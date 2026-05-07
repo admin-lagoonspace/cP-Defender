@@ -8,11 +8,10 @@ our @ISA = qw(Cpanel::Config::ConfigObj::Interface::Config::v1);
 
 sub init {
     my ( $class, $software_obj ) = @_;
-    my $defaults = {
-        'thirdparty_ns' => 'SentinelGate',
-        'meta'          => {},
-    };
-    my $self = $class->SUPER::base( $defaults, $software_obj );
+    my $self = $class->SUPER::base(
+        { 'thirdparty_ns' => 'SentinelGate', 'meta' => {} },
+        $software_obj
+    );
     return $self;
 }
 
