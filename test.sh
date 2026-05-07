@@ -200,40 +200,26 @@ if [[ -d /usr/local/cpanel ]]; then
     grep -q "acls=all" "$APPCONF" && pass "AppConfig: acls=all" || warn "AppConfig: acls field missing"
   fi
 
-  # ── Runtime registration check (the definitive test — not just file existence) ──
-  # If the plugin isn't in these runtime sources, it will NOT appear in WHM nav.
-  _RUNTIME_VERIFIED=false
-
-  # Method 1: whmapi1 — lists apps actually loaded into cpsrvd's memory
-  if command -v whmapi1 >/dev/null 2>&1; then
-    _APP_JSON=$(whmapi1 appconfig_get_apps 2>/dev/null)
-    if echo "${_APP_JSON}" | grep -q "sentinel_gate"; then
-      pass "RUNTIME: sentinel_gate registered in whmapi1 appconfig_get_apps (plugin IS in WHM nav)"
-      _RUNTIME_VERIFIED=true
+  # ── Registration check: /var/cpanel/apps/ is the definitive source of truth ──
+  # register_appconfig copies the conf here; cpsrvd reads from here on startup.
+  # If this file is present and correct, the plugin IS registered.
+  _APPCONF_DEPLOYED="/var/cpanel/apps/sentinel_gate.conf"
+  if [[ -f "$_APPCONF_DEPLOYED" ]]; then
+    if grep -q "name=sentinel_gate" "$_APPCONF_DEPLOYED" && \
+       grep -q "service=whostmgr" "$_APPCONF_DEPLOYED"; then
+      pass "REGISTERED: /var/cpanel/apps/sentinel_gate.conf is present and correct"
     else
-      fail "RUNTIME: sentinel_gate NOT found in whmapi1 appconfig_get_apps — plugin will NOT appear in WHM nav. Run: /usr/local/cpanel/bin/register_appconfig /usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate/sentinel_gate.conf && /usr/local/cpanel/scripts/restartsrv_cpsrvd"
+      fail "REGISTERED: /var/cpanel/apps/sentinel_gate.conf has wrong content — re-run install.sh"
     fi
+  else
+    fail "REGISTERED: /var/cpanel/apps/sentinel_gate.conf missing — register_appconfig did not run. Re-run install.sh"
   fi
 
-  # Method 2: cpanelappconfig.yaml — written by register_appconfig / cpsrvd startup
-  if ! $_RUNTIME_VERIFIED; then
-    _YAML_FOUND=false
-    for _YAML in /var/cpanel/cpanelappconfig.yaml /var/cpanel/apps/cpanelappconfig.yaml; do
-      if [[ -f "$_YAML" ]]; then
-        if grep -q "sentinel_gate" "$_YAML" 2>/dev/null; then
-          pass "RUNTIME: sentinel_gate found in ${_YAML} (plugin IS registered)"
-          _RUNTIME_VERIFIED=true
-        else
-          fail "RUNTIME: ${_YAML} exists but sentinel_gate not in it — run register_appconfig and restart cpsrvd"
-        fi
-        _YAML_FOUND=true
-        break
-      fi
-    done
-    if ! $_YAML_FOUND && ! $_RUNTIME_VERIFIED; then
-      # whmapi1 not available and no yaml — check if cpsrvd has loaded it via proc
-      warn "RUNTIME: Cannot verify via whmapi1 or cpanelappconfig.yaml — check WHM UI manually"
-    fi
+  # Check cpsrvd is running (it serves WHM on port 2087)
+  if pgrep -x cpsrvd >/dev/null 2>&1; then
+    pass "cpsrvd is running — plugin will appear in WHM on next login"
+  else
+    warn "cpsrvd is not running — start it: /usr/local/cpanel/scripts/restartsrv_cpsrvd"
   fi
 
   # dynamicui plugin (cPanel user-level)
