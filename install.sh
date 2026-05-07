@@ -560,6 +560,44 @@ DYNEOF
     done
     ok "Sentinel Gate now visible in WHM → Plugins → Sentinel Gate Security"
 
+  fi  # end: if [[ ! -d /usr/local/cpanel ]]
+
+fi  # end: if standalone / elif cpanel
+
+# ── Apache restart (cpanel mode) ─────────────────────────────────────────────
+if [[ "$INSTALL_MODE" == "cpanel" ]]; then
+  section "Restarting Apache"
+  if command -v /scripts/restartsrv_httpd >/dev/null 2>&1; then
+    /scripts/restartsrv_httpd 2>&1 | tail -4 | sed 's/^/  /'
+    ok "Apache restarted"
+  elif command -v httpd >/dev/null 2>&1; then
+    httpd -t 2>&1 && systemctl restart httpd 2>&1 && ok "Apache restarted" || warn "Apache restart failed — restart manually"
+  elif command -v apache2 >/dev/null 2>&1; then
+    apache2ctl -t 2>&1 && systemctl restart apache2 2>&1 && ok "Apache restarted" || warn "Apache restart failed — restart manually"
+  else
+    warn "Could not detect Apache — restart it manually to activate the config"
   fi
+fi
 
+# ── Final summary ─────────────────────────────────────────────────────────────
+echo ""
+echo -e "${CYAN}${BOLD}══════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}${BOLD}  Sentinel Gate v${SG_VERSION} installed successfully!${NC}"
+echo -e "${CYAN}${BOLD}══════════════════════════════════════════════════════${NC}"
+echo ""
 
+if [[ "$INSTALL_MODE" == "cpanel" ]]; then
+  echo -e "  ${BOLD}Access:${NC}  WHM → Plugins → Sentinel Gate Security"
+  echo -e "  ${BOLD}Also:${NC}    https://$(hostname -f 2>/dev/null || hostname)/sentinel-gate/"
+elif [[ "$INSTALL_MODE" == "standalone" ]]; then
+  echo -e "  ${BOLD}Access:${NC}  http://$(hostname -f 2>/dev/null || hostname):${SG_PORT}"
+  echo -e "  ${BOLD}Login:${NC}   ${ADMIN_USER} / (password you set)"
+fi
+
+echo ""
+echo -e "  ${BOLD}Install dir:${NC}  ${INSTALL_DIR}"
+echo -e "  ${BOLD}Manifest:${NC}     ${MANIFEST}"
+echo -e "  ${BOLD}Logs:${NC}         ${LOG_DIR}/"
+echo ""
+echo -e "  To uninstall: ${CYAN}bash ${SCRIPT_DIR}/uninstall.sh${NC}"
+echo ""
