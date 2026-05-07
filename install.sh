@@ -528,7 +528,6 @@ url=/cgi/addon_sentinel_gate.cgi
 user=root
 acls=all
 displayname=Sentinel Gate Security
-icon=plugin
 APPEOF
     chmod 644 "${APPCONFIG_CONF}"
 
@@ -542,12 +541,47 @@ APPEOF
 
     # ── Step 3: Register with AppConfig ──────────────────────────────────────
     info "  Running register_appconfig…"
+    _REG_OK=false
     if [[ -x /usr/local/cpanel/bin/register_appconfig ]]; then
-      /usr/local/cpanel/bin/register_appconfig "${APPCONFIG_CONF}" 2>&1 | sed 's/^/    /'
-      ok "  AppConfig registration complete"
+      _REG_OUT=$(/usr/local/cpanel/bin/register_appconfig "${APPCONFIG_CONF}" 2>&1)
+      _REG_EXIT=$?
+      echo "${_REG_OUT}" | sed 's/^/    /'
+      if [[ $_REG_EXIT -eq 0 ]]; then
+        ok "  AppConfig registration succeeded (exit 0)"
+        _REG_OK=true
+      else
+        warn "  register_appconfig exited ${_REG_EXIT} — trying full rescan…"
+        /usr/local/cpanel/bin/register_appconfig --all 2>&1 | sed 's/^/    /'
+        [[ $? -eq 0 ]] && _REG_OK=true
+      fi
     else
-      warn "  register_appconfig not found — plugin will activate after cpsrvd restart"
+      warn "  register_appconfig not found — will rely on cpsrvd restart to pick up conf"
     fi
+
+    # ── Verify plugin appears in cPanel's registered app list ────────────────
+    info "  Verifying plugin registration…"
+    _VERIFIED=false
+    # Method 1: whmapi1 (available on all modern cPanel servers)
+    if command -v whmapi1 >/dev/null 2>&1; then
+      _APP_LIST=$(whmapi1 appconfig_get_apps 2>/dev/null)
+      if echo "${_APP_LIST}" | grep -q "sentinel_gate"; then
+        ok "  VERIFIED: sentinel_gate appears in whmapi1 appconfig_get_apps"
+        _VERIFIED=true
+      else
+        info "  Not yet in whmapi1 list — restarting cpsrvd to force registration pickup…"
+      fi
+    fi
+    # Method 2: cpanelappconfig.yaml (written by register_appconfig / cpsrvd)
+    if ! $_VERIFIED; then
+      for _YAML in /var/cpanel/cpanelappconfig.yaml /var/cpanel/apps/cpanelappconfig.yaml; do
+        if [[ -f "$_YAML" ]] && grep -q "sentinel_gate" "$_YAML" 2>/dev/null; then
+          ok "  VERIFIED: sentinel_gate found in ${_YAML}"
+          _VERIFIED=true
+          break
+        fi
+      done
+    fi
+    $_VERIFIED || warn "  Could not verify registration yet — cpsrvd restart below will activate it"
 
     # ── Step 4: cPanel user-level plugin (all hosting accounts) ──────────────
     info "  Installing cPanel user-level plugin (dynamicui)…"
@@ -583,15 +617,40 @@ DYNEOF
     fi
 
     # ── Step 6: Restart cPanel services ──────────────────────────────────────
-    info "  Restarting cPanel services…"
+    # cpsrvd MUST be restarted for AppConfig registrations to take effect in WHM.
+    info "  Restarting cPanel services (required for plugin to appear in WHM nav)…"
     for SVC in restartsrv_cpsrvd restartsrv_cpaneld; do
       if [[ -x "/usr/local/cpanel/scripts/${SVC}" ]]; then
         info "    Running ${SVC}…"
         "/usr/local/cpanel/scripts/${SVC}" 2>&1 | tail -4 | sed 's/^/    /'
-        ok "    ${SVC} done"
+        _SVC_EXIT=${PIPESTATUS[0]}
+        if [[ $_SVC_EXIT -eq 0 ]]; then
+          ok "    ${SVC} completed successfully"
+        else
+          warn "    ${SVC} exited ${_SVC_EXIT} — plugin may not appear until service fully restarts"
+        fi
+      else
+        warn "    /usr/local/cpanel/scripts/${SVC} not found — skipping"
       fi
     done
-    ok "Sentinel Gate now visible in WHM → Plugins → Sentinel Gate Security"
+
+    # Post-restart verification: give cpsrvd 5 s to re-read AppConfig, then recheck
+    info "  Waiting 5 seconds for cpsrvd to re-read AppConfig…"
+    sleep 5
+    if command -v whmapi1 >/dev/null 2>&1; then
+      _APP_LIST2=$(whmapi1 appconfig_get_apps 2>/dev/null)
+      if echo "${_APP_LIST2}" | grep -q "sentinel_gate"; then
+        ok "  POST-RESTART VERIFIED: Sentinel Gate is registered in WHM"
+        ok "  Plugin will appear in WHM → Plugins → Sentinel Gate Security"
+      else
+        warn "  Plugin not yet detected in whmapi1 after restart"
+        warn "  Try: Log out of WHM and log back in, or run:"
+        warn "    /usr/local/cpanel/bin/register_appconfig --all"
+        warn "    /usr/local/cpanel/scripts/restartsrv_cpsrvd"
+      fi
+    else
+      ok "  cpsrvd restarted — Sentinel Gate Security should now appear in WHM → Plugins"
+    fi
 
   fi  # end: if [[ ! -d /usr/local/cpanel ]]
 
@@ -620,8 +679,8 @@ TEST_EXIT=0
 
 if [[ -f "$TEST_SCRIPT" ]]; then
   # Give Apache/cpsrvd a moment to fully apply the new config
-  info "Waiting 3 seconds for services to settle…"
-  sleep 3
+  info "Waiting 10 seconds for services to settle…"
+  sleep 10
   echo ""
   bash "$TEST_SCRIPT"
   TEST_EXIT=$?
