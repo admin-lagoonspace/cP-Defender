@@ -271,6 +271,16 @@ for LEGACY in \
   [[ -e "${LEGACY}" ]] && rm -rf "${LEGACY}" && ok "Removed legacy: ${LEGACY}"
 done
 
+# Remove Driver files
+DRIVER_DEST="/usr/local/cpanel/Cpanel/Config/ConfigObj/Driver"
+for _DF in \
+  "${DRIVER_DEST}/SentinelGate.pm" \
+  "${DRIVER_DEST}/SentinelGate/META.pm"; do
+  [[ -f "$_DF" ]] && rm -f "$_DF" && ok "Removed Driver file: $_DF"
+done
+[[ -d "${DRIVER_DEST}/SentinelGate" ]] && rmdir "${DRIVER_DEST}/SentinelGate" 2>/dev/null || true
+[[ -d "${DRIVER_DEST}" ]] && touch "${DRIVER_DEST}" 2>/dev/null || true
+
 if $WHM_REMOVED; then
   if [[ -x /usr/local/cpanel/scripts/restartsrv_cpsrvd ]]; then
     info "Restarting cpsrvd to remove plugin from WHM menu…"

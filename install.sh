@@ -523,20 +523,20 @@ ENDCGI
     fi
 
     # ── Step 3: Write AppConfig conf file ALONGSIDE the CGI ──────────────────
-    # CSF conf fields reference:
-    #   name        = internal identifier (becomes /var/cpanel/apps/<name>.conf)
-    #   service     = whostmgr (makes it appear in WHM, not cPanel user panel)
-    #   url         = path relative to WHM docroot (cgi/ prefix)
-    #   acls        = all (root + all resellers); CSF uses a custom ACL name
-    #   displayname = text shown in WHM left-nav Plugins section
-    #   target      = _blank opens in new tab (our SPA needs its own window)
-    # Do NOT include 'icon=...' unless you have an actual icon file installed —
-    # an invalid icon value causes silent rejection of the entire conf.
+    # Fields follow CSF's exact format (the reference implementation):
+    #   url      = path registered with AppConfig (cgi/ prefix required)
+    #   entryurl = clickable link shown in WHM nav (relative to cgi/, no prefix)
+    #   acls     = all — root + all resellers with the 'all' ACL can access
+    #   target   = _blank opens in new tab (SPA needs its own window)
+    # Do NOT include 'icon=...' unless you have an actual installed icon file.
     info "  Writing AppConfig conf: ${WHM_PLUGIN_CONF}"
+    # Remove any stale /var/cpanel/apps/ copy first so register_appconfig writes fresh
+    rm -f /var/cpanel/apps/sentinel_gate.conf 2>/dev/null || true
     cat > "${WHM_PLUGIN_CONF}" << APPEOF
 name=sentinel_gate
 service=whostmgr
 url=/cgi/sentinel_gate/sentinel_gate.cgi
+entryurl=sentinel_gate/sentinel_gate.cgi
 acls=all
 displayname=Sentinel Gate Security
 target=_blank
@@ -550,7 +550,26 @@ APPEOF
       warn "  AppConfig conf write FAILED: ${WHM_PLUGIN_CONF}"
     fi
 
-    # ── Step 4: Register with AppConfig (exactly as CSF does it) ─────────────
+    # ── Step 4: Install Driver files and touch directory ─────────────────────
+    # CSF installs Driver files and touches the directory BEFORE calling
+    # register_appconfig. The touch updates the directory mtime which signals
+    # cpsrvd to rescan and fully load new AppConfig entries into the WHM nav.
+    # Without this step the plugin conf may be registered but not shown in nav.
+    DRIVER_DEST="/usr/local/cpanel/Cpanel/Config/ConfigObj/Driver"
+    DRIVER_SRC="${SCRIPT_DIR}/whm/Driver"
+    if [[ -d "${DRIVER_DEST}" && -d "${DRIVER_SRC}" ]]; then
+      info "  Installing Driver files to ${DRIVER_DEST}…"
+      cp -af "${DRIVER_SRC}/SentinelGate.pm" "${DRIVER_DEST}/"
+      mkdir -p "${DRIVER_DEST}/SentinelGate"
+      cp -af "${DRIVER_SRC}/SentinelGate/META.pm" "${DRIVER_DEST}/SentinelGate/"
+      touch "${DRIVER_DEST}"
+      ok "  Driver files installed; directory mtime updated"
+      echo "DRIVER_DEST=${DRIVER_DEST}" >> "${MANIFEST}"
+    else
+      warn "  Driver destination not found (${DRIVER_DEST}) — skipping Driver install"
+    fi
+
+    # ── Step 5: Register with AppConfig (exactly as CSF does it) ─────────────
     # register_appconfig:
     #   • Reads conf from the path given
     #   • Copies it to /var/cpanel/apps/<name>.conf
@@ -583,7 +602,7 @@ APPEOF
       echo "APPCONFIG_CONF=/var/cpanel/apps/sentinel_gate.conf" >> "${MANIFEST}"
     fi
 
-    # ── Step 5: cPanel user-level plugin (cPanel dashboard for hosting accounts) ──
+    # ── Step 6: cPanel user-level plugin (cPanel dashboard for hosting accounts) ──
     info "  Installing cPanel user-level plugin (dynamicui)…"
     for CPANEL_THEME in paper_lantern jupiter; do
       DYNUI_DIR="/usr/local/cpanel/base/frontend/${CPANEL_THEME}/dynamicui"
@@ -606,7 +625,7 @@ DYNEOF
       fi
     done
 
-    # ── Step 6: Reseller feature flag ────────────────────────────────────────
+    # ── Step 7: Reseller feature flag ────────────────────────────────────────
     FEATURES_DIR="/usr/local/cpanel/cpanel/features"
     if [[ -d "${FEATURES_DIR}" ]]; then
       grep -q "sentinel_gate" "${FEATURES_DIR}/default" 2>/dev/null || \
@@ -615,7 +634,7 @@ DYNEOF
       echo "FEATURE_FLAG=sentinel_gate" >> "${MANIFEST}"
     fi
 
-    # ── Step 7: Restart cpsrvd if register_appconfig didn't already do it ────
+    # ── Step 8: Restart cpsrvd if register_appconfig didn't already do it ────
     # register_appconfig normally handles this, but we restart explicitly as a
     # safety net in case the binary was missing or the conf was copied manually.
     if ! $_REG_OK; then
@@ -626,7 +645,7 @@ DYNEOF
       fi
     fi
 
-    # ── Step 8: Post-registration verification ────────────────────────────────
+    # ── Step 9: Post-registration verification ────────────────────────────────
     info "  Verifying plugin registration (give cpsrvd 3s to settle)…"
     sleep 3
     _VERIFIED=false

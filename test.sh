@@ -166,10 +166,21 @@ if [[ -d /usr/local/cpanel ]]; then
       || fail "WHM conf missing service=whostmgr"
     grep -q "url=/cgi/sentinel_gate/sentinel_gate.cgi" "$WHM_PLUGIN_CONF" && pass "WHM conf: url correct" \
       || fail "WHM conf url wrong — should be /cgi/sentinel_gate/sentinel_gate.cgi"
+    grep -q "entryurl=" "$WHM_PLUGIN_CONF" && pass "WHM conf: entryurl present" \
+      || fail "WHM conf missing entryurl — re-run install.sh"
     grep -q "^icon=plugin" "$WHM_PLUGIN_CONF" \
       && fail "WHM conf contains invalid icon=plugin — re-run install.sh" \
       || pass "WHM conf: no invalid icon= value"
   fi
+
+  # Driver files (cpsrvd rescans when Driver dir mtime changes — required for nav entry)
+  DRIVER_DEST="/usr/local/cpanel/Cpanel/Config/ConfigObj/Driver"
+  [[ -f "${DRIVER_DEST}/SentinelGate.pm" ]] \
+    && pass "Driver file: SentinelGate.pm" \
+    || fail "Driver file MISSING: ${DRIVER_DEST}/SentinelGate.pm — re-run install.sh"
+  [[ -f "${DRIVER_DEST}/SentinelGate/META.pm" ]] \
+    && pass "Driver file: SentinelGate/META.pm" \
+    || fail "Driver file MISSING: ${DRIVER_DEST}/SentinelGate/META.pm — re-run install.sh"
 
   # Apache alias config
   for CANDIDATE in \
