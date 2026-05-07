@@ -480,26 +480,33 @@ APACHEEOF
     # Redirects to the Apache-served Sentinel Gate frontend.
     # target=_blank in AppConfig conf means WHM opens it in a new tab —
     # so this CGI's redirect also serves as a direct-link fallback.
+    # Detect cPanel's perl — cpsrvd does NOT use the system PATH when executing
+    # CGI scripts, so #!/usr/bin/env perl silently fails → cpsrvd returns 404.
+    # Must use the absolute path to cPanel's own Perl interpreter.
+    _CPANEL_PERL="/usr/local/cpanel/3rdparty/bin/perl"
+    [[ ! -x "${_CPANEL_PERL}" ]] && _CPANEL_PERL=$(command -v perl 2>/dev/null || echo "/usr/bin/perl")
+    info "  Perl interpreter for CGI: ${_CPANEL_PERL}"
+
     info "  Writing CGI: ${WHM_CGI}"
-    cat > "${WHM_CGI}" << 'ENDCGI'
-#!/usr/bin/env perl
+    cat > "${WHM_CGI}" << ENDCGI
+#!${_CPANEL_PERL}
 use strict;
 use warnings;
-my $host = $ENV{HTTP_HOST} || $ENV{SERVER_NAME} || '';
-unless ($host) {
-    $host = `hostname -f 2>/dev/null`; chomp $host;
-    $host ||= `hostname 2>/dev/null`;  chomp $host;
-    $host ||= 'localhost';
+my \$host = \$ENV{HTTP_HOST} || \$ENV{SERVER_NAME} || '';
+unless (\$host) {
+    \$host = \`hostname -f 2>/dev/null\`; chomp \$host;
+    \$host ||= \`hostname 2>/dev/null\`;  chomp \$host;
+    \$host ||= 'localhost';
 }
-$host =~ s/:.*//;
-my $url = "https://$host/sentinel-gate/";
+\$host =~ s/:.*//;
+my \$url = "https://\$host/sentinel-gate/";
 print "Content-Type: text/html\r\n\r\n";
 print <<"ENDHTML";
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="refresh" content="0; url=$url">
+  <meta http-equiv="refresh" content="0; url=\$url">
   <title>Sentinel Gate</title>
   <style>body{background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif;
     display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
@@ -508,9 +515,9 @@ print <<"ENDHTML";
 <body><div class="b">
   <h2>&#x26A1; Sentinel Gate Security</h2>
   <p>Opening dashboard&hellip;</p>
-  <p><a href="$url">Click here if not redirected</a></p>
+  <p><a href="\$url">Click here if not redirected</a></p>
 </div>
-<script>window.location.href='$url';</script>
+<script>window.location.href='\$url';</script>
 </body></html>
 ENDHTML
 ENDCGI

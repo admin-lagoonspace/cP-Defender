@@ -23,16 +23,7 @@ sub info {
     return $self->meta()->abstract();
 }
 
-sub acl_desc {
-    return [
-        {
-            'acl'              => 'all',
-            'default_value'    => 1,
-            'default_ui_value' => 1,
-            'name'             => 'Sentinel Gate Security',
-            'acl_subcat'       => 'Third Party Services',
-        },
-    ];
-}
+# acls=all in AppConfig conf — no custom ACL to register
+sub acl_desc { return []; }
 
 1;

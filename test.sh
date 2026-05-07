@@ -152,8 +152,14 @@ if [[ -d /usr/local/cpanel ]]; then
   [[ -f "$WHM_CGI" ]]     && pass "WHM CGI exists: $WHM_CGI"           || fail "WHM CGI MISSING: $WHM_CGI"
   [[ -x "$WHM_CGI" ]]     && pass "WHM CGI is executable"              || fail "WHM CGI not executable — run: chmod 755 $WHM_CGI"
 
-  # CGI syntax check
+  # CGI shebang must use cPanel's Perl — #!/usr/bin/env perl fails in cpsrvd (404)
   if [[ -f "$WHM_CGI" ]]; then
+    _SHEBANG=$(head -1 "$WHM_CGI")
+    if echo "$_SHEBANG" | grep -q "cpanel"; then
+      pass "WHM CGI shebang uses cPanel Perl: ${_SHEBANG}"
+    else
+      fail "WHM CGI shebang wrong: '${_SHEBANG}' — cpsrvd returns 404 without cPanel Perl path. Re-run install.sh"
+    fi
     perl -cw "$WHM_CGI" >/dev/null 2>&1 && pass "WHM CGI Perl syntax OK" || fail "WHM CGI has Perl syntax errors"
   fi
 
@@ -181,6 +187,19 @@ if [[ -d /usr/local/cpanel ]]; then
   [[ -f "${DRIVER_DEST}/SentinelGate/META.pm" ]] \
     && pass "Driver file: SentinelGate/META.pm" \
     || fail "Driver file MISSING: ${DRIVER_DEST}/SentinelGate/META.pm — re-run install.sh"
+  # Syntax-check Driver files using cPanel's own Perl to catch missing methods early
+  _CP_PERL="/usr/local/cpanel/3rdparty/bin/perl"
+  [[ ! -x "${_CP_PERL}" ]] && _CP_PERL=$(command -v perl)
+  if [[ -f "${DRIVER_DEST}/SentinelGate.pm" ]]; then
+    "${_CP_PERL}" -cw "${DRIVER_DEST}/SentinelGate.pm" >/dev/null 2>&1 \
+      && pass "Driver SentinelGate.pm syntax OK" \
+      || fail "Driver SentinelGate.pm has Perl syntax errors"
+  fi
+  if [[ -f "${DRIVER_DEST}/SentinelGate/META.pm" ]]; then
+    "${_CP_PERL}" -cw "${DRIVER_DEST}/SentinelGate/META.pm" >/dev/null 2>&1 \
+      && pass "Driver SentinelGate/META.pm syntax OK" \
+      || fail "Driver SentinelGate/META.pm has Perl syntax errors"
+  fi
 
   # Apache alias config
   for CANDIDATE in \
