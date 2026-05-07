@@ -108,6 +108,7 @@ ok "Directories created under $INSTALL_DIR"
 section "Installing files"
 cp -r "${SCRIPT_DIR}/backend"  "$INSTALL_DIR/"
 cp -r "${SCRIPT_DIR}/frontend" "$INSTALL_DIR/"
+cp    "${SCRIPT_DIR}/VERSION"  "$INSTALL_DIR/"
 ok "Files installed to $INSTALL_DIR"
 
 # ── Set permissions ────────────────────────────────────────────────────────────
@@ -386,6 +387,24 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
   fi
   ok "Apache config dir: ${APACHE_CONF_D}"
 
+  # ── Detect PHP handler for this server ────────────────────────────────────
+  # EasyApache 4 (cPanel): handler is per-EA4 PHP version, e.g. ea-php81
+  # Standard mod_php / other: application/x-httpd-php
+  PHP_HANDLER="application/x-httpd-php"
+  if [[ -d /opt/cpanel ]]; then
+    _PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION . PHP_MINOR_VERSION;' 2>/dev/null)
+    if [[ -n "$_PHP_VER" ]]; then
+      PHP_HANDLER="application/x-httpd-ea-php${_PHP_VER}"
+      info "Detected EasyApache 4 PHP handler: ${PHP_HANDLER}"
+    fi
+  else
+    # Non-cPanel: try to find the handler from existing Apache config
+    _H=$(grep -r "SetHandler.*php\|AddHandler.*php" /etc/apache2/ /etc/httpd/ 2>/dev/null \
+         | grep -oP 'application/x-httpd-php\S*' | head -1)
+    [[ -n "$_H" ]] && PHP_HANDLER="$_H"
+    info "PHP handler: ${PHP_HANDLER}"
+  fi
+
   # ── Write Apache alias config ──
   APACHE_CONF="${APACHE_CONF_D}/sentinel-gate.conf"
   info "Writing Apache alias config: ${APACHE_CONF}"
@@ -402,6 +421,9 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
   AllowOverride FileInfo
   Require all granted
   DirectoryIndex index.php
+  <FilesMatch "\.php$">
+    SetHandler ${PHP_HANDLER}
+  </FilesMatch>
   <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteCond %{REQUEST_FILENAME} !-f

@@ -10,9 +10,9 @@ PASS=0; FAIL=0; WARN=0
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-pass() { echo -e "  ${GREEN}[PASS]${NC} $*"; ((PASS++)); }
-fail() { echo -e "  ${RED}[FAIL]${NC} $*"; ((FAIL++)); }
-warn() { echo -e "  ${YELLOW}[WARN]${NC} $*"; ((WARN++)); }
+pass() { echo -e "  ${GREEN}[PASS]${NC} $*"; ((++PASS)); return 0; }
+fail() { echo -e "  ${RED}[FAIL]${NC} $*"; ((++FAIL)); return 0; }
+warn() { echo -e "  ${YELLOW}[WARN]${NC} $*"; ((++WARN)); return 0; }
 section() { echo -e "\n${CYAN}${BOLD}── $* ──${NC}"; }
 
 echo ""
@@ -190,10 +190,12 @@ if [[ -d /usr/local/cpanel ]]; then
     /etc/httpd/conf.d/sentinel-gate.conf; do
     if [[ -f "$CANDIDATE" ]]; then
       pass "Apache config: $CANDIDATE"
-      # Check rewrite rules are in the config
       grep -q "RewriteRule" "$CANDIDATE" \
         && pass "  mod_rewrite rules present in Apache config" \
-        || fail "  mod_rewrite MISSING from Apache config — API routes will 404. Re-run install.sh."
+        || fail "  mod_rewrite MISSING from Apache config — Re-run install.sh"
+      grep -q "SetHandler" "$CANDIDATE" \
+        && pass "  PHP SetHandler present in Apache config" \
+        || fail "  PHP SetHandler MISSING — PHP won't execute in aliased dir. Re-run install.sh"
       break
     fi
   done
