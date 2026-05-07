@@ -399,9 +399,14 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
 
 <Directory "${INSTALL_DIR}/backend/api">
   Options -Indexes -MultiViews
-  AllowOverride None
+  AllowOverride FileInfo
   Require all granted
   DirectoryIndex index.php
+  <IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [QSA,L]
+  </IfModule>
 </Directory>
 
 <Directory "${INSTALL_DIR}/backend">
@@ -444,12 +449,17 @@ APACHEEOF
     info "  Writing CGI: ${WHM_CGI}"
 
     cat > "${WHM_CGI}" << 'ENDCGI'
-#!/usr/bin/perl
+#!/usr/bin/env perl
 use strict;
 use warnings;
-my $host = `hostname -f 2>/dev/null`; chomp $host;
-$host ||= `hostname 2>/dev/null`;     chomp $host;
-$host ||= 'localhost';
+# Resolve the URL from cPanel's own ENV first (most reliable on cPanel)
+my $host = $ENV{HTTP_HOST} || $ENV{SERVER_NAME} || '';
+unless ($host) {
+    $host = `hostname -f 2>/dev/null`; chomp $host;
+    $host ||= `hostname 2>/dev/null`;  chomp $host;
+    $host ||= 'localhost';
+}
+$host =~ s/:.*//;   # strip port if present
 my $url = "https://$host/sentinel-gate/";
 print "Content-Type: text/html\r\n\r\n";
 print <<"ENDHTML";
@@ -496,6 +506,7 @@ url=/cgi/addon_sentinel_gate.cgi
 user=root
 acls=all
 displayname=Sentinel Gate Security
+icon=plugin
 APPEOF
     chmod 644 "${APPCONFIG_CONF}"
 

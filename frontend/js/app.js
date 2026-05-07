@@ -55,7 +55,7 @@ function applyModeUI(mode) {
 
   // Sidebar version / mode label
   const sideLabel = document.getElementById('sidebar-mode-label');
-  if (sideLabel) sideLabel.textContent = isStandalone ? 'v3.1.3 · Standalone' : 'v3.1.3 · cPanel Plugin';
+  if (sideLabel) sideLabel.textContent = isStandalone ? 'v3.1.4 · Standalone' : 'v3.1.4 · cPanel Plugin';
 
   // Settings page: show/hide standalone-only cards
   const banner = document.getElementById('standalone-settings-banner');
