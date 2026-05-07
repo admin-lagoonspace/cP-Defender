@@ -11,6 +11,12 @@ INSTALL_DIR="/usr/local/sentinel-gate"
 MANIFEST="${INSTALL_DIR}/install-manifest.env"
 SG_PORT=31150
 
+# --auto flag: skip all interactive prompts, answer yes to everything
+AUTO_MODE=false
+for _ARG in "$@"; do
+  [[ "$_ARG" == "--auto" || "$_ARG" == "--yes" ]] && AUTO_MODE=true
+done
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
@@ -108,19 +114,33 @@ fi
 echo ""
 
 # Q1 — proceed at all?
-read -rp "  Uninstall Sentinel Gate v${INSTALL_VERSION}? [y/N]: " Q1
+if $AUTO_MODE; then
+  echo -e "  ${YELLOW}[AUTO]${NC} Proceeding with full uninstall (--auto mode)"
+  Q1="y"
+else
+  read -rp "  Uninstall Sentinel Gate v${INSTALL_VERSION}? [y/N]: " Q1
+fi
 [[ "${Q1,,}" != "y" ]] && { echo "Aborted."; exit 0; }
 
 # Q2 — delete all data?
 echo ""
-read -rp "  Delete all data (database, logs, quarantine)? [y/N]: " Q2
+if $AUTO_MODE; then
+  Q2="y"
+else
+  read -rp "  Delete all data (database, logs, quarantine)? [y/N]: " Q2
+fi
 [[ "${Q2,,}" != "y" ]] && { echo "Aborted."; exit 0; }
 
 # Q3 — remove source/unzip directory?
 REMOVE_SOURCE=false
 if [[ -n "${SOURCE_DIR}" && -d "${SOURCE_DIR}" && "${SOURCE_DIR}" != "${INSTALL_DIR}" ]]; then
   echo ""
-  read -rp "  Remove source/unzip directory ${SOURCE_DIR}? [y/N]: " Q3
+  if $AUTO_MODE; then
+    Q3="n"   # keep source dir in auto mode so the installer zip stays available
+    echo -e "  ${YELLOW}[AUTO]${NC} Keeping source directory: ${SOURCE_DIR}"
+  else
+    read -rp "  Remove source/unzip directory ${SOURCE_DIR}? [y/N]: " Q3
+  fi
   [[ "${Q3,,}" == "y" ]] && REMOVE_SOURCE=true
 fi
 

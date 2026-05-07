@@ -590,25 +590,74 @@ if [[ "$INSTALL_MODE" == "cpanel" ]]; then
   fi
 fi
 
-# ── Final summary ─────────────────────────────────────────────────────────────
-echo ""
-echo -e "${CYAN}${BOLD}══════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}${BOLD}  Sentinel Gate v${SG_VERSION} installed successfully!${NC}"
-echo -e "${CYAN}${BOLD}══════════════════════════════════════════════════════${NC}"
-echo ""
+# ── Post-install test suite ───────────────────────────────────────────────────
+section "Post-install verification"
 
-if [[ "$INSTALL_MODE" == "cpanel" ]]; then
-  echo -e "  ${BOLD}Access:${NC}  WHM → Plugins → Sentinel Gate Security"
-  echo -e "  ${BOLD}Also:${NC}    https://$(hostname -f 2>/dev/null || hostname)/sentinel-gate/"
-elif [[ "$INSTALL_MODE" == "standalone" ]]; then
-  echo -e "  ${BOLD}Access:${NC}  http://$(hostname -f 2>/dev/null || hostname):${SG_PORT}"
-  echo -e "  ${BOLD}Login:${NC}   ${ADMIN_USER} / (password you set)"
+TEST_SCRIPT="${SCRIPT_DIR}/test.sh"
+TEST_EXIT=0
+
+if [[ -f "$TEST_SCRIPT" ]]; then
+  # Give Apache/cpsrvd a moment to fully apply the new config
+  info "Waiting 3 seconds for services to settle…"
+  sleep 3
+  echo ""
+  bash "$TEST_SCRIPT"
+  TEST_EXIT=$?
+else
+  warn "test.sh not found in ${SCRIPT_DIR} — skipping verification"
 fi
 
+# ── Outcome ───────────────────────────────────────────────────────────────────
 echo ""
-echo -e "  ${BOLD}Install dir:${NC}  ${INSTALL_DIR}"
-echo -e "  ${BOLD}Manifest:${NC}     ${MANIFEST}"
-echo -e "  ${BOLD}Logs:${NC}         ${LOG_DIR}/"
-echo ""
-echo -e "  To uninstall: ${CYAN}bash ${SCRIPT_DIR}/uninstall.sh${NC}"
-echo ""
+if [[ $TEST_EXIT -eq 0 ]]; then
+  echo -e "${CYAN}${BOLD}══════════════════════════════════════════════════════${NC}"
+  echo -e "${GREEN}${BOLD}  Sentinel Gate v${SG_VERSION} installed successfully!${NC}"
+  echo -e "${CYAN}${BOLD}══════════════════════════════════════════════════════${NC}"
+  echo ""
+
+  if [[ "$INSTALL_MODE" == "cpanel" ]]; then
+    echo -e "  ${BOLD}Access:${NC}  WHM → Plugins → Sentinel Gate Security"
+    echo -e "  ${BOLD}Also:${NC}    https://$(hostname -f 2>/dev/null || hostname)/sentinel-gate/"
+  elif [[ "$INSTALL_MODE" == "standalone" ]]; then
+    echo -e "  ${BOLD}Access:${NC}  http://$(hostname -f 2>/dev/null || hostname):${SG_PORT}"
+    echo -e "  ${BOLD}Login:${NC}   ${ADMIN_USER} / (password you set)"
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Install dir:${NC}  ${INSTALL_DIR}"
+  echo -e "  ${BOLD}Manifest:${NC}     ${MANIFEST}"
+  echo -e "  ${BOLD}Logs:${NC}         ${LOG_DIR}/"
+  echo ""
+  echo -e "  To uninstall: ${CYAN}bash ${SCRIPT_DIR}/uninstall.sh${NC}"
+  echo ""
+
+else
+  echo -e "${RED}${BOLD}══════════════════════════════════════════════════════${NC}"
+  echo -e "${RED}${BOLD}  Installation verification failed — ${TEST_EXIT} test(s) failed${NC}"
+  echo -e "${RED}${BOLD}══════════════════════════════════════════════════════${NC}"
+  echo ""
+  echo -e "  The plugin was installed but one or more self-tests failed."
+  echo -e "  ${BOLD}What would you like to do?${NC}"
+  echo ""
+  echo -e "  ${CYAN}1)${NC} Keep the installation — I'll fix the issues manually"
+  echo -e "  ${CYAN}2)${NC} Automatically uninstall and clean up everything"
+  echo ""
+  read -rp "  Choice [1/2]: " ROLLBACK_CHOICE
+
+  if [[ "${ROLLBACK_CHOICE}" == "2" ]]; then
+    echo ""
+    warn "Rolling back installation…"
+    bash "${SCRIPT_DIR}/uninstall.sh" --auto
+    echo ""
+    echo -e "${YELLOW}${BOLD}  Uninstall complete. Fix the failed tests above, then re-run install.sh.${NC}"
+    echo ""
+    exit 1
+  else
+    echo ""
+    info "Installation kept."
+    info "Review the FAIL lines above, fix the issues, then run:"
+    echo -e "  ${CYAN}bash ${SCRIPT_DIR}/test.sh${NC}"
+    echo ""
+    exit 1
+  fi
+fi
