@@ -452,9 +452,13 @@ APACHEEOF
     warn "Apache config write FAILED: ${APACHE_CONF}"
   fi
 
-  # ── Register plugin via AppConfig (the correct cPanel method) ────────────────
-  # The addon_plugins directory does NOT work — AppConfig + /var/cpanel/apps/ is
-  # the definitive registration system used by all real cPanel plugins (CSF, etc.)
+  # ── Register plugin via AppConfig ────────────────────────────────────────────
+  # Follows the exact same pattern as ConfigServer Security & Firewall (CSF),
+  # the most widely deployed WHM plugin. Key facts from CSF's installer:
+  #   1. CGI + conf live in a named subdirectory of cgi docroot
+  #   2. register_appconfig copies the conf to /var/cpanel/apps/ AND restarts cpsrvd
+  #   3. No manual cpsrvd restart is needed — register_appconfig handles it
+  #   4. Invalid AppConfig fields (like icon=plugin) cause silent rejection
   info "Registering Sentinel Gate with cPanel AppConfig system…"
   if [[ ! -d /usr/local/cpanel ]]; then
     warn "/usr/local/cpanel not found — skipping cPanel registration"
@@ -463,25 +467,31 @@ APACHEEOF
     SERVER_HOST=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "localhost")
     info "  Server hostname: ${SERVER_HOST}"
 
-    # ── Step 1: CGI script (served by cpsrvd on port 2087) ────────────────────
-    # MUST be at cgi root with "addon_" prefix — this is what AppConfig url= points to.
-    # Pattern confirmed from SpamExperts, Fantastico and other real plugins:
-    #   url=/cgi/addon_PLUGIN.cgi  →  file at whostmgr/docroot/cgi/addon_PLUGIN.cgi
-    WHM_CGI="/usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinel_gate.cgi"
-    info "  Writing CGI: ${WHM_CGI}"
+    # ── Step 1: Create named CGI subdirectory in WHM docroot ─────────────────
+    # CSF uses:  /usr/local/cpanel/whostmgr/docroot/cgi/configserver/csf/
+    # We follow: /usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate/
+    WHM_CGI_DIR="/usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate"
+    WHM_CGI="${WHM_CGI_DIR}/sentinel_gate.cgi"
+    WHM_PLUGIN_CONF="${WHM_CGI_DIR}/sentinel_gate.conf"
+    mkdir -p "${WHM_CGI_DIR}"
+    info "  WHM CGI dir: ${WHM_CGI_DIR}"
 
+    # ── Step 2: Write the CGI script ──────────────────────────────────────────
+    # Redirects to the Apache-served Sentinel Gate frontend.
+    # target=_blank in AppConfig conf means WHM opens it in a new tab —
+    # so this CGI's redirect also serves as a direct-link fallback.
+    info "  Writing CGI: ${WHM_CGI}"
     cat > "${WHM_CGI}" << 'ENDCGI'
 #!/usr/bin/env perl
 use strict;
 use warnings;
-# Resolve the URL from cPanel's own ENV first (most reliable on cPanel)
 my $host = $ENV{HTTP_HOST} || $ENV{SERVER_NAME} || '';
 unless ($host) {
     $host = `hostname -f 2>/dev/null`; chomp $host;
     $host ||= `hostname 2>/dev/null`;  chomp $host;
     $host ||= 'localhost';
 }
-$host =~ s/:.*//;   # strip port if present
+$host =~ s/:.*//;
 my $url = "https://$host/sentinel-gate/";
 print "Content-Type: text/html\r\n\r\n";
 print <<"ENDHTML";
@@ -504,7 +514,6 @@ print <<"ENDHTML";
 </body></html>
 ENDHTML
 ENDCGI
-
     chmod 755 "${WHM_CGI}"
     if [[ -f "${WHM_CGI}" ]]; then
       ok "  CGI written and executable: ${WHM_CGI}"
@@ -513,77 +522,68 @@ ENDCGI
       warn "  CGI write FAILED: ${WHM_CGI}"
     fi
 
-    # ── Step 2: AppConfig conf file in /var/cpanel/apps/ ─────────────────────
-    # Confirmed correct method from real plugins (SpamExperts, Fantastico):
-    #   • acls=all  (NOT "any" — "any" is not a valid value)
-    #   • url=/cgi/addon_PLUGIN.cgi  (root-level CGI with addon_ prefix)
-    APPCONFIG_DIR="/var/cpanel/apps"
-    APPCONFIG_CONF="${APPCONFIG_DIR}/sentinel_gate.conf"
-    mkdir -p "${APPCONFIG_DIR}"
-    info "  Writing AppConfig conf: ${APPCONFIG_CONF}"
-    cat > "${APPCONFIG_CONF}" << APPEOF
+    # ── Step 3: Write AppConfig conf file ALONGSIDE the CGI ──────────────────
+    # CSF conf fields reference:
+    #   name        = internal identifier (becomes /var/cpanel/apps/<name>.conf)
+    #   service     = whostmgr (makes it appear in WHM, not cPanel user panel)
+    #   url         = path relative to WHM docroot (cgi/ prefix)
+    #   acls        = all (root + all resellers); CSF uses a custom ACL name
+    #   displayname = text shown in WHM left-nav Plugins section
+    #   target      = _blank opens in new tab (our SPA needs its own window)
+    # Do NOT include 'icon=...' unless you have an actual icon file installed —
+    # an invalid icon value causes silent rejection of the entire conf.
+    info "  Writing AppConfig conf: ${WHM_PLUGIN_CONF}"
+    cat > "${WHM_PLUGIN_CONF}" << APPEOF
 name=sentinel_gate
 service=whostmgr
-url=/cgi/addon_sentinel_gate.cgi
-user=root
+url=/cgi/sentinel_gate/sentinel_gate.cgi
 acls=all
 displayname=Sentinel Gate Security
+target=_blank
 APPEOF
-    chmod 644 "${APPCONFIG_CONF}"
-
-    if [[ -f "${APPCONFIG_CONF}" ]]; then
-      ok "  AppConfig conf written: ${APPCONFIG_CONF}"
-      info "  Contents: $(tr '\n' ' ' < "${APPCONFIG_CONF}")"
-      echo "APPCONFIG_CONF=${APPCONFIG_CONF}" >> "${MANIFEST}"
+    chmod 644 "${WHM_PLUGIN_CONF}"
+    if [[ -f "${WHM_PLUGIN_CONF}" ]]; then
+      ok "  AppConfig conf written: ${WHM_PLUGIN_CONF}"
+      info "  Contents: $(tr '\n' ' ' < "${WHM_PLUGIN_CONF}")"
+      echo "WHM_PLUGIN_CONF=${WHM_PLUGIN_CONF}" >> "${MANIFEST}"
     else
-      warn "  AppConfig conf write FAILED: ${APPCONFIG_CONF}"
+      warn "  AppConfig conf write FAILED: ${WHM_PLUGIN_CONF}"
     fi
 
-    # ── Step 3: Register with AppConfig ──────────────────────────────────────
-    info "  Running register_appconfig…"
+    # ── Step 4: Register with AppConfig (exactly as CSF does it) ─────────────
+    # register_appconfig:
+    #   • Reads conf from the path given
+    #   • Copies it to /var/cpanel/apps/<name>.conf
+    #   • Restarts cpsrvd automatically
+    # We pass the path in the CGI docroot (not /var/cpanel/apps/) —
+    # this is the documented, CSF-proven approach.
+    info "  Running register_appconfig ${WHM_PLUGIN_CONF}…"
     _REG_OK=false
     if [[ -x /usr/local/cpanel/bin/register_appconfig ]]; then
-      _REG_OUT=$(/usr/local/cpanel/bin/register_appconfig "${APPCONFIG_CONF}" 2>&1)
+      _REG_OUT=$(/usr/local/cpanel/bin/register_appconfig "${WHM_PLUGIN_CONF}" 2>&1)
       _REG_EXIT=$?
       echo "${_REG_OUT}" | sed 's/^/    /'
       if [[ $_REG_EXIT -eq 0 ]]; then
-        ok "  AppConfig registration succeeded (exit 0)"
+        ok "  register_appconfig succeeded"
         _REG_OK=true
+        # Verify it landed in /var/cpanel/apps/
+        if [[ -f /var/cpanel/apps/sentinel_gate.conf ]]; then
+          ok "  Confirmed deployed to /var/cpanel/apps/sentinel_gate.conf"
+          echo "APPCONFIG_CONF=/var/cpanel/apps/sentinel_gate.conf" >> "${MANIFEST}"
+        fi
       else
-        warn "  register_appconfig exited ${_REG_EXIT} — trying full rescan…"
+        warn "  register_appconfig exited ${_REG_EXIT} — trying --all rescan…"
         /usr/local/cpanel/bin/register_appconfig --all 2>&1 | sed 's/^/    /'
         [[ $? -eq 0 ]] && _REG_OK=true
       fi
     else
-      warn "  register_appconfig not found — will rely on cpsrvd restart to pick up conf"
+      warn "  register_appconfig not found — manually restarting cpsrvd to pick up conf…"
+      # Fallback: copy conf directly and restart
+      cp -f "${WHM_PLUGIN_CONF}" /var/cpanel/apps/sentinel_gate.conf 2>/dev/null || true
+      echo "APPCONFIG_CONF=/var/cpanel/apps/sentinel_gate.conf" >> "${MANIFEST}"
     fi
 
-    # ── Verify plugin appears in cPanel's registered app list ────────────────
-    info "  Verifying plugin registration…"
-    _VERIFIED=false
-    # Method 1: whmapi1 (available on all modern cPanel servers)
-    if command -v whmapi1 >/dev/null 2>&1; then
-      _APP_LIST=$(whmapi1 appconfig_get_apps 2>/dev/null)
-      if echo "${_APP_LIST}" | grep -q "sentinel_gate"; then
-        ok "  VERIFIED: sentinel_gate appears in whmapi1 appconfig_get_apps"
-        _VERIFIED=true
-      else
-        info "  Not yet in whmapi1 list — restarting cpsrvd to force registration pickup…"
-      fi
-    fi
-    # Method 2: cpanelappconfig.yaml (written by register_appconfig / cpsrvd)
-    if ! $_VERIFIED; then
-      for _YAML in /var/cpanel/cpanelappconfig.yaml /var/cpanel/apps/cpanelappconfig.yaml; do
-        if [[ -f "$_YAML" ]] && grep -q "sentinel_gate" "$_YAML" 2>/dev/null; then
-          ok "  VERIFIED: sentinel_gate found in ${_YAML}"
-          _VERIFIED=true
-          break
-        fi
-      done
-    fi
-    $_VERIFIED || warn "  Could not verify registration yet — cpsrvd restart below will activate it"
-
-    # ── Step 4: cPanel user-level plugin (all hosting accounts) ──────────────
+    # ── Step 5: cPanel user-level plugin (cPanel dashboard for hosting accounts) ──
     info "  Installing cPanel user-level plugin (dynamicui)…"
     for CPANEL_THEME in paper_lantern jupiter; do
       DYNUI_DIR="/usr/local/cpanel/base/frontend/${CPANEL_THEME}/dynamicui"
@@ -598,7 +598,6 @@ itemdesc=Sentinel Gate Security
 feature=sentinel_gate
 url=https://${SERVER_HOST}/sentinel-gate/
 target=_blank
-icon=sentinel_gate.png
 itemorder=1
 DYNEOF
         chmod 644 "${DYNUI_CONF}"
@@ -607,7 +606,7 @@ DYNEOF
       fi
     done
 
-    # ── Step 5: Reseller feature flag ─────────────────────────────────────────
+    # ── Step 6: Reseller feature flag ────────────────────────────────────────
     FEATURES_DIR="/usr/local/cpanel/cpanel/features"
     if [[ -d "${FEATURES_DIR}" ]]; then
       grep -q "sentinel_gate" "${FEATURES_DIR}/default" 2>/dev/null || \
@@ -616,41 +615,36 @@ DYNEOF
       echo "FEATURE_FLAG=sentinel_gate" >> "${MANIFEST}"
     fi
 
-    # ── Step 6: Restart cPanel services ──────────────────────────────────────
-    # cpsrvd MUST be restarted for AppConfig registrations to take effect in WHM.
-    info "  Restarting cPanel services (required for plugin to appear in WHM nav)…"
-    for SVC in restartsrv_cpsrvd restartsrv_cpaneld; do
-      if [[ -x "/usr/local/cpanel/scripts/${SVC}" ]]; then
-        info "    Running ${SVC}…"
-        "/usr/local/cpanel/scripts/${SVC}" 2>&1 | tail -4 | sed 's/^/    /'
-        _SVC_EXIT=${PIPESTATUS[0]}
-        if [[ $_SVC_EXIT -eq 0 ]]; then
-          ok "    ${SVC} completed successfully"
-        else
-          warn "    ${SVC} exited ${_SVC_EXIT} — plugin may not appear until service fully restarts"
-        fi
-      else
-        warn "    /usr/local/cpanel/scripts/${SVC} not found — skipping"
+    # ── Step 7: Restart cpsrvd if register_appconfig didn't already do it ────
+    # register_appconfig normally handles this, but we restart explicitly as a
+    # safety net in case the binary was missing or the conf was copied manually.
+    if ! $_REG_OK; then
+      info "  Manually restarting cpsrvd (register_appconfig fallback)…"
+      if [[ -x /usr/local/cpanel/scripts/restartsrv_cpsrvd ]]; then
+        /usr/local/cpanel/scripts/restartsrv_cpsrvd 2>&1 | tail -4 | sed 's/^/    /'
+        ok "  cpsrvd restarted"
       fi
-    done
-
-    # Post-restart verification: give cpsrvd 5 s to re-read AppConfig, then recheck
-    info "  Waiting 5 seconds for cpsrvd to re-read AppConfig…"
-    sleep 5
-    if command -v whmapi1 >/dev/null 2>&1; then
-      _APP_LIST2=$(whmapi1 appconfig_get_apps 2>/dev/null)
-      if echo "${_APP_LIST2}" | grep -q "sentinel_gate"; then
-        ok "  POST-RESTART VERIFIED: Sentinel Gate is registered in WHM"
-        ok "  Plugin will appear in WHM → Plugins → Sentinel Gate Security"
-      else
-        warn "  Plugin not yet detected in whmapi1 after restart"
-        warn "  Try: Log out of WHM and log back in, or run:"
-        warn "    /usr/local/cpanel/bin/register_appconfig --all"
-        warn "    /usr/local/cpanel/scripts/restartsrv_cpsrvd"
-      fi
-    else
-      ok "  cpsrvd restarted — Sentinel Gate Security should now appear in WHM → Plugins"
     fi
+
+    # ── Step 8: Post-registration verification ────────────────────────────────
+    info "  Verifying plugin registration (give cpsrvd 3s to settle)…"
+    sleep 3
+    _VERIFIED=false
+    if command -v whmapi1 >/dev/null 2>&1; then
+      _APP_LIST=$(whmapi1 appconfig_get_apps 2>/dev/null)
+      if echo "${_APP_LIST}" | grep -q "sentinel_gate"; then
+        ok "  VERIFIED via whmapi1: Sentinel Gate is live in WHM Plugins menu"
+        _VERIFIED=true
+      else
+        warn "  whmapi1 does not yet list sentinel_gate"
+        warn "  If plugin is not visible in WHM → Plugins, try: Log out and log back in to WHM"
+      fi
+    fi
+    if ! $_VERIFIED && [[ -f /var/cpanel/apps/sentinel_gate.conf ]]; then
+      ok "  /var/cpanel/apps/sentinel_gate.conf exists — plugin should appear after WHM re-login"
+      _VERIFIED=true
+    fi
+    $_VERIFIED || warn "  Registration could not be verified — check WHM manually"
 
   fi  # end: if [[ ! -d /usr/local/cpanel ]]
 

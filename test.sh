@@ -180,14 +180,30 @@ if [[ -d /usr/local/cpanel ]]; then
       || pass "AppConfig: no invalid icon= value"
   fi
 
-  # CGI file
-  WHM_CGI="/usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinel_gate.cgi"
-  [[ -f "$WHM_CGI" ]]  && pass "WHM CGI exists: $WHM_CGI"         || fail "WHM CGI MISSING: $WHM_CGI"
-  [[ -x "$WHM_CGI" ]]  && pass "WHM CGI is executable"            || fail "WHM CGI not executable — run: chmod 755 $WHM_CGI"
+  # CGI file — lives in named subdirectory following CSF's pattern
+  WHM_CGI_DIR="/usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate"
+  WHM_CGI="${WHM_CGI_DIR}/sentinel_gate.cgi"
+  [[ -d "$WHM_CGI_DIR" ]] && pass "WHM CGI dir exists: $WHM_CGI_DIR"  || fail "WHM CGI dir MISSING: $WHM_CGI_DIR"
+  [[ -f "$WHM_CGI" ]]     && pass "WHM CGI exists: $WHM_CGI"           || fail "WHM CGI MISSING: $WHM_CGI"
+  [[ -x "$WHM_CGI" ]]     && pass "WHM CGI is executable"              || fail "WHM CGI not executable — run: chmod 755 $WHM_CGI"
 
   # CGI syntax check
   if [[ -f "$WHM_CGI" ]]; then
     perl -cw "$WHM_CGI" >/dev/null 2>&1 && pass "WHM CGI Perl syntax OK" || fail "WHM CGI has Perl syntax errors"
+  fi
+
+  # AppConfig conf alongside CGI (source of truth before register_appconfig copies it)
+  WHM_PLUGIN_CONF="${WHM_CGI_DIR}/sentinel_gate.conf"
+  [[ -f "$WHM_PLUGIN_CONF" ]] && pass "WHM plugin conf exists: $WHM_PLUGIN_CONF" \
+    || fail "WHM plugin conf MISSING: $WHM_PLUGIN_CONF"
+  if [[ -f "$WHM_PLUGIN_CONF" ]]; then
+    grep -q "service=whostmgr" "$WHM_PLUGIN_CONF" && pass "WHM conf: service=whostmgr" \
+      || fail "WHM conf missing service=whostmgr"
+    grep -q "url=/cgi/sentinel_gate/sentinel_gate.cgi" "$WHM_PLUGIN_CONF" && pass "WHM conf: url correct" \
+      || fail "WHM conf url wrong — should be /cgi/sentinel_gate/sentinel_gate.cgi"
+    grep -q "^icon=plugin" "$WHM_PLUGIN_CONF" \
+      && fail "WHM conf contains invalid icon=plugin — re-run install.sh" \
+      || pass "WHM conf: no invalid icon= value"
   fi
 
   # Apache alias config

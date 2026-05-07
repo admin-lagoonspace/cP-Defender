@@ -242,33 +242,29 @@ for APPCONF in \
   WHM_REMOVED=true
 done
 
-# Remove CGI script (new: root-level addon_sentinel_gate.cgi)
+# Remove CGI subdirectory (current: /usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate/)
+for CGI_DIR in \
+  /usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate \
+  /usr/local/cpanel/whostmgr/docroot/cgi/sentinel-gate; do
+  if [[ -d "${CGI_DIR}" ]]; then
+    rm -rf "${CGI_DIR}" && ok "Removed WHM CGI dir: ${CGI_DIR}"
+    WHM_REMOVED=true
+  fi
+done
+
+# Remove standalone CGI (legacy: root-level addon_sentinel_gate.cgi from pre-3.1.8)
 for CGI_FILE in \
   "${WHM_CGI}" \
   /usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinel_gate.cgi; do
   [[ -z "${CGI_FILE}" || ! -f "${CGI_FILE}" ]] && continue
-  rm -f "${CGI_FILE}" && ok "Removed WHM CGI: ${CGI_FILE}"
+  rm -f "${CGI_FILE}" && ok "Removed legacy WHM CGI: ${CGI_FILE}"
   WHM_REMOVED=true
 done
 
-# Remove old CGI subdirectory (legacy path from earlier installs)
-for CGI_DIR in \
-  /usr/local/cpanel/whostmgr/docroot/cgi/sentinel-gate; do
-  [[ -d "${CGI_DIR}" ]] && rm -rf "${CGI_DIR}" && ok "Removed legacy CGI dir: ${CGI_DIR}"
-done
-
-# Remove addon_plugins conf (legacy path, swept for old installs)
-for CANDIDATE in \
-  "${WHM_PLUGIN_CONF}" \
-  /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel-gate.conf \
-  /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel_gate.conf; do
-  [[ -z "${CANDIDATE}" || ! -f "${CANDIDATE}" ]] && continue
-  rm -f "${CANDIDATE}" && ok "Removed WHM conf: ${CANDIDATE}"
-  WHM_REMOVED=true
-done
-
-# Legacy paths
+# Legacy paths swept for old installs
 for LEGACY in \
+  /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel-gate.conf \
+  /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel_gate.conf \
   /usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinelgate.cgi \
   /usr/local/cpanel/whostmgr/docroot/cgi/sentinelgate.conf \
   /usr/local/cpanel/base/3rdparty/sentinel-gate; do
