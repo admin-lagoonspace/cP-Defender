@@ -1,0 +1,341 @@
+<?php
+/**
+ * Sentinel Gate — Malware Scanner Module
+ * ClamAV + custom signature-based scanning
+ */
+
+class Scanner {
+
+    private array $customSignatures = [];
+    private array $phpPatterns      = [];
+
+    public function __construct() {
+        $this->loadSignatures();
+        $this->phpPatterns = [
+            // Obfuscation
+            'base64_decode_exec'    => '/base64_decode\s*\(.*\)\s*;?\s*\)?\s*;?\s*eval\s*\(/i',
+            'eval_base64'           => '/eval\s*\(\s*base64_decode\s*\(/i',
+            'eval_gzinflate'        => '/eval\s*\(\s*gzinflate\s*\(/i',
+            'eval_str_rot13'        => '/eval\s*\(\s*str_rot13\s*\(/i',
+            'preg_replace_eval'     => '/preg_replace\s*\(\s*[\'"].*\/e[\'"],/i',
+            'assert_base64'         => '/assert\s*\(\s*base64_decode\s*\(/i',
+            'hex_decode_exec'       => '/\\\\x[0-9a-f]{2}.*eval/i',
+            'gzuncompress_eval'     => '/eval\s*\(\s*gzuncompress\s*\(/i',
+            // Shells
+            'c99_shell'             => '/\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\[.{0,30}\]\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)/i',
+            'system_shell'          => '/\$_(?:GET|POST|REQUEST)\s*\[.{0,30}\]\s*;\s*(?:system|exec|passthru|shell_exec)/i',
+            'backdoor_connect'      => '/fsockopen\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)/i',
+            'stdin_exec'            => '/proc_open.*STDIN.*STDOUT.*STDERR/is',
+            'reverse_shell'         => '/(?:bash|sh)\s*-i\s*>&?\s*\/dev\/tcp/i',
+            // Crypto miners
+            'xmrig_pattern'         => '/stratum\+tcp:\/\/|xmrig|moneropool|minergate\.com/i',
+            'coin_hive'             => '/CoinHive\.Anonymous|coinhive\.min\.js/i',
+            // Injections
+            'spam_mailer'           => '/\$(?:to|from|subject|body|message)\s*=.*(?:@gmail|@yahoo|@hotmail).*;.*mail\s*\(/is',
+            'seo_spam_hidden'       => '/<div\s+style=["\']display\s*:\s*none["\'][^>]*>.*(?:viagra|cialis|pharmacy|casino|poker)/is',
+            // Encoded payloads
+            'long_base64'           => '/[\'"][A-Za-z0-9+\/]{500,}={0,2}[\'"]/',
+            'hex_string_long'       => '/[\'"][0-9a-f]{200,}[\'"]/i',
+            'char_code_obf'         => '/chr\s*\(\s*\d+\s*\)\s*\.\s*chr\s*\(\s*\d+\s*\)/i',
+        ];
+    }
+
+    private function loadSignatures(): void {
+        $sigFile = SIG_DIR . '/custom.sig';
+        if (file_exists($sigFile)) {
+            $lines = file($sigFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            foreach ($lines as $line) {
+                if (str_starts_with($line, '#')) continue;
+                $parts = explode(':', $line, 3);
+                if (count($parts) === 3) {
+                    $this->customSignatures[] = [
+                        'name'    => $parts[0],
+                        'type'    => $parts[1],
+                        'pattern' => $parts[2],
+                    ];
+                }
+            }
+        }
+    }
+
+    /**
+     * Start a new scan job
+     */
+    public function startScan(string $path = '/home', string $type = 'quick'): int {
+        $jobId = Database::insert('scan_jobs', [
+            'scan_type'  => $type,
+            'status'     => 'running',
+            'started_at' => time(),
+            'scan_path'  => $path,
+        ]);
+
+        // Write job file so cron can pick it up
+        if (!is_dir(SG_TMP)) mkdir(SG_TMP, 0750, true);
+        file_put_contents(SG_TMP . '/current_job.json', json_encode([
+            'id'   => $jobId,
+            'path' => $path,
+            'type' => $type,
+        ]));
+
+        // Launch async via background process
+        $cmd = sprintf(
+            'php %s/backend/cron/scan.php --job-id=%d --path=%s > %s/scan_%d.log 2>&1 &',
+            SG_ROOT,
+            $jobId,
+            escapeshellarg($path),
+            SG_LOGS,
+            $jobId
+        );
+        exec($cmd);
+
+        return $jobId;
+    }
+
+    /**
+     * Run ClamAV scan on a path (synchronous, used by cron)
+     */
+    public function runClamScan(string $path, int $jobId): array {
+        if (!file_exists(CLAMSCAN_BIN)) {
+            return $this->runPatternScan($path, $jobId);
+        }
+
+        $cmd = sprintf(
+            '%s --recursive --infected --no-summary --max-filesize=50M --max-scansize=200M %s 2>&1',
+            CLAMSCAN_BIN,
+            escapeshellarg($path)
+        );
+
+        $output = [];
+        exec($cmd, $output, $exitCode);
+
+        $threats = [];
+        foreach ($output as $line) {
+            // ClamAV format: /path/to/file: ThreatName FOUND
+            if (preg_match('/^(.+):\s+(.+)\s+FOUND$/', $line, $m)) {
+                $filePath   = $m[1];
+                $threatName = $m[2];
+                $threatId   = Database::insert('threats', [
+                    'scan_job_id' => $jobId,
+                    'file_path'   => $filePath,
+                    'threat_name' => $threatName,
+                    'threat_type' => $this->classifyThreat($threatName),
+                    'severity'    => $this->getSeverity($threatName),
+                    'hash'        => file_exists($filePath) ? hash_file('sha256', $filePath) : null,
+                    'size'        => file_exists($filePath) ? filesize($filePath) : 0,
+                    'status'      => 'active',
+                ]);
+                $threats[] = ['id' => $threatId, 'file' => $filePath, 'name' => $threatName];
+
+                // Auto-quarantine if enabled
+                if (Database::setting('auto_quarantine') === '1') {
+                    $this->quarantine($filePath, $threatId);
+                }
+            }
+        }
+
+        return $threats;
+    }
+
+    /**
+     * Pattern-based PHP scanner (fallback when ClamAV not installed)
+     */
+    public function runPatternScan(string $path, int $jobId): array {
+        $threats = [];
+        $files   = $this->getPhpFiles($path);
+
+        foreach ($files as $file) {
+            if (filesize($file) > SCAN_MAX_SIZE) continue;
+
+            $content = @file_get_contents($file);
+            if ($content === false) continue;
+
+            foreach ($this->phpPatterns as $sigName => $pattern) {
+                if (preg_match($pattern, $content)) {
+                    $threatId = Database::insert('threats', [
+                        'scan_job_id' => $jobId,
+                        'file_path'   => $file,
+                        'threat_name' => "SG.PHP.$sigName",
+                        'threat_type' => $this->classifySigName($sigName),
+                        'severity'    => $this->getSeverityFromSig($sigName),
+                        'hash'        => hash_file('sha256', $file),
+                        'size'        => filesize($file),
+                        'status'      => 'active',
+                    ]);
+                    $threats[] = ['id' => $threatId, 'file' => $file, 'name' => $sigName];
+
+                    // Auto-quarantine
+                    if (Database::setting('auto_quarantine') === '1') {
+                        $this->quarantine($file, $threatId);
+                    }
+                    break; // One match per file is enough
+                }
+            }
+
+            // Also check custom signatures
+            foreach ($this->customSignatures as $sig) {
+                if ($sig['type'] === 'regex' && preg_match($sig['pattern'], $content)) {
+                    Database::insert('threats', [
+                        'scan_job_id' => $jobId,
+                        'file_path'   => $file,
+                        'threat_name' => $sig['name'],
+                        'threat_type' => 'custom',
+                        'severity'    => 'high',
+                        'hash'        => hash_file('sha256', $file),
+                        'size'        => filesize($file),
+                        'status'      => 'active',
+                    ]);
+                }
+            }
+        }
+
+        return $threats;
+    }
+
+    private function getPhpFiles(string $path): array {
+        $files = [];
+        $ext   = ['php', 'php3', 'php4', 'php5', 'phtml', 'php7', 'phps'];
+        try {
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::SELF_FIRST
+            );
+            foreach ($it as $file) {
+                if ($file->isFile() && in_array(strtolower($file->getExtension()), $ext)) {
+                    $files[] = $file->getPathname();
+                }
+            }
+        } catch (Exception $e) {
+            Logger::error("Scanner: cannot read $path — " . $e->getMessage());
+        }
+        return $files;
+    }
+
+    public function quarantine(string $filePath, int $threatId): bool {
+        $qDir = Database::storagePath('quarantine') . '/' . date('Y-m-d');
+        if (!is_dir($qDir)) mkdir($qDir, 0700, true);
+
+        $dest = $qDir . '/' . basename($filePath) . '_' . $threatId . '.quarantine';
+        if (rename($filePath, $dest)) {
+            // Leave a placeholder so the webmaster knows
+            file_put_contents($filePath . '.sentinel_removed',
+                "File quarantined by Sentinel Gate at " . date('Y-m-d H:i:s') .
+                "\nThreat ID: $threatId\nOriginal: $filePath\n");
+            Database::query(
+                "UPDATE threats SET status='quarantined', action_taken='quarantine', resolved_at=? WHERE id=?",
+                [time(), $threatId]
+            );
+            return true;
+        }
+        return false;
+    }
+
+    public function restoreFromQuarantine(int $threatId): bool {
+        $threat = Database::fetchOne("SELECT * FROM threats WHERE id = ?", [$threatId]);
+        if (!$threat) return false;
+
+        $qDir = Database::storagePath('quarantine') . '/' . date('Y-m-d', $threat['detected_at']);
+        $src  = $qDir . '/' . basename($threat['file_path']) . '_' . $threatId . '.quarantine';
+
+        if (file_exists($src) && rename($src, $threat['file_path'])) {
+            @unlink($threat['file_path'] . '.sentinel_removed');
+            Database::query(
+                "UPDATE threats SET status='restored', resolved_at=? WHERE id=?",
+                [time(), $threatId]
+            );
+            return true;
+        }
+        return false;
+    }
+
+    public function deleteThreat(int $threatId): bool {
+        $threat = Database::fetchOne("SELECT * FROM threats WHERE id = ?", [$threatId]);
+        if (!$threat) return false;
+
+        $deleted = @unlink($threat['file_path']);
+        Database::query(
+            "UPDATE threats SET status='deleted', action_taken='delete', resolved_at=? WHERE id=?",
+            [time(), $threatId]
+        );
+        return $deleted;
+    }
+
+    public function getScanStatus(int $jobId): array {
+        $job = Database::fetchOne("SELECT * FROM scan_jobs WHERE id = ?", [$jobId]);
+        if (!$job) return ['error' => 'Job not found'];
+
+        $threats = Database::fetchAll(
+            "SELECT * FROM threats WHERE scan_job_id = ? ORDER BY detected_at DESC",
+            [$jobId]
+        );
+
+        return ['job' => $job, 'threats' => $threats];
+    }
+
+    public function getStats(): array {
+        $total    = Database::fetchOne("SELECT COUNT(*) as c FROM threats")['c'];
+        $active   = Database::fetchOne("SELECT COUNT(*) as c FROM threats WHERE status='active'")['c'];
+        $quarant  = Database::fetchOne("SELECT COUNT(*) as c FROM threats WHERE status='quarantined'")['c'];
+        $lastScan = Database::fetchOne("SELECT * FROM scan_jobs ORDER BY id DESC LIMIT 1");
+        $byType   = Database::fetchAll(
+            "SELECT threat_type, COUNT(*) as count FROM threats WHERE status='active' GROUP BY threat_type"
+        );
+
+        return [
+            'total_threats'  => (int) $total,
+            'active'         => (int) $active,
+            'quarantined'    => (int) $quarant,
+            'last_scan'      => $lastScan,
+            'by_type'        => $byType,
+            'files_scanned'  => (int) ($lastScan['files_scanned'] ?? 0),
+        ];
+    }
+
+    private function classifyThreat(string $name): string {
+        $n = strtolower($name);
+        if (str_contains($n, 'backdoor'))    return 'backdoor';
+        if (str_contains($n, 'malware'))     return 'malware';
+        if (str_contains($n, 'trojan'))      return 'trojan';
+        if (str_contains($n, 'phishing'))    return 'phishing';
+        if (str_contains($n, 'miner'))       return 'cryptominer';
+        if (str_contains($n, 'shell'))       return 'webshell';
+        if (str_contains($n, 'spam'))        return 'spam';
+        return 'malware';
+    }
+
+    private function classifySigName(string $sig): string {
+        if (str_contains($sig, 'shell'))     return 'webshell';
+        if (str_contains($sig, 'eval'))      return 'obfuscated';
+        if (str_contains($sig, 'miner'))     return 'cryptominer';
+        if (str_contains($sig, 'spam'))      return 'spam';
+        if (str_contains($sig, 'backdoor'))  return 'backdoor';
+        return 'suspicious';
+    }
+
+    private function getSeverity(string $name): string {
+        $n = strtolower($name);
+        if (str_contains($n, 'critical') || str_contains($n, 'backdoor') || str_contains($n, 'shell')) return 'critical';
+        if (str_contains($n, 'trojan') || str_contains($n, 'malware')) return 'high';
+        if (str_contains($n, 'phishing') || str_contains($n, 'miner')) return 'medium';
+        return 'low';
+    }
+
+    private function getSeverityFromSig(string $sig): string {
+        $critical = ['c99_shell', 'backdoor_connect', 'reverse_shell', 'stdin_exec'];
+        $high     = ['eval_base64', 'eval_gzinflate', 'system_shell', 'assert_base64'];
+        if (in_array($sig, $critical)) return 'critical';
+        if (in_array($sig, $high))     return 'high';
+        return 'medium';
+    }
+
+    public function updateSignatures(): array {
+        // Update ClamAV signatures
+        $clamResult = '';
+        if (file_exists(FRESHCLAM_BIN)) {
+            exec(FRESHCLAM_BIN . ' 2>&1', $out, $code);
+            $clamResult = implode("\n", $out);
+        }
+
+        Database::setSetting('clam_db_update', (string) time());
+        return ['success' => true, 'clam' => $clamResult];
+    }
+}

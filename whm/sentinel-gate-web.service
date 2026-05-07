@@ -1,0 +1,29 @@
+[Unit]
+Description=Sentinel Gate Web Dashboard (port 31150)
+Documentation=https://github.com/sentinel-gate
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/usr/local/sentinel-gate
+Environment="SG_ROOT=/usr/local/sentinel-gate"
+ExecStart=/usr/bin/php -S 0.0.0.0:31150 /usr/local/sentinel-gate/backend/standalone-router.php
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=10
+StandardOutput=append:/usr/local/sentinel-gate/logs/web.log
+StandardError=append:/usr/local/sentinel-gate/logs/web.log
+
+# Security hardening
+NoNewPrivileges=false
+PrivateTmp=false
+ProtectSystem=false
+ReadWritePaths=/usr/local/sentinel-gate /tmp /home /var/www
+
+[Install]
+WantedBy=multi-user.target

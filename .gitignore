@@ -1,0 +1,26 @@
+# Runtime & generated files
+logs/
+*.log
+/tmp/
+
+# SQLite database (runtime data)
+database/*.db
+database/*.db-shm
+database/*.db-wal
+
+# Quarantine directory (runtime)
+quarantine/
+
+# Install-generated config
+backend/config/mode.php
+
+# OS & editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Zip archives
+*.zip

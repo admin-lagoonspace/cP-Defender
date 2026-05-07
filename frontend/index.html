@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentinel Gate — Security Dashboard</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+
+<!-- ══ LOGIN SCREEN ══════════════════════════════════════════════════════════ -->
+<div id="login-screen">
+  <div class="login-card card-accent">
+    <div class="login-logo">
+      <div class="brand-icon">🛡</div>
+      <div style="font-size:1.4rem;font-weight:800;letter-spacing:-.02em">SENTINEL GATE</div>
+      <div id="login-mode-sub" style="font-size:.75rem;color:var(--txt3);margin-top:4px">Security Suite</div>
+    </div>
+    <!-- Mode badge — updated by JS on load -->
+    <div id="login-mode-badge" style="display:flex;justify-content:center;margin-bottom:18px">
+      <span style="font-size:.68rem;padding:3px 10px;border-radius:20px;background:rgba(59,130,246,.15);color:var(--blue);border:1px solid rgba(59,130,246,.3);letter-spacing:.05em">
+        DETECTING MODE…
+      </span>
+    </div>
+    <form id="login-form">
+      <div class="form-group">
+        <label class="form-label" id="login-user-label">Username</label>
+        <input class="form-input" id="login-user" type="text" placeholder="admin" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input class="form-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <div id="login-error" class="hidden" style="color:var(--red);font-size:.78rem;margin-bottom:12px;padding:8px 12px;background:var(--red-dim);border-radius:6px;"></div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:10px">
+        Sign In
+      </button>
+      <div id="login-hint" style="text-align:center;margin-top:12px;font-size:.72rem;color:var(--txt3)">
+        Loading…
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ══ TOP BAR ═══════════════════════════════════════════════════════════════ -->
+<header class="topbar">
+  <div class="topbar-brand">
+    <div class="brand-icon">🛡</div>
+    <div>
+      <div class="brand-name">SENTINEL GATE</div>
+      <div class="brand-sub">SECURITY SUITE</div>
+    </div>
+  </div>
+
+  <nav class="topbar-nav">
+    <button class="nav-item active" data-page="dashboard">Dashboard</button>
+    <button class="nav-item" data-page="scanner">Scanner</button>
+    <button class="nav-item" data-page="firewall">Firewall</button>
+    <button class="nav-item" data-page="waf">WAF</button>
+    <button class="nav-item" data-page="iprep">IP Reputation</button>
+    <button class="nav-item" data-page="events">Events</button>
+    <button class="nav-item" data-page="settings">Settings</button>
+  </nav>
+
+  <div class="topbar-right">
+    <!-- Mode pill: shown after login -->
+    <div id="mode-pill" style="display:none;font-size:.65rem;padding:3px 9px;border-radius:12px;
+      background:rgba(59,130,246,.12);color:var(--blue);border:1px solid rgba(59,130,246,.25);
+      letter-spacing:.06em;font-weight:600"></div>
+    <div class="status-pill" id="top-status">
+      <div class="status-dot"></div>
+      <span>Protected</span>
+    </div>
+    <div class="avatar" id="user-avatar" title="Logout" onclick="Auth.logout()">RB</div>
+  </div>
+</header>
+
+<!-- ══ LAYOUT ════════════════════════════════════════════════════════════════ -->
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-section-label">Modules</div>
+
+    <div class="sidebar-item active" data-page="dashboard">
+      <span class="sidebar-icon">⊞</span> Dashboard
+    </div>
+    <div class="sidebar-item" data-page="scanner">
+      <span class="sidebar-icon">⬡</span> Malware Scanner
+      <span class="sidebar-badge" id="sb-threats" style="display:none">0</span>
+    </div>
+    <div class="sidebar-item" data-page="firewall">
+      <span class="sidebar-icon">▣</span> Firewall
+    </div>
+    <div class="sidebar-item" data-page="waf">
+      <span class="sidebar-icon">◈</span> WAF
+    </div>
+    <div class="sidebar-item" data-page="iprep">
+      <span class="sidebar-icon">◎</span> IP Reputation
+    </div>
+
+    <div class="sidebar-section-label">Protection</div>
+    <div class="sidebar-item" data-page="botshield">
+      <span class="sidebar-icon">◉</span> Bot Shield
+    </div>
+    <div class="sidebar-item" data-page="cms">
+      <span class="sidebar-icon">▤</span> CMS Guard
+    </div>
+    <div class="sidebar-item" data-page="rootkit">
+      <span class="sidebar-icon">◐</span> Rootkit Scan
+    </div>
+    <div class="sidebar-item" data-page="integrity">
+      <span class="sidebar-icon">◫</span> File Integrity
+    </div>
+    <div class="sidebar-item" data-page="php">
+      <span class="sidebar-icon">◬</span> PHP Hardening
+    </div>
+
+    <div class="sidebar-section-label">Monitoring</div>
+    <div class="sidebar-item" data-page="monitor">
+      <span class="sidebar-icon">◈</span> Real-Time Monitor
+      <span class="sidebar-badge" id="sb-rt-threats" style="display:none">!</span>
+    </div>
+    <div class="sidebar-item" data-page="logs">
+      <span class="sidebar-icon">◧</span> Log Analyzer
+    </div>
+    <div class="sidebar-item" data-page="events">
+      <span class="sidebar-icon">◑</span> Security Events
+      <span class="sidebar-badge" id="sb-events">0</span>
+    </div>
+    <div class="sidebar-item" data-page="settings">
+      <span class="sidebar-icon">◰</span> Settings
+    </div>
+
+    <div class="sidebar-footer">
+      <div style="font-weight:700;color:var(--txt2)">Sentinel Gate</div>
+      <div style="margin-top:2px" id="sidebar-mode-label">v3.1.2 · cPanel Plugin</div>
+    </div>
+  </aside>
+
+  <!-- ── Main Content ─────────────────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- ════ PAGE: DASHBOARD ════════════════════════════════════════════════ -->
+    <div id="page-dashboard" class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Security Dashboard</div>
+          <div class="page-sub" id="dash-server-info">Loading server info…</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="refreshDashboard()">↺ Refresh</button>
+          <button class="btn btn-primary btn-sm" onclick="openPage('scanner');startScan()">▶ Run Scan</button>
+        </div>
+      </div>
+
+      <!-- Stats Row -->
+      <div class="stats-row mb-5">
+        <div class="stat-card blue">
+          <div class="stat-label">Files Scanned</div>
+          <div class="stat-value" id="stat-files">—</div>
+          <div class="stat-sub" style="color:var(--blue2)" id="stat-files-sub">Last scan</div>
+          <div class="stat-spark"><svg class="spark-svg" id="spark-files"></svg></div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">Threats Detected</div>
+          <div class="stat-value" id="stat-threats">—</div>
+          <div class="stat-sub" style="color:var(--red)" id="stat-threats-sub">Active</div>
+          <div class="stat-spark"><svg class="spark-svg" id="spark-threats"></svg></div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Firewall Blocks</div>
+          <div class="stat-value" id="stat-fw">—</div>
+          <div class="stat-sub" style="color:var(--amber)" id="stat-fw-sub">Blocked IPs</div>
+          <div class="stat-spark"><svg class="spark-svg" id="spark-fw"></svg></div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">WAF Events</div>
+          <div class="stat-value" id="stat-waf">—</div>
+          <div class="stat-sub" style="color:var(--green)" id="stat-waf-sub">Today</div>
+          <div class="stat-spark"><svg class="spark-svg" id="spark-waf"></svg></div>
+        </div>
+      </div>
+
+      <!-- Scanner Status + Threat Breakdown -->
+      <div class="grid-62 mb-5">
+        <div class="card card-accent">
+          <div class="card-header">
+            <div class="card-title">Scanner Status</div>
+            <div id="dash-scan-badge" class="badge badge-green">Protected</div>
+          </div>
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+              <div style="font-size:2.8rem" id="dash-scan-icon">✅</div>
+              <div>
+                <div style="font-size:1.5rem;font-weight:800;letter-spacing:-.02em" id="dash-scan-status">Protected</div>
+                <div style="color:var(--txt2);font-size:.82rem;margin-top:3px" id="dash-scan-meta">Last scan: —</div>
+              </div>
+            </div>
+            <div class="label" style="margin-bottom:6px">Scan Coverage</div>
+            <div class="progress-bar" style="height:10px">
+              <div class="progress-fill" id="dash-coverage-bar" style="background:var(--green);width:0%"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:4px">
+              <span style="font-size:.72rem;color:var(--txt3)">Coverage</span>
+              <span style="font-size:.72rem;color:var(--green);font-family:var(--font-mono)" id="dash-coverage-pct">0%</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+              <div><div style="font-weight:700" id="fs-scanned">—</div><div class="dim" style="font-size:.68rem;margin-top:2px">Scanned</div></div>
+              <div><div style="font-weight:700;color:var(--green)" id="fs-clean">—</div><div class="dim" style="font-size:.68rem;margin-top:2px">Clean</div></div>
+              <div><div style="font-weight:700;color:var(--amber)" id="fs-quar">—</div><div class="dim" style="font-size:.68rem;margin-top:2px">Quarantined</div></div>
+              <div><div style="font-weight:700;color:var(--red)" id="fs-del">—</div><div class="dim" style="font-size:.68rem;margin-top:2px">Deleted</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card card-accent-red">
+          <div class="card-header">
+            <div class="card-title">Threat Breakdown</div>
+          </div>
+          <div class="card-body" id="dash-threat-breakdown">
+            <div class="dim" style="font-size:.8rem">Loading…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Real-Time Monitor Status Banner -->
+      <div class="card mb-5" id="rt-monitor-card" style="border-left:4px solid var(--green)">
+        <div class="card-body" style="padding:14px 20px">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+            <div style="display:flex;align-items:center;gap:14px">
+              <div style="font-size:1.6rem" id="rt-icon">🔍</div>
+              <div>
+                <div style="font-weight:700;font-size:.9rem">Real-Time File Monitor
+                  <span class="badge badge-green" id="rt-status-badge" style="margin-left:8px">Active</span>
+                </div>
+                <div style="font-size:.75rem;color:var(--txt2);margin-top:3px" id="rt-desc">
+                  Watching <span id="rt-paths">…</span> · Engine: <span id="rt-engine">inotify</span>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:20px">
+              <div style="text-align:center">
+                <div style="font-weight:800;font-size:1.2rem;color:var(--blue)" id="rt-files-checked">—</div>
+                <div class="dim" style="font-size:.65rem">Files Checked</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-weight:800;font-size:1.2rem;color:var(--amber)" id="rt-detections-24h">—</div>
+                <div class="dim" style="font-size:.65rem">Detected (24h)</div>
+              </div>
+              <div style="text-align:center">
+                <div style="font-weight:800;font-size:1.2rem;color:var(--red)" id="rt-detections-all">—</div>
+                <div class="dim" style="font-size:.65rem">Total Caught</div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <button class="btn btn-ghost btn-sm" id="rt-toggle-btn" onclick="toggleMonitor()">Stop</button>
+                <button class="btn btn-ghost btn-sm" onclick="openPage('monitor')">Details →</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Attack Timeline Chart -->
+      <div class="card mb-5">
+        <div class="card-header">
+          <div class="card-title">Attack Timeline — Last 30 Days</div>
+          <div class="chart-legend">
+            <div class="legend-item"><div class="legend-dot" style="background:var(--blue)"></div>WAF Blocks</div>
+            <div class="legend-item"><div class="legend-dot" style="background:var(--amber)"></div>Brute Force</div>
+            <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div>Malware</div>
+          </div>
+        </div>
+        <div class="card-body">
+          <svg id="timeline-chart" width="100%" height="200" style="overflow:visible"></svg>
+        </div>
+      </div>
+
+      <!-- Recent Events -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Recent Security Events</div>
+          <span class="badge badge-red" id="dash-events-badge">0 unresolved</span>
+        </div>
+        <div class="card-body" style="padding:0">
+          <div style="overflow-x:auto">
+            <table class="sg-table" id="dash-events-table">
+              <thead>
+                <tr>
+                  <th>Severity</th><th>Type</th><th>Source</th>
+                  <th>Target</th><th>Time</th><th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="dash-events-body">
+                <tr><td colspan="6" style="text-align:center;color:var(--txt3)">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ PAGE: SCANNER ══════════════════════════════════════════════════ -->
+    <div id="page-scanner" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Malware Scanner</div>
+          <div class="page-sub">ClamAV + pattern-based detection · auto-quarantine enabled</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <select class="form-input btn-sm" id="scan-type-sel" style="width:140px">
+            <option value="quick">Quick Scan</option>
+            <option value="full">Full Scan</option>
+            <option value="custom">Custom Path</option>
+          </select>
+          <input class="form-input btn-sm hidden" id="scan-path-input" placeholder="/home/user" style="width:180px">
+          <button class="btn btn-primary btn-sm" id="scan-btn" onclick="startScan()">▶ Start Scan</button>
+          <button class="btn btn-ghost btn-sm" onclick="updateSignatures()">↑ Update Sigs</button>
+        </div>
+      </div>
+
+      <!-- Scan Progress -->
+      <div class="card mb-5" id="scan-progress-card" style="display:none">
+        <div class="card-body">
+          <div class="scan-status-bar">
+            <div class="scan-status-icon" id="scan-spinner">⏳</div>
+            <div class="scan-progress-wrap">
+              <div class="scan-progress-label">
+                <span id="scan-progress-text">Scanning…</span>
+                <span id="scan-progress-pct" style="font-family:var(--font-mono)">0%</span>
+              </div>
+              <div class="progress-bar"><div class="progress-fill" id="scan-progress-bar" style="background:var(--blue);width:0%;transition:width .5s"></div></div>
+            </div>
+            <button class="btn btn-ghost btn-xs" onclick="stopScan()">Stop</button>
+          </div>
+          <div style="display:flex;gap:20px;margin-top:12px;font-size:.78rem;color:var(--txt3)" id="scan-live-stats">
+            <span>Files: <b id="scan-live-files" style="color:var(--txt)">0</b></span>
+            <span>Threats: <b id="scan-live-threats" style="color:var(--red)">0</b></span>
+            <span>Status: <b id="scan-live-status" style="color:var(--txt)">Starting…</b></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Threats Table -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Detected Threats</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select class="form-input" id="threat-filter" style="width:130px" onchange="loadThreats()">
+              <option value="">All</option>
+              <option value="active">Active</option>
+              <option value="quarantined">Quarantined</option>
+              <option value="deleted">Deleted</option>
+            </select>
+            <span class="badge badge-red" id="threat-count-badge">0</span>
+          </div>
+        </div>
+        <div class="card-body" style="padding:0">
+          <div style="overflow-x:auto">
+            <table class="sg-table">
+              <thead>
+                <tr><th>Severity</th><th>File</th><th>Threat Name</th><th>Type</th><th>Size</th><th>Detected</th><th>Status</th><th>Actions</th></tr>
+              </thead>
+              <tbody id="threats-body">
+                <tr><td colspan="8" style="text-align:center;color:var(--txt3);padding:28px">No threats detected. Run a scan to check your server.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ PAGE: FIREWALL ═════════════════════════════════════════════════ -->
+    <div id="page-firewall" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Firewall</div>
+          <div class="page-sub" id="fw-status-line">Loading firewall status…</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="reloadFirewall()">↺ Reload Rules</button>
+          <button class="btn btn-primary btn-sm" onclick="openAddRuleModal()">+ Add Rule</button>
+        </div>
+      </div>
+
+      <!-- FW Stats -->
+      <div class="stats-row mb-5" style="grid-template-columns:repeat(3,1fr)">
+        <div class="stat-card blue"><div class="stat-label">Active Rules</div><div class="stat-value" id="fw-stat-rules">—</div></div>
+        <div class="stat-card red"><div class="stat-label">Blocked IPs</div><div class="stat-value" id="fw-stat-blocked">—</div></div>
+        <div class="stat-card amber"><div class="stat-label">Blocked Today</div><div class="stat-value" id="fw-stat-today">—</div></div>
+      </div>
+
+      <div class="grid-62 mb-5">
+        <!-- Rules Table -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Firewall Rules</div>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="sg-table">
+              <thead>
+                <tr><th>Name</th><th>Direction</th><th>Protocol</th><th>Port</th><th>Action</th><th>Enabled</th><th></th></tr>
+              </thead>
+              <tbody id="fw-rules-body">
+                <tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:20px">Loading rules…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Block IP Panel -->
+        <div class="card card-accent-red">
+          <div class="card-header"><div class="card-title">Block / Allow IP</div></div>
+          <div class="card-body">
+            <div class="form-group">
+              <label class="form-label">IP Address</label>
+              <input class="form-input" id="fw-ip-input" placeholder="1.2.3.4">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Reason</label>
+              <input class="form-input" id="fw-ip-reason" placeholder="Manual block">
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-danger" style="flex:1" onclick="blockIP()">Block IP</button>
+              <button class="btn btn-ghost" style="flex:1" onclick="allowIP()">Allow IP</button>
+            </div>
+            <div class="label" style="margin-top:20px;margin-bottom:10px">Recently Blocked</div>
+            <div id="fw-recent-blocked" style="font-size:.78rem"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Geo Blocking -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Geographic Blocking</div>
+          <span class="badge badge-amber">CSF Integration</span>
+        </div>
+        <div class="card-body">
+          <div style="font-size:.82rem;color:var(--txt2);margin-bottom:14px">Select countries to block all inbound traffic from. Uses CSF's CC_DENY directive.</div>
+          <div id="geo-block-grid" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:16px">
+            <!-- Populated by JS -->
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="saveGeoBlock()">Save Geo Rules</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ PAGE: WAF ══════════════════════════════════════════════════════ -->
+    <div id="page-waf" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Web Application Firewall</div>
+          <div class="page-sub">ModSecurity 3.0 + OWASP Core Rule Set</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select class="form-input btn-sm" id="waf-mode-sel" style="width:160px">
+            <option value="On">Enforcement Mode</option>
+            <option value="DetectionOnly">Detection Only</option>
+            <option value="Off">Disabled</option>
+          </select>
+          <button class="btn btn-primary btn-sm" onclick="setWAFMode()">Apply Mode</button>
+        </div>
+      </div>
+
+      <!-- WAF Stats Row -->
+      <div class="stats-row mb-5" style="grid-template-columns:repeat(4,1fr)">
+        <div class="stat-card blue"><div class="stat-label">Total Events</div><div class="stat-value" id="waf-stat-total">—</div></div>
+        <div class="stat-card red"><div class="stat-label">Events Today</div><div class="stat-value" id="waf-stat-today">—</div></div>
+        <div class="stat-card amber"><div class="stat-label">Top Rule</div><div class="stat-value" style="font-size:1rem;font-family:var(--font-mono)" id="waf-stat-top-rule">—</div></div>
+        <div class="stat-card green"><div class="stat-label">Mode</div><div class="stat-value" style="font-size:1.1rem" id="waf-stat-mode">—</div></div>
+      </div>
+
+      <div class="grid-62 mb-5">
+        <!-- Events Table -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">WAF Events</div>
+            <div style="display:flex;gap:8px">
+              <select class="form-input" id="waf-sev-filter" style="width:120px" onchange="loadWAFEvents()">
+                <option value="">All Severity</option>
+                <option value="critical">Critical</option>
+                <option value="error">Error</option>
+                <option value="warning">Warning</option>
+                <option value="notice">Notice</option>
+              </select>
+            </div>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="sg-table">
+              <thead>
+                <tr><th>Severity</th><th>Rule ID</th><th>Message</th><th>IP</th><th>URI</th><th>Time</th></tr>
+              </thead>
+              <tbody id="waf-events-body">
+                <tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:20px">Loading WAF events…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- OWASP CRS Categories -->
+        <div class="card">
+          <div class="card-header"><div class="card-title">OWASP CRS Categories</div></div>
+          <div class="card-body" id="waf-categories">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ PAGE: IP REPUTATION ════════════════════════════════════════════ -->
+    <div id="page-iprep" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">IP Reputation</div>
+          <div class="page-sub">RBL/DNSBL checks · AbuseIPDB · GeoIP</div>
+        </div>
+      </div>
+
+      <!-- IP Lookup -->
+      <div class="card mb-5">
+        <div class="card-header"><div class="card-title">IP Lookup</div></div>
+        <div class="card-body">
+          <div style="display:flex;gap:10px">
+            <input class="form-input" id="iprep-ip-input" placeholder="Enter IP address to check…" style="flex:1">
+            <button class="btn btn-primary" onclick="checkIP()">Check IP</button>
+          </div>
+          <div id="iprep-result" style="margin-top:16px"></div>
+        </div>
+      </div>
+
+      <!-- Top Attackers -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Top Attacking IPs (24h)</div>
+          <button class="btn btn-ghost btn-sm" onclick="loadTopAttackers()">↺ Refresh</button>
+        </div>
+        <div class="card-body" style="padding:0">
+          <table class="sg-table">
+            <thead>
+              <tr><th>IP Address</th><th>Country</th><th>Risk Score</th><th>RBL Hits</th><th>Hits (24h)</th><th>Last Seen</th><th>Action</th></tr>
+            </thead>
+            <tbody id="iprep-table-body">
+              <tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:20px">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ PAGE: EVENTS ═══════════════════════════════════════════════════ -->
+    <div id="page-events" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Security Events</div>
+          <div class="page-sub">All security events from all modules</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <select class="form-input btn-sm" id="events-sev-filter" style="width:140px" onchange="loadEvents()">
+            <option value="">All Severity</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Event Log</div>
+          <span class="badge badge-red" id="events-unresolved-badge">0 unresolved</span>
+        </div>
+        <div class="card-body" style="padding:0">
+          <table class="sg-table">
+            <thead>
+              <tr><th>Severity</th><th>Type</th><th>Source IP</th><th>Target</th><th>Description</th><th>Time</th><th>Status</th></tr>
+            </thead>
+            <tbody id="events-body">
+              <tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:20px">Loading events…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ PAGE: SETTINGS ═════════════════════════════════════════════════ -->
+    <div id="page-settings" class="page hidden">
+      <div class="page-header">
+        <div><div class="page-title">Settings</div><div class="page-sub">Configure Sentinel Gate modules</div></div>
+        <button class="btn btn-primary btn-sm" onclick="saveSettings()">Save Changes</button>
+      </div>
+
+      <!-- Standalone-mode banner -->
+      <div id="standalone-settings-banner" class="hidden" style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);border-radius:10px;padding:12px 18px;margin-bottom:20px;display:flex;align-items:center;gap:12px">
+        <span style="font-size:1.3rem">&#x1F5A5;</span>
+        <div>
+          <div style="font-size:.82rem;font-weight:600;color:var(--blue)">Standalone Linux Mode</div>
+          <div style="font-size:.75rem;color:var(--txt2)">Running on port 31150 &middot; Local admin authentication &middot; No cPanel required</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <!-- Standalone only: Change Password -->
+        <div class="card mb-4 hidden" id="card-change-password">
+          <div class="card-header"><div class="card-title">Admin Account</div><span class="badge sev-info" style="font-size:.65rem">Standalone</span></div>
+          <div class="card-body">
+            <div class="form-group">
+              <label class="form-label">Username</label>
+              <input class="form-input" id="chpw-user" placeholder="admin">
+            </div>
+            <div class="form-group">
+              <label class="form-label">New Password</label>
+              <input class="form-input" id="chpw-pass" type="password" placeholder="Min 8 characters">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Confirm Password</label>
+              <input class="form-input" id="chpw-pass2" type="password" placeholder="Repeat password">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="changeAdminPassword()">Update Credentials</button>
+          </div>
+        </div>
+
+        <!-- Scanner Settings -->
+        <div class="card mb-4">
+          <div class="card-header"><div class="card-title">Scanner</div></div>
+          <div class="card-body">
+            <div class="form-group">
+              <label class="form-label">Scan Schedule</label>
+              <select class="form-input" id="set-scan-schedule">
+                <option value="hourly">Every Hour</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="manual">Manual Only</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Scan Paths (comma-separated)</label>
+              <input class="form-input" id="set-scan-paths" placeholder="/home,/var/www">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Auto-Quarantine Threats</label>
+              <label class="toggle"><input type="checkbox" id="set-auto-quar"><span class="toggle-slider"></span></label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Alerts -->
+        <div class="card mb-4">
+          <div class="card-header"><div class="card-title">Email Alerts</div></div>
+          <div class="card-body">
+            <div class="form-group">
+              <label class="form-label">Enable Email Alerts</label>
+              <label class="toggle"><input type="checkbox" id="set-email-alerts"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Alert Email Address</label>
+              <input class="form-input" id="set-alert-email" type="email" placeholder="admin@example.com">
+            </div>
+            <div class="form-group">
+              <label class="form-label">AbuseIPDB API Key</label>
+              <input class="form-input" id="set-abuseipdb" type="password" placeholder="Leave blank to skip">
+            </div>
+          </div>
+        </div>
+
+        <!-- PHP Hardening -->
+        <div class="card mb-4">
+          <div class="card-header"><div class="card-title">PHP Hardening</div></div>
+          <div class="card-body">
+            <div class="form-group">
+              <label class="form-label">Disabled Functions</label>
+              <input class="form-input" id="set-php-disable" placeholder="exec,passthru,shell_exec,system,proc_open">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Rate Limit SSH (attempts/min)</label>
+              <input class="form-input" id="set-rate-ssh" type="number" min="1" max="30">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Rate Limit HTTP (req/min per IP)</label>
+              <input class="form-input" id="set-rate-http" type="number" min="10" max="1000">
+            </div>
+          </div>
+        </div>
+
+        <!-- Module Toggles -->
+        <div class="card mb-4">
+          <div class="card-header"><div class="card-title">Module Status</div></div>
+          <div class="card-body">
+            <div style="display:grid;gap:14px">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:.82rem">Firewall</span>
+                <label class="toggle"><input type="checkbox" id="set-fw-enabled" checked><span class="toggle-slider"></span></label>
+              </div>
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:.82rem">WAF</span>
+                <label class="toggle"><input type="checkbox" id="set-waf-enabled" checked><span class="toggle-slider"></span></label>
+              </div>
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:.82rem">Bot Shield</span>
+                <label class="toggle"><input type="checkbox" id="set-bot-enabled" checked><span class="toggle-slider"></span></label>
+              </div>
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:.82rem">IP Reputation Checks</span>
+                <label class="toggle"><input type="checkbox" id="set-iprep-enabled" checked><span class="toggle-slider"></span></label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Storage Management -->
+      <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--txt3);font-weight:600">Storage Management</div>
+          <div style="font-size:.78rem;color:var(--txt2);margin-top:2px">Control where data lives and how long it is kept. Changes apply immediately.</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="loadStorageStats()">&#x21BA; Refresh</button>
+          <button class="btn btn-danger btn-sm" onclick="runStoragePrune()" id="prune-btn">Run Cleanup Now</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px">
+        <!-- Quarantine card -->
+        <div class="card" style="border-color:rgba(251,191,36,.25)">
+          <div class="card-header" style="padding-bottom:8px">
+            <div class="card-title" style="font-size:.82rem">&#x1F4E6; Quarantine</div>
+            <span class="badge sev-medium" id="stor-quar-size">--</span>
+          </div>
+          <div class="card-body" style="padding-top:8px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+              <div><div class="label">Files Held</div><div class="value" id="stor-quar-files">--</div></div>
+              <div><div class="label">Status</div><div class="value" id="stor-quar-status">--</div></div>
+            </div>
+            <div class="label" style="margin-bottom:4px">Custom Path <span style="font-weight:400;color:var(--txt3)">(blank = default)</span></div>
+            <input class="form-input" id="stor-quar-dir" placeholder="/usr/local/sentinel-gate/quarantine" style="font-size:.75rem;font-family:monospace">
+            <div class="label" style="margin-top:10px;margin-bottom:4px">Keep files for</div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="range" id="stor-quar-days-range" min="7" max="365" value="90"
+                oninput="document.getElementById('stor-quar-days-val').textContent=this.value+' days'"
+                style="flex:1;accent-color:var(--blue)">
+              <span id="stor-quar-days-val" style="min-width:60px;font-size:.8rem">90 days</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Logs card -->
+        <div class="card" style="border-color:rgba(99,102,241,.25)">
+          <div class="card-header" style="padding-bottom:8px">
+            <div class="card-title" style="font-size:.82rem">&#x1F4C4; Log Files</div>
+            <span class="badge sev-info" id="stor-log-size">--</span>
+          </div>
+          <div class="card-body" style="padding-top:8px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+              <div><div class="label">Log Files</div><div class="value" id="stor-log-files">--</div></div>
+              <div><div class="label">monitor.log</div><div class="value" id="stor-log-monitor">--</div></div>
+            </div>
+            <div class="label" style="margin-bottom:4px">Custom Log Path <span style="font-weight:400;color:var(--txt3)">(blank = default)</span></div>
+            <input class="form-input" id="stor-log-dir" placeholder="/usr/local/sentinel-gate/logs" style="font-size:.75rem;font-family:monospace">
+            <div class="label" style="margin-top:10px;margin-bottom:4px">Keep logs for</div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="range" id="stor-log-days-range" min="3" max="180" value="30"
+                oninput="document.getElementById('stor-log-days-val').textContent=this.value+' days'"
+                style="flex:1;accent-color:var(--blue)">
+              <span id="stor-log-days-val" style="min-width:60px;font-size:.8rem">30 days</span>
+            </div>
+            <div class="label" style="margin-top:10px;margin-bottom:4px">Rotate monitor.log at</div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="range" id="stor-mon-mb-range" min="5" max="500" value="50"
+                oninput="document.getElementById('stor-mon-mb-val').textContent=this.value+' MB'"
+                style="flex:1;accent-color:var(--blue)">
+              <span id="stor-mon-mb-val" style="min-width:60px;font-size:.8rem">50 MB</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Database card -->
+        <div class="card" style="border-color:rgba(16,185,129,.25)">
+          <div class="card-header" style="padding-bottom:8px">
+            <div class="card-title" style="font-size:.82rem">&#x1F5C4; Database</div>
+            <span class="badge sev-low" id="stor-db-size">--</span>
+          </div>
+          <div class="card-body" style="padding-top:8px">
+            <div class="label" style="margin-bottom:8px">Row counts</div>
+            <div style="display:grid;gap:6px;margin-bottom:14px">
+              <div style="display:flex;justify-content:space-between;font-size:.78rem"><span style="color:var(--txt2)">WAF Events</span><span id="stor-db-waf">--</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:.78rem"><span style="color:var(--txt2)">Security Events</span><span id="stor-db-sec">--</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:.78rem"><span style="color:var(--txt2)">Threats</span><span id="stor-db-threats">--</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:.78rem"><span style="color:var(--txt2)">Cron Log</span><span id="stor-db-cron">--</span></div>
+            </div>
+            <div class="label" style="margin-bottom:4px">Max WAF events</div>
+            <input class="form-input" id="stor-db-max-waf" type="number" min="1000" max="5000000" value="100000" style="font-size:.8rem;margin-bottom:10px">
+            <div class="label" style="margin-bottom:4px">Max security events</div>
+            <input class="form-input" id="stor-db-max-sec" type="number" min="1000" max="1000000" value="50000" style="font-size:.8rem">
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+        <button class="btn btn-primary" onclick="saveStorageSettings()">Save Storage Settings</button>
+      </div>
+      <div id="prune-result" class="hidden" style="background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);border-radius:8px;padding:14px 18px;font-size:.8rem;color:var(--green);margin-bottom:16px"></div>
+    </div>
+
+    <!-- ════ PAGE: REAL-TIME MONITOR ═════════════════════════════════════════ -->
+    <div id="page-monitor" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Real-Time File Monitor</div>
+          <div class="page-sub">inotify-based continuous scanning &middot; zero-latency threat detection</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="loadMonitor()">&#x21BA; Refresh</button>
+          <button class="btn btn-primary btn-sm" id="monitor-page-toggle" onclick="toggleMonitor()">Start Monitor</button>
+        </div>
+      </div>
+
+      <div class="card mb-5" style="border-left:3px solid var(--blue)">
+        <div class="card-header">
+          <div class="card-title">Monitor Status</div>
+          <span class="badge" id="monitor-status-badge">Loading&hellip;</span>
+        </div>
+        <div class="card-body">
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:20px;margin-bottom:20px">
+            <div><div class="label">Engine</div><div class="value" id="mon-engine">--</div></div>
+            <div><div class="label">PID</div><div class="value" id="mon-pid">--</div></div>
+            <div><div class="label">Files Checked</div><div class="value" id="mon-files">--</div></div>
+            <div><div class="label">Detections 24h</div><div class="value" id="mon-det-24h">--</div></div>
+            <div><div class="label">Total Caught</div><div class="value" id="mon-det-all">--</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card mb-4">
+          <div class="card-header">
+            <div class="card-title">Watch Paths</div>
+            <button class="btn btn-primary btn-sm" onclick="addWatchPath()">+ Add Path</button>
+          </div>
+          <div class="card-body">
+            <div id="mon-paths-list" style="margin-bottom:12px"></div>
+            <input class="form-input" id="mon-new-path" placeholder="/home/newuser/public_html" style="font-family:monospace;font-size:.8rem">
+          </div>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-header"><div class="card-title">System Service</div></div>
+          <div class="card-body">
+            <p style="font-size:.8rem;color:var(--txt2);margin-bottom:14px">
+              Install the monitor as a systemd service so it starts automatically on boot and restarts if it crashes.
+            </p>
+            <div style="font-family:monospace;font-size:.72rem;background:var(--bg0);padding:10px 14px;border-radius:6px;margin-bottom:14px;color:var(--txt2)">
+              systemctl status sentinel-gate-monitor
+            </div>
+            <button class="btn btn-ghost btn-sm" id="install-service-btn" onclick="installMonitorService()">
+              Install as System Service
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header"><div class="card-title">Recent Detections</div></div>
+        <div class="card-body" style="padding:0">
+          <table class="sg-table">
+            <thead><tr><th>Severity</th><th>File Path</th><th>Threat</th><th>Status</th><th>Detected</th></tr></thead>
+            <tbody id="rt-detections-body"><tr><td colspan="5" style="text-align:center;color:var(--txt3);padding:24px">Loading&hellip;</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Monitor Log</div>
+          <button class="btn btn-ghost btn-sm" onclick="loadMonitorLog()">&#x21BA; Reload</button>
+        </div>
+        <div class="card-body">
+          <pre id="monitor-log" style="font-size:.72rem;font-family:monospace;color:var(--txt2);max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">Loading&hellip;</pre>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /.main-content -->
+</div><!-- /.layout -->
+
+<!-- ══ TOAST CONTAINER ═══════════════════════════════════════════════════════ -->
+<div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px"></div>
+
+<script src="js/api.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/app.js"></script>
+<script>
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  if (Auth.init()) {
+    openPage('dashboard');
+  }
+
+  // Login form submit
+  document.getElementById('login-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const u = document.getElementById('login-user').value.trim();
+    const p = document.getElementById('login-pass').value;
+    const errEl = document.getElementById('login-error');
+    errEl.classList.add('hidden');
+
+    // Demo mode shortcut (client-side)
+    if (u === 'demo' && p === 'demo') {
+      Demo.active = true;
+      localStorage.setItem('sg_token', 'demo-token');
+      localStorage.setItem('sg_user', JSON.stringify({ username: 'demo', role: 'admin', mode: 'demo' }));
+      document.getElementById('login-screen').style.display = 'none';
+      applyModeUI(State.installMode);
+      openPage('dashboard');
+      return;
+    }
+
+    const res = await API.login(u, p);
+    if (res?.success) {
+      localStorage.setItem('sg_token', res.token);
+      localStorage.setItem('sg_user', JSON.stringify(res.user));
+      State.installMode = res.user?.mode || 'cpanel';
+      document.getElementById('login-screen').style.display = 'none';
+      applyModeUI(State.installMode);
+      openPage('dashboard');
+    } else {
+      errEl.textContent = res?.error || 'Login failed';
+      errEl.classList.remove('hidden');
+    }
+  });
+
+  // Nav clicks
+  document.querySelectorAll('[data-page]').forEach(el => {
+    el.addEventListener('click', () => openPage(el.dataset.page));
+  });
+});
+</script>
+</body>
+</html>

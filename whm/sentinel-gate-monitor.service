@@ -1,0 +1,28 @@
+[Unit]
+Description=Sentinel Gate Real-Time File Monitor
+Documentation=https://github.com/sentinel-gate
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment="SG_ROOT=/usr/local/sentinel-gate"
+ExecStart=/usr/bin/python3 /usr/local/sentinel-gate/backend/daemon/monitor.py
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=append:/usr/local/sentinel-gate/logs/monitor.log
+StandardError=append:/usr/local/sentinel-gate/logs/monitor.log
+
+# Hardening
+NoNewPrivileges=false
+PrivateTmp=false
+ProtectSystem=false
+ReadWritePaths=/usr/local/sentinel-gate /tmp /home /var/www
+
+[Install]
+WantedBy=multi-user.target
