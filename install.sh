@@ -111,6 +111,8 @@ cp -r "${SCRIPT_DIR}/frontend" "$INSTALL_DIR/"
 cp    "${SCRIPT_DIR}/VERSION"  "$INSTALL_DIR/"
 # Keep whm/sentinel.conf version in sync with VERSION file
 sed -i "s/\"version\":.*\"[0-9.]*\"/\"version\":     \"${SG_VERSION}\"/" "${SCRIPT_DIR}/whm/sentinel.conf" 2>/dev/null || true
+# Keep SG_VERSION constant in config.php in sync with VERSION file
+sed -i "s/define('SG_VERSION',  '[0-9.]*')/define('SG_VERSION',  '${SG_VERSION}')/" "${INSTALL_DIR}/backend/config/config.php" 2>/dev/null || true
 ok "Files installed to $INSTALL_DIR"
 
 # ── Set permissions ────────────────────────────────────────────────────────────
@@ -444,6 +446,11 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
   AllowOverride None
   Require all granted
   DirectoryIndex index.html
+  # Allow embedding in the WHM iframe (same server, different port)
+  <IfModule mod_headers.c>
+    Header always unset X-Frame-Options
+    Header always set Content-Security-Policy "frame-ancestors *"
+  </IfModule>
 </Directory>
 APACHEEOF
 
@@ -479,12 +486,10 @@ APACHEEOF
     info "  WHM CGI dir: ${WHM_CGI_DIR}"
 
     # ── Step 2: Write the CGI script ──────────────────────────────────────────
-    # Redirects to the Apache-served Sentinel Gate frontend.
-    # target=_blank in AppConfig conf means WHM opens it in a new tab —
-    # so this CGI's redirect also serves as a direct-link fallback.
-    # Detect cPanel's perl — cpsrvd does NOT use the system PATH when executing
-    # CGI scripts, so #!/usr/bin/env perl silently fails → cpsrvd returns 404.
-    # Must use the absolute path to cPanel's own Perl interpreter.
+    # Serves an iframe page that embeds the Apache-hosted Sentinel Gate frontend.
+    # This keeps the WHM chrome (sidebar, topbar) visible while showing the plugin,
+    # matching how CSF and other embedded WHM plugins appear.
+    # cpsrvd does NOT use the system PATH for CGI — must use absolute Perl path.
     _CPANEL_PERL="/usr/local/cpanel/3rdparty/bin/perl"
     [[ ! -x "${_CPANEL_PERL}" ]] && _CPANEL_PERL=$(command -v perl 2>/dev/null || echo "/usr/bin/perl")
     info "  Perl interpreter for CGI: ${_CPANEL_PERL}"
@@ -503,25 +508,15 @@ unless (\$host) {
 \$host =~ s/:.*//;
 my \$url = "https://\$host/sentinel-gate/";
 print "Content-Type: text/html\r\n\r\n";
-print <<"ENDHTML";
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta http-equiv="refresh" content="0; url=\$url">
-  <title>Sentinel Gate</title>
-  <style>body{background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif;
-    display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-    .b{text-align:center} a{color:#38bdf8}</style>
-</head>
-<body><div class="b">
-  <h2>&#x26A1; Sentinel Gate Security</h2>
-  <p>Opening dashboard&hellip;</p>
-  <p><a href="\$url">Click here if not redirected</a></p>
-</div>
-<script>window.location.href='\$url';</script>
-</body></html>
-ENDHTML
+print qq{<!DOCTYPE html><html><head>}
+    . qq{<meta charset="utf-8"><title>Sentinel Gate</title>}
+    . qq{<style>}
+    . qq{html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#020617}}
+    . qq{iframe{width:100%;height:100vh;border:none;display:block}}
+    . qq{</style>}
+    . qq{</head><body>}
+    . qq{<iframe src="\$url" title="Sentinel Gate Security Dashboard" allowfullscreen></iframe>}
+    . qq{</body></html>\n};
 ENDCGI
     chmod 755 "${WHM_CGI}"
     if [[ -f "${WHM_CGI}" ]]; then
@@ -536,7 +531,8 @@ ENDCGI
     #   url      = path registered with AppConfig (cgi/ prefix required)
     #   entryurl = clickable link shown in WHM nav (relative to cgi/, no prefix)
     #   acls     = all — root + all resellers with the 'all' ACL can access
-    #   target   = _blank opens in new tab (SPA needs its own window)
+    # No target= field: WHM opens the plugin in the main content area (embedded),
+    # matching how CSF, CPGuard, and MagicSpam appear in WHM.
     # Do NOT include 'icon=...' unless you have an actual installed icon file.
     info "  Writing AppConfig conf: ${WHM_PLUGIN_CONF}"
     # Remove any stale /var/cpanel/apps/ copy first so register_appconfig writes fresh
@@ -548,7 +544,6 @@ url=/cgi/sentinel_gate/sentinel_gate.cgi
 entryurl=sentinel_gate/sentinel_gate.cgi
 acls=all
 displayname=Sentinel Gate Security
-target=_blank
 APPEOF
     chmod 644 "${WHM_PLUGIN_CONF}"
     if [[ -f "${WHM_PLUGIN_CONF}" ]]; then

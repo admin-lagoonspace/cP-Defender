@@ -15,15 +15,17 @@ const State = {
 
 // ── Install mode (fetched from API on load) ───────────────────────────────────
 State.installMode = 'cpanel'; // default until API responds
+State.version     = '';       // filled by detectMode()
 
 async function detectMode() {
   try {
     const res = await API.status();
     if (res?.success) {
-      State.installMode = res.mode || 'cpanel';
-      applyModeUI(State.installMode);
+      State.installMode = res.mode    || 'cpanel';
+      State.version     = res.version || '';
     }
   } catch (_) { /* stay with default */ }
+  applyModeUI(State.installMode); // always update UI, even on API failure
 }
 
 function applyModeUI(mode) {
@@ -55,7 +57,10 @@ function applyModeUI(mode) {
 
   // Sidebar version / mode label
   const sideLabel = document.getElementById('sidebar-mode-label');
-  if (sideLabel) sideLabel.textContent = isStandalone ? 'v3.1.6 · Standalone' : 'v3.1.6 · cPanel Plugin';
+  if (sideLabel) {
+    const ver = State.version ? `v${State.version}` : '';
+    sideLabel.textContent = isStandalone ? `${ver} · Standalone` : `${ver} · cPanel Plugin`;
+  }
 
   // Settings page: show/hide standalone-only cards
   const banner = document.getElementById('standalone-settings-banner');
@@ -83,6 +88,7 @@ const Auth = {
       const av = document.getElementById('user-avatar');
       if (av && u.username) av.textContent = u.username.slice(0,2).toUpperCase();
       applyModeUI(State.installMode);
+      detectMode(); // async: fetches live version from API and updates sidebar
       return true;
     }
     // Not logged in — detect mode for login screen
