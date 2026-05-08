@@ -109,6 +109,8 @@ section "Installing files"
 cp -r "${SCRIPT_DIR}/backend"  "$INSTALL_DIR/"
 cp -r "${SCRIPT_DIR}/frontend" "$INSTALL_DIR/"
 cp    "${SCRIPT_DIR}/VERSION"  "$INSTALL_DIR/"
+# Keep whm/sentinel.conf version in sync with VERSION file
+sed -i "s/\"version\":.*\"[0-9.]*\"/\"version\":     \"${SG_VERSION}\"/" "${SCRIPT_DIR}/whm/sentinel.conf" 2>/dev/null || true
 ok "Files installed to $INSTALL_DIR"
 
 # ── Set permissions ────────────────────────────────────────────────────────────
