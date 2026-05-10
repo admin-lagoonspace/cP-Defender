@@ -446,11 +446,6 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
   AllowOverride None
   Require all granted
   DirectoryIndex index.html
-  # Allow embedding in the WHM iframe (same server, different port)
-  <IfModule mod_headers.c>
-    Header always unset X-Frame-Options
-    Header always set Content-Security-Policy "frame-ancestors *"
-  </IfModule>
 </Directory>
 APACHEEOF
 
@@ -486,9 +481,9 @@ APACHEEOF
     info "  WHM CGI dir: ${WHM_CGI_DIR}"
 
     # ── Step 2: Write the CGI script ──────────────────────────────────────────
-    # Serves an iframe page that embeds the Apache-hosted Sentinel Gate frontend.
-    # This keeps the WHM chrome (sidebar, topbar) visible while showing the plugin,
-    # matching how CSF and other embedded WHM plugins appear.
+    # Opens the Apache-hosted Sentinel Gate frontend in a new browser tab.
+    # The AppConfig conf sets target=_blank so WHM triggers a new tab; the CGI
+    # then redirects it to the correct URL.
     # cpsrvd does NOT use the system PATH for CGI — must use absolute Perl path.
     _CPANEL_PERL="/usr/local/cpanel/3rdparty/bin/perl"
     [[ ! -x "${_CPANEL_PERL}" ]] && _CPANEL_PERL=$(command -v perl 2>/dev/null || echo "/usr/bin/perl")
@@ -508,15 +503,26 @@ unless (\$host) {
 \$host =~ s/:.*//;
 my \$url = "https://\$host/sentinel-gate/";
 print "Content-Type: text/html\r\n\r\n";
-print qq{<!DOCTYPE html><html><head>}
-    . qq{<meta charset="utf-8"><title>Sentinel Gate</title>}
-    . qq{<style>}
-    . qq{html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#020617}}
-    . qq{iframe{width:100%;height:100vh;border:none;display:block}}
-    . qq{</style>}
-    . qq{</head><body>}
-    . qq{<iframe src="\$url" title="Sentinel Gate Security Dashboard" allowfullscreen></iframe>}
-    . qq{</body></html>\n};
+print <<"ENDHTML";
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="0; url=\$url">
+  <title>Sentinel Gate</title>
+  <style>body{background:#020617;color:#e2e8f0;font-family:system-ui,sans-serif;
+    display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+    .b{text-align:center} a{color:#38bdf8;text-decoration:none}</style>
+</head>
+<body><div class="b">
+  <div style="font-size:2rem;margin-bottom:12px">&#x1F6E1;</div>
+  <h2 style="margin-bottom:8px">Sentinel Gate Security</h2>
+  <p style="color:#94a3b8;font-size:.9rem">Opening dashboard&hellip;</p>
+  <p style="margin-top:14px;font-size:.8rem"><a href="\$url">Click here if not redirected</a></p>
+</div>
+<script>window.location.href='\$url';</script>
+</body></html>
+ENDHTML
 ENDCGI
     chmod 755 "${WHM_CGI}"
     if [[ -f "${WHM_CGI}" ]]; then
@@ -536,6 +542,7 @@ ENDCGI
     # acls=any — visible to ALL authenticated WHM users: root AND every reseller.
     # (acls=all means only users with the 'all' ACL i.e. root + superadmin
     #  resellers; acls=any means every reseller regardless of their ACL set.)
+    # target=_blank — opens the plugin in a new browser tab (not embedded in WHM).
     # Do NOT include 'icon=...' unless you have an actual installed icon file.
     info "  Writing AppConfig conf: ${WHM_PLUGIN_CONF}"
     # Remove any stale /var/cpanel/apps/ copy first so register_appconfig writes fresh
@@ -547,6 +554,7 @@ url=/cgi/sentinel_gate/sentinel_gate.cgi
 entryurl=sentinel_gate/sentinel_gate.cgi
 acls=any
 displayname=Sentinel Gate Security
+target=_blank
 APPEOF
     chmod 644 "${WHM_PLUGIN_CONF}"
     if [[ -f "${WHM_PLUGIN_CONF}" ]]; then

@@ -110,34 +110,6 @@ const API = (() => {
   };
 })();
 
-// Extend Demo mode with monitor mock
-Object.assign(Demo, {
-  mockMonitorStatus() {
-    return {
-      success: true,
-      data: {
-        running:        true,
-        pid:            12847,
-        engine:         'inotify',
-        watch_paths:    ['/home', '/var/www', '/tmp'],
-        files_checked:  284930,
-        threats_found:  3,
-        detections_24h: 2,
-        detections_all: 3,
-        service_active: true,
-      }
-    };
-  },
-
-  mockMonitorDetections() {
-    return { success: true, data: [
-      { id:10, file_path:'/home/user1/public_html/wp-content/uploads/image.php', threat_name:'SG.RT.c99_shell',      severity:'critical', status:'quarantined', detected_at: Date.now()/1000 - 1800 },
-      { id:11, file_path:'/home/user2/public_html/tmp/update.php',               threat_name:'SG.RT.eval_base64',    severity:'high',     status:'active',      detected_at: Date.now()/1000 - 5400 },
-      { id:12, file_path:'/home/user3/public_html/assets/thumb.php',             threat_name:'SG.RT.backdoor_connect',severity:'critical', status:'quarantined', detected_at: Date.now()/1000 - 86400 },
-    ]};
-  }
-});
-
 // Demo mode: returns realistic mock data when API isn't available
 const Demo = {
   active: false,
@@ -227,5 +199,30 @@ const Demo = {
       { ip_address:'104.21.15.98',   country:'BR', score:55, rbl_hits:'[]',                    hits: 987, last_seen: Date.now()/1000 - 1440 },
       { ip_address:'198.51.100.23',  country:'DE', score:38, rbl_hits:'[]',                    hits: 442, last_seen: Date.now()/1000 - 3600 },
     ]};
-  }
+  },
+
+  mockMonitorStatus() {
+    return {
+      success: true,
+      data: {
+        running:        true,
+        pid:            12847,
+        engine:         'inotify',
+        watch_paths:    ['/home', '/var/www', '/tmp'],
+        files_checked:  284930,
+        threats_found:  3,
+        detections_24h: 2,
+        detections_all: 3,
+        service_active: true,
+      }
+    };
+  },
+
+  mockMonitorDetections() {
+    return { success: true, data: [
+      { id:10, file_path:'/home/user1/public_html/wp-content/uploads/image.php', threat_name:'SG.RT.c99_shell',       severity:'critical', status:'quarantined', detected_at: Date.now()/1000 - 1800 },
+      { id:11, file_path:'/home/user2/public_html/tmp/update.php',               threat_name:'SG.RT.eval_base64',     severity:'high',     status:'active',      detected_at: Date.now()/1000 - 5400 },
+      { id:12, file_path:'/home/user3/public_html/assets/thumb.php',             threat_name:'SG.RT.backdoor_connect',severity:'critical', status:'quarantined', detected_at: Date.now()/1000 - 86400 },
+    ]};
+  },
 };

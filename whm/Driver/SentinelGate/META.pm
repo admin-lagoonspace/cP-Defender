@@ -2,7 +2,7 @@ package Cpanel::Config::ConfigObj::Driver::SentinelGate::META;
 
 use strict;
 
-our $VERSION = '3.2.7';
+our $VERSION = '3.2.8';
 
 sub new             { return bless {}, shift; }
 sub spec_version    { return 1; }
