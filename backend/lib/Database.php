@@ -142,6 +142,8 @@ class Database {
                 ran_at      INTEGER NOT NULL DEFAULT (strftime('%s','now'))
             );
 
+            -- v3.3.1: add cpanel_user to threats (ALTER is idempotent via try/catch in PHP)
+
             -- Default settings
             INSERT OR IGNORE INTO settings (key, value) VALUES
                 ('scan_schedule',           'daily'),
@@ -183,6 +185,13 @@ class Database {
                 ('BLOCK_XMAS',         'in',   'tcp', NULL,   'DROP',   'Block XMAS packets'),
                 ('RATE_LIMIT_SSH',     'in',   'tcp', '22',   'LIMIT',  'Rate limit SSH brute force');
         ");
+
+        // Incremental migrations — safe to run on every boot (IF NOT EXISTS / IGNORE)
+        // Add cpanel_user column to threats if missing (SQLite ALTER TABLE is append-only)
+        $cols = array_column($db->query("PRAGMA table_info(threats)")->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('cpanel_user', $cols)) {
+            $db->exec("ALTER TABLE threats ADD COLUMN cpanel_user TEXT");
+        }
     }
 
     public static function query(string $sql, array $params = []): PDOStatement {

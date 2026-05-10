@@ -125,13 +125,18 @@ function openPage(name) {
 
   // Trigger page-specific data load
   switch (name) {
-    case 'dashboard': refreshDashboard(); break;
-    case 'scanner':   loadThreats();      break;
-    case 'firewall':  loadFirewall();     break;
-    case 'waf':       loadWAF();          break;
-    case 'iprep':     loadTopAttackers(); break;
-    case 'events':    loadEvents();       break;
-    case 'settings':  loadSettings();     break;
+    case 'dashboard': refreshDashboard();   break;
+    case 'scanner':   loadThreats();        break;
+    case 'firewall':  loadFirewall();       break;
+    case 'waf':       loadWAF();            break;
+    case 'iprep':     loadTopAttackers();   break;
+    case 'events':    loadEvents();         break;
+    case 'settings':  loadSettings();       break;
+    case 'botshield': loadBotShield();      break;
+    case 'cms':       loadCMSGuard();       break;
+    case 'rootkit':   loadRootkit();        break;
+    case 'integrity': loadIntegrity();      break;
+    case 'php':       loadPHPHardening();   break;
   }
 }
 
@@ -385,9 +390,10 @@ async function loadThreats() {
   tbody.innerHTML = threats.map(t => `
     <tr>
       <td>${sevBadge(t.severity)}</td>
-      <td class="mono primary" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.file_path}">
+      <td class="mono primary" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.file_path}">
         ${t.file_path.split('/').slice(-2).join('/')}
       </td>
+      <td class="mono" style="color:var(--blue);font-size:.75rem">${t.cpanel_user || '—'}</td>
       <td class="mono" style="color:var(--red)">${t.threat_name}</td>
       <td><span class="badge badge-amber">${t.threat_type}</span></td>
       <td class="dim">${fmtBytes(t.size || 0)}</td>
@@ -1116,4 +1122,422 @@ async function changeAdminPassword() {
   } else {
     toast(res?.error || 'Update failed', 'error');
   }
+}
+
+// ── Bot Shield ────────────────────────────────────────────────────────────────
+async function loadBotShield() {
+  const [statsRes, blockedRes, eventsRes, whiteRes] = await Promise.all([
+    Demo.active ? { success: true, data: { bots_blocked_today: 142, total_blocked: 1048, whitelisted: 6, requests_analyzed: 284901 } } : API.botStats(),
+    Demo.active ? { success: true, data: [] } : API.botBlocked(),
+    Demo.active ? { success: true, data: [] } : API.botEvents(100),
+    Demo.active ? { success: true, data: [] } : API.botWhitelist(),
+  ]);
+  if (statsRes?.success) {
+    const d = statsRes.data;
+    document.getElementById('bot-stat-today').textContent    = fmtNum(d?.bots_blocked_today || 0);
+    document.getElementById('bot-stat-total').textContent    = fmtNum(d?.total_blocked || 0);
+    document.getElementById('bot-stat-white').textContent    = fmtNum(d?.whitelisted || 0);
+    document.getElementById('bot-stat-analyzed').textContent = fmtNum(d?.requests_analyzed || 0);
+  }
+  loadBotBlocked(blockedRes);
+  renderBotEvents(eventsRes?.data || []);
+  renderBotWhitelist(whiteRes?.data || []);
+}
+
+async function loadBotBlocked(cached) {
+  const res = cached || (Demo.active ? { success: true, data: [] } : await API.botBlocked());
+  const tbody = document.getElementById('bot-blocked-body');
+  if (!tbody) return;
+  const rows = res?.data || [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--txt3);padding:20px">No blocked bots. Click "Analyze Logs".</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(b => `
+    <tr>
+      <td class="mono">${b.ip_address}</td>
+      <td><span class="badge badge-red" style="font-size:.65rem">${b.threat_type || 'bot'}</span></td>
+      <td>${fmtNum(b.hits || 1)}</td>
+      <td class="dim">${b.last_seen ? reltime(b.last_seen) : '-'}</td>
+      <td><button class="btn btn-ghost btn-xs" onclick="unblockBot('${b.ip_address}')">Unblock</button></td>
+    </tr>`).join('');
+}
+
+function renderBotEvents(events) {
+  const tbody = document.getElementById('bot-events-body');
+  if (!tbody) return;
+  if (!events.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:20px">No events yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = events.slice(0, 50).map(e => `
+    <tr>
+      <td class="mono">${e.ip_address}</td>
+      <td class="mono" style="font-size:.7rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${e.user_agent||''}">${(e.user_agent||'-').slice(0,50)}</td>
+      <td><span class="badge badge-amber" style="font-size:.65rem">${e.threat_type||'scanner'}</span></td>
+      <td class="mono" style="font-size:.72rem">${e.uri||'-'}</td>
+      <td class="dim">${reltime(e.timestamp)}</td>
+      <td><span class="badge ${e.action==='block' ? 'badge-red' : 'badge-gray'}" style="font-size:.65rem">${e.action||'block'}</span></td>
+    </tr>`).join('');
+}
+
+function renderBotWhitelist(items) {
+  const el = document.getElementById('bot-whitelist-list');
+  if (!el) return;
+  if (!items.length) { el.innerHTML = '<div class="dim">No whitelist entries. Good bots (Googlebot etc.) are detected automatically.</div>'; return; }
+  el.innerHTML = items.map(w => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)">
+      <span class="mono" style="font-size:.78rem">${w.pattern}</span>
+      <button class="btn btn-ghost btn-xs" onclick="removeBotWhitelist(${w.id})">x</button>
+    </div>`).join('');
+}
+
+async function runBotScan() {
+  toast('Analyzing access logs for bots...', 'info');
+  const res = Demo.active
+    ? { success: true, data: { bots_found: 23, bots_blocked: 18, duration_ms: 1240 } }
+    : await API.botScan();
+  if (res?.success) {
+    const d = res.data || {};
+    toast(`Analysis done - ${d.bots_found||0} bots found, ${d.bots_blocked||0} blocked`, 'success');
+    loadBotShield();
+  } else toast(res?.error || 'Analysis failed', 'error');
+}
+
+async function unblockBot(ip) {
+  if (!confirm('Unblock bot IP ' + ip + '?')) return;
+  const res = Demo.active ? { success: true } : await API.botUnblock(ip);
+  if (res?.success) { toast(ip + ' unblocked', 'success'); loadBotShield(); }
+  else toast('Unblock failed', 'error');
+}
+
+async function addBotWhitelist() {
+  const pattern = document.getElementById('bot-white-pattern')?.value?.trim();
+  if (!pattern) { toast('Enter a pattern', 'error'); return; }
+  const res = Demo.active ? { success: true } : await API.botAddWhitelist(pattern, '');
+  if (res?.success) {
+    toast(pattern + ' whitelisted', 'success');
+    document.getElementById('bot-white-pattern').value = '';
+    loadBotShield();
+  } else toast('Add failed', 'error');
+}
+
+async function removeBotWhitelist(id) {
+  const res = Demo.active ? { success: true } : await API.botRemoveWhitelist(id);
+  if (res?.success) { toast('Removed from whitelist', 'success'); loadBotShield(); }
+  else toast('Remove failed', 'error');
+}
+
+// ── CMS Guard ─────────────────────────────────────────────────────────────────
+async function loadCMSGuard() {
+  const [statsRes, installsRes] = await Promise.all([
+    Demo.active ? { success: true, data: { total: 4, wordpress: 3, joomla: 1, drupal: 0, outdated: 2, installs_with_issues: 3 } } : API.cmsStats(),
+    Demo.active ? { success: true, data: [
+      { id:1, cms_type:'wordpress', version:'6.2.1', cpanel_user:'alice', install_path:'/home/alice/public_html', issues:'["xmlrpc_enabled","login_exposed"]', outdated:1, status:'warning' },
+      { id:2, cms_type:'wordpress', version:'6.4.2', cpanel_user:'bob',   install_path:'/home/bob/public_html',   issues:'[]', outdated:0, status:'ok' },
+      { id:3, cms_type:'joomla',    version:'4.2.0', cpanel_user:'carol', install_path:'/home/carol/public_html', issues:'["outdated_version"]', outdated:1, status:'warning' },
+    ]} : API.cmsInstalls(),
+  ]);
+
+  if (statsRes?.success) {
+    const d = statsRes.data;
+    document.getElementById('cms-stat-total').textContent    = fmtNum(d?.total || 0);
+    document.getElementById('cms-stat-outdated').textContent = fmtNum(d?.outdated || 0);
+    document.getElementById('cms-stat-issues').textContent   = fmtNum(d?.installs_with_issues || 0);
+    document.getElementById('cms-stat-wp').textContent       = fmtNum(d?.wordpress || 0);
+  }
+
+  const installs = installsRes?.data || [];
+  const badge = document.getElementById('cms-count-badge');
+  if (badge) badge.textContent = installs.length + ' found';
+
+  const tbody = document.getElementById('cms-installs-body');
+  if (!tbody) return;
+  if (!installs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:28px">Click "Scan Server" to discover CMS installations</td></tr>';
+    return;
+  }
+  tbody.innerHTML = installs.map(c => {
+    let issues = [];
+    try { issues = JSON.parse(c.issues || '[]'); } catch(_) {}
+    const icons = { wordpress: 'WP', joomla: 'JM', drupal: 'DR' };
+    const cmsLabel = icons[c.cms_type] || c.cms_type;
+    return '<tr>' +
+      '<td><span class="badge badge-blue" style="font-size:.7rem">' + cmsLabel + '</span></td>' +
+      '<td class="mono" style="color:' + (c.outdated ? 'var(--amber)' : 'var(--green)') + '">' + c.version + (c.outdated ? ' !' : '') + '</td>' +
+      '<td class="mono" style="color:var(--blue)">' + (c.cpanel_user||'-') + '</td>' +
+      '<td class="mono" style="font-size:.72rem;max-width:180px;overflow:hidden;text-overflow:ellipsis" title="' + c.install_path + '">' + c.install_path + '</td>' +
+      '<td>' + (issues.length ? issues.map(function(i){ return '<span class="badge badge-amber" style="font-size:.62rem;margin:1px">' + i.replace(/_/g,' ') + '</span>'; }).join('') : '<span class="badge badge-green" style="font-size:.62rem">None</span>') + '</td>' +
+      '<td>' + (c.status === 'ok' ? '<span class="badge badge-green">OK</span>' : '<span class="badge badge-amber">Issues</span>') + '</td>' +
+      '<td><button class="btn btn-ghost btn-xs" onclick="recheckCMS(' + c.id + ')">Recheck</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function runCMSScan() {
+  toast('Scanning server for CMS installations...', 'info');
+  const btn = document.getElementById('cms-scan-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
+  const res = Demo.active
+    ? { success: true, data: { found: 4, wordpress: 3, joomla: 1, issues_found: 3 } }
+    : await API.cmsScan();
+  if (btn) { btn.disabled = false; btn.textContent = 'Scan Server'; }
+  if (res?.success) {
+    const d = res.data || {};
+    toast('Scan complete - ' + (d.found||0) + ' installs found, ' + (d.issues_found||0) + ' with issues', 'success');
+    loadCMSGuard();
+  } else toast(res?.error || 'Scan failed', 'error');
+}
+
+async function recheckCMS(id) {
+  const res = Demo.active ? { success: true } : await API.cmsCheck(id);
+  if (res?.success) { toast('Re-check complete', 'success'); loadCMSGuard(); }
+  else toast('Check failed', 'error');
+}
+
+// ── Rootkit Scanner ───────────────────────────────────────────────────────────
+async function loadRootkit() {
+  const [statusRes, scansRes] = await Promise.all([
+    Demo.active ? { success: true, data: { rkhunter_available: true, chkrootkit_available: false } } : API.rootkitStatus(),
+    Demo.active ? { success: true, data: [] } : API.rootkitScans(),
+  ]);
+
+  if (statusRes?.success) {
+    const d = statusRes.data;
+    const rkIcon = document.getElementById('rk-rkhunter-icon');
+    const rkSt   = document.getElementById('rk-rkhunter-status');
+    const ckIcon = document.getElementById('rk-chkrootkit-icon');
+    const ckSt   = document.getElementById('rk-chkrootkit-status');
+    if (rkIcon) rkIcon.textContent = d?.rkhunter_available ? 'OK' : 'X';
+    if (rkSt)   rkSt.textContent   = d?.rkhunter_available ? 'Available' : 'Not installed';
+    if (ckIcon) ckIcon.textContent = d?.chkrootkit_available ? 'OK' : 'X';
+    if (ckSt)   ckSt.textContent   = d?.chkrootkit_available ? 'Available' : 'Not installed';
+  }
+
+  const scans = scansRes?.data || [];
+  const tbody = document.getElementById('rootkit-history-body');
+  if (tbody) {
+    if (!scans.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--txt3);padding:20px">No scan history</td></tr>';
+    } else {
+      tbody.innerHTML = scans.map(s => '<tr>' +
+        '<td class="mono">' + s.tool + '</td>' +
+        '<td class="dim">' + reltime(s.finished_at || s.started_at) + '</td>' +
+        '<td style="color:' + (s.warnings_count > 0 ? 'var(--amber)' : 'var(--green)') + '">' + s.warnings_count + '</td>' +
+        '<td style="color:' + (s.infected_count > 0 ? 'var(--red)' : 'var(--green)') + '">' + s.infected_count + '</td>' +
+        '<td><button class="btn btn-ghost btn-xs" onclick="viewRootkitFindings(' + s.id + ')">View</button></td>' +
+        '</tr>').join('');
+      const last = scans[0];
+      const badge = document.getElementById('rk-last-badge');
+      if (badge) {
+        badge.textContent = last.infected_count > 0 ? last.infected_count + ' INFECTED' :
+          last.warnings_count > 0 ? last.warnings_count + ' Warnings' : 'Clean';
+        badge.className = 'badge ' + (last.infected_count > 0 ? 'badge-red' : last.warnings_count > 0 ? 'badge-amber' : 'badge-green');
+      }
+      const resultEl = document.getElementById('rk-last-result');
+      if (resultEl) resultEl.textContent = 'Tool: ' + last.tool + ' | Scanned: ' + reltime(last.finished_at||last.started_at) + ' | Warnings: ' + last.warnings_count + ' | Infected: ' + last.infected_count;
+    }
+  }
+}
+
+async function runRootkitScan() {
+  const tool = document.getElementById('rootkit-tool-sel')?.value || 'rkhunter';
+  const btn  = document.getElementById('rootkit-scan-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
+  toast('Running ' + tool + ' scan - this may take a few minutes...', 'info');
+  const res = Demo.active
+    ? { success: true, data: { tool: tool, warnings_count: 2, clean_count: 167, infected_count: 0 } }
+    : await API.rootkitScan(tool);
+  if (btn) { btn.disabled = false; btn.textContent = 'Start Scan'; }
+  if (res?.success) {
+    const d = res.data || {};
+    toast(tool + ' scan complete - ' + (d.warnings_count||0) + ' warnings, ' + (d.infected_count||0) + ' infected', d.infected_count > 0 ? 'error' : 'success');
+    loadRootkit();
+  } else toast(res?.error || 'Scan failed - tool may not be installed', 'error');
+}
+
+async function viewRootkitFindings(scanId) {
+  const res = Demo.active ? { success: true, data: [] } : await API.rootkitFindings(scanId);
+  const container = document.getElementById('rk-findings-list');
+  if (!container) return;
+  const findings = res?.data || [];
+  if (!findings.length) { container.innerHTML = '<div class="dim" style="font-size:.78rem">No findings for this scan.</div>'; return; }
+  container.innerHTML = '<div class="label" style="font-size:.72rem;margin-bottom:8px">Findings</div>' +
+    findings.map(f => '<div style="display:flex;gap:10px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border)">' +
+      '<span class="badge ' + (f.finding_type==='infected' ? 'badge-red' : f.finding_type==='warning' ? 'badge-amber' : 'badge-green') + '" style="font-size:.62rem;white-space:nowrap">' + f.finding_type + '</span>' +
+      '<div><div style="font-size:.75rem;font-weight:600;color:var(--txt2)">' + (f.category||'General') + '</div>' +
+      '<div style="font-size:.72rem;color:var(--txt3);margin-top:2px">' + f.description + '</div></div>' +
+      '</div>').join('');
+}
+
+// ── File Integrity ────────────────────────────────────────────────────────────
+async function loadIntegrity() {
+  const [statsRes, pathsRes] = await Promise.all([
+    Demo.active ? { success: true, data: { total_monitored: 0, clean: 0, modified: 0, new_files: 0, missing: 0 } } : API.integrityStats(),
+    Demo.active ? { success: true, data: [] } : API.integrityPaths(),
+  ]);
+
+  if (statsRes?.success) {
+    const d = statsRes.data;
+    document.getElementById('int-stat-total').textContent    = fmtNum(d?.total_monitored || 0);
+    document.getElementById('int-stat-clean').textContent    = fmtNum(d?.clean || 0);
+    document.getElementById('int-stat-modified').textContent = fmtNum(d?.modified || 0);
+    document.getElementById('int-stat-issues').textContent   = fmtNum((d?.new_files||0) + (d?.missing||0));
+  }
+
+  const paths = pathsRes?.data || [];
+  const pathEl = document.getElementById('int-paths-list');
+  if (pathEl) {
+    pathEl.innerHTML = paths.length
+      ? paths.map(p => '<div class="mono" style="font-size:.75rem;padding:3px 0;color:var(--txt2)">/ ' + (p.path||p) + ' <span class="dim">(' + fmtNum(p.count||0) + ' files)</span></div>').join('')
+      : '<div class="dim">No baseline created yet</div>';
+  }
+
+  loadIntegrityChanges('');
+}
+
+async function loadIntegrityChanges(status) {
+  const res = Demo.active ? { success: true, data: [] } : await API.integrityChanges(status);
+  const changes = res?.data || [];
+  const badge = document.getElementById('int-changes-badge');
+  if (badge) badge.textContent = changes.length + ' changes';
+
+  const tbody = document.getElementById('integrity-changes-body');
+  if (!tbody) return;
+  if (!changes.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:28px">No changes detected - system is clean</td></tr>';
+    return;
+  }
+  const stMap = { modified: 'badge-amber', new: 'badge-blue', missing: 'badge-red', acknowledged: 'badge-gray' };
+  tbody.innerHTML = changes.map(c => '<tr>' +
+    '<td><span class="badge ' + (stMap[c.status]||'badge-gray') + '">' + c.status + '</span></td>' +
+    '<td class="mono" style="font-size:.72rem;max-width:260px;overflow:hidden;text-overflow:ellipsis" title="' + c.file_path + '">' + c.file_path + '</td>' +
+    '<td class="dim">' + fmtBytes(c.size||0) + '</td>' +
+    '<td class="mono" style="font-size:.72rem">' + (c.owner||'-') + '</td>' +
+    '<td class="dim">' + (c.last_check ? reltime(c.last_check) : '-') + '</td>' +
+    '<td>' + (c.status !== 'acknowledged' ? '<button class="btn btn-ghost btn-xs" onclick="acknowledgeIntegrityChange(' + c.id + ')">Acknowledge</button>' : '') + '</td>' +
+    '</tr>').join('');
+}
+
+async function createBaseline() {
+  const path = document.getElementById('int-baseline-path')?.value?.trim() || '/home';
+  toast('Creating baseline for ' + path + '...', 'info');
+  const res = Demo.active ? { success: true, data: { hashed: 12847 } } : await API.integrityBaseline(path);
+  if (res?.success) {
+    toast('Baseline created - ' + fmtNum(res.data?.hashed||0) + ' files hashed', 'success');
+    loadIntegrity();
+  } else toast(res?.error || 'Baseline failed', 'error');
+}
+
+async function runIntegrityCheck() {
+  toast('Running integrity check...', 'info');
+  const res = Demo.active ? { success: true, data: { modified: 0, new_files: 0, missing: 0 } } : await API.integrityCheck('');
+  if (res?.success) {
+    const d = res.data || {};
+    const changed = (d.modified||0) + (d.new_files||0) + (d.missing||0);
+    toast('Check complete - ' + changed + ' changes detected', changed ? 'error' : 'success');
+    loadIntegrity();
+  } else toast(res?.error || 'Check failed', 'error');
+}
+
+async function acknowledgeIntegrityChange(id) {
+  const res = Demo.active ? { success: true } : await API.integrityAck(id);
+  if (res?.success) { toast('Change acknowledged', 'success'); loadIntegrityChanges(''); }
+  else toast('Acknowledge failed', 'error');
+}
+
+// ── PHP Hardening ─────────────────────────────────────────────────────────────
+async function loadPHPHardening() {
+  const [statsRes, recsRes, settingsRes, accountsRes] = await Promise.all([
+    Demo.active ? { success: true, data: { critical: 1, high: 3, medium: 2, already_hardened: 4 } } : API.phpStats(),
+    Demo.active ? { success: true, data: [
+      { setting:'allow_url_include', current_value:'On', recommended_value:'Off', severity:'critical', description:'Remote file inclusion attack vector', can_apply:true },
+      { setting:'display_errors',    current_value:'On', recommended_value:'Off', severity:'high',     description:'Exposes error details to users', can_apply:true },
+      { setting:'allow_url_fopen',   current_value:'On', recommended_value:'Off', severity:'high',     description:'Allows remote file access', can_apply:true },
+      { setting:'expose_php',        current_value:'On', recommended_value:'Off', severity:'medium',   description:'Reveals PHP version in headers', can_apply:true },
+    ]} : API.phpRecs(),
+    Demo.active ? { success: true, data: { expose_php:'On', display_errors:'On', allow_url_fopen:'On', allow_url_include:'On', disable_functions:'', 'session.cookie_httponly':'0' } } : API.phpSettings(),
+    State.installMode !== 'standalone'
+      ? (Demo.active ? { success: true, data: [{ username:'alice', php_version:'8.1', hardened:false },{ username:'bob', php_version:'8.2', hardened:true }] } : API.phpAccounts())
+      : { success: true, data: [] },
+  ]);
+
+  if (statsRes?.success) {
+    const d = statsRes.data;
+    document.getElementById('php-stat-critical').textContent = d?.critical || 0;
+    document.getElementById('php-stat-high').textContent     = d?.high || 0;
+    document.getElementById('php-stat-medium').textContent   = d?.medium || 0;
+    document.getElementById('php-stat-ok').textContent       = d?.already_hardened || 0;
+  }
+
+  const recs = recsRes?.data || [];
+  const recsEl = document.getElementById('php-recs-list');
+  if (recsEl) {
+    if (!recs.length) {
+      recsEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--green)">PHP is well configured - no issues found!</div>';
+    } else {
+      const sevClass = { critical:'badge-red', high:'badge-amber', medium:'badge-blue', low:'badge-gray' };
+      recsEl.innerHTML = recs.map(r => '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border)">' +
+        '<span class="badge ' + (sevClass[r.severity]||'badge-gray') + '" style="white-space:nowrap;font-size:.65rem">' + r.severity.toUpperCase() + '</span>' +
+        '<div style="flex:1">' +
+          '<div style="font-weight:700;font-size:.82rem;font-family:var(--font-mono)">' + r.setting + '</div>' +
+          '<div style="font-size:.75rem;color:var(--txt2);margin-top:2px">' + r.description + '</div>' +
+          '<div style="font-size:.72rem;color:var(--txt3);margin-top:4px">Current: <code style="background:rgba(239,68,68,.1);color:var(--red);padding:1px 4px;border-radius:3px">' + r.current_value + '</code> &rarr; Recommended: <code style="background:rgba(34,197,94,.1);color:var(--green);padding:1px 4px;border-radius:3px">' + r.recommended_value + '</code></div>' +
+        '</div>' +
+        (r.can_apply ? '<button class="btn btn-primary btn-xs" onclick="applyPHPSetting(\'' + r.setting + '\',\'' + r.recommended_value + '\')">Apply</button>' : '') +
+        '</div>').join('');
+    }
+  }
+
+  const settings = settingsRes?.data || {};
+  const tbody = document.getElementById('php-settings-body');
+  if (tbody && Object.keys(settings).length) {
+    const dangerKeys = ['allow_url_include','allow_url_fopen','display_errors','expose_php','register_globals'];
+    tbody.innerHTML = Object.entries(settings).map(([k, v]) => {
+      const isDanger = ['On','1'].includes(String(v)) && dangerKeys.includes(k);
+      return '<tr><td class="mono" style="font-size:.75rem">' + k + '</td><td class="mono" style="color:' + (isDanger ? 'var(--red)' : 'var(--txt2)') + ';font-size:.75rem">' + (v||'(empty)') + '</td></tr>';
+    }).join('');
+  }
+
+  const accounts = accountsRes?.data || [];
+  const accTbody = document.getElementById('php-accounts-body');
+  if (accTbody) {
+    accTbody.innerHTML = accounts.length
+      ? accounts.map(a => '<tr>' +
+          '<td class="mono">' + (a.username||a.user||'-') + '</td>' +
+          '<td class="mono">' + (a.php_version||'Default') + '</td>' +
+          '<td>' + (a.hardened ? '<span class="badge badge-green">Yes</span>' : '<span class="badge badge-gray">No</span>') + '</td>' +
+          '<td><button class="btn btn-ghost btn-xs" onclick="applyAccountHardening(\'' + (a.username||a.user) + '\')">Harden</button></td>' +
+          '</tr>').join('')
+      : '<tr><td colspan="4" style="text-align:center;color:var(--txt3);padding:20px">No accounts found</td></tr>';
+  }
+}
+
+async function applyPHPSetting(setting, value) {
+  const data = {};
+  data[setting] = value;
+  const res = Demo.active ? { success: true } : await API.phpApply(data);
+  if (res?.success) { toast(setting + ' applied', 'success'); loadPHPHardening(); }
+  else toast(res?.error || 'Apply failed - may require root', 'error');
+}
+
+async function applyAllRecommendations() {
+  if (Demo.active) { toast('Applied 4 settings (demo)', 'success'); return; }
+  const recsRes = await API.phpRecs();
+  const safe = (recsRes?.data || []).filter(x => x.can_apply)
+    .reduce((acc, x) => { acc[x.setting] = x.recommended_value; return acc; }, {});
+  const res = await API.phpApply(safe);
+  if (res?.success) {
+    const d = res.data || {};
+    toast('Applied ' + (d.applied||0) + ' settings, ' + (d.failed||0) + ' failed', 'success');
+    loadPHPHardening();
+  } else toast(res?.error || 'Apply failed', 'error');
+}
+
+async function applyAccountHardening(account) {
+  toast('Hardening ' + account + '...', 'info');
+  const settings = { display_errors:'Off', allow_url_include:'Off', expose_php:'Off', 'session.cookie_httponly':'1' };
+  const res = Demo.active ? { success: true, data: { applied: 4 } } : await API.phpApplyAccount(account, settings);
+  if (res?.success) { toast(account + ' hardened', 'success'); loadPHPHardening(); }
+  else toast(res?.error || 'Harden failed', 'error');
 }

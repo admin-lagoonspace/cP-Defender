@@ -365,7 +365,7 @@
           <div style="overflow-x:auto">
             <table class="sg-table">
               <thead>
-                <tr><th>Severity</th><th>File</th><th>Threat Name</th><th>Type</th><th>Size</th><th>Detected</th><th>Status</th><th>Actions</th></tr>
+                <tr><th>Severity</th><th>File</th><th>Account</th><th>Threat Name</th><th>Type</th><th>Size</th><th>Detected</th><th>Status</th><th>Actions</th></tr>
               </thead>
               <tbody id="threats-body">
                 <tr><td colspan="8" style="text-align:center;color:var(--txt3);padding:28px">No threats detected. Run a scan to check your server.</td></tr>
@@ -885,8 +885,376 @@
       </div>
     </div>
 
+    <!-- ════ PAGE: BOT SHIELD ══════════════════════════════════════════════ -->
+    <div id="page-botshield" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Bot Shield</div>
+          <div class="page-sub">Detect and block malicious bots, scrapers, and exploit scanners</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="loadBotShield()">↺ Refresh</button>
+          <button class="btn btn-primary btn-sm" onclick="runBotScan()">⚡ Analyze Logs</button>
+        </div>
+      </div>
+
+      <div class="stats-row mb-5">
+        <div class="stat-card red">
+          <div class="stat-label">Blocked Today</div>
+          <div class="stat-value" id="bot-stat-today">—</div>
+          <div class="stat-sub" style="color:var(--red)">Bot requests blocked</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Total Blocked IPs</div>
+          <div class="stat-value" id="bot-stat-total">—</div>
+          <div class="stat-sub" style="color:var(--amber)">Unique IPs</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-label">Whitelisted</div>
+          <div class="stat-value" id="bot-stat-white">—</div>
+          <div class="stat-sub" style="color:var(--blue)">Good bots allowed</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Requests Analyzed</div>
+          <div class="stat-value" id="bot-stat-analyzed">—</div>
+          <div class="stat-sub" style="color:var(--green)">Log entries scanned</div>
+        </div>
+      </div>
+
+      <div class="grid-62 mb-5">
+        <div class="card card-accent">
+          <div class="card-header">
+            <div class="card-title">Blocked Bots</div>
+            <button class="btn btn-ghost btn-xs" onclick="loadBotBlocked()">↺</button>
+          </div>
+          <div class="card-body" style="padding:0">
+            <table class="table">
+              <thead><tr><th>IP</th><th>Type</th><th>Hits</th><th>Last Seen</th><th>Actions</th></tr></thead>
+              <tbody id="bot-blocked-body"><tr><td colspan="5" style="text-align:center;color:var(--txt3);padding:20px">No blocked bots. Click "Analyze Logs" to scan.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Good Bot Whitelist</div>
+          </div>
+          <div class="card-body">
+            <div style="display:flex;gap:8px;margin-bottom:12px">
+              <input class="form-input" id="bot-white-pattern" placeholder="e.g. Googlebot" style="flex:1;font-size:.8rem">
+              <button class="btn btn-primary btn-sm" onclick="addBotWhitelist()">Add</button>
+            </div>
+            <div id="bot-whitelist-list" style="font-size:.78rem;color:var(--txt2)">Loading…</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Recent Bot Events</div>
+        </div>
+        <div class="card-body" style="padding:0">
+          <table class="table">
+            <thead><tr><th>IP</th><th>User Agent</th><th>Type</th><th>URI</th><th>Time</th><th>Action</th></tr></thead>
+            <tbody id="bot-events-body"><tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:20px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ PAGE: CMS GUARD ════════════════════════════════════════════════ -->
+    <div id="page-cms" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">CMS Guard</div>
+          <div class="page-sub">Discover and audit WordPress, Joomla, and Drupal installations</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="loadCMSGuard()">↺ Refresh</button>
+          <button class="btn btn-primary btn-sm" id="cms-scan-btn" onclick="runCMSScan()">🔍 Scan Server</button>
+        </div>
+      </div>
+
+      <div class="stats-row mb-5">
+        <div class="stat-card blue">
+          <div class="stat-label">Total Installs</div>
+          <div class="stat-value" id="cms-stat-total">—</div>
+          <div class="stat-sub" style="color:var(--blue)">CMS found</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Outdated</div>
+          <div class="stat-value" id="cms-stat-outdated">—</div>
+          <div class="stat-sub" style="color:var(--amber)">Need updates</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">Issues Found</div>
+          <div class="stat-value" id="cms-stat-issues">—</div>
+          <div class="stat-sub" style="color:var(--red)">Security problems</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">WordPress</div>
+          <div class="stat-value" id="cms-stat-wp">—</div>
+          <div class="stat-sub" style="color:var(--green)">Installations</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">CMS Installations</div>
+          <div class="badge badge-blue" id="cms-count-badge">0 found</div>
+        </div>
+        <div class="card-body" style="padding:0">
+          <table class="table">
+            <thead><tr><th>CMS</th><th>Version</th><th>Account</th><th>Path</th><th>Issues</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody id="cms-installs-body">
+              <tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:28px">Click "Scan Server" to discover CMS installations</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ PAGE: ROOTKIT SCAN ═════════════════════════════════════════════ -->
+    <div id="page-rootkit" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Rootkit Scanner</div>
+          <div class="page-sub">Scan for rootkits, backdoors, and compromised system binaries</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="loadRootkit()">↺ Refresh</button>
+          <button class="btn btn-primary btn-sm" id="rootkit-scan-btn" onclick="runRootkitScan()">🔍 Start Scan</button>
+        </div>
+      </div>
+
+      <!-- Tool availability -->
+      <div class="card mb-5">
+        <div class="card-body" style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="rk-rkhunter-icon">⬜</span>
+            <div>
+              <div style="font-weight:700;font-size:.85rem">rkhunter</div>
+              <div id="rk-rkhunter-status" class="dim" style="font-size:.72rem">Checking…</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="rk-chkrootkit-icon">⬜</span>
+            <div>
+              <div style="font-weight:700;font-size:.85rem">chkrootkit</div>
+              <div id="rk-chkrootkit-status" class="dim" style="font-size:.72rem">Checking…</div>
+            </div>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+            <label class="form-label" style="margin:0;font-size:.78rem">Tool:</label>
+            <select class="form-input" id="rootkit-tool-sel" style="font-size:.8rem;padding:4px 8px;width:auto">
+              <option value="rkhunter">rkhunter</option>
+              <option value="chkrootkit">chkrootkit</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-62 mb-5">
+        <div class="card card-accent">
+          <div class="card-header">
+            <div class="card-title">Last Scan Result</div>
+            <div class="badge" id="rk-last-badge" style="background:rgba(107,114,128,.15);color:var(--txt2)">No scans yet</div>
+          </div>
+          <div class="card-body">
+            <div id="rk-last-result" style="font-size:.82rem;color:var(--txt2)">Run a scan to see results here.</div>
+            <div id="rk-findings-list" style="margin-top:14px"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div class="card-title">Scan History</div></div>
+          <div class="card-body" style="padding:0">
+            <table class="table">
+              <thead><tr><th>Tool</th><th>Date</th><th>Warnings</th><th>Infected</th><th>Actions</th></tr></thead>
+              <tbody id="rootkit-history-body"><tr><td colspan="5" style="text-align:center;color:var(--txt3);padding:20px">No scan history</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ PAGE: FILE INTEGRITY ════════════════════════════════════════════ -->
+    <div id="page-integrity" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">File Integrity Monitor</div>
+          <div class="page-sub">Detect unauthorized changes to critical files</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="loadIntegrity()">↺ Refresh</button>
+          <button class="btn btn-primary btn-sm" onclick="runIntegrityCheck()">▶ Run Check</button>
+        </div>
+      </div>
+
+      <div class="stats-row mb-5">
+        <div class="stat-card blue">
+          <div class="stat-label">Monitored Files</div>
+          <div class="stat-value" id="int-stat-total">—</div>
+          <div class="stat-sub" style="color:var(--blue)">In baseline</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Clean</div>
+          <div class="stat-value" id="int-stat-clean">—</div>
+          <div class="stat-sub" style="color:var(--green)">Unchanged</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">Modified</div>
+          <div class="stat-value" id="int-stat-modified">—</div>
+          <div class="stat-sub" style="color:var(--amber)">Hash changed</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">Missing / New</div>
+          <div class="stat-value" id="int-stat-issues">—</div>
+          <div class="stat-sub" style="color:var(--red)">Need review</div>
+        </div>
+      </div>
+
+      <div class="grid-62 mb-5">
+        <div class="card card-accent">
+          <div class="card-header"><div class="card-title">Create Baseline</div></div>
+          <div class="card-body">
+            <div class="form-group" style="margin-bottom:12px">
+              <label class="form-label" style="font-size:.72rem">Path to Baseline</label>
+              <input class="form-input" id="int-baseline-path" value="/home" placeholder="/home">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="createBaseline()">📸 Create Baseline</button>
+            <div style="margin-top:16px">
+              <div class="label" style="font-size:.72rem;margin-bottom:8px">Monitored Paths</div>
+              <div id="int-paths-list" style="font-size:.78rem;color:var(--txt2)">None yet</div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Filter Changes</div>
+          </div>
+          <div class="card-body">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-ghost btn-sm" onclick="loadIntegrityChanges('')">All</button>
+              <button class="btn btn-ghost btn-sm" onclick="loadIntegrityChanges('modified')">Modified</button>
+              <button class="btn btn-ghost btn-sm" onclick="loadIntegrityChanges('new')">New Files</button>
+              <button class="btn btn-ghost btn-sm" onclick="loadIntegrityChanges('missing')">Missing</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">File Changes</div>
+          <div class="badge badge-amber" id="int-changes-badge">0 changes</div>
+        </div>
+        <div class="card-body" style="padding:0">
+          <table class="table">
+            <thead><tr><th>Status</th><th>File Path</th><th>Size</th><th>Owner</th><th>Last Check</th><th>Actions</th></tr></thead>
+            <tbody id="integrity-changes-body">
+              <tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:28px">Create a baseline first, then run a check to detect changes.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ PAGE: PHP HARDENING ════════════════════════════════════════════ -->
+    <div id="page-php" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">PHP Hardening</div>
+          <div class="page-sub">Audit and harden PHP configuration across the server</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="loadPHPHardening()">↺ Refresh</button>
+          <button class="btn btn-primary btn-sm" onclick="applyAllRecommendations()">⚡ Apply All Safe</button>
+        </div>
+      </div>
+
+      <!-- Stats row -->
+      <div class="stats-row mb-5">
+        <div class="stat-card red">
+          <div class="stat-label">Critical Issues</div>
+          <div class="stat-value" id="php-stat-critical">—</div>
+          <div class="stat-sub" style="color:var(--red)">Require immediate fix</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="stat-label">High Issues</div>
+          <div class="stat-value" id="php-stat-high">—</div>
+          <div class="stat-sub" style="color:var(--amber)">Recommended fix</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-label">Medium Issues</div>
+          <div class="stat-value" id="php-stat-medium">—</div>
+          <div class="stat-sub" style="color:var(--blue)">Consider fixing</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Already Hardened</div>
+          <div class="stat-value" id="php-stat-ok">—</div>
+          <div class="stat-sub" style="color:var(--green)">Compliant settings</div>
+        </div>
+      </div>
+
+      <div class="grid-62 mb-5">
+        <!-- Recommendations -->
+        <div class="card card-accent">
+          <div class="card-header">
+            <div class="card-title">Security Recommendations</div>
+          </div>
+          <div class="card-body" style="padding:0">
+            <div id="php-recs-list">
+              <div style="padding:20px;text-align:center;color:var(--txt3)">Loading recommendations…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Current php.ini settings -->
+        <div class="card">
+          <div class="card-header"><div class="card-title">Current php.ini Settings</div></div>
+          <div class="card-body" style="padding:0">
+            <table class="table">
+              <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+              <tbody id="php-settings-body">
+                <tr><td colspan="2" style="text-align:center;color:var(--txt3);padding:20px">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Per-account hardening (cPanel mode only) -->
+      <div class="card" id="php-accounts-card">
+        <div class="card-header">
+          <div class="card-title">Per-Account PHP Hardening</div>
+          <div class="dim" style="font-size:.75rem">Apply hardening to individual cPanel accounts via .htaccess</div>
+        </div>
+        <div class="card-body" style="padding:0">
+          <table class="table">
+            <thead><tr><th>Account</th><th>PHP Version</th><th>Hardened</th><th>Actions</th></tr></thead>
+            <tbody id="php-accounts-body">
+              <tr><td colspan="4" style="text-align:center;color:var(--txt3);padding:20px">Loading accounts…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /.main-content -->
 </div><!-- /.layout -->
+
+<!-- ══ LOADING SCREEN (cPanel auto-login) ════════════════════════════════════ -->
+<div id="cpanel-loading" style="display:none;position:fixed;inset:0;z-index:99999;
+  background:var(--bg);display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:20px">
+  <div class="brand-icon" style="width:64px;height:64px;font-size:32px;
+    box-shadow:0 0 0 8px rgba(59,130,246,.1),0 0 32px rgba(59,130,246,.2)">🛡</div>
+  <div style="font-size:1.2rem;font-weight:800;letter-spacing:.08em;color:var(--txt)">SENTINEL GATE</div>
+  <div style="font-size:.82rem;color:var(--blue2);display:flex;align-items:center;gap:8px">
+    <span class="status-dot" style="animation:pulse 1s infinite"></span>
+    Authenticating with cPanel…
+  </div>
+</div>
 
 <!-- ══ TOAST CONTAINER ═══════════════════════════════════════════════════════ -->
 <div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px"></div>
@@ -896,9 +1264,38 @@
 <script src="js/app.js"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Already have a valid token — go straight to dashboard
   if (Auth.init()) {
     openPage('dashboard');
+  } else {
+    // Detect install mode first (fast GET, tells us cPanel vs standalone)
+    await detectMode();
+
+    // ── cPanel auto-login ──────────────────────────────────────────────────
+    // In cPanel mode REMOTE_USER is set by the cPanel webserver when the
+    // plugin loads inside the cPanel/WHM UI. Try SSO before showing login.
+    if (State.installMode === 'cpanel') {
+      const loadEl = document.getElementById('cpanel-loading');
+      if (loadEl) loadEl.style.display = 'flex';
+
+      try {
+        const res = await API.autoLogin();
+        if (res?.success) {
+          localStorage.setItem('sg_token', res.token);
+          localStorage.setItem('sg_user', JSON.stringify(res.user));
+          State.installMode = res.user?.mode || 'cpanel';
+          if (loadEl) loadEl.style.display = 'none';
+          document.getElementById('login-screen').style.display = 'none';
+          applyModeUI(State.installMode);
+          openPage('dashboard');
+          return; // done — skip login form wiring
+        }
+      } catch (_) {}
+
+      // Auto-login failed (direct browser hit, no cPanel session) — show login
+      if (loadEl) loadEl.style.display = 'none';
+    }
   }
 
   // Login form submit

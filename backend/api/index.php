@@ -18,6 +18,11 @@ require_once __DIR__ . '/../lib/Firewall.php';
 require_once __DIR__ . '/../lib/WAF.php';
 require_once __DIR__ . '/../lib/IPReputation.php';
 require_once __DIR__ . '/../lib/RealTimeMonitor.php';
+require_once __DIR__ . '/../lib/BotShield.php';
+require_once __DIR__ . '/../lib/CMSGuard.php';
+require_once __DIR__ . '/../lib/RootkitScanner.php';
+require_once __DIR__ . '/../lib/FileIntegrity.php';
+require_once __DIR__ . '/../lib/PHPHardening.php';
 
 // ── CORS & Headers ────────────────────────────────────────────────────────────
 header('Content-Type: application/json');
@@ -52,8 +57,9 @@ $query  = $_GET;
 
 // ── Public routes (no auth required) ─────────────────────────────────────────
 $publicRoutes = [
-    'auth/login'  => true,
-    'auth/status' => true,
+    'auth/login'      => true,
+    'auth/status'     => true,
+    'auth/auto-login' => true,  // cPanel SSO — trusts REMOTE_USER set by cPanel webserver
 ];
 
 $routeKey = "$module/$action";
@@ -77,6 +83,11 @@ try {
         'logs'       => routeLogs($action, $method, $query, $user),
         'monitor'    => routeMonitor($action, $method, $body, $query, $user),
         'storage'    => routeStorage($action, $method, $body, $user),
+        'botshield'  => routeBotShield($action, $method, $body, $query, $user),
+        'cmsguard'   => routeCMSGuard($action, $method, $body, $query, $user),
+        'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
+        'integrity'  => routeIntegrity($action, $method, $body, $query, $id, $user),
+        'phphard'    => routePHPHard($action, $method, $body, $query, $user),
         default      => ['success' => false, 'error' => "Unknown module: $module", 'code' => 404],
     };
 } catch (Throwable $e) {
@@ -138,6 +149,21 @@ function routeAuth(string $action, string $method, array $body, ?array $user): a
                 'token'   => Auth::generateToken($u, $role),
                 'user'    => ['username' => $u, 'role' => $role, 'mode' => INSTALL_MODE],
             ];
+        })(),
+
+        // GET auth/auto-login — cPanel SSO: trust REMOTE_USER from cPanel webserver
+        'auto-login' => (function() {
+            if (INSTALL_MODE === 'standalone') {
+                return ['success' => false, 'error' => 'Not available in standalone mode', 'code' => 400];
+            }
+            $token = Auth::autoLoginCpanel();
+            if (!$token) {
+                return ['success' => false, 'error' => 'No cPanel session', 'code' => 401];
+            }
+            $data = Auth::verifyToken($token);
+            $user = ['username' => $data['sub'], 'role' => $data['role'], 'mode' => INSTALL_MODE];
+            Logger::info("Auto-login: {$data['sub']} ({$data['role']}) via REMOTE_USER");
+            return ['success' => true, 'token' => $token, 'user' => $user];
         })(),
 
         'status' => [
@@ -614,5 +640,114 @@ function routeStorage(string $action, string $method, array $body, ?array $user)
         })() : ['success' => false, 'code' => 405],
 
         default => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Bot Shield
+// ════════════════════════════════════════════════════════════════════════════
+function routeBotShield(string $action, string $method, array $body, array $q, ?array $user): array {
+    $bs = new BotShield();
+    return match($action) {
+        'stats'           => ['success' => true, 'data' => $bs->getStats()],
+        'events'          => ['success' => true, 'data' => $bs->getBotEvents((int)($q['limit'] ?? 100))],
+        'blocked'         => ['success' => true, 'data' => $bs->getBlockedBots()],
+        'whitelist'       => $method === 'GET'
+            ? ['success' => true, 'data' => $bs->getWhitelistedBots()]
+            : ['success' => $bs->addWhitelist($body['pattern'] ?? '', $body['note'] ?? '')],
+        'remove-whitelist'=> $method === 'POST'
+            ? ['success' => $bs->removeWhitelist((int)($body['id'] ?? 0))]
+            : ['success' => false, 'code' => 405],
+        'block'           => $method === 'POST'
+            ? ['success' => $bs->blockBot($body['ip'] ?? '', $body['ua'] ?? '', $body['reason'] ?? 'Manual')]
+            : ['success' => false, 'code' => 405],
+        'unblock'         => $method === 'POST'
+            ? ['success' => $bs->unblockBot($body['ip'] ?? '')]
+            : ['success' => false, 'code' => 405],
+        'scan', 'analyze' => $method === 'POST'
+            ? ['success' => true, 'data' => $bs->runAnalysis()]
+            : ['success' => false, 'code' => 405],
+        default           => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CMS Guard
+// ════════════════════════════════════════════════════════════════════════════
+function routeCMSGuard(string $action, string $method, array $body, array $q, ?array $user): array {
+    $cg = new CMSGuard();
+    return match($action) {
+        'stats'    => ['success' => true, 'data' => $cg->getStats()],
+        'installs' => ['success' => true, 'data' => $cg->getInstalls()],
+        'scan'     => $method === 'POST'
+            ? ['success' => true, 'data' => $cg->runScan()]
+            : ['success' => false, 'code' => 405],
+        'check'    => $method === 'POST'
+            ? ['success' => true, 'data' => $cg->checkInstall((int)($body['id'] ?? 0))]
+            : ['success' => false, 'code' => 405],
+        default    => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Rootkit Scanner
+// ════════════════════════════════════════════════════════════════════════════
+function routeRootkit(string $action, string $method, array $body, array $q, ?string $id, ?array $user): array {
+    $rk = new RootkitScanner();
+    return match($action) {
+        'status'   => ['success' => true, 'data' => $rk->getStatus()],
+        'scans'    => ['success' => true, 'data' => $rk->getScans((int)($q['limit'] ?? 10))],
+        'findings' => ['success' => true, 'data' => $rk->getFindings((int)($id ?? 0))],
+        'scan'     => $method === 'POST'
+            ? ['success' => true, 'data' => $rk->runScan($body['tool'] ?? 'rkhunter')]
+            : ['success' => false, 'code' => 405],
+        default    => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// File Integrity
+// ════════════════════════════════════════════════════════════════════════════
+function routeIntegrity(string $action, string $method, array $body, array $q, ?string $id, ?array $user): array {
+    $fi = new FileIntegrity();
+    return match($action) {
+        'stats'      => ['success' => true, 'data' => $fi->getStats()],
+        'baselines'  => ['success' => true, 'data' => $fi->getBaselines()],
+        'changes'    => ['success' => true, 'data' => $fi->getChanges($q['status'] ?? '')],
+        'paths'      => ['success' => true, 'data' => $fi->getWatchedPaths()],
+        'baseline'   => $method === 'POST'
+            ? ['success' => true, 'data' => $fi->createBaseline($body['path'] ?? '/home')]
+            : ['success' => false, 'code' => 405],
+        'check'      => $method === 'POST'
+            ? ['success' => true, 'data' => $fi->runCheck($body['path'] ?? '')]
+            : ['success' => false, 'code' => 405],
+        'reset'      => $method === 'POST'
+            ? ['success' => $fi->resetBaseline($body['path'] ?? '')]
+            : ['success' => false, 'code' => 405],
+        'acknowledge'=> $method === 'POST'
+            ? ['success' => $fi->acknowledgeChange((int)($body['id'] ?? 0))]
+            : ['success' => false, 'code' => 405],
+        default      => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PHP Hardening
+// ════════════════════════════════════════════════════════════════════════════
+function routePHPHard(string $action, string $method, array $body, array $q, ?array $user): array {
+    $ph = new PHPHardening();
+    return match($action) {
+        'stats'            => ['success' => true, 'data' => $ph->getStats()],
+        'settings'         => ['success' => true, 'data' => $ph->getCurrentSettings()],
+        'recommendations'  => ['success' => true, 'data' => $ph->getRecommendations()],
+        'accounts'         => ['success' => true, 'data' => $ph->getCpanelAccounts()],
+        'account-settings' => ['success' => true, 'data' => $ph->getAccountPHPSettings($q['account'] ?? '')],
+        'apply'            => $method === 'POST'
+            ? ['success' => true, 'data' => $ph->applyHardening($body['settings'] ?? [])]
+            : ['success' => false, 'code' => 405],
+        'apply-account'    => $method === 'POST'
+            ? ['success' => true, 'data' => $ph->applyAccountHardening($body['account'] ?? '', $body['settings'] ?? [])]
+            : ['success' => false, 'code' => 405],
+        default            => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }

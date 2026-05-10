@@ -55,6 +55,7 @@ const API = (() => {
 
     // Auth
     login:          (username, password) => req('POST', 'auth/login',           { username, password }),
+    autoLogin:      ()                   => req('GET',  'auth/auto-login'),
     status:         ()                   => req('GET',  'auth/status'),
     changePassword: (username, password) => req('POST', 'auth/change-password', { username, password }),
 
@@ -119,6 +120,48 @@ const API = (() => {
     storageStats:        ()       => req('GET',  'storage/stats'),
     storagePrune:        ()       => req('POST', 'storage/prune',          {}),
     storageSaveSettings: (data)   => req('POST', 'storage/save-settings',  data),
+
+    // Bot Shield
+    botStats:           ()           => req('GET',  'botshield/stats'),
+    botEvents:          (limit)      => req('GET',  `botshield/events?limit=${limit||100}`),
+    botBlocked:         ()           => req('GET',  'botshield/blocked'),
+    botWhitelist:       ()           => req('GET',  'botshield/whitelist'),
+    botAddWhitelist:    (p, note)    => req('POST', 'botshield/whitelist',        { pattern: p, note }),
+    botRemoveWhitelist: (id)         => req('POST', 'botshield/remove-whitelist', { id }),
+    botBlock:           (ip, ua, reason) => req('POST', 'botshield/block',        { ip, ua, reason }),
+    botUnblock:         (ip)         => req('POST', 'botshield/unblock',          { ip }),
+    botScan:            ()           => req('POST', 'botshield/scan',             {}),
+
+    // CMS Guard
+    cmsStats:    ()   => req('GET',  'cmsguard/stats'),
+    cmsInstalls: ()   => req('GET',  'cmsguard/installs'),
+    cmsScan:     ()   => req('POST', 'cmsguard/scan',  {}),
+    cmsCheck:    (id) => req('POST', 'cmsguard/check', { id }),
+
+    // Rootkit Scanner
+    rootkitStatus:   ()     => req('GET',  'rootkit/status'),
+    rootkitScans:    ()     => req('GET',  'rootkit/scans'),
+    rootkitFindings: (id)   => req('GET',  `rootkit/findings/${id}`),
+    rootkitScan:     (tool) => req('POST', 'rootkit/scan', { tool: tool || 'rkhunter' }),
+
+    // File Integrity
+    integrityStats:    ()     => req('GET',  'integrity/stats'),
+    integrityBaselines:()     => req('GET',  'integrity/baselines'),
+    integrityChanges:  (st)   => req('GET',  `integrity/changes${st ? '?status='+st : ''}`),
+    integrityPaths:    ()     => req('GET',  'integrity/paths'),
+    integrityBaseline: (path) => req('POST', 'integrity/baseline',   { path }),
+    integrityCheck:    (path) => req('POST', 'integrity/check',      { path: path || '' }),
+    integrityReset:    (path) => req('POST', 'integrity/reset',      { path }),
+    integrityAck:      (id)   => req('POST', 'integrity/acknowledge', { id }),
+
+    // PHP Hardening
+    phpStats:          ()           => req('GET',  'phphard/stats'),
+    phpSettings:       ()           => req('GET',  'phphard/settings'),
+    phpRecs:           ()           => req('GET',  'phphard/recommendations'),
+    phpAccounts:       ()           => req('GET',  'phphard/accounts'),
+    phpAccountSettings:(acct)       => req('GET',  `phphard/account-settings?account=${encodeURIComponent(acct)}`),
+    phpApply:          (settings)   => req('POST', 'phphard/apply',         { settings }),
+    phpApplyAccount:   (acct, sets) => req('POST', 'phphard/apply-account', { account: acct, settings: sets }),
   };
 })();
 

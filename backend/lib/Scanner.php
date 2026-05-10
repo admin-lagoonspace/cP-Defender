@@ -115,14 +115,15 @@ class Scanner {
                 $filePath   = $m[1];
                 $threatName = $m[2];
                 $threatId   = Database::insert('threats', [
-                    'scan_job_id' => $jobId,
-                    'file_path'   => $filePath,
-                    'threat_name' => $threatName,
-                    'threat_type' => $this->classifyThreat($threatName),
-                    'severity'    => $this->getSeverity($threatName),
-                    'hash'        => file_exists($filePath) ? hash_file('sha256', $filePath) : null,
-                    'size'        => file_exists($filePath) ? filesize($filePath) : 0,
-                    'status'      => 'active',
+                    'scan_job_id'  => $jobId,
+                    'file_path'    => $filePath,
+                    'threat_name'  => $threatName,
+                    'threat_type'  => $this->classifyThreat($threatName),
+                    'severity'     => $this->getSeverity($threatName),
+                    'hash'         => file_exists($filePath) ? hash_file('sha256', $filePath) : null,
+                    'size'         => file_exists($filePath) ? filesize($filePath) : 0,
+                    'status'       => 'active',
+                    'cpanel_user'  => self::getCpanelUser($filePath),
                 ]);
                 $threats[] = ['id' => $threatId, 'file' => $filePath, 'name' => $threatName];
 
@@ -160,6 +161,7 @@ class Scanner {
                         'hash'        => hash_file('sha256', $file),
                         'size'        => filesize($file),
                         'status'      => 'active',
+                        'cpanel_user' => self::getCpanelUser($file),
                     ]);
                     $threats[] = ['id' => $threatId, 'file' => $file, 'name' => $sigName];
 
@@ -288,6 +290,28 @@ class Scanner {
             'by_type'        => $byType,
             'files_scanned'  => (int) ($lastScan['files_scanned'] ?? 0),
         ];
+    }
+
+    /**
+     * Determine which cPanel account owns a file path.
+     * /home/USERNAME/... → USERNAME
+     * Falls back to posix file owner, then 'unknown'.
+     */
+    public static function getCpanelUser(string $filePath): string {
+        // Most common: /home/<user>/...
+        if (preg_match('#^/home/([^/]+)/#', $filePath, $m)) {
+            return $m[1];
+        }
+        // /usr/home/<user>/...
+        if (preg_match('#^/usr/home/([^/]+)/#', $filePath, $m)) {
+            return $m[1];
+        }
+        // Fallback: file owner via posix
+        if (file_exists($filePath) && function_exists('posix_getpwuid')) {
+            $info = @posix_getpwuid(@fileowner($filePath));
+            if ($info && isset($info['name'])) return $info['name'];
+        }
+        return 'system';
     }
 
     private function classifyThreat(string $name): string {

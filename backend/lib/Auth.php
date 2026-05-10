@@ -116,6 +116,20 @@ class Auth {
         Database::setSetting('local_admin_hash', password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]));
     }
 
+    /**
+     * Auto-login for cPanel mode: trust REMOTE_USER set by cPanel's webserver.
+     * Returns a JWT if REMOTE_USER is present and non-empty, null otherwise.
+     */
+    public static function autoLoginCpanel(): ?string {
+        // cPanel sets REMOTE_USER when the plugin page is loaded inside the
+        // cPanel/WHM UI.  If it's absent (direct browser hit, non-cPanel), bail.
+        $remoteUser = $_SERVER['REMOTE_USER'] ?? '';
+        if ($remoteUser === '') return null;
+
+        $role = ($remoteUser === 'root' || $remoteUser === 'cpanel') ? 'admin' : 'user';
+        return self::generateToken($remoteUser, $role);
+    }
+
     public static function hashPassword(string $password): string {
         return password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
     }
