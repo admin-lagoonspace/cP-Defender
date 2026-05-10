@@ -848,18 +848,68 @@
           </div>
         </div>
 
-        <div class="card mb-4">
-          <div class="card-header"><div class="card-title">System Service</div></div>
+        <div class="card mb-4" id="svc-card">
+          <div class="card-header">
+            <div class="card-title">System Service (systemd)</div>
+            <span class="badge" id="svc-state-badge" style="background:rgba(107,114,128,.15);color:var(--txt2)">Checking&hellip;</span>
+          </div>
           <div class="card-body">
-            <p style="font-size:.8rem;color:var(--txt2);margin-bottom:14px">
-              Install the monitor as a systemd service so it starts automatically on boot and restarts if it crashes.
-            </p>
-            <div style="font-family:monospace;font-size:.72rem;background:var(--bg0);padding:10px 14px;border-radius:6px;margin-bottom:14px;color:var(--txt2)">
-              systemctl status sentinel-gate-monitor
+
+            <!-- Status row -->
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px">
+              <div>
+                <div class="label" style="font-size:.68rem">Unit File</div>
+                <div id="svc-installed" class="dim" style="font-size:.75rem">Checking…</div>
+              </div>
+              <div>
+                <div class="label" style="font-size:.68rem">Auto-start</div>
+                <div id="svc-enabled" class="dim" style="font-size:.75rem">—</div>
+              </div>
+              <div>
+                <div class="label" style="font-size:.68rem">Running Since</div>
+                <div id="svc-since" class="dim" style="font-size:.75rem">—</div>
+              </div>
+              <div>
+                <div class="label" style="font-size:.68rem">Main PID</div>
+                <div id="svc-pid" class="mono" style="font-size:.75rem">—</div>
+              </div>
+              <div>
+                <div class="label" style="font-size:.68rem">Memory</div>
+                <div id="svc-mem" class="dim" style="font-size:.75rem">—</div>
+              </div>
+              <div>
+                <div class="label" style="font-size:.68rem">Sub-state</div>
+                <div id="svc-substate" class="mono" style="font-size:.75rem">—</div>
+              </div>
             </div>
-            <button class="btn btn-ghost btn-sm" id="install-service-btn" onclick="installMonitorService()">
-              Install as System Service
-            </button>
+
+            <!-- Action buttons -->
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+              <button class="btn btn-primary btn-sm" id="svc-start-btn" onclick="svcAction('start')">▶ Start</button>
+              <button class="btn btn-ghost btn-sm"   id="svc-stop-btn"  onclick="svcAction('stop')">■ Stop</button>
+              <button class="btn btn-ghost btn-sm"               onclick="svcAction('restart')">↺ Restart</button>
+              <div style="flex:1"></div>
+              <label class="toggle" title="Enable auto-start on boot" style="align-self:center">
+                <input type="checkbox" id="svc-autostart-toggle" onchange="toggleServiceAutostart(this.checked)">
+                <span class="toggle-slider"></span>
+              </label>
+              <span style="font-size:.75rem;color:var(--txt2);align-self:center">Auto-start on boot</span>
+            </div>
+
+            <!-- Install strip (shown only when unit file is missing) -->
+            <div id="svc-install-strip" style="display:none;padding:12px;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.2);border-radius:8px;margin-bottom:12px">
+              <div style="font-size:.78rem;color:var(--amber);margin-bottom:8px">
+                ⚠ systemd unit file not installed. Install it to enable auto-start and boot survival.
+              </div>
+              <button class="btn btn-primary btn-sm" id="install-service-btn" onclick="installMonitorService()">
+                Install systemd Unit
+              </button>
+            </div>
+
+            <!-- Unit file path -->
+            <div style="font-family:monospace;font-size:.7rem;background:var(--bg0);padding:8px 12px;border-radius:6px;color:var(--txt3)">
+              /etc/systemd/system/sentinel-gate-monitor.service
+            </div>
           </div>
         </div>
       </div>
@@ -874,13 +924,32 @@
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">Monitor Log</div>
-          <button class="btn btn-ghost btn-sm" onclick="loadMonitorLog()">&#x21BA; Reload</button>
+      <div class="grid-2 mb-4">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Daemon Log</div>
+            <button class="btn btn-ghost btn-sm" onclick="loadMonitorLog()">&#x21BA;</button>
+          </div>
+          <div class="card-body" style="padding:0">
+            <pre id="monitor-log" style="font-size:.7rem;font-family:monospace;color:var(--txt2);max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:0;padding:14px">Loading&hellip;</pre>
+          </div>
         </div>
-        <div class="card-body">
-          <pre id="monitor-log" style="font-size:.72rem;font-family:monospace;color:var(--txt2);max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">Loading&hellip;</pre>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">journalctl Output</div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select class="form-input" id="svc-log-lines" style="font-size:.75rem;padding:3px 6px;width:auto">
+                <option value="30">30 lines</option>
+                <option value="50" selected>50 lines</option>
+                <option value="100">100 lines</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" onclick="loadServiceLogs()">&#x21BA;</button>
+            </div>
+          </div>
+          <div class="card-body" style="padding:0">
+            <pre id="svc-journal-log" style="font-size:.7rem;font-family:monospace;color:var(--txt2);max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:0;padding:14px">Loading&hellip;</pre>
+          </div>
         </div>
       </div>
     </div>

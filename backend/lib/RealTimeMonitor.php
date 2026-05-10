@@ -218,6 +218,95 @@ UNIT;
         return ($out[0] ?? '') === 'enabled';
     }
 
+    /**
+     * Detailed systemd service status — installed, enabled, active-state,
+     * uptime, PID, memory.  Works whether running or not.
+     */
+    public function getServiceStatus(): array {
+        $installed = file_exists($this->serviceFile);
+        $enabled   = $installed && $this->isServiceEnabled();
+
+        if (!$installed) {
+            return [
+                'installed'    => false,
+                'enabled'      => false,
+                'active'       => false,
+                'active_state' => 'not-installed',
+                'sub_state'    => '',
+                'since'        => null,
+                'main_pid'     => null,
+                'memory_mb'    => null,
+                'description'  => 'Service unit not installed',
+            ];
+        }
+
+        // `systemctl show` returns KEY=VALUE lines — fast, machine-readable
+        exec('systemctl show sentinel-gate-monitor ' .
+             '--no-pager 2>/dev/null', $out);
+        $props = [];
+        foreach ($out as $line) {
+            [$k, $v] = array_pad(explode('=', $line, 2), 2, '');
+            $props[$k] = $v;
+        }
+
+        $activeState = $props['ActiveState']  ?? 'unknown';
+        $subState    = $props['SubState']     ?? '';
+        $mainPid     = (int) ($props['MainPID']     ?? 0);
+        $memBytes    = (int) ($props['MemoryCurrent'] ?? 0);
+
+        // ActiveEnterTimestamp is microseconds since epoch
+        $since = null;
+        $ts = $props['ActiveEnterTimestamp'] ?? '';
+        if ($ts && $ts !== '0') {
+            $since = (int) (substr($ts, 0, -6) ?: '0'); // strip µs
+        }
+
+        return [
+            'installed'    => true,
+            'enabled'      => $enabled,
+            'active'       => $activeState === 'active',
+            'active_state' => $activeState,
+            'sub_state'    => $subState,
+            'since'        => $since ?: null,
+            'main_pid'     => $mainPid ?: null,
+            'memory_mb'    => $memBytes > 0 ? round($memBytes / 1048576, 1) : null,
+            'description'  => $props['Description'] ?? 'Sentinel Gate Monitor',
+            'unit_file'    => $this->serviceFile,
+        ];
+    }
+
+    public function enableService(): array {
+        if (!file_exists($this->serviceFile)) {
+            return ['success' => false, 'error' => 'Service not installed — install it first'];
+        }
+        exec('systemctl enable sentinel-gate-monitor 2>&1', $out, $code);
+        Logger::info("Monitor service enabled");
+        return ['success' => $code === 0, 'output' => implode("\n", $out)];
+    }
+
+    public function disableService(): array {
+        exec('systemctl disable sentinel-gate-monitor 2>&1', $out, $code);
+        Logger::info("Monitor service disabled");
+        return ['success' => $code === 0, 'output' => implode("\n", $out)];
+    }
+
+    /**
+     * Pull recent journal entries for the unit.
+     * Returns plain-text lines newest-first.
+     */
+    public function getServiceLogs(int $lines = 50): array {
+        exec(
+            "journalctl -u sentinel-gate-monitor -n {$lines} " .
+            "--no-pager --output=short-iso 2>/dev/null",
+            $out, $code
+        );
+        if ($code !== 0 || empty($out)) {
+            // Journald may not be available — fall back to daemon log tail
+            return $this->getRecentLogs($lines);
+        }
+        return array_reverse($out); // newest first
+    }
+
     // ── Recent Detections ─────────────────────────────────────────────────────
 
     public function getRecentDetections(int $limit = 50): array {

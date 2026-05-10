@@ -268,7 +268,28 @@ else
   fi
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /etc/systemd/system ]]; then
-    cp "${SCRIPT_DIR}/whm/sentinel-gate-monitor.service" /etc/systemd/system/
+    # Generate the service unit dynamically so paths match this installation
+    cat > /etc/systemd/system/sentinel-gate-monitor.service << SVCEOF
+[Unit]
+Description=Sentinel Gate Real-Time File Monitor
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Environment="SG_ROOT=${INSTALL_DIR}"
+ExecStart=/usr/bin/python3 ${INSTALL_DIR}/backend/daemon/monitor.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:${LOG_DIR}/monitor.log
+StandardError=append:${LOG_DIR}/monitor.log
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
     chmod 644 /etc/systemd/system/sentinel-gate-monitor.service
     systemctl daemon-reload
     systemctl enable sentinel-gate-monitor 2>/dev/null

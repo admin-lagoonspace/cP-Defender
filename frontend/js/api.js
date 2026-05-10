@@ -114,7 +114,11 @@ const API = (() => {
     monitorLogs:          (lines)  => req('GET',  `monitor/logs?lines=${lines||100}`),
     monitorAddPath:       (path)   => req('POST', 'monitor/add-path',       { path }),
     monitorRemovePath:    (path)   => req('POST', 'monitor/remove-path',    { path }),
-    monitorInstallService:()       => req('POST', 'monitor/install-service', {}),
+    monitorInstallService: ()        => req('POST', 'monitor/install-service', {}),
+    monitorServiceStatus:  ()        => req('GET',  'monitor/service-status'),
+    monitorEnableService:  ()        => req('POST', 'monitor/enable-service',  {}),
+    monitorDisableService: ()        => req('POST', 'monitor/disable-service', {}),
+    monitorServiceLogs:    (lines)   => req('GET',  `monitor/service-logs?lines=${lines||50}`),
 
     // Storage Management
     storageStats:        ()       => req('GET',  'storage/stats'),

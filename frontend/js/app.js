@@ -905,6 +905,10 @@ async function loadMonitor() {
       'onclick="removeWatchPath(\'' + p + '\')">✕ Remove</button></div>'
     ).join('') || '<div style="color:var(--txt3);font-size:.8rem">No paths configured</div>';
   }
+
+  // Also refresh service panel
+  loadServiceStatus();
+  loadServiceLogs();
 }
 
 async function toggleMonitor() {
@@ -984,6 +988,112 @@ async function installMonitorService() {
   else toast(res?.error || 'Installation failed', 'error');
   if (btn) { btn.disabled = false; btn.textContent = 'Install as System Service'; }
   loadMonitor();
+  loadServiceStatus();
+}
+
+// ── Systemd Service Status Panel ─────────────────────────────────────────────
+
+async function loadServiceStatus() {
+  const res = Demo.active
+    ? { success: true, data: {
+        installed: true, enabled: true, active: true,
+        active_state: 'active', sub_state: 'running',
+        since: Math.floor(Date.now() / 1000) - 3600,
+        main_pid: 1234, memory_mb: 18.4,
+        description: 'Sentinel Gate Real-Time File Monitor',
+        unit_file: '/etc/systemd/system/sentinel-gate-monitor.service'
+      }}
+    : await API.monitorServiceStatus();
+
+  if (!res?.success) return;
+  const d = res.data;
+
+  // State badge
+  const badge = document.getElementById('svc-state-badge');
+  if (badge) {
+    const active = d.active_state === 'active';
+    const color  = active ? 'badge-green' : (d.active_state === 'failed' ? 'badge-red' : 'badge-yellow');
+    badge.className   = 'badge ' + color;
+    badge.textContent = active ? '● Active' : ('○ ' + (d.active_state || 'Unknown'));
+  }
+
+  // Info cells
+  setText('svc-installed',  d.installed ? (d.unit_file || 'Yes') : 'Not installed');
+  setText('svc-enabled',    d.enabled   ? 'Enabled (auto-start on boot)' : 'Disabled');
+  setText('svc-since',      d.since     ? new Date(d.since * 1000).toLocaleString() : '—');
+  setText('svc-pid',        d.main_pid  ? String(d.main_pid) : '—');
+  setText('svc-mem',        d.memory_mb ? d.memory_mb + ' MB' : '—');
+  setText('svc-substate',   d.sub_state || '—');
+
+  // Auto-start toggle
+  const toggle = document.getElementById('svc-autostart-toggle');
+  if (toggle) toggle.checked = !!d.enabled;
+
+  // Install strip — hide once installed
+  const strip = document.getElementById('svc-install-strip');
+  if (strip) strip.style.display = d.installed ? 'none' : '';
+}
+
+async function svcAction(action) {
+  const validActions = ['start', 'stop', 'restart'];
+  if (!validActions.includes(action)) return;
+
+  if (Demo.active) {
+    toast('Service ' + action + 'ed (demo)', 'success');
+    return;
+  }
+
+  const fn = {
+    start:   API.monitorStart,
+    stop:    API.monitorStop,
+    restart: API.monitorRestart
+  }[action];
+
+  const res = await fn();
+  if (res?.success) {
+    toast('Service ' + action + 'ed', 'success');
+    setTimeout(() => { loadMonitor(); loadServiceStatus(); }, 800);
+  } else {
+    toast(res?.error || 'Action failed', 'error');
+  }
+}
+
+async function toggleServiceAutostart(checked) {
+  if (Demo.active) {
+    toast(checked ? 'Auto-start enabled (demo)' : 'Auto-start disabled (demo)', 'success');
+    return;
+  }
+  const res = checked ? await API.monitorEnableService() : await API.monitorDisableService();
+  if (res?.success) toast(checked ? 'Auto-start enabled' : 'Auto-start disabled', 'success');
+  else {
+    toast(res?.error || 'Failed to update auto-start', 'error');
+    // Revert toggle on failure
+    const toggle = document.getElementById('svc-autostart-toggle');
+    if (toggle) toggle.checked = !checked;
+  }
+}
+
+async function loadServiceLogs() {
+  if (Demo.active) {
+    const el = document.getElementById('svc-journal-log');
+    if (el) el.textContent =
+      '2024-01-15T14:22:01+0000 sentinel-gate-monitor[1234]: INFO  Monitor started\n' +
+      '2024-01-15T14:22:01+0000 sentinel-gate-monitor[1234]: INFO  inotify engine active\n' +
+      '2024-01-15T14:22:01+0000 sentinel-gate-monitor[1234]: INFO  Watching /home\n' +
+      '2024-01-15T15:30:00+0000 sentinel-gate-monitor[1234]: ALERT c99_shell detected';
+    return;
+  }
+  const sel   = document.getElementById('svc-log-lines');
+  const lines = parseInt(sel?.value || '50', 10);
+  const res   = await API.monitorServiceLogs(lines);
+  const el    = document.getElementById('svc-journal-log');
+  if (el) {
+    if (res?.success && Array.isArray(res.data) && res.data.length > 0) {
+      el.textContent = res.data.join('\n');
+    } else {
+      el.textContent = '(no journal entries — service may not have run yet)';
+    }
+  }
 }
 
 function setText(id, val) {

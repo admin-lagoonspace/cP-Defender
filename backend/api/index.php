@@ -494,6 +494,21 @@ function routeMonitor(string $action, string $method, array $body, array $q, ?ar
             ? $monitor->installService()
             : ['success' => false, 'code' => 405],
 
+        'service-status' => ['success' => true, 'data' => $monitor->getServiceStatus()],
+
+        'enable-service'  => $method === 'POST'
+            ? $monitor->enableService()
+            : ['success' => false, 'code' => 405],
+
+        'disable-service' => $method === 'POST'
+            ? $monitor->disableService()
+            : ['success' => false, 'code' => 405],
+
+        'service-logs' => [
+            'success' => true,
+            'data'    => $monitor->getServiceLogs((int)($q['lines'] ?? 50))
+        ],
+
         default => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }
