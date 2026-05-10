@@ -42,6 +42,11 @@ WHM_CGI=""
 DYNUI_PAPER=""
 DYNUI_JUPITER=""
 FEATURE_FLAG=""
+FEATURE_FLAG_MODERN=""
+FEATURE_FLAG_LEGACY=""
+CPANEL_APPCONFIG=""
+CPANEL_PLUGIN_PAPER=""
+CPANEL_PLUGIN_JUPITER=""
 CRON_FILE="/etc/cron.d/sentinel-gate"
 MONITOR_SERVICE="/etc/systemd/system/sentinel-gate-monitor.service"
 WEB_SERVICE=""
@@ -60,10 +65,15 @@ if [[ -f "${MANIFEST}" ]]; then
       APPCONFIG_CONF)   APPCONFIG_CONF="$VAL" ;;
       WHM_PLUGIN_CONF)  WHM_PLUGIN_CONF="$VAL" ;;
       WHM_CGI)          WHM_CGI="$VAL" ;;
-      DYNUI_paper_lantern) DYNUI_PAPER="$VAL" ;;
-      DYNUI_jupiter)    DYNUI_JUPITER="$VAL" ;;
-      FEATURE_FLAG)     FEATURE_FLAG="$VAL" ;;
-      CRON_FILE)        CRON_FILE="$VAL" ;;
+      DYNUI_paper_lantern)     DYNUI_PAPER="$VAL" ;;
+      DYNUI_jupiter)           DYNUI_JUPITER="$VAL" ;;
+      FEATURE_FLAG)            FEATURE_FLAG="$VAL" ;;
+      FEATURE_FLAG_MODERN)     FEATURE_FLAG_MODERN="$VAL" ;;
+      FEATURE_FLAG_LEGACY)     FEATURE_FLAG_LEGACY="$VAL" ;;
+      CPANEL_APPCONFIG)        CPANEL_APPCONFIG="$VAL" ;;
+      CPANEL_PLUGIN_paper_lantern) CPANEL_PLUGIN_PAPER="$VAL" ;;
+      CPANEL_PLUGIN_jupiter)   CPANEL_PLUGIN_JUPITER="$VAL" ;;
+      CRON_FILE)               CRON_FILE="$VAL" ;;
       MONITOR_SERVICE)  MONITOR_SERVICE="$VAL" ;;
       WEB_SERVICE)      WEB_SERVICE="$VAL" ;;
       WEB_PID_FILE)     WEB_PID_FILE="$VAL" ;;
@@ -291,27 +301,58 @@ else
   skip "No WHM plugin files found"
 fi
 
-# Remove cPanel user-level dynamicui plugin from all themes
+# ── Remove cPanel user-level plugin (all themes) ──────────────────────────
 info "Removing cPanel user-level plugin…"
+
+# Unregister cPanel AppConfig entry (service=cpanel)
+for CPANEL_CONF in \
+  "${CPANEL_APPCONFIG}" \
+  /var/cpanel/apps/sentinel_gate_cpanel.conf; do
+  [[ -z "${CPANEL_CONF}" || ! -f "${CPANEL_CONF}" ]] && continue
+  if [[ -x /usr/local/cpanel/bin/register_appconfig ]]; then
+    /usr/local/cpanel/bin/register_appconfig --remove "${CPANEL_CONF}" 2>/dev/null || true
+  fi
+  rm -f "${CPANEL_CONF}" && ok "Removed cPanel AppConfig: ${CPANEL_CONF}"
+done
+
+# Remove plugin directories (PHP pages + install.json) from both themes
+for CPANEL_PLUGIN_DIR in \
+  "${CPANEL_PLUGIN_PAPER}" \
+  "${CPANEL_PLUGIN_JUPITER}" \
+  /usr/local/cpanel/base/frontend/paper_lantern/sentinel_gate \
+  /usr/local/cpanel/base/frontend/jupiter/sentinel_gate; do
+  [[ -z "${CPANEL_PLUGIN_DIR}" || ! -d "${CPANEL_PLUGIN_DIR}" ]] && continue
+  # Call uninstall_plugin before removing files (if available)
+  if [[ -x /usr/local/cpanel/scripts/uninstall_plugin ]]; then
+    _THEME=$(basename "$(dirname "${CPANEL_PLUGIN_DIR}")")
+    /usr/local/cpanel/scripts/uninstall_plugin \
+      "${CPANEL_PLUGIN_DIR}" --theme "${_THEME}" 2>/dev/null || true
+  fi
+  rm -rf "${CPANEL_PLUGIN_DIR}" && ok "Removed cPanel plugin dir: ${CPANEL_PLUGIN_DIR}"
+done
+
+# Remove dynamicui confs from all themes
 for DYNUI_CONF in \
   "${DYNUI_PAPER}" \
   "${DYNUI_JUPITER}" \
   /usr/local/cpanel/base/frontend/paper_lantern/dynamicui/dynamicui_sentinel_gate.conf \
   /usr/local/cpanel/base/frontend/jupiter/dynamicui/dynamicui_sentinel_gate.conf; do
   [[ -z "${DYNUI_CONF}" || ! -f "${DYNUI_CONF}" ]] && continue
-  rm -f "${DYNUI_CONF}" && ok "Removed cPanel user plugin: ${DYNUI_CONF}"
+  rm -f "${DYNUI_CONF}" && ok "Removed dynamicui conf: ${DYNUI_CONF}"
 done
 
-# Remove reseller feature flag from feature lists
-FEATURES_DIR="/usr/local/cpanel/cpanel/features"
-if [[ -d "${FEATURES_DIR}" ]]; then
-  info "Removing sentinel_gate feature flag…"
-  for FEAT_FILE in "${FEATURES_DIR}"/*; do
+# Remove feature flags from all feature list files (modern + legacy paths)
+info "Removing sentinel_gate feature flags…"
+for _FEAT_DIR in \
+  /var/cpanel/features \
+  /usr/local/cpanel/cpanel/features; do
+  [[ -d "${_FEAT_DIR}" ]] || continue
+  for FEAT_FILE in "${_FEAT_DIR}"/*; do
     [[ -f "${FEAT_FILE}" ]] && \
       sed -i '/^sentinel_gate=/d' "${FEAT_FILE}" 2>/dev/null || true
   done
-  ok "Feature flag removed from feature lists"
-fi
+  ok "Feature flags removed: ${_FEAT_DIR}"
+done
 
 # ── 5. Remove firewall rule ────────────────────────────────────────────────────
 echo -e "\n${CYAN}${BOLD}── Removing firewall rule ──${NC}"

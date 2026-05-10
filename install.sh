@@ -533,6 +533,9 @@ ENDCGI
     #   acls     = all — root + all resellers with the 'all' ACL can access
     # No target= field: WHM opens the plugin in the main content area (embedded),
     # matching how CSF, CPGuard, and MagicSpam appear in WHM.
+    # acls=any — visible to ALL authenticated WHM users: root AND every reseller.
+    # (acls=all means only users with the 'all' ACL i.e. root + superadmin
+    #  resellers; acls=any means every reseller regardless of their ACL set.)
     # Do NOT include 'icon=...' unless you have an actual installed icon file.
     info "  Writing AppConfig conf: ${WHM_PLUGIN_CONF}"
     # Remove any stale /var/cpanel/apps/ copy first so register_appconfig writes fresh
@@ -542,7 +545,7 @@ name=sentinel_gate
 service=whostmgr
 url=/cgi/sentinel_gate/sentinel_gate.cgi
 entryurl=sentinel_gate/sentinel_gate.cgi
-acls=all
+acls=any
 displayname=Sentinel Gate Security
 APPEOF
     chmod 644 "${WHM_PLUGIN_CONF}"
@@ -606,10 +609,66 @@ APPEOF
       echo "APPCONFIG_CONF=/var/cpanel/apps/sentinel_gate.conf" >> "${MANIFEST}"
     fi
 
-    # ── Step 6: cPanel user-level plugin (cPanel dashboard for hosting accounts) ──
-    info "  Installing cPanel user-level plugin (dynamicui)…"
+    # ── Step 6: cPanel user-level plugin (per-account cPanel dashboard) ─────
+    # Each cPanel account holder sees a "Sentinel Gate" icon in their dashboard.
+    # Clicking it opens the Sentinel Gate dashboard in a new tab.
+    # Registered via:
+    #   a) install_plugin (modern, 11.44+) — processes install.json
+    #   b) dynamicui .conf (legacy fallback) — direct conf file
+    #   c) service=cpanel AppConfig entry — security integration
+    info "  Installing cPanel user-level plugin…"
     for CPANEL_THEME in paper_lantern jupiter; do
-      DYNUI_DIR="/usr/local/cpanel/base/frontend/${CPANEL_THEME}/dynamicui"
+      CPANEL_THEME_BASE="/usr/local/cpanel/base/frontend/${CPANEL_THEME}"
+      [[ ! -d "${CPANEL_THEME_BASE}" ]] && { info "  Theme not found: ${CPANEL_THEME} — skip"; continue; }
+
+      # Create plugin directory and PHP redirect page
+      CPANEL_PLUGIN_DIR="${CPANEL_THEME_BASE}/sentinel_gate"
+      mkdir -p "${CPANEL_PLUGIN_DIR}"
+      # Use single-quoted heredoc: bash does NOT expand $variables inside
+      cat > "${CPANEL_PLUGIN_DIR}/index.php" << 'PHPEOF'
+<?php
+// Sentinel Gate — cPanel user entry point (auto-redirect to dashboard)
+$host = $_SERVER['HTTP_HOST'] ?? '';
+$host = preg_replace('/:[0-9]+$/', '', $host); // strip port number
+if (!$host) $host = gethostname();
+header('Location: https://' . $host . '/sentinel-gate/');
+exit;
+PHPEOF
+      chmod 644 "${CPANEL_PLUGIN_DIR}/index.php"
+
+      # install.json for the modern install_plugin mechanism (cPanel 11.44+)
+      cat > "${CPANEL_PLUGIN_DIR}/install.json" << JSONEOF
+[
+  {
+    "id":       "sentinel_gate",
+    "type":     "link",
+    "name":     "Sentinel Gate",
+    "order":    100,
+    "group_id": "security",
+    "uri":      "/frontend/${CPANEL_THEME}/sentinel_gate/index.php",
+    "feature":  "sentinel_gate"
+  }
+]
+JSONEOF
+      chmod 644 "${CPANEL_PLUGIN_DIR}/install.json"
+
+      # Run install_plugin if the binary exists (modern method)
+      if [[ -x /usr/local/cpanel/scripts/install_plugin ]]; then
+        _INS_OUT=$(/usr/local/cpanel/scripts/install_plugin \
+          "${CPANEL_PLUGIN_DIR}" --theme "${CPANEL_THEME}" 2>&1)
+        _INS_EXIT=$?
+        echo "${_INS_OUT}" | sed 's/^/    /'
+        if [[ ${_INS_EXIT} -eq 0 ]]; then
+          ok "  install_plugin: ${CPANEL_THEME}"
+        else
+          warn "  install_plugin failed for ${CPANEL_THEME} — dynamicui fallback active"
+        fi
+      else
+        info "  install_plugin not found — using dynamicui conf only"
+      fi
+
+      # Legacy dynamicui conf (works on all cPanel versions, parallel to install_plugin)
+      DYNUI_DIR="${CPANEL_THEME_BASE}/dynamicui"
       if [[ -d "${DYNUI_DIR}" ]]; then
         DYNUI_CONF="${DYNUI_DIR}/dynamicui_sentinel_gate.conf"
         cat > "${DYNUI_CONF}" << DYNEOF
@@ -619,23 +678,55 @@ grouporder=30
 name=sentinel_gate
 itemdesc=Sentinel Gate Security
 feature=sentinel_gate
-url=https://${SERVER_HOST}/sentinel-gate/
+url=/frontend/${CPANEL_THEME}/sentinel_gate/index.php
 target=_blank
 itemorder=1
 DYNEOF
         chmod 644 "${DYNUI_CONF}"
-        ok "  cPanel user plugin: ${DYNUI_CONF}"
+        ok "  DynamicUI conf: ${DYNUI_CONF}"
         echo "DYNUI_${CPANEL_THEME}=${DYNUI_CONF}" >> "${MANIFEST}"
       fi
+      echo "CPANEL_PLUGIN_${CPANEL_THEME}=${CPANEL_PLUGIN_DIR}" >> "${MANIFEST}"
     done
 
-    # ── Step 7: Reseller feature flag ────────────────────────────────────────
-    FEATURES_DIR="/usr/local/cpanel/cpanel/features"
-    if [[ -d "${FEATURES_DIR}" ]]; then
-      grep -q "sentinel_gate" "${FEATURES_DIR}/default" 2>/dev/null || \
-        echo "sentinel_gate=1" >> "${FEATURES_DIR}/default"
-      ok "  Reseller feature flag added: sentinel_gate"
-      echo "FEATURE_FLAG=sentinel_gate" >> "${MANIFEST}"
+    # cPanel-level AppConfig entry (service=cpanel) — integrates with cPanel security framework
+    # features=any means ALL cPanel users see it regardless of their feature list
+    CPANEL_APPCONF="${WHM_CGI_DIR}/sentinel_gate_cpanel.conf"
+    rm -f /var/cpanel/apps/sentinel_gate_cpanel.conf 2>/dev/null || true
+    cat > "${CPANEL_APPCONF}" << CPANELEOF
+name=sentinel_gate_cpanel
+service=cpanel
+url=/frontend/jupiter/sentinel_gate/index.php
+features=any
+displayname=Sentinel Gate Security
+CPANELEOF
+    chmod 644 "${CPANEL_APPCONF}"
+    if [[ -x /usr/local/cpanel/bin/register_appconfig ]]; then
+      _CREG_OUT=$(/usr/local/cpanel/bin/register_appconfig "${CPANEL_APPCONF}" 2>&1)
+      echo "${_CREG_OUT}" | sed 's/^/    /'
+      ok "  cPanel AppConfig registered (service=cpanel, features=any)"
+      [[ -f /var/cpanel/apps/sentinel_gate_cpanel.conf ]] && \
+        echo "CPANEL_APPCONFIG=/var/cpanel/apps/sentinel_gate_cpanel.conf" >> "${MANIFEST}"
+    fi
+
+    # ── Step 7: Feature flags — enable Sentinel Gate for all cPanel users ─────
+    # Feature flags control which icons appear in a cPanel user's dashboard.
+    # Adding sentinel_gate=1 to the 'default' feature list means it's ON for
+    # every account unless an admin or reseller explicitly disables it.
+    info "  Writing feature flags…"
+    # Modern location (cPanel 11.44+ / CENTOS 7+ — the authoritative path)
+    mkdir -p /var/cpanel/features
+    grep -q "^sentinel_gate=" /var/cpanel/features/default 2>/dev/null || \
+      echo "sentinel_gate=1" >> /var/cpanel/features/default
+    ok "  Feature flag: /var/cpanel/features/default"
+    echo "FEATURE_FLAG_MODERN=/var/cpanel/features/default" >> "${MANIFEST}"
+    # Legacy location (older cPanel — kept for compatibility)
+    _LEGACY_FEAT="/usr/local/cpanel/cpanel/features"
+    if [[ -d "${_LEGACY_FEAT}" ]]; then
+      grep -q "^sentinel_gate=" "${_LEGACY_FEAT}/default" 2>/dev/null || \
+        echo "sentinel_gate=1" >> "${_LEGACY_FEAT}/default"
+      ok "  Feature flag (legacy): ${_LEGACY_FEAT}/default"
+      echo "FEATURE_FLAG_LEGACY=${_LEGACY_FEAT}/default" >> "${MANIFEST}"
     fi
 
     # ── Step 8: Restart cpsrvd if register_appconfig didn't already do it ────
