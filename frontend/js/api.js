@@ -23,15 +23,27 @@ const API = (() => {
     const url = BASE + '/' + path.replace(/^\//, '');
     try {
       const r = await fetch(url, opts);
-      const json = await r.json();
-      if (r.status === 401) {
-        // Token expired — go back to login
+
+      // Read as text first so a non-JSON body (PHP warnings, 500 pages) never
+      // surfaces a raw parse-error string to the user.
+      const text = await r.text();
+      let json;
+      try {
+        json = JSON.parse(text);
+      } catch (_) {
+        console.error('Non-JSON response from', path, ':', text.slice(0, 300));
+        return { success: false, error: 'Server error — please try again' };
+      }
+
+      // 401 on anything except a login attempt means the session expired.
+      if (r.status === 401 && path !== 'auth/login') {
         Auth.logout();
       }
+
       return json;
     } catch (e) {
-      console.error('API error:', e);
-      return { success: false, error: e.message };
+      console.error('API fetch error:', e);
+      return { success: false, error: 'Could not reach the server — please try again' };
     }
   }
 

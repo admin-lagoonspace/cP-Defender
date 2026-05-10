@@ -4,6 +4,10 @@
  * Endpoint: /sentinel-gate/api/{module}/{action}
  */
 
+// Suppress PHP notices/warnings so they never corrupt the JSON output
+error_reporting(0);
+@ini_set('display_errors', '0');
+
 define('SG_API', true);
 require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../lib/Database.php';
