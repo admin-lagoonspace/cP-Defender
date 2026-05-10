@@ -234,44 +234,52 @@ fi
 
 # ── 4. Remove WHM plugin registration ─────────────────────────────────────────
 echo -e "\n${CYAN}${BOLD}── Removing WHM plugin registration ──${NC}"
-WHM_REMOVED=false
 
-# Remove AppConfig registration (the correct cPanel WHM plugin method)
 REGISTER_APPCONFIG="/usr/local/cpanel/bin/register_appconfig"
+
+# Step A — deregister via whmapi1 (most direct; works even if conf file is missing)
+if command -v whmapi1 >/dev/null 2>&1; then
+  info "Deregistering via whmapi1…"
+  whmapi1 unregister_appconfig_application appname=sentinel_gate 2>/dev/null && \
+    ok "whmapi1: sentinel_gate deregistered" || \
+    info "whmapi1 unregister returned non-zero (plugin may already be absent)"
+fi
+
+# Step B — remove the AppConfig conf from /var/cpanel/apps/ (the canonical location
+# written by register_appconfig at install time) and any source-dir copy.
 for APPCONF in \
-  "${APPCONFIG_CONF}" \
   /var/cpanel/apps/sentinel_gate.conf \
-  /var/cpanel/apps/sentinel-gate.conf; do
+  /var/cpanel/apps/sentinel-gate.conf \
+  "${APPCONFIG_CONF}" \
+  "${WHM_PLUGIN_CONF}"; do
   [[ -z "${APPCONF}" || ! -f "${APPCONF}" ]] && continue
+  # Try register_appconfig --remove first so it can do internal bookkeeping
   if [[ -x "${REGISTER_APPCONFIG}" ]]; then
     "${REGISTER_APPCONFIG}" --remove "${APPCONF}" 2>/dev/null && \
-      ok "Unregistered AppConfig: ${APPCONF}" || \
-      warn "register_appconfig --remove failed (continuing): ${APPCONF}"
+      ok "register_appconfig --remove: ${APPCONF}" || true
   fi
-  rm -f "${APPCONF}" && ok "Removed AppConfig conf: ${APPCONF}"
-  WHM_REMOVED=true
+  rm -f "${APPCONF}" && ok "Deleted AppConfig conf: ${APPCONF}"
 done
 
-# Remove CGI subdirectory (current: /usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate/)
+# Touch /var/cpanel/apps/ so cPanel's mtime-based scanner sees the change
+[[ -d /var/cpanel/apps ]] && touch /var/cpanel/apps/
+
+# Step C — remove CGI directory
 for CGI_DIR in \
   /usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate \
   /usr/local/cpanel/whostmgr/docroot/cgi/sentinel-gate; do
-  if [[ -d "${CGI_DIR}" ]]; then
-    rm -rf "${CGI_DIR}" && ok "Removed WHM CGI dir: ${CGI_DIR}"
-    WHM_REMOVED=true
-  fi
+  [[ -d "${CGI_DIR}" ]] && rm -rf "${CGI_DIR}" && ok "Removed WHM CGI dir: ${CGI_DIR}"
 done
 
-# Remove standalone CGI (legacy: root-level addon_sentinel_gate.cgi from pre-3.1.8)
+# Step D — remove standalone CGI (legacy pre-3.1.8 installs)
 for CGI_FILE in \
   "${WHM_CGI}" \
   /usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinel_gate.cgi; do
   [[ -z "${CGI_FILE}" || ! -f "${CGI_FILE}" ]] && continue
   rm -f "${CGI_FILE}" && ok "Removed legacy WHM CGI: ${CGI_FILE}"
-  WHM_REMOVED=true
 done
 
-# Legacy paths swept for old installs
+# Step E — legacy paths from very old installs
 for LEGACY in \
   /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel-gate.conf \
   /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel_gate.conf \
@@ -281,7 +289,7 @@ for LEGACY in \
   [[ -e "${LEGACY}" ]] && rm -rf "${LEGACY}" && ok "Removed legacy: ${LEGACY}"
 done
 
-# Remove Driver files
+# Step F — remove ConfigObj Driver files (WHM nav registration)
 DRIVER_DEST="/usr/local/cpanel/Cpanel/Config/ConfigObj/Driver"
 for _DF in \
   "${DRIVER_DEST}/SentinelGate.pm" \
@@ -289,16 +297,23 @@ for _DF in \
   [[ -f "$_DF" ]] && rm -f "$_DF" && ok "Removed Driver file: $_DF"
 done
 [[ -d "${DRIVER_DEST}/SentinelGate" ]] && rmdir "${DRIVER_DEST}/SentinelGate" 2>/dev/null || true
-[[ -d "${DRIVER_DEST}" ]] && touch "${DRIVER_DEST}" 2>/dev/null || true
 
-if $WHM_REMOVED; then
+# Step G — restart cpsrvd to flush the WHM nav cache.
+# This is UNCONDITIONAL in cPanel mode — the daemon restart is the only reliable
+# way to clear the in-memory nav cache regardless of which files were found above.
+if [[ "$INSTALL_MODE" != "standalone" ]]; then
   if [[ -x /usr/local/cpanel/scripts/restartsrv_cpsrvd ]]; then
-    info "Restarting cpsrvd to remove plugin from WHM menu…"
+    info "Restarting cpsrvd to flush WHM nav cache…"
     /usr/local/cpanel/scripts/restartsrv_cpsrvd 2>&1 | tail -3 | sed 's/^/  /'
-    ok "cpsrvd restarted"
+    ok "cpsrvd restarted — Sentinel Gate menu item removed"
+  elif command -v whmapi1 >/dev/null 2>&1; then
+    # Fallback: ask cPanel to rescan all appconfig entries
+    info "restartsrv_cpsrvd not found — running register_appconfig --all rescan…"
+    [[ -x "${REGISTER_APPCONFIG}" ]] && \
+      "${REGISTER_APPCONFIG}" --all 2>&1 | sed 's/^/  /' || true
   fi
 else
-  skip "No WHM plugin files found"
+  skip "Standalone mode — cpsrvd not applicable"
 fi
 
 # ── Remove cPanel user-level plugin (all themes) ──────────────────────────
