@@ -7,7 +7,9 @@
 #
 # Usage:
 #   bash /usr/local/sentinel-gate/update.sh
-#   bash /usr/local/sentinel-gate/update.sh --yes        # non-interactive
+#   bash /usr/local/sentinel-gate/update.sh --yes               # non-interactive
+#   bash /usr/local/sentinel-gate/update.sh --version 3.3.7     # skip API, force version
+#   bash /usr/local/sentinel-gate/update.sh --url https://...   # use a direct zip URL
 #
 # Run as: root
 # ════════════════════════════════════════════════════════════════════════════════
@@ -32,8 +34,21 @@ GITHUB_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 BACKUP_ROOT="/var/backups/sentinel-gate"
 TMP_DIR="$(mktemp -d /tmp/sg-update.XXXXXX)"
 AUTO_YES=false
+FORCE_VERSION=""
+FORCE_URL=""
 
-[[ "${1:-}" == "--yes" ]] && AUTO_YES=true
+# ── Parse arguments ───────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --yes)              AUTO_YES=true ;;
+        --version)          shift; FORCE_VERSION="${1:-}"; FORCE_VERSION="${FORCE_VERSION#v}" ;;
+        --version=*)        FORCE_VERSION="${1#--version=}"; FORCE_VERSION="${FORCE_VERSION#v}" ;;
+        --url)              shift; FORCE_URL="${1:-}" ;;
+        --url=*)            FORCE_URL="${1#--url=}" ;;
+        *) warn "Unknown option: $1" ;;
+    esac
+    shift
+done
 
 # ── Root check ────────────────────────────────────────────────────────────────
 [[ $EUID -ne 0 ]] && die "Run as root:  sudo bash $0"
@@ -48,43 +63,127 @@ echo -e "║    Sentinel Gate — Safe Updater       ║"
 echo -e "╚═══════════════════════════════════════╝${NC}"
 echo ""
 
+# ── Helper: download a URL to a file (curl first, wget fallback) ──────────────
+_download() {
+    local url="$1" dest="$2" label="${3:-file}"
+    if command -v curl >/dev/null 2>&1; then
+        info "Downloading ${label} via curl…"
+        if curl -fL --progress-bar --max-time 120 -o "$dest" "$url"; then
+            return 0
+        fi
+        warn "curl failed. Trying wget…"
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        info "Downloading ${label} via wget…"
+        if wget -q --show-progress --timeout=120 -O "$dest" "$url" 2>&1; then
+            return 0
+        fi
+        warn "wget also failed."
+    fi
+    return 1
+}
+
 # ── Detect current version ────────────────────────────────────────────────────
 section "Version check"
 CURRENT_VERSION="$(cat "${INSTALL_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]')"
 [[ -z "$CURRENT_VERSION" ]] && CURRENT_VERSION="unknown"
 info "Current version: ${BOLD}v${CURRENT_VERSION}${NC}"
 
-# ── Fetch latest release from GitHub ─────────────────────────────────────────
-info "Checking GitHub for latest release…"
-RELEASE_JSON="$(curl -fsSL --max-time 15 \
-    -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2022-11-28' \
-    "$GITHUB_API" 2>/dev/null)" \
-    || die "Cannot reach GitHub API. Check network or try again."
+# ── Resolve target version ────────────────────────────────────────────────────
+LATEST_VERSION=""
+DOWNLOAD_URL=""
+RELEASE_URL=""
 
-LATEST_VERSION="$(echo "$RELEASE_JSON" | grep -oP '"tag_name"\s*:\s*"\Kv?[^"]+' | head -1 | sed 's/^v//')"
-DOWNLOAD_URL="$(echo "$RELEASE_JSON"   | grep -oP '"browser_download_url"\s*:\s*"\K[^"]+\.zip' | head -1)"
-RELEASE_URL="$(echo "$RELEASE_JSON"    | grep -oP '"html_url"\s*:\s*"\Khttps://github\.com[^"]+/releases/tag[^"]+' | head -1)"
+if [[ -n "$FORCE_VERSION" ]]; then
+    # ── Manual version override — skip API entirely ───────────────────────────
+    info "Using forced version: ${BOLD}v${FORCE_VERSION}${NC} (--version flag)"
+    LATEST_VERSION="$FORCE_VERSION"
+    # Release asset URL pattern (built zip) and source archive fallback
+    DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/v${LATEST_VERSION}/sentinel-gate-v${LATEST_VERSION}.zip"
+    RELEASE_URL="https://github.com/${GITHUB_REPO}/releases/tag/v${LATEST_VERSION}"
 
-[[ -z "$LATEST_VERSION" ]] && die "Could not parse latest version from GitHub API."
+elif [[ -n "$FORCE_URL" ]]; then
+    # ── Direct URL supplied — derive version from current install ─────────────
+    info "Using direct download URL (--url flag)"
+    LATEST_VERSION="${CURRENT_VERSION}-manual"
+    DOWNLOAD_URL="$FORCE_URL"
+
+else
+    # ── Fetch latest release from GitHub API (with retries) ───────────────────
+    info "Checking GitHub for latest release…"
+    API_RETRIES=3
+    API_WAIT=5
+    RELEASE_JSON=""
+    for attempt in $(seq 1 $API_RETRIES); do
+        [[ $attempt -gt 1 ]] && { warn "Retrying in ${API_WAIT}s (attempt ${attempt}/${API_RETRIES})…"; sleep $API_WAIT; }
+        CURL_ERR_FILE="${TMP_DIR}/curl_err.txt"
+        if RELEASE_JSON="$(curl -fsSL --max-time 15 \
+                -H 'Accept: application/vnd.github+json' \
+                -H 'X-GitHub-Api-Version: 2022-11-28' \
+                "$GITHUB_API" 2>"$CURL_ERR_FILE")"; then
+            break
+        else
+            CURL_EXIT=$?
+            CURL_ERR="$(cat "$CURL_ERR_FILE" 2>/dev/null)"
+            warn "curl exit ${CURL_EXIT}: ${CURL_ERR}"
+            RELEASE_JSON=""
+        fi
+    done
+
+    if [[ -z "$RELEASE_JSON" ]]; then
+        err "Cannot reach GitHub API after ${API_RETRIES} attempts."
+        echo ""
+        echo -e "  ${BOLD}Diagnostics:${NC}"
+        info "Testing DNS for api.github.com…"
+        if command -v host >/dev/null 2>&1; then
+            host api.github.com 2>&1 | head -3 | while IFS= read -r l; do info "  $l"; done
+        elif command -v nslookup >/dev/null 2>&1; then
+            nslookup api.github.com 2>&1 | head -5 | while IFS= read -r l; do info "  $l"; done
+        else
+            info "  (no host/nslookup available)"
+        fi
+        info "Testing HTTPS to github.com…"
+        curl -sk --max-time 5 -o /dev/null -w "  HTTP %{http_code} in %{time_total}s\n" \
+            "https://github.com" 2>&1 || info "  (connection failed)"
+        echo ""
+        echo -e "  ${YELLOW}To update without GitHub API access, run:${NC}"
+        echo -e "  ${BOLD}bash $0 --version 3.3.7${NC}"
+        echo -e "  or download the zip manually and use:"
+        echo -e "  ${BOLD}bash $0 --url https://your-mirror/sentinel-gate.zip${NC}"
+        echo ""
+        exit 1
+    fi
+
+    LATEST_VERSION="$(echo "$RELEASE_JSON" | grep -oP '"tag_name"\s*:\s*"\Kv?[^"]+' | head -1 | sed 's/^v//')"
+    DOWNLOAD_URL="$(echo "$RELEASE_JSON"   | grep -oP '"browser_download_url"\s*:\s*"\K[^"]+\.zip' | head -1)"
+    RELEASE_URL="$(echo "$RELEASE_JSON"    | grep -oP '"html_url"\s*:\s*"\Khttps://github\.com[^"]+/releases/tag[^"]+' | head -1)"
+
+    [[ -z "$LATEST_VERSION" ]] && die "Could not parse latest version from GitHub API response."
+fi
 
 info "Latest version:  ${BOLD}v${LATEST_VERSION}${NC}"
 
 # ── Already up to date? ───────────────────────────────────────────────────────
-if [[ "$CURRENT_VERSION" == "$LATEST_VERSION" ]]; then
-    ok "Already up to date — v${CURRENT_VERSION}"
-    exit 0
-fi
+# Skip version comparison when forced via --version or --url flags
+if [[ -z "$FORCE_VERSION" && -z "$FORCE_URL" ]]; then
+    if [[ "$CURRENT_VERSION" == "$LATEST_VERSION" ]]; then
+        ok "Already up to date — v${CURRENT_VERSION}"
+        exit 0
+    fi
 
-# Check if update is actually newer
-python3 -c "
+    # Check if update is actually newer
+    python3 -c "
 import sys
 def v(s): return tuple(int(x) for x in s.split('.'))
 sys.exit(0 if v('$LATEST_VERSION') > v('$CURRENT_VERSION') else 1)
 " 2>/dev/null || {
-    warn "Latest GitHub release (v${LATEST_VERSION}) is not newer than current (v${CURRENT_VERSION}). Aborting."
-    exit 0
-}
+        warn "Latest GitHub release (v${LATEST_VERSION}) is not newer than current (v${CURRENT_VERSION})."
+        if [[ "$AUTO_YES" == false ]]; then
+            read -rp "  Force reinstall anyway? [y/N] " REPLY
+            [[ "${REPLY,,}" =~ ^y(es)?$ ]] || { info "Aborted."; exit 0; }
+        fi
+    }
+fi
 
 echo ""
 echo -e "  ${BOLD}v${CURRENT_VERSION}${NC} → ${BOLD}${GREEN}v${LATEST_VERSION}${NC}"
@@ -123,20 +222,35 @@ ok "Backup created at: ${BACKUP_DIR}"
 # ── Download latest release ───────────────────────────────────────────────────
 section "Downloading v${LATEST_VERSION}"
 
+DOWNLOADED=false
+RELEASE_ZIP="${TMP_DIR}/release.zip"
+
+# 1st attempt: release asset zip (or --url / --version forced URL)
 if [[ -n "$DOWNLOAD_URL" ]]; then
-    info "Downloading zip from release assets…"
-    curl -fsSL --progress-bar --max-time 120 \
-        -o "${TMP_DIR}/release.zip" \
-        "$DOWNLOAD_URL" \
-        || die "Download failed from: $DOWNLOAD_URL"
-else
-    # Fallback: download source zip from GitHub
+    if _download "$DOWNLOAD_URL" "$RELEASE_ZIP" "release zip"; then
+        DOWNLOADED=true
+    else
+        warn "Release asset download failed. Trying source archive…"
+    fi
+fi
+
+# 2nd attempt: GitHub source archive (works even when release assets are missing)
+if [[ "$DOWNLOADED" == false ]] && [[ "$LATEST_VERSION" != *"-manual"* ]]; then
     SOURCE_URL="https://github.com/${GITHUB_REPO}/archive/refs/tags/v${LATEST_VERSION}.zip"
-    info "No asset found — downloading source archive…"
-    curl -fsSL --progress-bar --max-time 120 \
-        -o "${TMP_DIR}/release.zip" \
-        "$SOURCE_URL" \
-        || die "Download failed from: $SOURCE_URL"
+    if _download "$SOURCE_URL" "$RELEASE_ZIP" "source archive"; then
+        DOWNLOADED=true
+    else
+        warn "Source archive download also failed."
+    fi
+fi
+
+if [[ "$DOWNLOADED" == false ]]; then
+    err "All download attempts failed for v${LATEST_VERSION}."
+    echo ""
+    info "Manual option: download the zip on another machine and copy it here, then run:"
+    info "  bash $0 --url file:///path/to/sentinel-gate.zip"
+    echo ""
+    exit 1
 fi
 
 ok "Downloaded release archive"
