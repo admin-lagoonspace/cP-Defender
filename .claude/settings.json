@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "grep -oP '\"file_path\"\\s*:\\s*\"\\K[^\"]+' | { read -r f; [[ \"$f\" == *VERSION ]] && bash tests/run-tests.sh all; } 2>/dev/null || true",
+            "timeout": 180,
+            "statusMessage": "Running Sentinel Gate test suite..."
+          }
+        ]
+      }
+    ]
+  }
+}
