@@ -4,7 +4,7 @@
  * Adjust paths after installation via install.sh
  */
 
-define('SG_VERSION',  '3.3.7');
+define('SG_VERSION',  '3.3.8');
 define('SG_ROOT',     dirname(__DIR__, 2));
 define('SG_DB',       SG_ROOT . '/database/sentinel.db');
 define('SG_LOGS',     SG_ROOT . '/logs');
