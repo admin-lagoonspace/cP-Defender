@@ -166,6 +166,10 @@ const API = (() => {
     phpAccountSettings:(acct)       => req('GET',  `phphard/account-settings?account=${encodeURIComponent(acct)}`),
     phpApply:          (settings)   => req('POST', 'phphard/apply',         { settings }),
     phpApplyAccount:   (acct, sets) => req('POST', 'phphard/apply-account', { account: acct, settings: sets }),
+
+    // Update checker
+    updateStatus: ()  => req('GET',  'update/status'),
+    updateCheck:  ()  => req('POST', 'update/check', {}),
   };
 })();
 

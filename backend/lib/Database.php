@@ -173,7 +173,13 @@ class Database {
                 ('monitor_log_max_mb',      '50'),
                 -- Performance
                 ('cpu_limit_percent',       '50'),
-                ('rt_poll_interval',        '300');
+                ('rt_poll_interval',        '300'),
+                -- Update checker
+                ('update_available',        '0'),
+                ('update_latest_ver',       ''),
+                ('update_checked_at',       '0'),
+                ('update_release_url',      ''),
+                ('update_release_notes',    '');
 
             -- Default firewall rules
             INSERT OR IGNORE INTO firewall_rules (name, direction, protocol, port, action, comment) VALUES

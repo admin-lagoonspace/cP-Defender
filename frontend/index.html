@@ -15,8 +15,7 @@
 
     <!-- Logo -->
     <div class="login-logo" style="margin-bottom:20px">
-      <div class="brand-icon" style="width:60px;height:60px;font-size:30px;margin:0 auto 14px;box-shadow:0 0 0 6px rgba(59,130,246,.12),0 0 24px rgba(59,130,246,.25)">🛡</div>
-      <div style="font-size:1.5rem;font-weight:800;letter-spacing:.04em;color:var(--txt)">SENTINEL GATE</div>
+      <img src="images/logo.png" alt="Sentinel Gate" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
       <div id="login-mode-sub" style="font-size:.75rem;color:var(--blue2);margin-top:5px;font-weight:600;letter-spacing:.03em">cPanel Security Suite</div>
     </div>
 
@@ -51,11 +50,7 @@
 <!-- ══ TOP BAR ═══════════════════════════════════════════════════════════════ -->
 <header class="topbar">
   <div class="topbar-brand">
-    <div class="brand-icon">🛡</div>
-    <div>
-      <div class="brand-name">SENTINEL GATE</div>
-      <div class="brand-sub">SECURITY SUITE</div>
-    </div>
+    <img src="images/logo.png" alt="Sentinel Gate" style="height:36px;width:auto;filter:drop-shadow(0 0 8px rgba(59,130,246,.3))">
   </div>
 
   <nav class="topbar-nav">
@@ -86,6 +81,11 @@
 
   <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
   <aside class="sidebar">
+    <!-- Logo -->
+    <div style="padding:16px 14px 12px;border-bottom:1px solid var(--border);margin-bottom:8px">
+      <img src="images/logo.png" alt="Sentinel Gate" style="width:100%;max-width:160px;height:auto;display:block;margin:0 auto;filter:drop-shadow(0 0 10px rgba(59,130,246,.25))">
+    </div>
+
     <div class="sidebar-section-label">Modules</div>
 
     <div class="sidebar-item active" data-page="dashboard">
@@ -139,8 +139,13 @@
     </div>
 
     <div class="sidebar-footer">
-      <div style="font-weight:700;color:var(--txt2)">Sentinel Gate</div>
-      <div style="margin-top:2px" id="sidebar-mode-label">v3.1.6 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.3.5 · cPanel Plugin</div>
+      <div id="sidebar-update-dot" style="display:none;margin-top:6px">
+        <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
+          <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
+          Update available
+        </button>
+      </div>
     </div>
   </aside>
 
@@ -149,6 +154,20 @@
 
     <!-- ════ PAGE: DASHBOARD ════════════════════════════════════════════════ -->
     <div id="page-dashboard" class="page">
+
+      <!-- Update available banner (hidden until update detected) -->
+      <div id="update-banner" style="display:none;margin-bottom:18px;padding:14px 18px;background:linear-gradient(135deg,rgba(245,158,11,.12),rgba(239,68,68,.08));border:1px solid rgba(245,158,11,.35);border-radius:12px;display:none;align-items:center;gap:14px">
+        <span style="font-size:1.4rem">🚀</span>
+        <div style="flex:1">
+          <div style="font-weight:700;color:#f59e0b;font-size:.88rem">New version available — <span id="update-new-version"></span></div>
+          <div style="font-size:.75rem;color:var(--txt2);margin-top:2px">You are running <span id="update-cur-version"></span>. Run the update script to upgrade — all your settings will be preserved.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-shrink:0">
+          <a id="update-release-link" href="#" target="_blank" class="btn btn-ghost btn-sm" style="font-size:.74rem">Release Notes</a>
+          <button onclick="runUpdate()" class="btn btn-primary btn-sm" style="font-size:.74rem;background:linear-gradient(135deg,#f59e0b,#ef4444)">Update Now</button>
+        </div>
+      </div>
+
       <div class="page-header">
         <div>
           <div class="page-title">Security Dashboard</div>

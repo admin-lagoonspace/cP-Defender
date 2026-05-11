@@ -23,6 +23,7 @@ require_once __DIR__ . '/../lib/CMSGuard.php';
 require_once __DIR__ . '/../lib/RootkitScanner.php';
 require_once __DIR__ . '/../lib/FileIntegrity.php';
 require_once __DIR__ . '/../lib/PHPHardening.php';
+require_once __DIR__ . '/../lib/UpdateChecker.php';
 
 // ── CORS & Headers ────────────────────────────────────────────────────────────
 header('Content-Type: application/json');
@@ -88,6 +89,7 @@ try {
         'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
         'integrity'  => routeIntegrity($action, $method, $body, $query, $id, $user),
         'phphard'    => routePHPHard($action, $method, $body, $query, $user),
+        'update'     => routeUpdate($action, $method, $user),
         default      => ['success' => false, 'error' => "Unknown module: $module", 'code' => 404],
     };
 } catch (Throwable $e) {
@@ -764,5 +766,20 @@ function routePHPHard(string $action, string $method, array $body, array $q, ?ar
             ? ['success' => true, 'data' => $ph->applyAccountHardening($body['account'] ?? '', $body['settings'] ?? [])]
             : ['success' => false, 'code' => 405],
         default            => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+function routeUpdate(string $action, string $method, ?array $user): array {
+    Auth::requireRole('admin', $user);
+    return match($action) {
+        // Return cached update status (no network call — fast)
+        'status' => ['success' => true, 'data' => UpdateChecker::getCachedStatus()],
+
+        // Force an immediate live check against GitHub
+        'check'  => $method === 'POST'
+            ? ['success' => true, 'data' => UpdateChecker::checkForUpdates()]
+            : ['success' => false, 'code' => 405],
+
+        default  => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }

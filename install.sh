@@ -314,6 +314,8 @@ MAILTO=""
 0 2 * * * root /usr/bin/php ${INSTALL_DIR}/backend/cron/scan.php full  >> ${LOG_DIR}/cron.log 2>&1
 # Weekly signature update Sunday 1am
 0 1 * * 0 root /usr/bin/php ${INSTALL_DIR}/backend/cron/scan.php update-sigs >> ${LOG_DIR}/cron.log 2>&1
+# Daily update check at 8am
+0 8 * * * root SG_ROOT=${INSTALL_DIR} /usr/bin/php ${INSTALL_DIR}/backend/cron/update-check.php >> ${LOG_DIR}/cron.log 2>&1
 CRONEOF
 chmod 644 "${CRON_FILE}"
 ok "Cron jobs installed to ${CRON_FILE}"

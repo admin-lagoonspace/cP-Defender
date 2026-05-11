@@ -167,7 +167,39 @@ function openModal(id)  { document.getElementById(id)?.classList.remove('hidden'
 function closeModal(id) { document.getElementById(id)?.classList.add('hidden'); }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
+async function checkForUpdates(forceLive = false) {
+  if (Demo.active) return;
+  try {
+    const res = forceLive
+      ? await API.updateCheck()
+      : await API.updateStatus();
+    if (!res?.success) return;
+    const d = res.data;
+    const banner  = document.getElementById('update-banner');
+    const dot     = document.getElementById('sidebar-update-dot');
+    const newVer  = document.getElementById('update-new-version');
+    const curVer  = document.getElementById('update-cur-version');
+    const relLink = document.getElementById('update-release-link');
+
+    if (d.update_available) {
+      if (banner)  { banner.style.display  = 'flex'; }
+      if (dot)     { dot.style.display     = 'block'; }
+      if (newVer)  newVer.textContent  = 'v' + d.latest_version;
+      if (curVer)  curVer.textContent  = 'v' + d.current_version;
+      if (relLink && d.release_url) relLink.href = d.release_url;
+    } else {
+      if (banner)  banner.style.display  = 'none';
+      if (dot)     dot.style.display     = 'none';
+    }
+  } catch (_) {}
+}
+
+async function runUpdate() {
+  toast('To update: SSH into your server and run:  bash /usr/local/sentinel-gate/update.sh', 'info', 8000);
+}
+
 async function refreshDashboard() {
+  checkForUpdates();   // non-blocking — uses cached result
   const data = Demo.active
     ? Demo.mockDashStats()
     : await API.dashStats();
