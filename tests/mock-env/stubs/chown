@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Stub: chown — no-op on Windows/Git Bash (permissions model differs)
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] chown $*" >> "$LOG"
+exit 0

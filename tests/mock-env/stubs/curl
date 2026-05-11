@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Stub: curl — intercepts GitHub API + zip download calls for mock testing
+# Env vars:
+#   SG_MOCK_API  — path to mock GitHub releases/latest JSON file
+#   SG_MOCK_ZIP  — path to mock release zip file
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] curl $*" >> "$LOG"
+
+# Extract -o output file and URL from args
+OUTPUT_FILE=""
+URL=""
+NEXT_O=false
+
+for arg in "$@"; do
+    if $NEXT_O; then
+        OUTPUT_FILE="$arg"
+        NEXT_O=false
+    elif [[ "$arg" == "-o" ]]; then
+        NEXT_O=true
+    elif [[ "$arg" =~ ^(https?|file):// ]]; then
+        URL="$arg"
+    fi
+done
+
+# GitHub API call — return mock JSON
+if [[ "$URL" == *"api.github.com"* ]]; then
+    if [[ -n "$SG_MOCK_API" && -f "$SG_MOCK_API" ]]; then
+        cat "$SG_MOCK_API"
+        echo "[stub-curl] API: returned mock JSON" >> "$LOG"
+    else
+        echo '{"tag_name":"v3.3.5","html_url":"https://github.com/test","body":"Mock","assets":[]}'
+    fi
+    exit 0
+fi
+
+# Zip download — copy mock zip to output file
+if [[ "$URL" == *.zip* || "$URL" == file://* ]]; then
+    if [[ -n "$OUTPUT_FILE" ]]; then
+        if [[ -n "$SG_MOCK_ZIP" && -f "$SG_MOCK_ZIP" ]]; then
+            cp "$SG_MOCK_ZIP" "$OUTPUT_FILE"
+            echo "[stub-curl] ZIP: copied mock zip to $OUTPUT_FILE" >> "$LOG"
+        elif [[ "$URL" == file://* ]]; then
+            # file:// URL — extract path and copy
+            LOCAL_PATH="${URL#file://}"
+            cp "$LOCAL_PATH" "$OUTPUT_FILE" 2>/dev/null || true
+            echo "[stub-curl] ZIP: copied from file:// to $OUTPUT_FILE" >> "$LOG"
+        else
+            echo "[stub-curl] ZIP: no mock zip available" >> "$LOG"
+            exit 1
+        fi
+    fi
+    exit 0
+fi
+
+# Fallback — return empty 200 response
+echo "[stub-curl] fallback: $URL" >> "$LOG"
+exit 0

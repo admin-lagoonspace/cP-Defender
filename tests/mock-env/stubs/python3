@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Stub: python3 — pretend the monitor daemon starts successfully
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] python3 $*" >> "$LOG"
+echo "[stub] monitor.py started (mock)"
+exit 0

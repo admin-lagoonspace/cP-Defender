@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Stub: systemctl — records calls, returns success for safe commands
+CMD="${1:-}"
+UNIT="${2:-}"
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] systemctl $*" >> "$LOG"
+
+case "$CMD" in
+    start|stop|restart|enable|disable|daemon-reload)
+        echo "[stub-systemctl] $CMD $UNIT — OK" ;;
+    is-active)
+        # Report the monitor as inactive so start paths are tested
+        echo "inactive"; exit 1 ;;
+    is-enabled)
+        echo "enabled"; exit 0 ;;
+    show)
+        # Return minimal KEY=VALUE output
+        cat << 'PROPS'
+ActiveState=active
+SubState=running
+MainPID=9999
+MemoryCurrent=18874368
+ActiveEnterTimestamp=1715000000000000
+Description=Sentinel Gate Real-Time File Monitor
+PROPS
+        ;;
+    *)
+        echo "[stub-systemctl] unknown: $*" ;;
+esac
+exit 0

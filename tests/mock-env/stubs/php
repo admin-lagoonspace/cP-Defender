@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Stub: php — handles specific invocations used by install.sh and update.sh
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] php $*" >> "$LOG"
+
+# PHP inline -r execution
+if [[ "$1" == "-r" ]]; then
+    CODE="$2"
+    # PHP version check
+    if [[ "$CODE" == *"PHP_MAJOR_VERSION"* ]]; then
+        echo "8"
+        exit 0
+    fi
+    # Database migrations stub
+    if [[ "$CODE" == *"Database"* ]]; then
+        echo "Database initialised"
+        exit 0
+    fi
+    # Auth credentials stub
+    if [[ "$CODE" == *"Auth::"* ]]; then
+        echo "Admin credentials stored"
+        exit 0
+    fi
+    # Update state clear stub
+    if [[ "$CODE" == *"update_available"* ]]; then
+        echo "Update state cleared."
+        exit 0
+    fi
+    # password_hash stub
+    if [[ "$CODE" == *"password_hash"* ]]; then
+        echo "\$2y\$12\$stubhashabcdefghijklmnopqrstuvwxyz01234567890ABCDEF"
+        exit 0
+    fi
+    echo "[stub-php] -r executed"
+    exit 0
+fi
+
+# PHP -S (built-in server) — just background and exit
+if [[ "$1" == "-S" ]]; then
+    echo "[stub-php] -S server stub"
+    exit 0
+fi
+
+# Called as script (cron scan, update-check)
+SCRIPT="${!#}"   # last argument
+echo "[stub-php] script: $SCRIPT"
+exit 0

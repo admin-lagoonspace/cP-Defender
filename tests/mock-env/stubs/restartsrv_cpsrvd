@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] restartsrv_cpsrvd $*" >> "$LOG"
+echo "[stub] cpsrvd restarted (mock)"
+exit 0

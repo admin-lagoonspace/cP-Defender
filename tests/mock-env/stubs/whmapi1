@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] whmapi1 $*" >> "$LOG"
+echo '{"metadata":{"result":1,"reason":"OK"}}'
+exit 0

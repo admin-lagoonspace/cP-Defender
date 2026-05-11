@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Stub: zip — uses PowerShell Compress-Archive (Git Bash on Windows)
+# Usage: zip [-options] output.zip source_dir/
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] zip $*" >> "$LOG"
+
+# Collect non-flag args: [output, input...]
+ARGS=()
+for arg in "$@"; do
+    [[ "$arg" == -* ]] || ARGS+=("$arg")
+done
+
+OUTPUT="${ARGS[0]:-}"
+INPUT="${ARGS[1]:-}"
+
+if [[ -n "$OUTPUT" && -n "$INPUT" ]]; then
+    # Resolve to absolute paths (handles relative paths from subshell cd)
+    OUTPUT_ABS="$(realpath "$OUTPUT" 2>/dev/null || echo "$OUTPUT")"
+    INPUT_CLEAN="${INPUT%/}"  # strip trailing slash
+    INPUT_ABS="$(realpath "$INPUT_CLEAN" 2>/dev/null || echo "$INPUT_CLEAN")"
+
+    WIN_OUTPUT="$(cygpath -w "$OUTPUT_ABS")"
+    WIN_INPUT="$(cygpath -w "$INPUT_ABS")"
+
+    powershell.exe -NoProfile -NonInteractive -Command \
+        "Compress-Archive -Path '${WIN_INPUT}' -DestinationPath '${WIN_OUTPUT}' -Force" 2>/dev/null
+    echo "[stub-zip] ${WIN_INPUT} -> ${WIN_OUTPUT}" >> "$LOG"
+fi
+exit 0

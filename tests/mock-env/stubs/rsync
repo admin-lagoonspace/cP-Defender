@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Stub: rsync — use cp -a as fallback (rsync not in Git Bash)
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] rsync $*" >> "$LOG"
+
+# Parse src and dst from the end of the args (skip flags)
+ARGS=()
+for arg in "$@"; do
+    [[ "$arg" == -* ]] || ARGS+=("$arg")
+done
+
+SRC="${ARGS[-2]:-}"
+DST="${ARGS[-1]:-}"
+
+if [[ -n "$SRC" && -n "$DST" ]]; then
+    mkdir -p "$DST"
+    cp -af "$SRC"* "$DST" 2>/dev/null || true
+    echo "[stub-rsync] cp -a $SRC -> $DST"
+fi
+exit 0

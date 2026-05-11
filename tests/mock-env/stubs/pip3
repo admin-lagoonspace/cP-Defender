@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Stub: pip3 — pretend inotify_simple installed successfully
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] pip3 $*" >> "$LOG"
+echo "Successfully installed inotify_simple-1.3.5 (stub)"
+exit 0

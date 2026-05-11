@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Stub: unzip — uses PowerShell Expand-Archive (Git Bash on Windows)
+# Usage: unzip [-q] file.zip [-d destdir]
+LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
+echo "[STUB] unzip $*" >> "$LOG"
+
+ZIPFILE=""
+DESTDIR="."
+NEXT_DEST=false
+
+for arg in "$@"; do
+    if $NEXT_DEST; then
+        DESTDIR="$arg"
+        NEXT_DEST=false
+    elif [[ "$arg" == "-d" ]]; then
+        NEXT_DEST=true
+    elif [[ "$arg" != -* ]]; then
+        ZIPFILE="$arg"
+    fi
+done
+
+if [[ -n "$ZIPFILE" ]]; then
+    mkdir -p "$DESTDIR"
+    WIN_ZIP="$(cygpath -w "$ZIPFILE")"
+    WIN_DEST="$(cygpath -w "$DESTDIR")"
+    powershell.exe -NoProfile -NonInteractive -Command \
+        "Expand-Archive -Path '${WIN_ZIP}' -DestinationPath '${WIN_DEST}' -Force" 2>/dev/null
+    echo "[stub-unzip] ${WIN_ZIP} -> ${WIN_DEST}"
+else
+    echo "[stub-unzip] no zip file specified"
+    exit 1
+fi
+exit 0
