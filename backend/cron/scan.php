@@ -1,102 +1,115 @@
-<?php
+﻿<?php
 /**
- * Sentinel Gate — Background Scan Worker
- * Called by: php scan.php --job-id=N --path=/home
+ * Sentinel Gate - Background Scan Runner
+ * Called by Scanner::startScan() as a background process:
+ *   nice -nX php backend/cron/scan.php --job-id=N --path=/home
+ * Called by cron jobs:
+ *   php backend/cron/scan.php quick|full|update-sigs
  */
+error_reporting(E_ERROR);
+ini_set('display_errors', '0');
+set_time_limit(0);
+ignore_user_abort(true);
 
-define('SG_API', true);
 require_once __DIR__ . '/../config/config.php';
-require_once __DIR__ . '/../lib/Database.php';
-require_once __DIR__ . '/../lib/Logger.php';
-require_once __DIR__ . '/../lib/Scanner.php';
+require_once SG_ROOT . '/backend/lib/Database.php';
+require_once SG_ROOT . '/backend/lib/Logger.php';
+require_once SG_ROOT . '/backend/lib/Scanner.php';
 
-// Parse CLI args
-$opts   = getopt('', ['job-id:', 'path:']);
-$jobId  = (int)($opts['job-id'] ?? 0);
-$path   = $opts['path'] ?? '/home';
+$jobId    = null;
+$scanPath = null;
+$scanType = 'quick';
+$runMode  = 'job';
 
-if (!$jobId) {
-    // Scheduled run — create a new job
-    $scanner = new Scanner();
-    $path    = Database::setting('scan_paths', '/home');
-    $jobId   = Database::insert('scan_jobs', [
-        'scan_type'  => 'scheduled',
-        'status'     => 'running',
-        'started_at' => time(),
-        'scan_path'  => $path,
-    ]);
+foreach (array_slice($argv, 1) as $arg) {
+    if (preg_match('/^--job-id=(\d+)$/', $arg, $m)) {
+        $jobId = (int) $m[1]; $runMode = 'job';
+    } elseif (preg_match('/^--path=(.+)$/', $arg, $m)) {
+        $scanPath = $m[1];
+    } elseif ($arg === 'update-sigs') {
+        $runMode = 'update-sigs';
+    } elseif (in_array($arg, ['quick', 'full'], true)) {
+        $runMode = 'cron'; $scanType = $arg;
+    }
 }
 
 $scanner = new Scanner();
-Logger::info("Scan worker started: job=$jobId path=$path");
 
-// Update job status
-Database::query("UPDATE scan_jobs SET status='running', started_at=? WHERE id=?", [time(), $jobId]);
+if ($runMode === 'update-sigs') {
+    Logger::info('Cron: Updating ClamAV signatures');
+    $t = microtime(true);
+    $r = $scanner->updateSignatures();
+    Database::insert('cron_log', [
+        'job_name'=>'update-sigs','status'=>'ok',
+        'message'=>$r['clam']??'',
+        'duration_ms'=>(int)((microtime(true)-$t)*1000),'ran_at'=>time()
+    ]);
+    Logger::info('Cron: Signature update complete');
+    exit(0);
+}
+
+if ($runMode === 'cron') {
+    $raw      = Database::setting('scan_paths', '/home') ?? '/home';
+    $scanPath = trim(explode(',', $raw)[0]);
+    $jobId    = Database::insert('scan_jobs', [
+        'scan_type'=>$scanType,'status'=>'running',
+        'started_at'=>time(),'scan_path'=>$scanPath
+    ]);
+    Logger::info("Cron: Created $scanType scan job $jobId on $scanPath");
+}
+
+if ($jobId === null) {
+    Logger::error('scan.php: no --job-id and no cron mode');
+    exit(1);
+}
+
+$job = Database::fetchOne('SELECT * FROM scan_jobs WHERE id=?', [$jobId]);
+if (!$job) {
+    Logger::error("scan.php: job $jobId not found");
+    exit(1);
+}
+if ($scanPath === null) $scanPath = $job['scan_path'] ?? '/home';
+
+Logger::info("scan.php: Starting job $jobId ({$job['scan_type']}) on $scanPath");
+$t = microtime(true);
 
 try {
-    $start = microtime(true);
+    $threats = $scanner->runClamScan($scanPath, $jobId);
+    $files   = countFiles($scanPath);
+    $ms      = (int)((microtime(true)-$t)*1000);
 
-    // Count files first
-    $fileCount = 0;
-    $it = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
-        RecursiveIteratorIterator::SELF_FIRST
-    );
-    foreach ($it as $f) {
-        if ($f->isFile()) $fileCount++;
-    }
-    Database::query("UPDATE scan_jobs SET files_scanned=? WHERE id=?", [$fileCount, $jobId]);
-
-    // Run scan
-    $threats = $scanner->runClamScan($path, $jobId);
-    if (empty($threats)) {
-        $threats = $scanner->runPatternScan($path, $jobId);
-    }
-
-    $elapsed = round(microtime(true) - $start, 2);
-
-    // Mark complete
     Database::query(
-        "UPDATE scan_jobs SET status='done', finished_at=?, files_scanned=?, threats_found=? WHERE id=?",
-        [time(), $fileCount, count($threats), $jobId]
+        'UPDATE scan_jobs SET status=?,finished_at=?,files_scanned=?,threats_found=? WHERE id=?',
+        ['done', time(), $files, count($threats), $jobId]
     );
+    Database::setSetting('last_scan', (string)time());
 
-    Database::setSetting('last_scan', (string) time());
-
-    Logger::info("Scan done: job=$jobId files=$fileCount threats=" . count($threats) . " time={$elapsed}s");
-
-    // Send email alert if threats found
-    if (count($threats) > 0) {
-        $alertEmail = Database::setting('alert_email');
-        if ($alertEmail && Database::setting('email_alerts') === '1') {
-            $subject = "[Sentinel Gate] " . count($threats) . " threat(s) detected on " . gethostname();
-            $body    = "Sentinel Gate malware scan completed.\n\n";
-            $body   .= "Threats detected: " . count($threats) . "\n";
-            $body   .= "Scan path: $path\n";
-            $body   .= "Duration: {$elapsed}s\n\n";
-            foreach ($threats as $t) {
-                $body .= "  - {$t['file']}: {$t['name']}\n";
-            }
-            $body .= "\nLogin to WHM to take action: https://" . gethostname() . ":2087\n";
-            mail($alertEmail, $subject, $body, 'From: sentinel@' . gethostname());
-        }
-    }
-
-    // Log cron run
+    $msg = count($threats) . " threat(s) found in $files files";
+    Logger::info("scan.php: Job $jobId done -- $msg ({$ms}ms)");
     Database::insert('cron_log', [
-        'job_name'    => 'malware_scan',
-        'status'      => 'success',
-        'message'     => "Scanned $fileCount files, found " . count($threats) . " threats",
-        'duration_ms' => (int)($elapsed * 1000),
+        'job_name'=>"scan_$jobId",'status'=>'ok',
+        'message'=>$msg,'duration_ms'=>$ms,'ran_at'=>time()
     ]);
-
 } catch (Throwable $e) {
-    Logger::error("Scan worker error: " . $e->getMessage());
-    Database::query("UPDATE scan_jobs SET status='error' WHERE id=?", [$jobId]);
+    Logger::error("scan.php: Job $jobId failed -- " . $e->getMessage());
+    Database::query('UPDATE scan_jobs SET status=?,finished_at=? WHERE id=?',['error',time(),$jobId]);
     Database::insert('cron_log', [
-        'job_name' => 'malware_scan',
-        'status'   => 'error',
-        'message'  => $e->getMessage(),
+        'job_name'=>"scan_$jobId",'status'=>'error',
+        'message'=>$e->getMessage(),
+        'duration_ms'=>(int)((microtime(true)-$t)*1000),'ran_at'=>time()
     ]);
     exit(1);
+}
+exit(0);
+
+function countFiles(string $path): int {
+    $c = 0;
+    try {
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::LEAVES_ONLY
+        );
+        foreach ($it as $f) if ($f->isFile()) $c++;
+    } catch (Exception $e) {}
+    return $c;
 }

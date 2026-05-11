@@ -280,7 +280,11 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
         })(),
 
         'quarantine' => $method === 'POST' && $id
-            ? ['success' => $scanner->quarantine($body['file'] ?? '', (int)$id)]
+            ? (function() use ($scanner, $id) {
+                $threat = Database::fetchOne('SELECT file_path FROM threats WHERE id=?', [(int)$id]);
+                if (!$threat) return ['success' => false, 'error' => 'Threat not found', 'code' => 404];
+                return ['success' => $scanner->quarantine($threat['file_path'], (int)$id)];
+            })()
             : ['success' => false, 'error' => 'Invalid request', 'code' => 400],
 
         'restore' => $method === 'POST' && $id

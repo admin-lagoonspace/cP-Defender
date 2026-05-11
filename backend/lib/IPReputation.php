@@ -121,11 +121,11 @@ class IPReputation {
 
     public function getTopAttackingIPs(): array {
         return Database::fetchAll(
-            "SELECT e.ip_address, r.country, r.score, COUNT(e.id) as hits,
-                    MAX(e.timestamp) as last_seen
+            "SELECT e.source_ip AS ip_address, r.country, r.score, r.rbl_hits,
+                    COUNT(e.id) AS hits, MAX(e.timestamp) AS last_seen
              FROM security_events e
              LEFT JOIN ip_reputation r ON r.ip_address = e.source_ip
-             WHERE e.timestamp > ?
+             WHERE e.timestamp > ? AND e.source_ip IS NOT NULL AND e.source_ip != ''
              GROUP BY e.source_ip
              ORDER BY hits DESC
              LIMIT 20",

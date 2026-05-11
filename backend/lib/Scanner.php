@@ -258,7 +258,7 @@ class Scanner {
         $threat = Database::fetchOne("SELECT * FROM threats WHERE id = ?", [$threatId]);
         if (!$threat) return false;
 
-        $qDir = Database::storagePath('quarantine') . '/' . date('Y-m-d', $threat['detected_at']);
+        $qDir = Database::storagePath('quarantine') . '/' . date('Y-m-d', $threat['resolved_at'] ?? $threat['detected_at']);
         $src  = $qDir . '/' . basename($threat['file_path']) . '_' . $threatId . '.quarantine';
 
         if (file_exists($src) && rename($src, $threat['file_path'])) {
