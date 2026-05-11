@@ -791,11 +791,9 @@ function updateCpuSliderLabel(val) {
 
   if (descEl) {
     // nice value: 100% → 0, 10% → 19
-    const niceVal  = Math.round(19 * (1 - val / 100));
-    // scan sleep: 100% → 0ms, 10% → 500ms
-    const sleepMs  = Math.round(Math.max(0, (1 - val / 100) * 550));
-    // poll interval (fallback mode): 100% → 1s, 10% → 30s
-    const pollSec  = Math.max(1, Math.round(30 * (1 - val / 100) + 1));
+    const niceVal = Math.round(19 * (1 - val / 100));
+    // scan sleep: 100% → 0ms, 10% → 550ms
+    const sleepMs = Math.round(Math.max(0, (1 - val / 100) * 550));
 
     let label, color;
     if (val <= 25)      { label = 'Minimal — maximum headroom for web traffic'; color = '#10b981'; }
@@ -807,10 +805,20 @@ function updateCpuSliderLabel(val) {
       '<span style="color:' + color + ';font-weight:600">' + label + '</span><br>' +
       '<span style="color:var(--txt3)">Process priority: </span><code>nice ' + niceVal + '</code>' +
       ' &nbsp;·&nbsp; ' +
-      '<span style="color:var(--txt3)">Scan throttle: </span><code>' + (sleepMs ? sleepMs + 'ms between files' : 'no throttle') + '</code>' +
-      ' &nbsp;·&nbsp; ' +
-      '<span style="color:var(--txt3)">Poll interval (fallback): </span><code>' + pollSec + 's</code>';
+      '<span style="color:var(--txt3)">Scan throttle: </span><code>' + (sleepMs ? sleepMs + 'ms between files' : 'no throttle') + '</code>';
   }
+}
+
+function selectPollInterval(seconds) {
+  [60, 300, 900].forEach(v => {
+    const el = document.getElementById('poll-opt-' + v);
+    if (!el) return;
+    const active = v === seconds;
+    el.style.borderColor    = active ? 'var(--primary)' : 'var(--border)';
+    el.style.background     = active ? 'rgba(59,130,246,.08)' : '';
+    const radio = el.querySelector('input[type=radio]');
+    if (radio) radio.checked = active;
+  });
 }
 
 async function loadSettings() {
@@ -820,7 +828,7 @@ async function loadSettings() {
         email_alerts: '1', alert_email: '', php_disable_funcs: 'exec,passthru,shell_exec,system',
         rate_limit_ssh: '5', rate_limit_http: '100',
         firewall_enabled: '1', waf_enabled: '1', bot_shield_enabled: '1', ip_rep_enabled: '1',
-        cpu_limit_percent: '50',
+        cpu_limit_percent: '50', rt_poll_interval: '300',
       }}
     : await API.getSettings();
 
@@ -847,6 +855,10 @@ async function loadSettings() {
   const cpuVal = parseInt(d.cpu_limit_percent || '50', 10);
   const cpuSlider = document.getElementById('set-cpu-limit');
   if (cpuSlider) { cpuSlider.value = cpuVal; updateCpuSliderLabel(cpuVal); }
+
+  // Poll interval selector
+  const pollVal = parseInt(d.rt_poll_interval || '300', 10);
+  selectPollInterval([60, 300, 900].includes(pollVal) ? pollVal : 300);
 }
 
 async function saveSettings() {
@@ -865,6 +877,7 @@ async function saveSettings() {
     bot_shield_enabled: g('set-bot-enabled')?.checked ? '1' : '0',
     ip_rep_enabled:     g('set-iprep-enabled')?.checked ? '1' : '0',
     cpu_limit_percent:  g('set-cpu-limit')?.value || '50',
+    rt_poll_interval:   document.querySelector('input[name="rt_poll_interval"]:checked')?.value || '300',
   };
 
   const res = Demo.active ? { success: true } : await API.saveSettings(data);

@@ -172,7 +172,8 @@ class Database {
                 ('db_max_cron_log',         '1000'),
                 ('monitor_log_max_mb',      '50'),
                 -- Performance
-                ('cpu_limit_percent',       '50');
+                ('cpu_limit_percent',       '50'),
+                ('rt_poll_interval',        '300');
 
             -- Default firewall rules
             INSERT OR IGNORE INTO firewall_rules (name, direction, protocol, port, action, comment) VALUES

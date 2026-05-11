@@ -46,11 +46,14 @@ def cpu_to_scan_sleep(cpu_pct: int) -> float:
     cpu_pct = max(10, min(100, cpu_pct))
     return max(0.0, (1.0 - cpu_pct / 100.0) * 0.55)
 
-def cpu_to_poll_interval(cpu_pct: int) -> float:
-    """Poll interval for polling mode.
-       10% → 30 s,  50% → 5 s,  100% → 1 s."""
-    cpu_pct = max(10, min(100, cpu_pct))
-    return max(1.0, 30.0 * (1.0 - cpu_pct / 100.0) + 1.0)
+def get_poll_interval() -> int:
+    """Read rt_poll_interval from DB; valid values are 60, 300, 900 seconds.
+       Defaults to 300 s (5 min) if unset or invalid."""
+    try:
+        val = int(get_setting('rt_poll_interval', '300'))
+        return val if val in (60, 300, 900) else 300
+    except (ValueError, TypeError):
+        return 300
 
 # ── PHP Malware Patterns (mirrors Scanner.php) ────────────────────────────────
 PATTERNS = [
@@ -123,8 +126,7 @@ def apply_cpu_priority(cpu_pct: int):
         except Exception:
             pass
     log.info(f"CPU limit: {cpu_pct}% → nice {nice_val}, "
-             f"scan_sleep {cpu_to_scan_sleep(cpu_pct):.3f}s, "
-             f"poll_interval {cpu_to_poll_interval(cpu_pct):.1f}s")
+             f"scan_sleep {cpu_to_scan_sleep(cpu_pct):.3f}s")
 
 def record_threat(file_path: str, sig_name: str, file_hash: str, file_size: int):
     severity = SEVERITY_MAP.get(sig_name, 'medium')
@@ -400,19 +402,24 @@ class PollingMonitor:
         self.threats_found = 0
 
     def start(self):
+        poll_interval = get_poll_interval()
         log.info("Starting polling monitor (install inotify_simple for better performance: pip3 install inotify_simple)")
-        log.info(f"Watch paths: {self.watch_paths}")
+        log.info(f"Watch paths: {self.watch_paths}  poll_interval: {poll_interval}s")
 
         stats_tick      = time.time()
         cpu_reload_tick = time.time()
 
         while True:
-            # Reload CPU setting every 5 min
+            # Reload CPU limit and poll interval every 5 min
             if time.time() - cpu_reload_tick > 300:
-                new_cpu = get_cpu_limit()
+                new_cpu  = get_cpu_limit()
+                new_poll = get_poll_interval()
                 if new_cpu != self.cpu_pct:
                     self.cpu_pct = new_cpu
                     apply_cpu_priority(self.cpu_pct)
+                if new_poll != poll_interval:
+                    poll_interval = new_poll
+                    log.info(f"Poll interval updated to {poll_interval}s")
                 cpu_reload_tick = time.time()
 
             for watch_path in self.watch_paths:
@@ -422,7 +429,7 @@ class PollingMonitor:
                 update_monitor_stats(self.files_checked, self.threats_found)
                 stats_tick = time.time()
 
-            time.sleep(cpu_to_poll_interval(self.cpu_pct))
+            time.sleep(poll_interval)
 
     def _poll_directory(self, path: str):
         try:
@@ -488,9 +495,10 @@ def main():
     log.info(f"Sentinel Gate Real-Time Monitor starting (PID {os.getpid()})")
     log.info(f"Watch paths: {watch_paths}")
     log.info(f"Engine: {'inotify' if INOTIFY_AVAILABLE else 'polling (fallback)'}")
+    poll_interval = get_poll_interval()
     log.info(f"CPU limit: {cpu_pct}% (nice={cpu_to_nice(cpu_pct)}, "
              f"scan_sleep={cpu_to_scan_sleep(cpu_pct):.3f}s, "
-             f"poll_interval={cpu_to_poll_interval(cpu_pct):.1f}s)")
+             f"poll_interval={poll_interval}s)")
 
     if INOTIFY_AVAILABLE:
         InotifyMonitor(watch_paths, cpu_pct).start()

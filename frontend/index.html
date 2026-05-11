@@ -675,6 +675,30 @@
               The daemon picks up changes within 5 minutes without a restart.
               Lower values free CPU for web traffic; higher values speed up threat detection.
             </p>
+
+            <div class="form-group" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+              <label class="form-label">Polling Interval <span style="font-size:.72rem;color:var(--txt3);font-weight:400">(fallback mode only — when inotify is unavailable)</span></label>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px">
+                <label id="poll-opt-60" class="poll-interval-opt" style="display:flex;flex-direction:column;align-items:center;padding:12px 8px;border:2px solid var(--border);border-radius:10px;cursor:pointer;transition:border-color .15s,background .15s">
+                  <input type="radio" name="rt_poll_interval" value="60"  style="display:none" onchange="selectPollInterval(60)">
+                  <span style="font-size:1.2rem;font-weight:700;color:var(--primary)">1 min</span>
+                  <span style="font-size:.7rem;color:var(--txt3);margin-top:3px;text-align:center">High resource use<br>Fastest detection</span>
+                </label>
+                <label id="poll-opt-300" class="poll-interval-opt" style="display:flex;flex-direction:column;align-items:center;padding:12px 8px;border:2px solid var(--border);border-radius:10px;cursor:pointer;transition:border-color .15s,background .15s">
+                  <input type="radio" name="rt_poll_interval" value="300" style="display:none" onchange="selectPollInterval(300)">
+                  <span style="font-size:1.2rem;font-weight:700;color:var(--primary)">5 min</span>
+                  <span style="font-size:.7rem;color:var(--txt3);margin-top:3px;text-align:center">Balanced<br>Recommended</span>
+                </label>
+                <label id="poll-opt-900" class="poll-interval-opt" style="display:flex;flex-direction:column;align-items:center;padding:12px 8px;border:2px solid var(--border);border-radius:10px;cursor:pointer;transition:border-color .15s,background .15s">
+                  <input type="radio" name="rt_poll_interval" value="900" style="display:none" onchange="selectPollInterval(900)">
+                  <span style="font-size:1.2rem;font-weight:700;color:var(--primary)">15 min</span>
+                  <span style="font-size:.7rem;color:var(--txt3);margin-top:3px;text-align:center">Minimal resource use<br>Busy servers</span>
+                </label>
+              </div>
+              <p style="font-size:.73rem;color:var(--txt3);margin-top:8px">
+                In inotify mode (default when <code>inotify_simple</code> is installed) the daemon reacts instantly to file changes — this setting only matters on servers where inotify is unavailable.
+              </p>
+            </div>
           </div>
         </div>
 
