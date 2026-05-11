@@ -24,7 +24,6 @@ INSTALL_DIR   = os.environ.get('SG_ROOT', '/usr/local/sentinel-gate')
 DB_PATH       = os.path.join(INSTALL_DIR, 'database', 'sentinel.db')
 LOG_PATH      = os.path.join(INSTALL_DIR, 'logs', 'monitor.log')
 PID_FILE      = '/var/run/sentinel-gate-monitor.pid'
-STATE_FILE    = os.path.join(INSTALL_DIR, 'database', 'monitor_state.json')
 
 WATCH_EXTENSIONS = {'.php', '.php3', '.php4', '.php5', '.php7', '.phtml',
                     '.phps', '.phar', '.js', '.py', '.pl', '.sh', '.rb',
@@ -32,7 +31,26 @@ WATCH_EXTENSIONS = {'.php', '.php3', '.php4', '.php5', '.php7', '.phtml',
 
 MAX_FILE_SIZE   = 52_428_800   # 50 MB — skip larger files
 SCAN_COOLDOWN   = 5            # seconds before re-scanning the same path
-POLL_INTERVAL   = 2            # seconds for fallback polling mode
+
+# ── CPU throttle defaults (overridden at runtime from DB setting) ─────────────
+DEFAULT_CPU_LIMIT = 50         # percent
+
+def cpu_to_nice(cpu_pct: int) -> int:
+    """Map CPU % (10–100) to nice value (19–0). Lower % = higher nice = lower priority."""
+    cpu_pct = max(10, min(100, cpu_pct))
+    return round(19 * (1.0 - cpu_pct / 100.0))
+
+def cpu_to_scan_sleep(cpu_pct: int) -> float:
+    """Seconds to sleep between each file scan in inotify mode.
+       10% → 0.5 s,  50% → 0.1 s,  100% → 0 s."""
+    cpu_pct = max(10, min(100, cpu_pct))
+    return max(0.0, (1.0 - cpu_pct / 100.0) * 0.55)
+
+def cpu_to_poll_interval(cpu_pct: int) -> float:
+    """Poll interval for polling mode.
+       10% → 30 s,  50% → 5 s,  100% → 1 s."""
+    cpu_pct = max(10, min(100, cpu_pct))
+    return max(1.0, 30.0 * (1.0 - cpu_pct / 100.0) + 1.0)
 
 # ── PHP Malware Patterns (mirrors Scanner.php) ────────────────────────────────
 PATTERNS = [
@@ -86,11 +104,32 @@ def get_setting(key, default=''):
     except Exception:
         return default
 
+def get_cpu_limit() -> int:
+    """Read cpu_limit_percent from DB; returns int 10–100."""
+    try:
+        val = int(get_setting('cpu_limit_percent', str(DEFAULT_CPU_LIMIT)))
+        return max(10, min(100, val))
+    except (ValueError, TypeError):
+        return DEFAULT_CPU_LIMIT
+
+def apply_cpu_priority(cpu_pct: int):
+    """Set the process nice value according to the CPU limit."""
+    nice_val = cpu_to_nice(cpu_pct)
+    try:
+        os.nice(nice_val - os.nice(0))   # delta from current nice
+    except Exception:
+        try:
+            os.nice(nice_val)
+        except Exception:
+            pass
+    log.info(f"CPU limit: {cpu_pct}% → nice {nice_val}, "
+             f"scan_sleep {cpu_to_scan_sleep(cpu_pct):.3f}s, "
+             f"poll_interval {cpu_to_poll_interval(cpu_pct):.1f}s")
+
 def record_threat(file_path: str, sig_name: str, file_hash: str, file_size: int):
     severity = SEVERITY_MAP.get(sig_name, 'medium')
     try:
         db = get_db()
-        # Get or create a realtime scan job
         job = db.execute(
             "SELECT id FROM scan_jobs WHERE scan_type='realtime' AND status='running' ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -103,7 +142,6 @@ def record_threat(file_path: str, sig_name: str, file_hash: str, file_size: int)
         else:
             job_id = job['id']
 
-        # Check not already active
         existing = db.execute(
             "SELECT id FROM threats WHERE file_path=? AND status='active'", (file_path,)
         ).fetchone()
@@ -118,22 +156,18 @@ def record_threat(file_path: str, sig_name: str, file_hash: str, file_size: int)
             (job_id, file_path, f'SG.RT.{sig_name}', 'realtime_detection',
              severity, file_hash, file_size, int(time.time()))
         )
-
-        # Security event
         db.execute(
             """INSERT INTO security_events
                (type, severity, source_ip, target, description, timestamp)
                VALUES ('realtime_malware',?,NULL,?,?,?)""",
             (severity, file_path, f'Real-time detection: {sig_name}', int(time.time()))
         )
-
         db.commit()
         db.close()
 
         log.warning(f"THREAT DETECTED | {severity.upper()} | {sig_name} | {file_path}")
         send_alert(file_path, sig_name, severity)
 
-        # Auto-quarantine
         if get_setting('auto_quarantine') == '1':
             auto_quarantine(file_path, sig_name)
 
@@ -143,29 +177,24 @@ def record_threat(file_path: str, sig_name: str, file_hash: str, file_size: int)
 def update_monitor_stats(files_checked: int, threats_found: int):
     try:
         db = get_db()
-        db.execute(
-            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,strftime('%s','now'))",
-            ('rt_files_checked', str(files_checked))
-        )
-        db.execute(
-            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,strftime('%s','now'))",
-            ('rt_threats_found', str(threats_found))
-        )
-        db.execute(
-            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,strftime('%s','now'))",
-            ('rt_monitor_pid', str(os.getpid()))
-        )
-        db.execute(
-            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,strftime('%s','now'))",
-            ('rt_monitor_status', 'running')
-        )
+        for k, v in [
+            ('rt_files_checked', str(files_checked)),
+            ('rt_threats_found', str(threats_found)),
+            ('rt_monitor_pid',   str(os.getpid())),
+            ('rt_monitor_status', 'running'),
+            ('rt_last_activity', str(int(time.time()))),
+        ]:
+            db.execute(
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,strftime('%s','now'))",
+                (k, v)
+            )
         db.commit()
         db.close()
     except Exception:
         pass
 
 # ── Scanner ───────────────────────────────────────────────────────────────────
-def scan_file(path: str) -> bool:
+def scan_file(path: str, cpu_pct: int = DEFAULT_CPU_LIMIT) -> bool:
     """Scan a single file. Returns True if threat found."""
     try:
         stat = os.stat(path)
@@ -179,15 +208,15 @@ def scan_file(path: str) -> bool:
     if ext not in WATCH_EXTENSIONS:
         return False
 
-    # Try ClamAV first (faster, more signatures)
+    # ClamAV: run with nice/ionice based on CPU limit
     clamscan = '/usr/bin/clamscan'
     if os.path.exists(clamscan):
+        nice_val = cpu_to_nice(cpu_pct)
+        cmd = ['nice', f'-n{nice_val}', 'ionice', '-c3',
+               clamscan, '--no-summary', '--infected', path]
         try:
-            result = subprocess.run(
-                [clamscan, '--no-summary', '--infected', path],
-                capture_output=True, timeout=30, text=True
-            )
-            if result.returncode == 1:  # Virus found
+            result = subprocess.run(cmd, capture_output=True, timeout=30, text=True)
+            if result.returncode == 1:
                 for line in result.stdout.splitlines():
                     if 'FOUND' in line:
                         threat_name = line.split(': ')[1].replace(' FOUND', '').strip()
@@ -212,13 +241,10 @@ def scan_file(path: str) -> bool:
     return False
 
 def auto_quarantine(file_path: str, sig_name: str):
-    """Move detected file to quarantine directory."""
     q_dir = os.path.join(INSTALL_DIR, 'quarantine', datetime.now().strftime('%Y-%m-%d'))
     os.makedirs(q_dir, mode=0o700, exist_ok=True)
-
     basename = os.path.basename(file_path)
     dest = os.path.join(q_dir, f"{basename}_{int(time.time())}.quarantine")
-
     try:
         os.rename(file_path, dest)
         with open(file_path + '.sentinel_removed', 'w') as f:
@@ -233,7 +259,6 @@ def auto_quarantine(file_path: str, sig_name: str):
         log.error(f"Quarantine failed for {file_path}: {e}")
 
 def send_alert(file_path: str, sig_name: str, severity: str):
-    """Send email alert for real-time detection."""
     alert_email = get_setting('alert_email')
     if not alert_email or get_setting('email_alerts') != '1':
         return
@@ -249,25 +274,22 @@ def send_alert(file_path: str, sig_name: str, severity: str):
         f"\nDashboard: https://{hostname}:2087\n"
     )
     try:
-        subprocess.run(
-            ['mail', '-s', subject, alert_email],
-            input=body.encode(), timeout=10
-        )
+        subprocess.run(['mail', '-s', subject, alert_email], input=body.encode(), timeout=10)
     except Exception:
         pass
 
 # ── inotify Watcher ───────────────────────────────────────────────────────────
 class InotifyMonitor:
 
-    def __init__(self, watch_paths: list):
-        self.watch_paths  = watch_paths
-        self.inotify      = inotify_simple.INotify()
-        self.wd_to_path   = {}
-        self.cooldowns    = {}   # path → last_scan_time
+    def __init__(self, watch_paths: list, cpu_pct: int):
+        self.watch_paths   = watch_paths
+        self.cpu_pct       = cpu_pct
+        self.inotify       = inotify_simple.INotify()
+        self.wd_to_path    = {}
+        self.cooldowns     = {}
         self.files_checked = 0
         self.threats_found = 0
 
-        # Events: file created, written+closed, moved into watched dir
         self.flags = (
             inotify_simple.flags.CREATE      |
             inotify_simple.flags.CLOSE_WRITE |
@@ -285,8 +307,6 @@ class InotifyMonitor:
         except PermissionError:
             log.warning(f"Permission denied watching: {path}")
             return
-
-        # Recursively add subdirectories (up to depth 8 to avoid /proc etc.)
         try:
             for entry in os.scandir(path):
                 if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.'):
@@ -304,11 +324,20 @@ class InotifyMonitor:
         log.info(f"inotify monitor active — watching {total} directories")
         update_monitor_stats(0, 0)
 
-        stats_tick = time.time()
+        stats_tick      = time.time()
+        cpu_reload_tick = time.time()   # re-read CPU setting every 5 min
 
         while True:
+            # Periodically reload CPU limit in case user changed it
+            if time.time() - cpu_reload_tick > 300:
+                new_cpu = get_cpu_limit()
+                if new_cpu != self.cpu_pct:
+                    self.cpu_pct = new_cpu
+                    apply_cpu_priority(self.cpu_pct)
+                cpu_reload_tick = time.time()
+
             try:
-                events = self.inotify.read(timeout=5000)  # 5s timeout
+                events = self.inotify.read(timeout=5000)
             except Exception as e:
                 log.error(f"inotify read error: {e}")
                 time.sleep(1)
@@ -317,21 +346,17 @@ class InotifyMonitor:
             for event in events:
                 if not event.name:
                     continue
-
-                parent = self.wd_to_path.get(event.wd, '')
+                parent    = self.wd_to_path.get(event.wd, '')
                 full_path = os.path.join(parent, event.name)
 
-                # New directory created — watch it too
                 if (inotify_simple.flags.CREATE & event.mask) and \
                    (inotify_simple.flags.ISDIR & event.mask):
                     self.add_watch_recursive(full_path)
                     continue
 
-                # File event
                 if not (inotify_simple.flags.ISDIR & event.mask):
                     self._handle_file_event(full_path)
 
-            # Write stats every 30s
             if time.time() - stats_tick > 30:
                 update_monitor_stats(self.files_checked, self.threats_found)
                 stats_tick = time.time()
@@ -341,14 +366,12 @@ class InotifyMonitor:
         if ext not in WATCH_EXTENSIONS:
             return
 
-        # Cooldown: don't re-scan the same file within SCAN_COOLDOWN seconds
-        now = time.time()
+        now  = time.time()
         last = self.cooldowns.get(path, 0)
         if now - last < SCAN_COOLDOWN:
             return
         self.cooldowns[path] = now
 
-        # Prune old cooldown entries
         if len(self.cooldowns) > 5000:
             cutoff = now - 300
             self.cooldowns = {k: v for k, v in self.cooldowns.items() if v > cutoff}
@@ -356,50 +379,73 @@ class InotifyMonitor:
         log.debug(f"Scanning: {path}")
         self.files_checked += 1
 
-        if scan_file(path):
+        # Throttle: sleep between scans to respect CPU limit
+        sleep_s = cpu_to_scan_sleep(self.cpu_pct)
+        if sleep_s > 0:
+            time.sleep(sleep_s)
+
+        if scan_file(path, self.cpu_pct):
             self.threats_found += 1
             log.warning(f"Threat in new/modified file: {path}")
 
 
 # ── Polling Fallback ──────────────────────────────────────────────────────────
 class PollingMonitor:
-    """Fallback when inotify_simple not installed — polls for mtime changes."""
 
-    def __init__(self, watch_paths: list):
+    def __init__(self, watch_paths: list, cpu_pct: int):
         self.watch_paths   = watch_paths
-        self.seen_mtimes   = {}   # path → mtime
+        self.cpu_pct       = cpu_pct
+        self.seen_mtimes   = {}
         self.files_checked = 0
         self.threats_found = 0
 
     def start(self):
-        log.info("Starting polling monitor (inotify_simple not installed — install with: pip3 install inotify_simple)")
-        log.info(f"Polling interval: {POLL_INTERVAL}s — watching {self.watch_paths}")
+        log.info("Starting polling monitor (install inotify_simple for better performance: pip3 install inotify_simple)")
+        log.info(f"Watch paths: {self.watch_paths}")
+
+        stats_tick      = time.time()
+        cpu_reload_tick = time.time()
 
         while True:
+            # Reload CPU setting every 5 min
+            if time.time() - cpu_reload_tick > 300:
+                new_cpu = get_cpu_limit()
+                if new_cpu != self.cpu_pct:
+                    self.cpu_pct = new_cpu
+                    apply_cpu_priority(self.cpu_pct)
+                cpu_reload_tick = time.time()
+
             for watch_path in self.watch_paths:
                 self._poll_directory(watch_path)
-            update_monitor_stats(self.files_checked, self.threats_found)
-            time.sleep(POLL_INTERVAL)
+
+            if time.time() - stats_tick > 30:
+                update_monitor_stats(self.files_checked, self.threats_found)
+                stats_tick = time.time()
+
+            time.sleep(cpu_to_poll_interval(self.cpu_pct))
 
     def _poll_directory(self, path: str):
         try:
             for root, _, files in os.walk(path, followlinks=False):
                 for fname in files:
                     full = os.path.join(root, fname)
-                    ext = Path(full).suffix.lower()
+                    ext  = Path(full).suffix.lower()
                     if ext not in WATCH_EXTENSIONS:
                         continue
                     try:
                         mtime = os.path.getmtime(full)
                     except OSError:
                         continue
-
                     prev = self.seen_mtimes.get(full)
                     if prev != mtime:
                         self.seen_mtimes[full] = mtime
-                        if prev is not None:  # Only scan on change, not first discovery
+                        if prev is not None:
+                            # Throttle per-file scan
+                            sleep_s = cpu_to_scan_sleep(self.cpu_pct)
+                            if sleep_s > 0:
+                                time.sleep(sleep_s)
                             self.files_checked += 1
-                            if scan_file(full):
+                            if scan_file(full, self.cpu_pct):
                                 self.threats_found += 1
         except PermissionError:
             pass
@@ -424,28 +470,32 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT,  handle_signal)
 
-    # Write PID
     with open(PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
 
-    # Read watch paths from settings
-    raw_paths = get_setting('scan_paths', '/home')
+    # Read CPU limit and apply nice priority immediately
+    cpu_pct = get_cpu_limit()
+    apply_cpu_priority(cpu_pct)
+
+    raw_paths   = get_setting('scan_paths', '/home')
     watch_paths = [p.strip() for p in raw_paths.split(',') if p.strip()]
 
-    # Also watch common upload/temp directories
     extra = ['/tmp', '/var/tmp', '/usr/local/apache/htdocs']
     for p in extra:
         if os.path.isdir(p) and p not in watch_paths:
             watch_paths.append(p)
 
-    log.info(f"Sentinel Gate Real-Time Monitor v2.4.1 starting (PID {os.getpid()})")
+    log.info(f"Sentinel Gate Real-Time Monitor starting (PID {os.getpid()})")
     log.info(f"Watch paths: {watch_paths}")
     log.info(f"Engine: {'inotify' if INOTIFY_AVAILABLE else 'polling (fallback)'}")
+    log.info(f"CPU limit: {cpu_pct}% (nice={cpu_to_nice(cpu_pct)}, "
+             f"scan_sleep={cpu_to_scan_sleep(cpu_pct):.3f}s, "
+             f"poll_interval={cpu_to_poll_interval(cpu_pct):.1f}s)")
 
     if INOTIFY_AVAILABLE:
-        InotifyMonitor(watch_paths).start()
+        InotifyMonitor(watch_paths, cpu_pct).start()
     else:
-        PollingMonitor(watch_paths).start()
+        PollingMonitor(watch_paths, cpu_pct).start()
 
 if __name__ == '__main__':
     main()

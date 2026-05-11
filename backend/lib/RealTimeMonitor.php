@@ -76,8 +76,8 @@ class RealTimeMonitor {
             return ['success' => false, 'error' => 'Daemon script not found: ' . $this->daemonScript];
         }
 
-        // Prefer systemd
-        if ($this->isServiceEnabled()) {
+        // Prefer systemd whenever the unit file is present
+        if (file_exists($this->serviceFile)) {
             exec('systemctl start sentinel-gate-monitor 2>&1', $out, $code);
             if ($code === 0) {
                 Database::setSetting('rt_monitor_status', 'running');
@@ -109,12 +109,13 @@ class RealTimeMonitor {
     }
 
     public function stop(): array {
-        // Systemd path
-        if ($this->isServiceEnabled()) {
+        // Prefer systemd whenever the unit file is present (installed),
+        // regardless of whether auto-start is enabled.
+        if (file_exists($this->serviceFile)) {
             exec('systemctl stop sentinel-gate-monitor 2>&1', $out, $code);
             Database::setSetting('rt_monitor_status', 'stopped');
             Logger::info("Real-time monitor stopped via systemd");
-            return ['success' => true];
+            return ['success' => $code === 0, 'output' => implode("\n", $out)];
         }
 
         // Kill by PID

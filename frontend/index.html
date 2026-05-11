@@ -649,6 +649,35 @@
           </div>
         </div>
 
+        <!-- Performance & CPU -->
+        <div class="card mb-4">
+          <div class="card-header"><div class="card-title">Performance &amp; CPU Usage</div></div>
+          <div class="card-body">
+            <div class="form-group">
+              <label class="form-label" style="display:flex;justify-content:space-between;align-items:center">
+                <span>CPU Limit for Scanning &amp; Real-Time Monitor</span>
+                <span id="cpu-limit-label" style="font-weight:700;color:var(--primary);font-size:.9rem">50%</span>
+              </label>
+              <input type="range" id="set-cpu-limit" min="10" max="100" step="5" value="50"
+                oninput="updateCpuSliderLabel(this.value)"
+                style="width:100%;accent-color:var(--primary);cursor:pointer;margin:8px 0">
+              <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--txt3);margin-top:2px">
+                <span>10% — Minimal</span>
+                <span>50% — Balanced</span>
+                <span>100% — Maximum</span>
+              </div>
+            </div>
+            <div id="cpu-limit-desc" style="margin-top:10px;padding:10px 14px;background:var(--bg1);border-radius:8px;font-size:.78rem;color:var(--txt2);line-height:1.6">
+              <!-- filled by updateCpuSliderLabel() -->
+            </div>
+            <p style="font-size:.74rem;color:var(--txt3);margin-top:10px">
+              Applies to: manual malware scans, cron scans, and the real-time file monitor daemon.
+              The daemon picks up changes within 5 minutes without a restart.
+              Lower values free CPU for web traffic; higher values speed up threat detection.
+            </p>
+          </div>
+        </div>
+
         <!-- Alerts -->
         <div class="card mb-4">
           <div class="card-header"><div class="card-title">Email Alerts</div></div>

@@ -59,6 +59,25 @@ class Scanner {
     }
 
     /**
+     * CPU limit → Linux nice value (0–19).
+     * 100 % CPU → nice 0 (normal),  10 % CPU → nice 19 (lowest priority).
+     */
+    private static function getCpuNice(): int {
+        $pct = max(10, min(100, (int) (Database::setting('cpu_limit_percent') ?? 50)));
+        return (int) round(19 * (1.0 - $pct / 100.0));
+    }
+
+    /**
+     * Build the nice/ionice prefix for external commands.
+     * Uses idle I/O class (-c3) so scans never starve interactive I/O.
+     */
+    private static function nicePrefix(): string {
+        $nice = self::getCpuNice();
+        // ionice may not be available on all systems; ignore if missing
+        return "nice -n{$nice} ionice -c3 2>/dev/null || nice -n{$nice}";
+    }
+
+    /**
      * Start a new scan job
      */
     public function startScan(string $path = '/home', string $type = 'quick'): int {
@@ -77,9 +96,11 @@ class Scanner {
             'type' => $type,
         ]));
 
-        // Launch async via background process
-        $cmd = sprintf(
-            'php %s/backend/cron/scan.php --job-id=%d --path=%s > %s/scan_%d.log 2>&1 &',
+        // Launch async via background process with CPU throttling
+        $nice = self::getCpuNice();
+        $cmd  = sprintf(
+            'nice -n%d php %s/backend/cron/scan.php --job-id=%d --path=%s > %s/scan_%d.log 2>&1 &',
+            $nice,
             SG_ROOT,
             $jobId,
             escapeshellarg($path),
@@ -99,8 +120,10 @@ class Scanner {
             return $this->runPatternScan($path, $jobId);
         }
 
-        $cmd = sprintf(
-            '%s --recursive --infected --no-summary --max-filesize=50M --max-scansize=200M %s 2>&1',
+        $nice = self::getCpuNice();
+        $cmd  = sprintf(
+            'nice -n%d ionice -c3 %s --recursive --infected --no-summary --max-filesize=50M --max-scansize=200M %s 2>&1',
+            $nice,
             CLAMSCAN_BIN,
             escapeshellarg($path)
         );
