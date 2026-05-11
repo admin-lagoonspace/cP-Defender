@@ -1384,19 +1384,6 @@
   </div><!-- /.main-content -->
 </div><!-- /.layout -->
 
-<!-- ══ LOADING SCREEN (cPanel auto-login) ════════════════════════════════════ -->
-<div id="cpanel-loading" style="display:none;position:fixed;inset:0;z-index:99999;
-  background:var(--bg);display:flex;flex-direction:column;align-items:center;
-  justify-content:center;gap:20px">
-  <div class="brand-icon" style="width:64px;height:64px;font-size:32px;
-    box-shadow:0 0 0 8px rgba(59,130,246,.1),0 0 32px rgba(59,130,246,.2)">🛡</div>
-  <div style="font-size:1.2rem;font-weight:800;letter-spacing:.08em;color:var(--txt)">SENTINEL GATE</div>
-  <div style="font-size:.82rem;color:var(--blue2);display:flex;align-items:center;gap:8px">
-    <span class="status-dot" style="animation:pulse 1s infinite"></span>
-    Authenticating with cPanel…
-  </div>
-</div>
-
 <!-- ══ TOAST CONTAINER ═══════════════════════════════════════════════════════ -->
 <div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px"></div>
 
@@ -1413,29 +1400,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Detect install mode first (fast GET, tells us cPanel vs standalone)
     await detectMode();
 
-    // ── cPanel auto-login ──────────────────────────────────────────────────
-    // In cPanel mode REMOTE_USER is set by the cPanel webserver when the
-    // plugin loads inside the cPanel/WHM UI. Try SSO before showing login.
+    // ── cPanel auto-login (silent) ─────────────────────────────────────────
+    // In cPanel mode REMOTE_USER is set by the cPanel webserver; attempt SSO
+    // silently before showing the login form.
     if (State.installMode === 'cpanel') {
-      const loadEl = document.getElementById('cpanel-loading');
-      if (loadEl) loadEl.style.display = 'flex';
-
       try {
         const res = await API.autoLogin();
         if (res?.success) {
           localStorage.setItem('sg_token', res.token);
           localStorage.setItem('sg_user', JSON.stringify(res.user));
           State.installMode = res.user?.mode || 'cpanel';
-          if (loadEl) loadEl.style.display = 'none';
           document.getElementById('login-screen').style.display = 'none';
           applyModeUI(State.installMode);
           openPage('dashboard');
           return; // done — skip login form wiring
         }
       } catch (_) {}
-
-      // Auto-login failed (direct browser hit, no cPanel session) — show login
-      if (loadEl) loadEl.style.display = 'none';
     }
   }
 
