@@ -50,7 +50,34 @@
 <!-- ══ TOP BAR ═══════════════════════════════════════════════════════════════ -->
 <header class="topbar">
   <div class="topbar-brand">
-    <img src="images/logo.png" alt="Sentinel Gate" style="height:36px;width:auto;filter:drop-shadow(0 0 8px rgba(59,130,246,.3))">
+    <!-- Shield icon mark — inline SVG so it renders crisp at any size with no background bleed -->
+    <div class="brand-icon">
+      <svg width="34" height="38" viewBox="0 0 34 38" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="tb-og" x1="17" y1="7" x2="26" y2="19" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#fb923c"/><stop offset="1" stop-color="#ef4444"/>
+          </linearGradient>
+          <linearGradient id="tb-bl" x1="8" y1="10" x2="17" y2="28" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/>
+          </linearGradient>
+          <linearGradient id="tb-tl" x1="17" y1="19" x2="26" y2="30" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#34d399"/><stop offset="1" stop-color="#059669"/>
+          </linearGradient>
+        </defs>
+        <!-- Shield -->
+        <path d="M17 1L2 7V19C2 28 8.8 35.2 17 37.5C25.2 35.2 32 28 32 19V7L17 1Z" fill="#111e38" stroke="rgba(59,130,246,0.25)" stroke-width="0.5"/>
+        <!-- Orange wedge (top-right) -->
+        <path d="M17 7.5L25 11V19H17V7.5Z" fill="url(#tb-og)"/>
+        <!-- Blue wedge (left) -->
+        <path d="M9 11L17 7.5V27.5L9 30.5V19V11Z" fill="url(#tb-bl)"/>
+        <!-- Teal wedge (bottom-right) -->
+        <path d="M17 19H25V19.5L21 30L17 27.5V19Z" fill="url(#tb-tl)"/>
+      </svg>
+    </div>
+    <div>
+      <div class="brand-name">Sentinel Gate</div>
+      <div class="brand-sub">Security Suite</div>
+    </div>
   </div>
 
   <nav class="topbar-nav">
@@ -81,9 +108,29 @@
 
   <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
   <aside class="sidebar">
-    <!-- Logo -->
-    <div style="padding:16px 14px 12px;border-bottom:1px solid var(--border);margin-bottom:8px">
-      <img src="images/logo.png" alt="Sentinel Gate" style="width:100%;max-width:160px;height:auto;display:block;margin:0 auto;filter:drop-shadow(0 0 10px rgba(59,130,246,.25))">
+    <!-- Brand lockup -->
+    <div class="sidebar-brand">
+      <svg width="38" height="43" viewBox="0 0 34 38" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+        <defs>
+          <linearGradient id="sb-og" x1="17" y1="7" x2="26" y2="19" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#fb923c"/><stop offset="1" stop-color="#ef4444"/>
+          </linearGradient>
+          <linearGradient id="sb-bl" x1="8" y1="10" x2="17" y2="28" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/>
+          </linearGradient>
+          <linearGradient id="sb-tl" x1="17" y1="19" x2="26" y2="30" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#34d399"/><stop offset="1" stop-color="#059669"/>
+          </linearGradient>
+        </defs>
+        <path d="M17 1L2 7V19C2 28 8.8 35.2 17 37.5C25.2 35.2 32 28 32 19V7L17 1Z" fill="#111e38" stroke="rgba(59,130,246,0.3)" stroke-width="0.5"/>
+        <path d="M17 7.5L25 11V19H17V7.5Z" fill="url(#sb-og)"/>
+        <path d="M9 11L17 7.5V27.5L9 30.5V19V11Z" fill="url(#sb-bl)"/>
+        <path d="M17 19H25V19.5L21 30L17 27.5V19Z" fill="url(#sb-tl)"/>
+      </svg>
+      <div>
+        <div class="sidebar-brand-name">Sentinel Gate</div>
+        <div class="sidebar-brand-tagline">Security Suite</div>
+      </div>
     </div>
 
     <div class="sidebar-section-label">Modules</div>
@@ -139,7 +186,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.3.8 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.3.9 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>

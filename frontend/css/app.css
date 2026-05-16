@@ -114,15 +114,12 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.2; }
   flex-shrink: 0;
 }
 .brand-icon {
-  width: 32px; height: 32px;
-  background: var(--blue);
-  border-radius: 8px;
+  width: 34px; height: 38px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 16px; color: #fff;
   flex-shrink: 0;
 }
-.brand-name { font-weight: 800; font-size: .95rem; letter-spacing: -.01em; }
-.brand-sub  { font-size: .65rem; color: var(--blue2); font-weight: 600; letter-spacing:.04em; }
+.brand-name { font-weight: 800; font-size: .95rem; letter-spacing: -.015em; line-height: 1.15; }
+.brand-sub  { font-size: .6rem; color: var(--blue2); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; margin-top: 2px; }
 
 .topbar-nav {
   display: flex; align-items: center; gap: 2px;
@@ -182,7 +179,24 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.2; }
   border-right: 1px solid var(--border);
   position:fixed; top:var(--topbar-h); bottom:0; left:0;
   overflow-y:auto; z-index:100;
-  padding: 16px 0;
+  padding: 0 0 16px;
+}
+
+/* Sidebar brand lockup — sits above nav items */
+.sidebar-brand {
+  display: flex; align-items: center; gap: 11px;
+  padding: 16px 18px 15px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+.sidebar-brand-name {
+  font-size: .95rem; font-weight: 800;
+  color: var(--txt); letter-spacing: -.015em; line-height: 1.15;
+}
+.sidebar-brand-tagline {
+  font-size: .58rem; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--blue2); margin-top: 3px;
 }
 .sidebar-section-label {
   font-size:.65rem; font-weight:700; letter-spacing:.1em;
