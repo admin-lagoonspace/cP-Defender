@@ -54,6 +54,38 @@ PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION;')
 [[ $PHP_VER -lt 7 ]] && error "PHP 7.4+ required (found PHP $PHP_VER)"
 ok "PHP $PHP_VER found"
 
+# ── Pre-install cleanup ─────────────────────────────────────────────────────────
+# Makes reinstalls clean: stops running services, refreshes code dirs so files
+# deleted in newer versions don't linger, and sweeps legacy artifacts from old
+# layouts. Data (database, logs, quarantine) is preserved on reinstall —
+# uninstall.sh is the only thing that deletes data.
+section "Pre-install cleanup"
+if command -v systemctl >/dev/null 2>&1; then
+  for _SVC in sentinel-gate-web sentinel-gate-monitor; do
+    if systemctl is-active --quiet "${_SVC}" 2>/dev/null; then
+      systemctl stop "${_SVC}" 2>/dev/null || true
+      info "Stopped running service: ${_SVC}"
+    fi
+  done
+fi
+if [[ -d "${INSTALL_DIR}" ]]; then
+  info "Existing installation detected — refreshing code, keeping data"
+  for _OLD in "${INSTALL_DIR}/backend" "${INSTALL_DIR}/frontend"; do
+    [[ -d "${_OLD}" ]] && rm -rf "${_OLD}" && info "Removed stale code dir: ${_OLD}"
+  done
+fi
+# Legacy artifacts from pre-3.2 layouts — harmless to sweep when absent
+for _LEGACY in \
+  /usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinel_gate.cgi \
+  /usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinelgate.cgi \
+  /usr/local/cpanel/whostmgr/docroot/cgi/sentinel-gate \
+  /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel-gate.conf \
+  /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel_gate.conf \
+  /var/cpanel/apps/sentinel-gate.conf; do
+  [[ -e "${_LEGACY}" ]] && rm -rf "${_LEGACY}" && info "Removed legacy artifact: ${_LEGACY}"
+done
+ok "Pre-install cleanup complete"
+
 # ── Mode selection ─────────────────────────────────────────────────────────────
 section "Installation Mode"
 echo ""
@@ -866,7 +898,12 @@ else
   echo -e "  ${CYAN}1)${NC} Keep the installation — I'll fix the issues manually"
   echo -e "  ${CYAN}2)${NC} Automatically uninstall and clean up everything"
   echo ""
-  read -rp "  Choice [1/2]: " ROLLBACK_CHOICE
+  if [[ -t 0 ]]; then
+    read -rp "  Choice [1/2]: " ROLLBACK_CHOICE
+  else
+    info "Non-interactive shell detected — keeping installation (default)"
+    ROLLBACK_CHOICE=1
+  fi
 
   if [[ "${ROLLBACK_CHOICE}" == "2" ]]; then
     echo ""

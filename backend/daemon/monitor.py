@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Sentinel Gate - Real-Time File Monitor Daemon
 Watches filesystem paths for new/modified PHP files and scans for malware.
@@ -66,6 +66,51 @@ def db_set(conn, key, value):
         conn.commit()
     except Exception as e:
         log.debug('db_set %s: %s', key, e)
+
+# -- CPU throttle ----------------------------------------------------------------
+# Maps the user-facing cpu_limit_percent setting (Settings -> CPU usage limit)
+# to process priority and inter-scan sleeps. Restored after the v3.3.7 rewrite
+# dropped it while the UI/DB kept the setting.
+DEFAULT_CPU_LIMIT = 50   # percent
+_SCAN_SLEEP = 0.0        # set in main() from the CPU limit
+
+def cpu_to_nice(cpu_pct):
+    """Map CPU % (10-100) to a nice value (19-0). Lower % = lower priority."""
+    cpu_pct = max(10, min(100, int(cpu_pct)))
+    return round(19 * (1.0 - cpu_pct / 100.0))
+
+def cpu_to_scan_sleep(cpu_pct):
+    """Seconds to sleep between file scans in inotify mode.
+       10% -> 0.50s, 50% -> 0.28s, 100% -> 0s."""
+    cpu_pct = max(10, min(100, int(cpu_pct)))
+    return max(0.0, (1.0 - cpu_pct / 100.0) * 0.55)
+
+def get_cpu_limit(conn):
+    """Read cpu_limit_percent from settings; clamp to 10-100."""
+    try:
+        return max(10, min(100, int(db_get(conn, 'cpu_limit_percent', str(DEFAULT_CPU_LIMIT)))))
+    except (ValueError, TypeError):
+        return DEFAULT_CPU_LIMIT
+
+def get_poll_interval(conn):
+    """Poll interval (seconds) for polling mode -- rt_poll_interval setting,
+       default 300 (5 min), clamped to >= 10."""
+    try:
+        return max(10, int(db_get(conn, 'rt_poll_interval', '300') or '300'))
+    except (ValueError, TypeError):
+        return 300
+
+def apply_cpu_priority(cpu_pct):
+    """Lower process priority according to the CPU limit (best-effort)."""
+    target = cpu_to_nice(cpu_pct)
+    try:
+        current = os.nice(0)
+        if target > current:
+            os.nice(target - current)
+    except Exception as e:
+        log.debug('nice failed: %s', e)
+    log.info('CPU limit %d%% -> nice %d, scan_sleep %.2fs',
+             cpu_pct, target, cpu_to_scan_sleep(cpu_pct))
 
 def db_threat(conn, path, name, sev='high'):
     try:
@@ -181,7 +226,9 @@ def run_inotify(conn, paths):
         for ev in evts:
             if not ev.name or Path(ev.name).suffix.lower() not in PHP_EXTS: continue
             dp = wds.get(ev.wd,'')
-            if dp: handle(conn, os.path.join(dp, ev.name))
+            if dp:
+                handle(conn, os.path.join(dp, ev.name))
+                if _SCAN_SLEEP: time.sleep(_SCAN_SLEEP)  # CPU throttle
             tick += 1
             if tick >= 50: flush(conn); tick = 0
     ino.close()
@@ -212,12 +259,16 @@ def run_polling(conn, paths, interval):
         if time.time()-last_fl >= 30: flush(conn); last_fl = time.time()
 
 def main():
+    global _SCAN_SLEEP
     write_pid()
     log.info('Sentinel Gate RT Monitor starting PID=%d SG_ROOT=%s', os.getpid(), SG_ROOT)
     conn = None
     try:
         conn = db_connect()
         db_set(conn,'rt_monitor_status','running')
+        cpu = get_cpu_limit(conn)
+        apply_cpu_priority(cpu)
+        _SCAN_SLEEP = cpu_to_scan_sleep(cpu)
         paths = watch_paths(conn)
         if not paths:
             paths = [p for p in ['/home','/var/www'] if os.path.isdir(p)] or ['/']
@@ -228,7 +279,7 @@ def main():
             log.info('Engine: inotify_simple')
             run_inotify(conn, paths)
         except ImportError:
-            iv = int(db_get(conn,'rt_poll_interval','300') or '300')
+            iv = get_poll_interval(conn)
             db_set(conn,'rt_engine','polling')
             log.info('Engine: polling interval=%ds', iv)
             run_polling(conn, paths, iv)

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Stub: zip — uses PowerShell Compress-Archive (Git Bash on Windows)
+# Stub: zip — cross-platform.
+#   Git Bash on Windows: PowerShell Compress-Archive
+#   Linux/macOS:         real zip if present, else python3 zipfile
 # Usage: zip [-options] output.zip source_dir/
 LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
 echo "[STUB] zip $*" >> "$LOG"
@@ -19,11 +21,34 @@ if [[ -n "$OUTPUT" && -n "$INPUT" ]]; then
     INPUT_CLEAN="${INPUT%/}"  # strip trailing slash
     INPUT_ABS="$(realpath "$INPUT_CLEAN" 2>/dev/null || echo "$INPUT_CLEAN")"
 
-    WIN_OUTPUT="$(cygpath -w "$OUTPUT_ABS")"
-    WIN_INPUT="$(cygpath -w "$INPUT_ABS")"
-
-    powershell.exe -NoProfile -NonInteractive -Command \
-        "Compress-Archive -Path '${WIN_INPUT}' -DestinationPath '${WIN_OUTPUT}' -Force" 2>/dev/null
-    echo "[stub-zip] ${WIN_INPUT} -> ${WIN_OUTPUT}" >> "$LOG"
+    if command -v cygpath >/dev/null 2>&1 && command -v powershell.exe >/dev/null 2>&1; then
+        # Git Bash on Windows
+        WIN_OUTPUT="$(cygpath -w "$OUTPUT_ABS")"
+        WIN_INPUT="$(cygpath -w "$INPUT_ABS")"
+        powershell.exe -NoProfile -NonInteractive -Command \
+            "Compress-Archive -Path '${WIN_INPUT}' -DestinationPath '${WIN_OUTPUT}' -Force" 2>/dev/null
+        echo "[stub-zip] ${WIN_INPUT} -> ${WIN_OUTPUT}" >> "$LOG"
+    elif ZIP_REAL="$(type -P -a zip 2>/dev/null | grep -v "mock-env/stubs" | head -1)" && [[ -n "$ZIP_REAL" ]]; then
+        # Real zip available (not this stub itself)
+        (cd "$(dirname "$INPUT_ABS")" && "$ZIP_REAL" -rq "$OUTPUT_ABS" "$(basename "$INPUT_ABS")")
+        echo "[stub-zip] real zip: ${INPUT_ABS} -> ${OUTPUT_ABS}" >> "$LOG"
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 - "$INPUT_ABS" "$OUTPUT_ABS" << 'PYEOF'
+import os, sys, zipfile
+src, dst = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as z:
+    if os.path.isdir(src):
+        base = os.path.dirname(src.rstrip('/'))
+        for root, dirs, files in os.walk(src):
+            for f in files:
+                fp = os.path.join(root, f)
+                z.write(fp, os.path.relpath(fp, base))
+    else:
+        z.write(src, os.path.basename(src))
+PYEOF
+        echo "[stub-zip] python3 zipfile: ${INPUT_ABS} -> ${OUTPUT_ABS}" >> "$LOG"
+    else
+        echo "[stub-zip] no zip backend available" >> "$LOG"
+    fi
 fi
 exit 0

@@ -44,7 +44,7 @@ CPANEL_PLUGIN_PAPER=""
 CPANEL_PLUGIN_JUPITER=""
 CRON_FILE="/etc/cron.d/sentinel-gate"
 MONITOR_SERVICE="/etc/systemd/system/sentinel-gate-monitor.service"
-WEB_SERVICE=""
+WEB_SERVICE="/etc/systemd/system/sentinel-gate-web.service"
 WEB_PID_FILE=""
 FIREWALL_TOOL=""
 SOURCE_DIR=""
@@ -291,6 +291,12 @@ if [[ "$INSTALL_MODE" == "standalone" ]]; then
         iptables -D INPUT -p tcp --dport ${SG_PORT} -j ACCEPT 2>/dev/null && \
             ok "iptables rule removed for port ${SG_PORT}" || \
             info "iptables rule not found"
+        # Persist the removal — otherwise the saved rule resurrects the open
+        # port on next reboot (install.sh wrote it to rules.v4)
+        if [[ -d /etc/iptables ]]; then
+            iptables-save > /etc/iptables/rules.v4 2>/dev/null && \
+                ok "Persisted rule removal to /etc/iptables/rules.v4" || true
+        fi
     fi
 else
     info "cPanel mode — no port rule to remove"
@@ -307,15 +313,37 @@ else
     info "${INSTALL_DIR} not found — already removed"
 fi
 
-# ── 7. Remove source/unzip directory ──────────────────────────────────────────
+# ── 7. Remove runtime temp files and update backups ───────────────────────────
+section "Removing temp files and update backups"
+# Scanner scratch dir (created at runtime by backend, lives outside INSTALL_DIR)
+if [[ -d /tmp/sentinel-gate ]]; then
+    rm -rf /tmp/sentinel-gate && ok "Removed: /tmp/sentinel-gate" || true
+else
+    info "/tmp/sentinel-gate not found — nothing to remove"
+fi
+# Leftover update.sh temp dirs (from interrupted updates)
+for _SGTMP in /tmp/sg-update.*; do
+    [[ -d "${_SGTMP}" ]] && rm -rf "${_SGTMP}" && ok "Removed: ${_SGTMP}" || true
+done
+# update.sh version backups
+if [[ -d /var/backups/sentinel-gate ]]; then
+    rm -rf /var/backups/sentinel-gate && ok "Removed update backups: /var/backups/sentinel-gate" || true
+else
+    info "No update backups found"
+fi
+
+# ── 8. Remove source/unzip directory ──────────────────────────────────────────
 section "Removing source directory"
-if [[ -n "${SOURCE_DIR}" && -d "${SOURCE_DIR}" && "${SOURCE_DIR}" != "${INSTALL_DIR}" ]]; then
+# Safety: only delete if it actually looks like a Sentinel Gate source dir —
+# never blindly rm -rf a path read from a manifest.
+if [[ -n "${SOURCE_DIR}" && -d "${SOURCE_DIR}" && "${SOURCE_DIR}" != "${INSTALL_DIR}" \
+      && -f "${SOURCE_DIR}/install.sh" && -f "${SOURCE_DIR}/VERSION" ]]; then
     info "Scheduling removal of ${SOURCE_DIR}…"
     # Deferred — this script lives inside SOURCE_DIR
     nohup bash -c "sleep 2 && rm -rf '${SOURCE_DIR}'" >/dev/null 2>&1 &
     ok "Source directory will be deleted in 2 seconds: ${SOURCE_DIR}"
 else
-    info "Source dir same as install dir or not found — already removed"
+    info "Source dir not found, same as install dir, or not a Sentinel Gate source — skipping"
 fi
 
 # ── Done ───────────────────────────────────────────────────────────────────────

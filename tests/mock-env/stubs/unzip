@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Stub: unzip — uses PowerShell Expand-Archive (Git Bash on Windows)
+# Stub: unzip — cross-platform.
+#   Git Bash on Windows: PowerShell Expand-Archive
+#   Linux/macOS:         real unzip if present, else python3 zipfile
 # Usage: unzip [-q] file.zip [-d destdir]
 LOG="${SG_TEST_ROOT:-/tmp/sg-mock}/stubs.log"
 echo "[STUB] unzip $*" >> "$LOG"
@@ -21,11 +23,23 @@ done
 
 if [[ -n "$ZIPFILE" ]]; then
     mkdir -p "$DESTDIR"
-    WIN_ZIP="$(cygpath -w "$ZIPFILE")"
-    WIN_DEST="$(cygpath -w "$DESTDIR")"
-    powershell.exe -NoProfile -NonInteractive -Command \
-        "Expand-Archive -Path '${WIN_ZIP}' -DestinationPath '${WIN_DEST}' -Force" 2>/dev/null
-    echo "[stub-unzip] ${WIN_ZIP} -> ${WIN_DEST}"
+    if command -v cygpath >/dev/null 2>&1 && command -v powershell.exe >/dev/null 2>&1; then
+        # Git Bash on Windows
+        WIN_ZIP="$(cygpath -w "$ZIPFILE")"
+        WIN_DEST="$(cygpath -w "$DESTDIR")"
+        powershell.exe -NoProfile -NonInteractive -Command \
+            "Expand-Archive -Path '${WIN_ZIP}' -DestinationPath '${WIN_DEST}' -Force" 2>/dev/null
+        echo "[stub-unzip] ${WIN_ZIP} -> ${WIN_DEST}"
+    elif UNZIP_REAL="$(type -P -a unzip 2>/dev/null | grep -v "mock-env/stubs" | head -1)" && [[ -n "$UNZIP_REAL" ]]; then
+        "$UNZIP_REAL" -oq "$ZIPFILE" -d "$DESTDIR"
+        echo "[stub-unzip] real unzip: ${ZIPFILE} -> ${DESTDIR}"
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$ZIPFILE" "$DESTDIR"
+        echo "[stub-unzip] python3 zipfile: ${ZIPFILE} -> ${DESTDIR}"
+    else
+        echo "[stub-unzip] no unzip backend available"
+        exit 1
+    fi
 else
     echo "[stub-unzip] no zip file specified"
     exit 1
