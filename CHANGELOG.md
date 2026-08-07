@@ -3,6 +3,32 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.7.1] — 2026-08-07
+
+### Fixed
+- **Unattended standalone installs hung forever.** When the installer ran piped
+  (`curl … | bash`) in standalone mode it still prompted for an admin password.
+  `read` hit EOF on the pipe, `ADMIN_PASS` stayed empty, and the minimum-length
+  loop spun indefinitely. The installer now never prompts on a non-TTY: supply a
+  password via `--admin-pass` / `SG_ADMIN_PASS`, or one is generated and printed
+  in the completion summary.
+- **Piped installs picked the wrong mode on non-cPanel servers.** A
+  non-interactive install with no prior config defaulted to `cpanel`
+  unconditionally, so plain Linux servers ran the whole WHM registration path
+  against nothing and ended up with no working dashboard. Mode is now probed
+  from `/usr/local/cpanel` and falls back to `standalone`.
+
+### Added
+- **Self-hosted install channel.** `get.sh` and `update.sh` now resolve releases
+  from `https://defender.lws-s1.com/sentinel-gate/code` first and fall back to
+  the GitHub raw mirror automatically. This keeps installs and updates working on
+  servers whose firewall blocks github.com. The `sha256` in `latest.json` is
+  verified no matter which channel served the file, so fallback is safe.
+- `--admin-user` / `--admin-pass` installer flags (and `SG_ADMIN_USER` /
+  `SG_ADMIN_PASS` env equivalents — preferred, since flags are visible in `ps`).
+- `scripts/upload-cdn.sh` publishes a release to the CDN and then verifies the
+  live manifest version and zip checksum before reporting success.
+
 ## [3.7.0] — 2026-07-23
 
 ### Added

@@ -18,15 +18,26 @@ SG_PORT=31150
 #                   against an already-installed copy. Used by update.sh after it
 #                   overlays new code, so plugin-registration fixes reach upgrades.
 # --mode MODE     : force install mode (cpanel|standalone), skips the prompt.
+# --admin-user U  : standalone admin username (default: admin)
+# --admin-pass P  : standalone admin password. Supply this for unattended
+#                   standalone installs, otherwise one is generated and printed.
+#                   Prefer the SG_ADMIN_PASS env var — flags are visible in `ps`.
 REGISTER_ONLY=false
 INSTALL_MODE=""
 SKIP_DEPS=false
+ADMIN_USER=""
+ADMIN_PASS=""
+GENERATED_PASS=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --register-only) REGISTER_ONLY=true ;;
     --no-deps)       SKIP_DEPS=true ;;
     --mode)          shift; INSTALL_MODE="${1:-}" ;;
     --mode=*)        INSTALL_MODE="${1#--mode=}" ;;
+    --admin-user)    shift; ADMIN_USER="${1:-}" ;;
+    --admin-user=*)  ADMIN_USER="${1#--admin-user=}" ;;
+    --admin-pass)    shift; ADMIN_PASS="${1:-}" ;;
+    --admin-pass=*)  ADMIN_PASS="${1#--admin-pass=}" ;;
     *) ;;
   esac
   shift
@@ -174,9 +185,16 @@ if [[ -n "$INSTALL_MODE" ]]; then
   # Mode already known (--mode flag, --register-only, or detected from mode.php)
   info "Mode: ${BOLD}${INSTALL_MODE}${NC} (auto-detected)"
 elif [[ ! -t 0 ]]; then
-  # Non-interactive (piped) install with no prior mode — default to cpanel
-  INSTALL_MODE="cpanel"
-  info "Non-interactive — defaulting to mode: ${BOLD}cpanel${NC}"
+  # Non-interactive (piped) install with no prior mode. PROBE for cPanel rather
+  # than assuming it — blindly defaulting to cpanel on a plain Linux box runs the
+  # whole WHM registration path against nothing and leaves no working dashboard.
+  if [[ -d /usr/local/cpanel ]]; then
+    INSTALL_MODE="cpanel"
+    info "Non-interactive — detected /usr/local/cpanel, mode: ${BOLD}cpanel${NC}"
+  else
+    INSTALL_MODE="standalone"
+    info "Non-interactive — no cPanel found, mode: ${BOLD}standalone${NC}"
+  fi
 else
   echo ""
   echo -e "  ${BOLD}Select where you are installing Sentinel Gate:${NC}"
@@ -205,21 +223,46 @@ if ! $REGISTER_ONLY; then
 # ── Standalone: collect admin credentials ──────────────────────────────────────
 if [[ "$INSTALL_MODE" == "standalone" ]]; then
   section "Admin Account Setup"
-  echo "  Create the local admin account for the web dashboard."
-  echo ""
 
-  read -rp "  Admin username [admin]: " ADMIN_USER
-  ADMIN_USER="${ADMIN_USER:-admin}"
+  # Credentials may arrive as flags/env (piped installs) — otherwise prompt.
+  ADMIN_USER="${ADMIN_USER:-${SG_ADMIN_USER:-}}"
+  ADMIN_PASS="${ADMIN_PASS:-${SG_ADMIN_PASS:-}}"
 
-  while true; do
-    read -srp "  Admin password (min 8 chars): " ADMIN_PASS; echo
-    [[ ${#ADMIN_PASS} -ge 8 ]] && break
-    echo -e "  ${RED}Password too short — minimum 8 characters.${NC}"
-  done
+  if [[ -n "$ADMIN_PASS" ]]; then
+    ADMIN_USER="${ADMIN_USER:-admin}"
+    [[ ${#ADMIN_PASS} -ge 8 ]] || error "Admin password must be at least 8 characters."
+    ok "Admin account: ${ADMIN_USER} (supplied via flag/env)"
 
-  read -srp "  Confirm password: " ADMIN_PASS2; echo
-  [[ "$ADMIN_PASS" != "$ADMIN_PASS2" ]] && error "Passwords do not match"
-  ok "Admin account: ${ADMIN_USER}"
+  elif [[ ! -t 0 ]]; then
+    # Non-interactive with no password supplied. NEVER prompt here — `read` would
+    # hit EOF on the pipe, leave ADMIN_PASS empty, and spin the length-check loop
+    # forever. Generate a strong one and surface it at the end of the install.
+    ADMIN_USER="${ADMIN_USER:-admin}"
+    if command -v openssl >/dev/null 2>&1; then
+      ADMIN_PASS="$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)"
+    else
+      ADMIN_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
+    fi
+    GENERATED_PASS=true
+    warn "Non-interactive install — generated a random admin password."
+    warn "It is printed at the end of this install. Save it, then change it."
+
+  else
+    echo "  Create the local admin account for the web dashboard."
+    echo ""
+    read -rp "  Admin username [admin]: " _IN_USER
+    ADMIN_USER="${_IN_USER:-admin}"
+
+    while true; do
+      read -srp "  Admin password (min 8 chars): " ADMIN_PASS; echo
+      [[ ${#ADMIN_PASS} -ge 8 ]] && break
+      echo -e "  ${RED}Password too short — minimum 8 characters.${NC}"
+    done
+
+    read -srp "  Confirm password: " ADMIN_PASS2; echo
+    [[ "$ADMIN_PASS" != "$ADMIN_PASS2" ]] && error "Passwords do not match"
+    ok "Admin account: ${ADMIN_USER}"
+  fi
 fi
 
 # ── Create directories ─────────────────────────────────────────────────────────
@@ -1134,7 +1177,16 @@ if [[ $TEST_EXIT -eq 0 ]]; then
     echo -e "  ${BOLD}Also:${NC}    https://$(hostname -f 2>/dev/null || hostname)/sentinel-gate/"
   elif [[ "$INSTALL_MODE" == "standalone" ]]; then
     echo -e "  ${BOLD}Access:${NC}  http://$(hostname -f 2>/dev/null || hostname):${SG_PORT}"
-    echo -e "  ${BOLD}Login:${NC}   ${ADMIN_USER} / (password you set)"
+    if $GENERATED_PASS; then
+      echo ""
+      echo -e "  ${YELLOW}${BOLD}┌─ GENERATED ADMIN PASSWORD — SAVE THIS NOW ─────────────┐${NC}"
+      echo -e "  ${YELLOW}${BOLD}│${NC}  Username:  ${BOLD}${ADMIN_USER}${NC}"
+      echo -e "  ${YELLOW}${BOLD}│${NC}  Password:  ${BOLD}${ADMIN_PASS}${NC}"
+      echo -e "  ${YELLOW}${BOLD}└────────────────────────────────────────────────────────┘${NC}"
+      echo -e "  It is not stored anywhere in plaintext. Change it after first login."
+    else
+      echo -e "  ${BOLD}Login:${NC}   ${ADMIN_USER} / (password you set)"
+    fi
   fi
 
   echo ""

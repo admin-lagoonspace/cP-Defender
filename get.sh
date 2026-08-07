@@ -1,18 +1,33 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
 # Sentinel Gate — Online bootstrap installer
-# Downloads the latest release and runs the installer in one step.
+# Downloads the latest build from the release channel and runs the installer in
+# one step. Works on cPanel/WHM servers and plain Linux servers alike — the mode
+# is auto-detected (cPanel if /usr/local/cpanel exists, else standalone).
 #
-# Usage (fresh install):
-#   bash <(curl -fsSL https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/get.sh)
-#   curl -fsSL https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/get.sh | bash
+# ── INSTALL (one line, as root) ───────────────────────────────────────────────
+#   bash <(curl -fsSL https://defender.lws-s1.com/sentinel-gate/code/get.sh)
 #
-# Any arguments after `bash -s --` are passed straight to install.sh, e.g.:
+# Or piped (identical result — the installer never prompts when piped):
+#   curl -fsSL https://defender.lws-s1.com/sentinel-gate/code/get.sh | bash
+#
+# ── OPTIONS ───────────────────────────────────────────────────────────────────
+# Anything after `bash -s --` is passed straight through to install.sh:
 #   curl -fsSL .../get.sh | bash -s -- --mode standalone
 #   curl -fsSL .../get.sh | bash -s -- --mode cpanel --no-deps
 #
+# Unattended standalone install with a chosen admin password (env keeps it out
+# of `ps` output; without it a strong one is generated and printed at the end):
+#   curl -fsSL .../get.sh | SG_ADMIN_PASS='your-password' bash -s -- --mode standalone
+#
 # Pin a specific version instead of latest:
 #   SG_VERSION=3.7.0 bash <(curl -fsSL .../get.sh)
+#
+# ── CHANNELS ──────────────────────────────────────────────────────────────────
+# Tried in order; the sha256 in latest.json is verified regardless of source:
+#   1. https://defender.lws-s1.com/sentinel-gate/code   (primary)
+#   2. raw.githubusercontent.com/<repo>/main            (mirror)
+# Override with SG_BASE_URL=<base> (pins to that one channel).
 # ═══════════════════════════════════════════════════════════════════════════════
 
 set -o pipefail
