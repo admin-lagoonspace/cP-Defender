@@ -61,6 +61,45 @@ jobs:
           fi
           echo "Tag and VERSION agree: ${TAG}"
 
+      # Fail fast with a precise message. A combined "one or both missing" check
+      # is useless when you cannot see which one it is.
+      - name: Preflight — credentials
+        env:
+          SG_CDN_USER: ${{ secrets.SG_CDN_USER }}
+          SG_CDN_PASS: ${{ secrets.SG_CDN_PASS }}
+        run: |
+          MISSING=0
+          if [ -z "$SG_CDN_USER" ]; then
+            echo "::error title=SG_CDN_USER missing::Repository secret SG_CDN_USER is not set or is empty."
+            MISSING=1
+          else
+            echo "SG_CDN_USER    : set (${#SG_CDN_USER} chars)"
+          fi
+          if [ -z "$SG_CDN_PASS" ]; then
+            echo "::error title=SG_CDN_PASS missing::Repository secret SG_CDN_PASS is not set or is empty."
+            MISSING=1
+          else
+            echo "SG_CDN_PASS    : set (${#SG_CDN_PASS} chars)"
+          fi
+
+          if [ "$MISSING" = "1" ]; then
+            echo ""
+            echo "Both secrets are required. Add them at:"
+            echo "  Settings -> Secrets and variables -> Actions -> [Secrets tab] -> New repository secret"
+            echo ""
+            echo "  Name: SG_CDN_USER    Value: the cPanel/FTP username"
+            echo "  Name: SG_CDN_PASS    Value: the cPanel/FTP password"
+            echo ""
+            echo "Common causes of this failure:"
+            echo "  * Only one of the two was added (both are required)."
+            echo "  * Added under the 'Variables' tab instead of 'Secrets'."
+            echo "  * Added as an *Environment* secret — those need an 'environment:'"
+            echo "    key on the job. Use repository secrets instead."
+            echo "  * Name typo / stray whitespace — must match EXACTLY, case-sensitive."
+            exit 1
+          fi
+          echo "Both credentials present."
+
       - name: Build release artifacts
         run: bash scripts/make-release.sh
 
@@ -71,12 +110,7 @@ jobs:
           SG_CDN_HOST:  ${{ vars.SG_CDN_HOST  || 'defender.lws-s1.com' }}
           SG_CDN_PATH:  ${{ vars.SG_CDN_PATH  || '/public_html/defender.lws-s1.com/sentinel-gate/code' }}
           SG_CDN_PROTO: ${{ vars.SG_CDN_PROTO || 'ftps' }}
-        run: |
-          if [ -z "$SG_CDN_USER" ] || [ -z "$SG_CDN_PASS" ]; then
-            echo "::error::SG_CDN_USER / SG_CDN_PASS secrets are not configured. See this workflow's header for setup."
-            exit 1
-          fi
-          bash scripts/upload-cdn.sh
+        run: bash scripts/upload-cdn.sh
 
       # upload-cdn.sh already verifies the live channel, but re-check here from a
       # clean network path so a CDN cache serving stale bytes is caught too.
