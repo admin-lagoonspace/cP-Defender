@@ -29,14 +29,28 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPLOAD_DIR="${REPO_DIR}/dist/upload"
 
-SG_CDN_HOST="${SG_CDN_HOST:-defender.lws-s1.com}"
-SG_CDN_PROTO="${SG_CDN_PROTO:-ftps}"          # sftp | ftps | ftp
-# Path relative to the FTP user's home (/home/lwss1). The addon domain lives in
-# its own docroot, so the domain name IS part of the path — confirmed against the
+# ── Upload target vs. public URL are DIFFERENT hosts, deliberately ────────────
+# The server's FTPS certificate is issued for host.lws-s1.com (CN is actually
+# autoconfig.host.lws-s1.com, with host.lws-s1.com in the SANs). Connecting to
+# defender.lws-s1.com therefore fails TLS hostname verification:
+#     verify error:num=62: hostname mismatch
+# which is what made lftp burn its retries and die with "max-retries exceeded".
+#
+# host.lws-s1.com resolves to the SAME server (51.68.163.24) and validates
+# cleanly, so we upload there — certificate verification stays ON — while the
+# files are still published under defender.lws-s1.com over HTTPS.
+SG_CDN_FTP_HOST="${SG_CDN_FTP_HOST:-host.lws-s1.com}"   # where we upload TO
+SG_CDN_HOST="${SG_CDN_HOST:-defender.lws-s1.com}"       # where it is SERVED from
+SG_CDN_PROTO="${SG_CDN_PROTO:-ftps}"                    # sftp | ftps | ftp
+# Path relative to the FTP user's home (/home/lwss1). The addon domain has its
+# own docroot, so the domain name IS part of the path — confirmed against the
 # live server's directory tree:
 #   /home/lwss1/public_html/defender.lws-s1.com/sentinel-gate/code
 SG_CDN_PATH="${SG_CDN_PATH:-/public_html/defender.lws-s1.com/sentinel-gate/code}"
 SG_CDN_PORT="${SG_CDN_PORT:-}"
+# Last resort only. Skips TLS certificate validation — traffic stays encrypted
+# but is no longer MITM-proof. Prefer fixing SG_CDN_FTP_HOST.
+SG_CDN_INSECURE="${SG_CDN_INSECURE:-0}"
 
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
 ok()   { echo -e "  ${GREEN}✔${NC}  $*"; }
@@ -56,36 +70,73 @@ ZIP_NAME="sentinel-gate-${VERSION}.zip"
 [[ -f "${UPLOAD_DIR}/dist/${ZIP_NAME}" ]] || die "Missing ${UPLOAD_DIR}/dist/${ZIP_NAME}"
 
 echo ""
-echo -e "${BOLD}Publishing Sentinel Gate v${VERSION} to ${SG_CDN_HOST}${NC}"
-info "Transport: ${SG_CDN_PROTO}   Remote path: ${SG_CDN_PATH}"
-[[ "$SG_CDN_PROTO" == "ftp" ]] && warn "Plain FTP sends your password in CLEARTEXT. Use sftp or ftps if the host supports it."
+echo -e "${BOLD}Publishing Sentinel Gate v${VERSION}${NC}"
+info "Upload host : ${SG_CDN_FTP_HOST}  (${SG_CDN_PROTO})"
+info "Served from : https://${SG_CDN_HOST}/sentinel-gate/code"
+info "Remote path : ${SG_CDN_PATH}"
+[[ "$SG_CDN_PROTO" == "ftp" ]] && warn "Plain FTP sends your password in CLEARTEXT. Prefer ftps."
+[[ "$SG_CDN_INSECURE" == "1" ]] && warn "SG_CDN_INSECURE=1 — TLS certificate will NOT be validated."
 echo ""
 
 # ── Upload ────────────────────────────────────────────────────────────────────
-# lftp handles all three transports and does atomic-ish mirroring. Preferred.
+# lftp handles all three transports and mirrors whole trees. Preferred.
 if command -v lftp >/dev/null 2>&1; then
   case "$SG_CDN_PROTO" in
-    sftp) URL="sftp://${SG_CDN_HOST}${SG_CDN_PORT:+:$SG_CDN_PORT}" ;;
-    ftps) URL="ftps://${SG_CDN_HOST}${SG_CDN_PORT:+:$SG_CDN_PORT}" ;;
-    ftp)  URL="ftp://${SG_CDN_HOST}${SG_CDN_PORT:+:$SG_CDN_PORT}"  ;;
+    sftp) URL="sftp://${SG_CDN_FTP_HOST}${SG_CDN_PORT:+:$SG_CDN_PORT}" ;;
+    ftps) URL="ftps://${SG_CDN_FTP_HOST}${SG_CDN_PORT:+:$SG_CDN_PORT}" ;;
+    ftp)  URL="ftp://${SG_CDN_FTP_HOST}${SG_CDN_PORT:+:$SG_CDN_PORT}"  ;;
     *)    die "Unknown SG_CDN_PROTO: ${SG_CDN_PROTO} (use sftp|ftps|ftp)" ;;
   esac
+
+  VERIFY_CERT=yes
+  [[ "$SG_CDN_INSECURE" == "1" ]] && VERIFY_CERT=no
+
   info "Uploading via lftp…"
-  # -f script via stdin so the password never appears in the process list (ps aux)
-  lftp -u "${SG_CDN_USER},${SG_CDN_PASS}" "$URL" <<LFTPEOF
-set ssl:verify-certificate yes
+  # Script fed on stdin so the password never lands in the process list (ps aux).
+  # Passive mode is forced: a CI runner sits behind NAT, so an active-mode data
+  # channel back to the runner cannot be established.
+  set +e
+  lftp -u "${SG_CDN_USER},${SG_CDN_PASS}" "$URL" <<LFTPEOF 2>&1 | tee /tmp/lftp.log
+set ssl:verify-certificate ${VERIFY_CERT}
+set ftp:ssl-force true
+set ftp:ssl-protect-data true
+set ftp:passive-mode true
 set net:max-retries 3
-set net:timeout 20
+set net:timeout 25
+set net:reconnect-interval-base 5
+set mirror:parallel-transfer-count 1
+mkdir -p ${SG_CDN_PATH}
 mkdir -p ${SG_CDN_PATH}/dist
-mirror -R --verbose --only-newer ${UPLOAD_DIR}/ ${SG_CDN_PATH}/
+mkdir -p ${SG_CDN_PATH}/v${VERSION}
+mirror -R --verbose --overwrite ${UPLOAD_DIR}/ ${SG_CDN_PATH}/
 bye
 LFTPEOF
+  RC=${PIPESTATUS[0]}
+  set -e
+
+  if [[ $RC -ne 0 ]]; then
+    echo ""
+    err_msg="$(cat /tmp/lftp.log 2>/dev/null | tail -5)"
+    echo -e "  ${RED}✖${NC}  lftp failed (exit ${RC}):"
+    printf '      %s\n' "$err_msg"
+    echo ""
+    if grep -qiE 'certificate|verify|hostname' /tmp/lftp.log 2>/dev/null; then
+      warn "This looks like a TLS certificate problem."
+      warn "The cert is valid for host.lws-s1.com, NOT defender.lws-s1.com."
+      warn "Upload via the cert's hostname:  SG_CDN_FTP_HOST=host.lws-s1.com"
+      warn "Or, as a last resort:            SG_CDN_INSECURE=1"
+    elif grep -qiE 'max-retries|timeout|refused' /tmp/lftp.log 2>/dev/null; then
+      warn "Connection could not be established. Check that port 21 is reachable"
+      warn "and that the FTP account is not IP-restricted in cPanel."
+    fi
+    die "Upload aborted — nothing was published."
+  fi
   ok "Upload complete via lftp"
 
 elif command -v curl >/dev/null 2>&1; then
   case "$SG_CDN_PROTO" in
     sftp) SCHEME="sftp"; EXTRA=() ;;
-    ftps) SCHEME="ftp";  EXTRA=(--ssl-reqd) ;;
+    ftps) SCHEME="ftp";  EXTRA=(--ssl-reqd); [[ "$SG_CDN_INSECURE" == "1" ]] && EXTRA+=(-k) ;;
     ftp)  SCHEME="ftp";  EXTRA=() ;;
     *)    die "Unknown SG_CDN_PROTO: ${SG_CDN_PROTO}" ;;
   esac
@@ -99,7 +150,7 @@ elif command -v curl >/dev/null 2>&1; then
       --ftp-create-dirs \
       --config <(printf 'user = "%s:%s"\n' "$SG_CDN_USER" "$SG_CDN_PASS") \
       --upload-file "$src" \
-      "${SCHEME}://${SG_CDN_HOST}${SG_CDN_PORT:+:$SG_CDN_PORT}${SG_CDN_PATH}/${rel}" \
+      "${SCHEME}://${SG_CDN_FTP_HOST}${SG_CDN_PORT:+:$SG_CDN_PORT}${SG_CDN_PATH}/${rel}" \
       || die "Upload failed: ${rel}"
   }
   # ORDER MATTERS: every artifact goes up BEFORE latest.json. Until the manifest

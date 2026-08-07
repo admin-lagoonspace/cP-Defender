@@ -100,16 +100,46 @@ jobs:
           fi
           echo "Both credentials present."
 
+      # Prove the runner can actually reach the FTP host and that the TLS cert
+      # validates, BEFORE spending time on a build. A cert hostname mismatch here
+      # is what produced the opaque "max-retries exceeded" failure.
+      - name: Preflight — FTP connectivity and TLS
+        env:
+          SG_CDN_FTP_HOST: ${{ vars.SG_CDN_FTP_HOST || 'host.lws-s1.com' }}
+          SG_CDN_PORT:     ${{ vars.SG_CDN_PORT || '21' }}
+        run: |
+          echo "Target: ${SG_CDN_FTP_HOST}:${SG_CDN_PORT}"
+          getent hosts "$SG_CDN_FTP_HOST" || { echo "::error::DNS lookup failed for ${SG_CDN_FTP_HOST}"; exit 1; }
+
+          timeout 15 bash -c "echo > /dev/tcp/${SG_CDN_FTP_HOST}/${SG_CDN_PORT}" 2>/dev/null \
+            && echo "port ${SG_CDN_PORT}: reachable" \
+            || { echo "::error::Cannot open ${SG_CDN_FTP_HOST}:${SG_CDN_PORT} from this runner. The FTP account may be IP-restricted in cPanel — GitHub runners use rotating IPs."; exit 1; }
+
+          echo "Validating FTPS certificate…"
+          OUT="$(timeout 25 openssl s_client -connect "${SG_CDN_FTP_HOST}:${SG_CDN_PORT}" \
+                   -starttls ftp -servername "$SG_CDN_FTP_HOST" \
+                   -verify_hostname "$SG_CDN_FTP_HOST" </dev/null 2>&1)" || true
+          echo "$OUT" | grep -E '^subject=|Verify return code' | head -3
+          if echo "$OUT" | grep -q 'Verify return code: 0'; then
+            echo "TLS certificate validates for ${SG_CDN_FTP_HOST}"
+          else
+            echo "::warning::Certificate does NOT validate for ${SG_CDN_FTP_HOST}. Set the SG_CDN_FTP_HOST variable to the host the cert is issued for, or set SG_CDN_INSECURE=1 to skip validation."
+          fi
+
       - name: Build release artifacts
         run: bash scripts/make-release.sh
 
       - name: Upload to CDN
         env:
-          SG_CDN_USER:  ${{ secrets.SG_CDN_USER }}
-          SG_CDN_PASS:  ${{ secrets.SG_CDN_PASS }}
-          SG_CDN_HOST:  ${{ vars.SG_CDN_HOST  || 'defender.lws-s1.com' }}
-          SG_CDN_PATH:  ${{ vars.SG_CDN_PATH  || '/public_html/defender.lws-s1.com/sentinel-gate/code' }}
-          SG_CDN_PROTO: ${{ vars.SG_CDN_PROTO || 'ftps' }}
+          SG_CDN_USER:     ${{ secrets.SG_CDN_USER }}
+          SG_CDN_PASS:     ${{ secrets.SG_CDN_PASS }}
+          # Upload host and serving host differ on purpose — the FTPS cert is
+          # valid for host.lws-s1.com, not defender.lws-s1.com (same server).
+          SG_CDN_FTP_HOST: ${{ vars.SG_CDN_FTP_HOST || 'host.lws-s1.com' }}
+          SG_CDN_HOST:     ${{ vars.SG_CDN_HOST  || 'defender.lws-s1.com' }}
+          SG_CDN_PATH:     ${{ vars.SG_CDN_PATH  || '/public_html/defender.lws-s1.com/sentinel-gate/code' }}
+          SG_CDN_PROTO:    ${{ vars.SG_CDN_PROTO || 'ftps' }}
+          SG_CDN_INSECURE: ${{ vars.SG_CDN_INSECURE || '0' }}
         run: bash scripts/upload-cdn.sh
 
       # upload-cdn.sh already verifies the live channel, but re-check here from a
