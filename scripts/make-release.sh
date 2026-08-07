@@ -89,15 +89,36 @@ JSON
 ok "Wrote ${OUT_DIR}/latest.json  (primary: CDN, mirror: GitHub raw)"
 
 # ── Stage an upload tree matching the CDN layout exactly ──────────────────────
-# Upload the CONTENTS of this dir to ${CDN_BASE}/ so paths line up 1:1.
+# Upload the CONTENTS of this dir to ${CDN_BASE}/ so paths line up 1:1:
+#
+#   <cdn>/get.sh                          bootstrap installer (always current)
+#   <cdn>/latest.json                     pointer to the newest release
+#   <cdn>/dist/sentinel-gate-<v>.zip      flat path — get.sh/update.sh build this
+#                                         URL by convention when a manifest is
+#                                         stale, so it must keep working
+#   <cdn>/v<v>/sentinel-gate-<v>.zip      permanent per-version archive
+#   <cdn>/v<v>/latest.json                version-pinned manifest
+#   <cdn>/v<v>/CHANGELOG.md               notes as shipped for that version
+#
+# The zip is written to BOTH dist/ and v<v>/ deliberately: dist/ preserves the
+# conventional fallback path for already-deployed clients, v<v>/ gives every
+# release a permanent home so old versions stay installable via
+# `SG_VERSION=<v>` and update.sh --version <v>.
 UPLOAD_DIR="${OUT_DIR}/upload"
+VER_DIR="${UPLOAD_DIR}/v${VERSION}"
 rm -rf "$UPLOAD_DIR"
-mkdir -p "${UPLOAD_DIR}/dist"
-cp -f "$ZIP_PATH"             "${UPLOAD_DIR}/dist/${ZIP_NAME}"
+mkdir -p "${UPLOAD_DIR}/dist" "$VER_DIR"
+
+cp -f "$ZIP_PATH"              "${UPLOAD_DIR}/dist/${ZIP_NAME}"
+cp -f "$ZIP_PATH"              "${VER_DIR}/${ZIP_NAME}"
 cp -f "${OUT_DIR}/latest.json" "${UPLOAD_DIR}/latest.json"
-# get.sh is served from the CDN too so the one-line installer works without GitHub
+cp -f "${OUT_DIR}/latest.json" "${VER_DIR}/latest.json"
+[[ -f "${REPO_DIR}/CHANGELOG.md" ]] && cp -f "${REPO_DIR}/CHANGELOG.md" "${VER_DIR}/CHANGELOG.md"
+# get.sh is served from the CDN too so the one-line installer needs no GitHub
 [[ -f "${REPO_DIR}/get.sh" ]] && cp -f "${REPO_DIR}/get.sh" "${UPLOAD_DIR}/get.sh"
+
 ok "Staged upload tree: ${UPLOAD_DIR}"
+find "$UPLOAD_DIR" -type f | sed "s|${UPLOAD_DIR}|      <cdn>|" | sort
 
 echo ""
 info "Next: publish to the PUBLIC releases repo (${RELEASES_REPO}):"

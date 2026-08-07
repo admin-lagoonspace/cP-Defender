@@ -1,0 +1,123 @@
+name: Publish build to CDN
+
+# Mirrors every release to https://defender.lws-s1.com/sentinel-gate/code/ so the
+# CDN copy can never drift behind git. Runs on GitHub's servers, so it works even
+# if the machine that cut the release is offline.
+#
+# ── ONE-TIME SETUP ────────────────────────────────────────────────────────────
+# Add these in:  repo → Settings → Secrets and variables → Actions → New secret
+#     SG_CDN_USER   cPanel/FTP username
+#     SG_CDN_PASS   cPanel/FTP password
+# Optionally override the defaults as repository *variables*:
+#     SG_CDN_HOST   (default: defender.lws-s1.com)
+#     SG_CDN_PATH   (default: /public_html/sentinel-gate/code)
+#     SG_CDN_PROTO  (default: ftps — use sftp if SSH is enabled)
+#
+# Secrets are write-only: they are never printed and never reach the repo.
+
+on:
+  push:
+    tags: ['v*']            # every released tag
+  workflow_dispatch:        # or run it by hand to re-sync the CDN
+    inputs:
+      version:
+        description: 'Version to (re)publish, e.g. 3.7.1. Blank = ./VERSION'
+        required: false
+
+concurrency:
+  group: publish-cdn        # never let two uploads race the same manifest
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v4
+
+      - name: Install build/upload tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zip lftp curl
+
+      - name: Resolve version
+        id: ver
+        run: |
+          V="${{ github.event.inputs.version }}"
+          [ -z "$V" ] && V="$(tr -d '[:space:]' < VERSION)"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Publishing v$V"
+
+      - name: Guard — tag must match VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          FILE="$(tr -d '[:space:]' < VERSION)"
+          if [ "$TAG" != "$FILE" ]; then
+            echo "::error::Tag v${TAG} does not match VERSION file (${FILE}). Refusing to publish a mismatched build."
+            exit 1
+          fi
+          echo "Tag and VERSION agree: ${TAG}"
+
+      - name: Build release artifacts
+        run: bash scripts/make-release.sh
+
+      - name: Upload to CDN
+        env:
+          SG_CDN_USER:  ${{ secrets.SG_CDN_USER }}
+          SG_CDN_PASS:  ${{ secrets.SG_CDN_PASS }}
+          SG_CDN_HOST:  ${{ vars.SG_CDN_HOST  || 'defender.lws-s1.com' }}
+          SG_CDN_PATH:  ${{ vars.SG_CDN_PATH  || '/public_html/sentinel-gate/code' }}
+          SG_CDN_PROTO: ${{ vars.SG_CDN_PROTO || 'ftps' }}
+        run: |
+          if [ -z "$SG_CDN_USER" ] || [ -z "$SG_CDN_PASS" ]; then
+            echo "::error::SG_CDN_USER / SG_CDN_PASS secrets are not configured. See this workflow's header for setup."
+            exit 1
+          fi
+          bash scripts/upload-cdn.sh
+
+      # upload-cdn.sh already verifies the live channel, but re-check here from a
+      # clean network path so a CDN cache serving stale bytes is caught too.
+      - name: Verify live channel
+        run: |
+          BASE="https://${{ vars.SG_CDN_HOST || 'defender.lws-s1.com' }}/sentinel-gate/code"
+          V="${{ steps.ver.outputs.version }}"
+          echo "Checking ${BASE}"
+
+          LIVE="$(curl -fsSL --max-time 30 "${BASE}/latest.json")" \
+            || { echo "::error::latest.json unreachable"; exit 1; }
+          echo "$LIVE"
+
+          LIVE_V="$(printf '%s' "$LIVE" | grep -oE '"version"[^,]*' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
+          [ "$LIVE_V" = "$V" ] || { echo "::error::Live manifest says ${LIVE_V}, expected ${V}"; exit 1; }
+
+          WANT="$(printf '%s' "$LIVE" | grep -oE '"sha256"[^,]*' | head -1 | sed -E 's/.*"([a-f0-9]+)".*/\1/')"
+          for REL in "dist/sentinel-gate-${V}.zip" "v${V}/sentinel-gate-${V}.zip"; do
+            curl -fsSL --max-time 300 -o /tmp/z.zip "${BASE}/${REL}" \
+              || { echo "::error::${REL} not fetchable"; exit 1; }
+            GOT="$(sha256sum /tmp/z.zip | awk '{print $1}')"
+            [ "$GOT" = "$WANT" ] || { echo "::error::${REL} checksum mismatch"; exit 1; }
+            echo "OK  ${REL}"
+          done
+
+          curl -fsSL --max-time 20 "${BASE}/get.sh" -o /dev/null \
+            || { echo "::error::get.sh not served — the install one-liner will 404"; exit 1; }
+          echo "OK  get.sh"
+
+      - name: Summary
+        if: success()
+        run: |
+          BASE="https://${{ vars.SG_CDN_HOST || 'defender.lws-s1.com' }}/sentinel-gate/code"
+          V="${{ steps.ver.outputs.version }}"
+          {
+            echo "### v${V} published to CDN"
+            echo ""
+            echo '```bash'
+            echo "bash <(curl -fsSL ${BASE}/get.sh)"
+            echo '```'
+            echo ""
+            echo "- Manifest: ${BASE}/latest.json"
+            echo "- Archive:  ${BASE}/v${V}/"
+          } >> "$GITHUB_STEP_SUMMARY"

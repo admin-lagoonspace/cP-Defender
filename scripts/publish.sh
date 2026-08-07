@@ -140,7 +140,27 @@ else
     warn "Create it manually: repo → Releases → new release, tag ${TAG} on main, attach ${ZIP}."
 fi
 
+# ── 7. Mirror the build to the public CDN ──────────────────────────────────────
+# A release is NOT done until both copies exist: git + CDN. This step is
+# mandatory, so a missing credential is a hard failure rather than a silent skip
+# that leaves the two channels out of sync. Set SG_SKIP_CDN=1 to deliberately
+# publish git-only.
+if [[ "${SG_SKIP_CDN:-0}" == "1" ]]; then
+    warn "SG_SKIP_CDN=1 — skipping CDN upload. The CDN will now be STALE."
+elif [[ -z "${SG_CDN_USER:-}" || -z "${SG_CDN_PASS:-}" ]]; then
+    echo ""
+    warn "CDN credentials not in the environment — build NOT mirrored to the CDN."
+    warn "git has ${TAG}, the CDN does not. Finish the release with:"
+    echo -e "    ${BOLD}source ~/.sentinel-cdn.env && bash scripts/upload-cdn.sh${NC}"
+    warn "(or re-run with SG_SKIP_CDN=1 if git-only is intended)"
+    exit 1
+else
+    info "Mirroring build to the CDN…"
+    bash "${REPO_ROOT}/scripts/upload-cdn.sh" || die "CDN upload failed — ${TAG} is on git but NOT on the CDN."
+    ok "CDN updated"
+fi
+
 echo ""
-ok "Published ${TAG}."
+ok "Published ${TAG} to git + CDN."
 echo -e "  Install command now live:"
 echo -e "  ${BOLD}bash <(curl -fsSL https://raw.githubusercontent.com/${SLUG}/main/get.sh)${NC}"

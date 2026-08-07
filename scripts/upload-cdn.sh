@@ -86,7 +86,7 @@ elif command -v curl >/dev/null 2>&1; then
     *)    die "Unknown SG_CDN_PROTO: ${SG_CDN_PROTO}" ;;
   esac
   warn "lftp not found — using curl (uploads file-by-file, no mirroring)"
-  # --ftp-create-dirs makes the remote dist/ if absent.
+  # --ftp-create-dirs makes remote dirs if absent.
   # Credentials go via a config file on stdin so they stay out of `ps` output.
   upload_one() { # upload_one <local> <remote-rel>
     local src="$1" rel="$2"
@@ -98,11 +98,15 @@ elif command -v curl >/dev/null 2>&1; then
       "${SCHEME}://${SG_CDN_HOST}${SG_CDN_PORT:+:$SG_CDN_PORT}${SG_CDN_PATH}/${rel}" \
       || die "Upload failed: ${rel}"
   }
-  # Zip first, manifest LAST — until latest.json flips, no client can be pointed
-  # at a zip that isn't fully uploaded yet.
-  upload_one "${UPLOAD_DIR}/dist/${ZIP_NAME}" "dist/${ZIP_NAME}"
+  # ORDER MATTERS: every artifact goes up BEFORE latest.json. Until the manifest
+  # flips, no client can be pointed at a zip that is still mid-transfer.
+  upload_one "${UPLOAD_DIR}/v${VERSION}/${ZIP_NAME}"   "v${VERSION}/${ZIP_NAME}"
+  [[ -f "${UPLOAD_DIR}/v${VERSION}/CHANGELOG.md" ]] && \
+    upload_one "${UPLOAD_DIR}/v${VERSION}/CHANGELOG.md" "v${VERSION}/CHANGELOG.md"
+  upload_one "${UPLOAD_DIR}/v${VERSION}/latest.json"   "v${VERSION}/latest.json"
+  upload_one "${UPLOAD_DIR}/dist/${ZIP_NAME}"          "dist/${ZIP_NAME}"
   [[ -f "${UPLOAD_DIR}/get.sh" ]] && upload_one "${UPLOAD_DIR}/get.sh" "get.sh"
-  upload_one "${UPLOAD_DIR}/latest.json" "latest.json"
+  upload_one "${UPLOAD_DIR}/latest.json"               "latest.json"
   ok "Upload complete via curl"
 
 else
@@ -121,20 +125,34 @@ LIVE_VER="$(printf '%s' "$LIVE_JSON" | grep -oE '"version"[[:space:]]*:[[:space:
   && ok "latest.json live and reports v${LIVE_VER}" \
   || die "Live manifest reports v${LIVE_VER}, expected v${VERSION}."
 
-# Confirm the zip is fetchable and matches the manifest checksum
+# Confirm every published copy is fetchable and matches the manifest checksum
 WANT_SHA="$(printf '%s' "$LIVE_JSON" | grep -oE '"sha256"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
 TMP_ZIP="$(mktemp)"; trap 'rm -f "$TMP_ZIP"' EXIT
-if curl -fsSL --max-time 300 -o "$TMP_ZIP" "${BASE_URL}/dist/${ZIP_NAME}"; then
-  GOT_SHA="$(sha256sum "$TMP_ZIP" | awk '{print $1}')"
-  [[ "$GOT_SHA" == "$WANT_SHA" ]] \
-    && ok "Zip downloads and checksum matches" \
-    || die "Live zip checksum MISMATCH — expected ${WANT_SHA}, got ${GOT_SHA}."
-else
-  die "Zip not fetchable at ${BASE_URL}/dist/${ZIP_NAME}"
-fi
+for REL in "dist/${ZIP_NAME}" "v${VERSION}/${ZIP_NAME}"; do
+  if curl -fsSL --max-time 300 -o "$TMP_ZIP" "${BASE_URL}/${REL}"; then
+    GOT_SHA="$(sha256sum "$TMP_ZIP" | awk '{print $1}')"
+    [[ "$GOT_SHA" == "$WANT_SHA" ]] \
+      && ok "${REL} — downloads, checksum matches" \
+      || die "${REL} checksum MISMATCH — expected ${WANT_SHA}, got ${GOT_SHA}."
+  else
+    die "Not fetchable: ${BASE_URL}/${REL}"
+  fi
+done
+
+# get.sh must be live — it is the one URL with no fallback, since nothing has
+# run yet at the moment a user curls it.
+curl -fsSL --max-time 20 "${BASE_URL}/get.sh" -o /dev/null \
+  && ok "get.sh — served" \
+  || die "get.sh NOT reachable at ${BASE_URL}/get.sh — the install one-liner will 404."
 
 echo ""
 ok "Channel live: ${BASE_URL}"
-echo -e "  Install command:"
-echo -e "  ${BOLD}bash <(curl -fsSL ${BASE_URL}/get.sh)${NC}"
+echo ""
+echo -e "  ${BOLD}Install (any server type):${NC}"
+echo -e "    bash <(curl -fsSL ${BASE_URL}/get.sh)"
+echo ""
+echo -e "  ${BOLD}Pin this exact version:${NC}"
+echo -e "    SG_VERSION=${VERSION} bash <(curl -fsSL ${BASE_URL}/get.sh)"
+echo ""
+echo -e "  ${BOLD}Archived at:${NC} ${BASE_URL}/v${VERSION}/"
 echo ""
