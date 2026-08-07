@@ -10,7 +10,7 @@ name: Publish build to CDN
 #     SG_CDN_PASS   cPanel/FTP password
 # Optionally override the defaults as repository *variables*:
 #     SG_CDN_HOST   (default: defender.lws-s1.com)
-#     SG_CDN_PATH   (default: /public_html/sentinel-gate/code)
+#     SG_CDN_PATH   (default: /public_html/defender.lws-s1.com/sentinel-gate/code)
 #     SG_CDN_PROTO  (default: ftps — use sftp if SSH is enabled)
 #
 # Secrets are write-only: they are never printed and never reach the repo.
@@ -69,7 +69,7 @@ jobs:
           SG_CDN_USER:  ${{ secrets.SG_CDN_USER }}
           SG_CDN_PASS:  ${{ secrets.SG_CDN_PASS }}
           SG_CDN_HOST:  ${{ vars.SG_CDN_HOST  || 'defender.lws-s1.com' }}
-          SG_CDN_PATH:  ${{ vars.SG_CDN_PATH  || '/public_html/sentinel-gate/code' }}
+          SG_CDN_PATH:  ${{ vars.SG_CDN_PATH  || '/public_html/defender.lws-s1.com/sentinel-gate/code' }}
           SG_CDN_PROTO: ${{ vars.SG_CDN_PROTO || 'ftps' }}
         run: |
           if [ -z "$SG_CDN_USER" ] || [ -z "$SG_CDN_PASS" ]; then

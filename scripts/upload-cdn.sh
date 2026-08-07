@@ -31,7 +31,11 @@ UPLOAD_DIR="${REPO_DIR}/dist/upload"
 
 SG_CDN_HOST="${SG_CDN_HOST:-defender.lws-s1.com}"
 SG_CDN_PROTO="${SG_CDN_PROTO:-ftps}"          # sftp | ftps | ftp
-SG_CDN_PATH="${SG_CDN_PATH:-/public_html/sentinel-gate/code}"
+# Path relative to the FTP user's home (/home/lwss1). The addon domain lives in
+# its own docroot, so the domain name IS part of the path — confirmed against the
+# live server's directory tree:
+#   /home/lwss1/public_html/defender.lws-s1.com/sentinel-gate/code
+SG_CDN_PATH="${SG_CDN_PATH:-/public_html/defender.lws-s1.com/sentinel-gate/code}"
 SG_CDN_PORT="${SG_CDN_PORT:-}"
 
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
