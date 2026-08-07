@@ -6,10 +6,21 @@
 # is auto-detected (cPanel if /usr/local/cpanel exists, else standalone).
 #
 # ── INSTALL (one line, as root) ───────────────────────────────────────────────
+# curl — present by default on RHEL/CentOS/AlmaLinux/CloudLinux (all cPanel hosts):
 #   bash <(curl -fsSL https://defender.lws-s1.com/sentinel-gate/code/get.sh)
 #
-# Or piped (identical result — the installer never prompts when piped):
-#   curl -fsSL https://defender.lws-s1.com/sentinel-gate/code/get.sh | bash
+# wget — present by default on Debian/Ubuntu:
+#   bash <(wget -qO- https://defender.lws-s1.com/sentinel-gate/code/get.sh)
+#
+# Both forms behave identically. Once this script is running it uses whichever of
+# curl/wget exists, so only the bootstrap line differs.
+#
+# The `bash <(...)` form is preferred over piping. Piping attaches the download to
+# stdin, which leaves the installer no terminal to read from — it then takes the
+# fully non-interactive path (auto-detected mode, generated admin password).
+# Process substitution keeps stdin on the terminal so prompts still work:
+#   curl -fsSL .../get.sh | bash      # non-interactive
+#   wget -qO- .../get.sh | bash       # non-interactive
 #
 # ── OPTIONS ───────────────────────────────────────────────────────────────────
 # Anything after `bash -s --` is passed straight through to install.sh:
@@ -56,9 +67,16 @@ die()  { echo -e "${RED}[x]${NC} $*" >&2; exit 1; }
 echo -e "${CYAN}${BOLD}Sentinel Gate — online installer${NC}"
 
 # ── Must be root (install.sh needs it anyway; fail early with a clear message) ──
-[[ $EUID -ne 0 ]] && die "Run as root:  curl -fsSL ${PRIMARY_BASE}/get.sh | sudo bash"
+# Suggest whichever downloader this box actually has.
+if [[ $EUID -ne 0 ]]; then
+  if command -v curl >/dev/null 2>&1; then
+    die "Run as root:  sudo bash <(curl -fsSL ${PRIMARY_BASE}/get.sh)"
+  else
+    die "Run as root:  sudo bash <(wget -qO- ${PRIMARY_BASE}/get.sh)"
+  fi
+fi
 
-# ── Ensure the tools this bootstrap itself needs (curl already ran us if piped) ─
+# ── Ensure the tools this bootstrap itself needs ───────────────────────────────
 ensure_tool() {
   local bin="$1" pkg="$2"
   command -v "$bin" >/dev/null 2>&1 && return 0
@@ -85,26 +103,73 @@ fetch_to() { # fetch_to <url> <dest>
   else wget -q --timeout=300 -O "$2" "$1"; fi
 }
 
+# ── Version discovery from a directory listing ─────────────────────────────────
+# Fallback for when latest.json is absent or unreadable: the release directory
+# holds one v<major>.<minor>.<patch>/ folder per release, so the newest build can
+# be derived straight from an Apache/nginx autoindex. Sorted numerically per
+# field — a plain lexical sort would rank v3.9.0 above v3.10.0.
+discover_latest() { # discover_latest <base> -> version | empty
+  local base="$1" idx
+  idx="$(fetch "${base}/" 2>/dev/null)" || return 1
+  printf '%s' "$idx" \
+    | grep -oE 'href="v?[0-9]+\.[0-9]+\.[0-9]+/?"' \
+    | sed -E 's/.*"v?([0-9]+\.[0-9]+\.[0-9]+)\/?"/\1/' \
+    | sort -t. -k1,1n -k2,2n -k3,3n \
+    | tail -1
+}
+
+parse_manifest() { # parse_manifest <json> <field> -> value
+  printf '%s' "$1" | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" \
+    | head -1 | sed -E 's/.*"([^"]+)"$/\1/'
+}
+
 # ── Resolve version + download URL + checksum ──────────────────────────────────
-VERSION=""; URL=""; SHA=""
+VERSION=""; URL=""; SHA=""; SRC_BASE=""
 if [[ -n "$PIN_VERSION" ]]; then
   VERSION="$PIN_VERSION"
-  warn "Pinned version ${VERSION} — checksum not verified."
-else
-  # Walk the mirror list until one serves a usable manifest
+  info "Pinned version: v${VERSION}"
+  # Still try for a version-pinned manifest so the checksum can be verified
   for BASE in "${MIRRORS[@]}"; do
-    info "Fetching release manifest: ${BASE}/latest.json"
-    MANIFEST="$(fetch "${BASE}/latest.json")" || { warn "Unreachable: ${BASE}"; continue; }
-    [[ -n "$MANIFEST" ]] || { warn "Empty manifest at ${BASE}"; continue; }
-    # Parse JSON without jq
-    VERSION="$(printf '%s' "$MANIFEST" | grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
-    URL="$(printf '%s' "$MANIFEST"     | grep -oE '"url"[[:space:]]*:[[:space:]]*"[^"]+"'     | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
-    SHA="$(printf '%s' "$MANIFEST"     | grep -oE '"sha256"[[:space:]]*:[[:space:]]*"[^"]+"'  | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
-    [[ -n "$VERSION" ]] || { warn "Malformed manifest at ${BASE}"; continue; }
-    ok "Latest version: v${VERSION}  (channel: ${BASE})"
-    break
+    VM="$(fetch "${BASE}/v${VERSION}/latest.json" 2>/dev/null)" || continue
+    SHA="$(parse_manifest "$VM" sha256)"
+    [[ -n "$SHA" ]] && { SRC_BASE="$BASE"; ok "Checksum found for v${VERSION}"; break; }
   done
-  [[ -n "$VERSION" ]] || die "Cannot reach any release channel. Tried: ${MIRRORS[*]}"
+  [[ -z "$SHA" ]] && warn "No checksum published for v${VERSION} — integrity will NOT be verified."
+else
+  for BASE in "${MIRRORS[@]}"; do
+    # 1. Preferred: latest.json — authoritative and carries the checksum
+    info "Checking channel: ${BASE}"
+    MANIFEST="$(fetch "${BASE}/latest.json" 2>/dev/null)"
+    if [[ -n "$MANIFEST" ]]; then
+      VERSION="$(parse_manifest "$MANIFEST" version)"
+      URL="$(parse_manifest "$MANIFEST" url)"
+      SHA="$(parse_manifest "$MANIFEST" sha256)"
+      if [[ -n "$VERSION" ]]; then
+        SRC_BASE="$BASE"
+        ok "Latest version: v${VERSION}  (from latest.json)"
+        break
+      fi
+      warn "  Malformed manifest — trying directory listing…"
+    else
+      info "  No latest.json — trying directory listing…"
+    fi
+
+    # 2. Fallback: derive the newest version from the directory listing
+    DISCOVERED="$(discover_latest "$BASE" 2>/dev/null)"
+    if [[ -n "$DISCOVERED" ]]; then
+      VERSION="$DISCOVERED"
+      SRC_BASE="$BASE"
+      ok "Latest version: v${VERSION}  (discovered from directory listing)"
+      # Pick up the checksum from the version folder if one is published
+      VM="$(fetch "${BASE}/v${VERSION}/latest.json" 2>/dev/null)"
+      [[ -n "$VM" ]] && SHA="$(parse_manifest "$VM" sha256)"
+      [[ -n "$SHA" ]] && ok "  Checksum published for v${VERSION}" \
+                      || warn "  No checksum for v${VERSION} — integrity will NOT be verified."
+      break
+    fi
+    warn "  Channel unusable: ${BASE}"
+  done
+  [[ -n "$VERSION" ]] || die "Cannot determine the latest version from any channel. Tried: ${MIRRORS[*]}"
 fi
 
 # ── Download the package ───────────────────────────────────────────────────────
@@ -112,12 +177,21 @@ TMP="$(mktemp -d /tmp/sg-get.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 ZIP="${TMP}/sentinel-gate-${VERSION}.zip"
 
-# Try the manifest's own URL first, then each mirror's dist/ path. The checksum
-# below is what makes cross-mirror fallback safe.
+# Order: the manifest's own URL, then the channel that resolved the version, then
+# every remaining channel. Both the per-version folder and the flat dist/ path are
+# tried since releases are published to both. The checksum verified below is what
+# makes falling across channels safe.
 CANDIDATES=()
 [[ -n "$URL" ]] && CANDIDATES+=("$URL")
+[[ -n "$SRC_BASE" ]] && CANDIDATES+=(
+  "${SRC_BASE}/v${VERSION}/sentinel-gate-${VERSION}.zip"
+  "${SRC_BASE}/dist/sentinel-gate-${VERSION}.zip"
+)
 for BASE in "${MIRRORS[@]}"; do
-  CANDIDATES+=("${BASE}/dist/sentinel-gate-${VERSION}.zip")
+  CANDIDATES+=(
+    "${BASE}/v${VERSION}/sentinel-gate-${VERSION}.zip"
+    "${BASE}/dist/sentinel-gate-${VERSION}.zip"
+  )
 done
 
 DOWNLOADED=false
