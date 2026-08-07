@@ -22,5 +22,27 @@ Thumbs.db
 *.swp
 *.swo
 
-# Zip archives
+# Zip archives — local build scratch only.
 *.zip
+# ...but published release artifacts MUST be tracked: the GitHub raw mirror in
+# latest.json serves them straight out of dist/. Without this negation `git add`
+# silently refuses the zip and the update channel 404s in the field.
+!dist/*.zip
+
+# Local Windows dev Python (portable embeddable install — NEVER ship to server)
+python/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Release staging tree (duplicate of dist/ contents, rebuilt every release)
+dist/upload/
+
+# Build/test scratch probes
+__probe_*.txt
+_wtest.txt
+
+# CDN upload credentials — keep these OUT of the repo, always
+.sentinel-cdn.env
+*.env.local

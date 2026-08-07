@@ -48,6 +48,14 @@ WEB_SERVICE="/etc/systemd/system/sentinel-gate-web.service"
 WEB_PID_FILE=""
 FIREWALL_TOOL=""
 SOURCE_DIR=""
+SG_ETC="/etc/sentinel-gate"
+SYSCTL_CONF="/etc/sysctl.d/60-sentinel-gate.conf"
+CSF_ALLOW_INCLUDE=""
+CSF_IGNORE_INCLUDE=""
+MODSEC_USER_CONF=""
+SG_MODSEC_DIR=""
+WHM_ICON=""
+SG_CLI="/usr/bin/sentinel"
 
 if [[ -f "${MANIFEST}" ]]; then
     info "Reading install manifest…"
@@ -71,6 +79,14 @@ if [[ -f "${MANIFEST}" ]]; then
             WEB_PID_FILE)               WEB_PID_FILE="$VAL" ;;
             FIREWALL_TOOL)              FIREWALL_TOOL="$VAL" ;;
             SOURCE_DIR)                 SOURCE_DIR="$VAL" ;;
+            SG_ETC)                     SG_ETC="$VAL" ;;
+            SYSCTL_CONF)                SYSCTL_CONF="$VAL" ;;
+            CSF_ALLOW_INCLUDE)          CSF_ALLOW_INCLUDE="$VAL" ;;
+            CSF_IGNORE_INCLUDE)         CSF_IGNORE_INCLUDE="$VAL" ;;
+            MODSEC_USER_CONF)           MODSEC_USER_CONF="$VAL" ;;
+            SG_MODSEC_DIR)              SG_MODSEC_DIR="$VAL" ;;
+            WHM_ICON)                   WHM_ICON="$VAL" ;;
+            SG_CLI)                     SG_CLI="$VAL" ;;
         esac
     done < "${MANIFEST}"
     ok "Manifest loaded — mode: ${INSTALL_MODE}, version: ${INSTALL_VERSION}"
@@ -278,6 +294,80 @@ if [[ "$INSTALL_MODE" != "standalone" ]]; then
 else
     info "Standalone mode — skipping WHM cleanup"
 fi
+
+# ── 4b. Remove CSF/LFD, ModSecurity, inotify integration ──────────────────────
+section "Removing firewall & WAF integration"
+
+# inotify sysctl tuning
+for _SC in "${SYSCTL_CONF}" /etc/sysctl.d/60-sentinel-gate.conf; do
+    [[ -n "${_SC}" && -f "${_SC}" ]] && rm -f "${_SC}" && ok "Removed sysctl conf: ${_SC}" || true
+done
+
+# CSF includes + LFD process-tracking exemptions
+if [[ -f /etc/csf/csf.allow ]]; then
+    sed -i '\#sentinel-gate/csf_allow.txt#d' /etc/csf/csf.allow 2>/dev/null && \
+        ok "Cleaned csf.allow include" || true
+fi
+if [[ -f /etc/csf/csf.ignore ]]; then
+    sed -i '\#sentinel-gate/csf_ignore.txt#d' /etc/csf/csf.ignore 2>/dev/null && \
+        ok "Cleaned csf.ignore include" || true
+fi
+if [[ -f /etc/csf/csf.pignore ]]; then
+    sed -i '\#sentinel-gate/backend/daemon/monitor.py#d' /etc/csf/csf.pignore 2>/dev/null || true
+    sed -i '\#sentinel-gate/backend/standalone-router.php#d' /etc/csf/csf.pignore 2>/dev/null || true
+    ok "Cleaned csf.pignore exemptions"
+fi
+if [[ -f /usr/sbin/csf ]]; then
+    csf -r >/dev/null 2>&1 || systemctl restart lfd 2>/dev/null || service lfd restart 2>/dev/null || true
+    ok "CSF reloaded"
+fi
+
+# ModSecurity Include + rules dir
+MODSEC_RELOAD=false
+if [[ -n "${MODSEC_USER_CONF}" && -f "${MODSEC_USER_CONF}" ]]; then
+    sed -i '\#sentinel-gate/custom_rules.conf#d;/# Sentinel Gate WAF rules/d' "${MODSEC_USER_CONF}" 2>/dev/null && \
+        { ok "Removed WAF Include from ${MODSEC_USER_CONF}"; MODSEC_RELOAD=true; } || true
+else
+    for _MSC in \
+        /etc/apache2/conf.d/modsec/modsec2.user.conf \
+        /etc/apache2/conf.d/modsec2.user.conf \
+        /usr/local/apache/conf/modsec2.user.conf \
+        /etc/httpd/conf.d/mod_security.conf; do
+        [[ -f "${_MSC}" ]] && grep -q "sentinel-gate/custom_rules.conf" "${_MSC}" 2>/dev/null && {
+            sed -i '\#sentinel-gate/custom_rules.conf#d;/# Sentinel Gate WAF rules/d' "${_MSC}" 2>/dev/null && \
+                { ok "Removed WAF Include from ${_MSC}"; MODSEC_RELOAD=true; }
+        } || true
+    done
+fi
+for _MD in "${SG_MODSEC_DIR}" /etc/apache2/conf.d/modsec_vendor_configs/sentinel-gate; do
+    [[ -n "${_MD}" && -d "${_MD}" ]] && rm -rf "${_MD}" && ok "Removed WAF rules dir: ${_MD}" || true
+done
+# Reload Apache so the removed Include stops loading
+if $MODSEC_RELOAD; then
+    for APACHECTL in /scripts/restartsrv_httpd /usr/sbin/apachectl /usr/sbin/apache2ctl; do
+        [[ -x "${APACHECTL}" ]] || command -v "${APACHECTL}" >/dev/null 2>&1 || continue
+        "${APACHECTL}" graceful 2>/dev/null || "${APACHECTL}" -k graceful 2>/dev/null || true
+        ok "Apache reloaded (WAF Include removed)"; break
+    done
+fi
+
+# WHM plugin icon
+for _IC in "${WHM_ICON}" /usr/local/cpanel/whostmgr/docroot/addon_plugins/sentinel_gate.png; do
+    [[ -n "${_IC}" && -f "${_IC}" ]] && rm -f "${_IC}" && ok "Removed plugin icon: ${_IC}" || true
+done
+
+# CLI wrapper (only remove if it's ours)
+for _CLI in "${SG_CLI}" /usr/bin/sentinel; do
+    [[ -n "${_CLI}" && -f "${_CLI}" ]] || continue
+    if grep -q "sentinel-gate/backend/cli/sentinel.php" "${_CLI}" 2>/dev/null; then
+        rm -f "${_CLI}" && ok "Removed CLI: ${_CLI}"
+    fi
+done
+
+# Sentinel Gate config dir
+for _SE in "${SG_ETC}" /etc/sentinel-gate; do
+    [[ -n "${_SE}" && -d "${_SE}" ]] && rm -rf "${_SE}" && ok "Removed config dir: ${_SE}" || true
+done
 
 # ── 5. Remove firewall rule (standalone mode) ──────────────────────────────────
 section "Removing firewall rule"

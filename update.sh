@@ -28,14 +28,39 @@ section() { echo -e "\n${BOLD}${BLUE}▶ $*${NC}"; }
 die()     { err "$*"; exit 1; }
 
 # ── Config ────────────────────────────────────────────────────────────────────
+# Updates are pulled from a PUBLIC releases channel, NOT the private source repo.
+# This means no GitHub credentials ever ship to customer servers. The channel
+# holds two things: a manifest (latest.json) and the built zips under dist/.
+#
+#   latest.json:
+#     { "version": "3.5.0",
+#       "url":     "https://raw.githubusercontent.com/<repo>/main/dist/sentinel-gate-3.5.0.zip",
+#       "sha256":  "<hex>",
+#       "notes":   "https://..." }
+#
+# The manifest carries the full download URL, so the updater never has to guess
+# the asset filename (kills the old v-prefix / no-prefix naming mismatch).
 INSTALL_DIR="${SG_ROOT:-/usr/local/sentinel-gate}"
-GITHUB_REPO="admin-lagoonspace/cP-Defender"
-GITHUB_API="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+# Repo is public, so updates are served straight from it — no separate channel,
+# no credentials on customer servers. Override via env if you ever split it out.
+RELEASES_REPO="${SG_RELEASES_REPO:-admin-lagoonspace/cP-Defender}"
+RELEASES_BRANCH="${SG_RELEASES_BRANCH:-main}"
+# Primary channel is our own CDN — no API rate limits, and it keeps working on
+# servers whose firewall blocks github.com (the exact failure that broke v3.3.6
+# updates in the field). GitHub raw stays as an automatic fallback.
+CDN_BASE="${SG_CDN_BASE:-https://defender.lws-s1.com/sentinel-gate/code}"
+GITHUB_BASE="https://raw.githubusercontent.com/${RELEASES_REPO}/${RELEASES_BRANCH}"
+CHANNELS=("$CDN_BASE" "$GITHUB_BASE")
+# Explicit override wins and disables channel rotation
+[[ -n "${SG_MANIFEST_URL:-}" ]] && CHANNELS=("${SG_MANIFEST_URL%/latest.json}")
+MANIFEST_URL="${CHANNELS[0]}/latest.json"
+DIST_BASE="${CHANNELS[0]}/dist"
 BACKUP_ROOT="/var/backups/sentinel-gate"
 TMP_DIR="$(mktemp -d /tmp/sg-update.XXXXXX)"
 AUTO_YES=false
 FORCE_VERSION=""
 FORCE_URL=""
+EXPECTED_SHA256=""
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -95,70 +120,90 @@ DOWNLOAD_URL=""
 RELEASE_URL=""
 
 if [[ -n "$FORCE_VERSION" ]]; then
-    # ── Manual version override — skip API entirely ───────────────────────────
+    # ── Manual version override — build URL from the public dist path ──────────
     info "Using forced version: ${BOLD}v${FORCE_VERSION}${NC} (--version flag)"
     LATEST_VERSION="$FORCE_VERSION"
-    # Release asset URL pattern (built zip) and source archive fallback
-    DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/v${LATEST_VERSION}/sentinel-gate-v${LATEST_VERSION}.zip"
-    RELEASE_URL="https://github.com/${GITHUB_REPO}/releases/tag/v${LATEST_VERSION}"
+    DOWNLOAD_URL="${DIST_BASE}/sentinel-gate-${LATEST_VERSION}.zip"
+    warn "No checksum available for a forced version — integrity will NOT be verified."
 
 elif [[ -n "$FORCE_URL" ]]; then
     # ── Direct URL supplied — derive version from current install ─────────────
     info "Using direct download URL (--url flag)"
     LATEST_VERSION="${CURRENT_VERSION}-manual"
     DOWNLOAD_URL="$FORCE_URL"
+    warn "No checksum available for a direct URL — integrity will NOT be verified."
 
 else
-    # ── Fetch latest release from GitHub API (with retries) ───────────────────
-    info "Checking GitHub for latest release…"
-    API_RETRIES=3
-    API_WAIT=5
-    RELEASE_JSON=""
-    for attempt in $(seq 1 $API_RETRIES); do
-        [[ $attempt -gt 1 ]] && { warn "Retrying in ${API_WAIT}s (attempt ${attempt}/${API_RETRIES})…"; sleep $API_WAIT; }
-        CURL_ERR_FILE="${TMP_DIR}/curl_err.txt"
-        if RELEASE_JSON="$(curl -fsSL --max-time 15 \
-                -H 'Accept: application/vnd.github+json' \
-                -H 'X-GitHub-Api-Version: 2022-11-28' \
-                "$GITHUB_API" 2>"$CURL_ERR_FILE")"; then
+    # ── Fetch the manifest, walking each channel in turn (with retries) ────────
+    info "Checking releases channel for latest version…"
+    API_RETRIES=2
+    API_WAIT=4
+    MANIFEST_JSON=""
+    ACTIVE_BASE=""
+    for BASE in "${CHANNELS[@]}"; do
+        info "  Trying: ${BASE}/latest.json"
+        for attempt in $(seq 1 $API_RETRIES); do
+            [[ $attempt -gt 1 ]] && { warn "  Retrying in ${API_WAIT}s (${attempt}/${API_RETRIES})…"; sleep $API_WAIT; }
+            CURL_ERR_FILE="${TMP_DIR}/curl_err.txt"
+            if MANIFEST_JSON="$(curl -fsSL --max-time 15 \
+                    -H 'Cache-Control: no-cache' \
+                    "${BASE}/latest.json" 2>"$CURL_ERR_FILE")"; then
+                break
+            else
+                CURL_EXIT=$?
+                CURL_ERR="$(cat "$CURL_ERR_FILE" 2>/dev/null)"
+                warn "  curl exit ${CURL_EXIT}: ${CURL_ERR}"
+                MANIFEST_JSON=""
+            fi
+        done
+        if [[ -n "$MANIFEST_JSON" ]]; then
+            ACTIVE_BASE="$BASE"
+            DIST_BASE="${BASE}/dist"
+            ok "Channel reachable: ${BASE}"
             break
-        else
-            CURL_EXIT=$?
-            CURL_ERR="$(cat "$CURL_ERR_FILE" 2>/dev/null)"
-            warn "curl exit ${CURL_EXIT}: ${CURL_ERR}"
-            RELEASE_JSON=""
         fi
+        warn "Channel unreachable, trying next…"
     done
 
-    if [[ -z "$RELEASE_JSON" ]]; then
-        err "Cannot reach GitHub API after ${API_RETRIES} attempts."
+    if [[ -z "$MANIFEST_JSON" ]]; then
+        err "Cannot reach ANY releases channel."
+        echo ""
+        echo -e "  ${BOLD}Channels tried:${NC}"
+        for BASE in "${CHANNELS[@]}"; do echo "    - ${BASE}/latest.json"; done
         echo ""
         echo -e "  ${BOLD}Diagnostics:${NC}"
-        info "Testing DNS for api.github.com…"
-        if command -v host >/dev/null 2>&1; then
-            host api.github.com 2>&1 | head -3 | while IFS= read -r l; do info "  $l"; done
-        elif command -v nslookup >/dev/null 2>&1; then
-            nslookup api.github.com 2>&1 | head -5 | while IFS= read -r l; do info "  $l"; done
-        else
-            info "  (no host/nslookup available)"
-        fi
-        info "Testing HTTPS to github.com…"
-        curl -sk --max-time 5 -o /dev/null -w "  HTTP %{http_code} in %{time_total}s\n" \
-            "https://github.com" 2>&1 || info "  (connection failed)"
+        for _H in "${CDN_BASE#https://}" raw.githubusercontent.com; do
+            _H="${_H%%/*}"
+            info "DNS for ${_H}…"
+            if command -v host >/dev/null 2>&1; then
+                host "$_H" 2>&1 | head -2 | while IFS= read -r l; do info "  $l"; done
+            elif command -v nslookup >/dev/null 2>&1; then
+                nslookup "$_H" 2>&1 | head -4 | while IFS= read -r l; do info "  $l"; done
+            else
+                info "  (no host/nslookup available)"
+            fi
+            info "HTTPS to ${_H}…"
+            curl -sk --max-time 5 -o /dev/null -w "  HTTP %{http_code} in %{time_total}s\n" \
+                "https://${_H}" 2>&1 || info "  (connection failed)"
+        done
         echo ""
-        echo -e "  ${YELLOW}To update without GitHub API access, run:${NC}"
-        echo -e "  ${BOLD}bash $0 --version 3.3.7${NC}"
+        echo -e "  ${YELLOW}To update without channel access, run:${NC}"
+        echo -e "  ${BOLD}bash $0 --version 3.5.0${NC}"
         echo -e "  or download the zip manually and use:"
         echo -e "  ${BOLD}bash $0 --url https://your-mirror/sentinel-gate.zip${NC}"
         echo ""
         exit 1
     fi
 
-    LATEST_VERSION="$(echo "$RELEASE_JSON" | grep -oP '"tag_name"\s*:\s*"\Kv?[^"]+' | head -1 | sed 's/^v//')"
-    DOWNLOAD_URL="$(echo "$RELEASE_JSON"   | grep -oP '"browser_download_url"\s*:\s*"\K[^"]+\.zip' | head -1)"
-    RELEASE_URL="$(echo "$RELEASE_JSON"    | grep -oP '"html_url"\s*:\s*"\Khttps://github\.com[^"]+/releases/tag[^"]+' | head -1)"
+    # Parse manifest (tolerant of whitespace; values are simple strings)
+    LATEST_VERSION="$(echo "$MANIFEST_JSON" | grep -oP '"version"\s*:\s*"\K[^"]+' | head -1)"
+    DOWNLOAD_URL="$(echo "$MANIFEST_JSON"   | grep -oP '"url"\s*:\s*"\K[^"]+' | head -1)"
+    MIRROR_URL="$(echo "$MANIFEST_JSON"     | grep -oP '"mirror"\s*:\s*"\K[^"]+' | head -1)"
+    EXPECTED_SHA256="$(echo "$MANIFEST_JSON" | grep -oP '"sha256"\s*:\s*"\K[0-9a-fA-F]+' | head -1)"
+    RELEASE_URL="$(echo "$MANIFEST_JSON"    | grep -oP '"notes"\s*:\s*"\K[^"]+' | head -1)"
 
-    [[ -z "$LATEST_VERSION" ]] && die "Could not parse latest version from GitHub API response."
+    [[ -z "$LATEST_VERSION" ]] && die "Could not parse version from manifest."
+    [[ -z "$DOWNLOAD_URL"   ]] && DOWNLOAD_URL="${DIST_BASE}/sentinel-gate-${LATEST_VERSION}.zip"
 fi
 
 info "Latest version:  ${BOLD}v${LATEST_VERSION}${NC}"
@@ -171,12 +216,28 @@ if [[ -z "$FORCE_VERSION" && -z "$FORCE_URL" ]]; then
         exit 0
     fi
 
-    # Check if update is actually newer
-    python3 -c "
+    # Check if update is actually newer. Tolerant of suffixes (e.g. 3.5.0-rc1):
+    # compare only the leading numeric dotted parts; fall back to sort -V.
+    _is_newer() {
+        local latest="${1%%-*}" current="${2%%-*}"
+        if command -v python3 >/dev/null 2>&1; then
+            python3 -c "
 import sys
-def v(s): return tuple(int(x) for x in s.split('.'))
-sys.exit(0 if v('$LATEST_VERSION') > v('$CURRENT_VERSION') else 1)
-" 2>/dev/null || {
+def v(s):
+    return tuple(int(p) for p in s.split('.') if p.isdigit())
+try:
+    sys.exit(0 if v('$latest') > v('$current') else 1)
+except Exception:
+    sys.exit(2)
+" && return 0
+            local rc=$?
+            [[ $rc -eq 1 ]] && return 1   # definitively not newer
+            # rc==2 → parse error, fall through to sort -V
+        fi
+        # Fallback: highest version via sort -V; newer iff latest sorts last and differs
+        [[ "$latest" != "$current" && "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)" == "$latest" ]]
+    }
+    _is_newer "$LATEST_VERSION" "$CURRENT_VERSION" || {
         warn "Latest GitHub release (v${LATEST_VERSION}) is not newer than current (v${CURRENT_VERSION})."
         if [[ "$AUTO_YES" == false ]]; then
             read -rp "  Force reinstall anyway? [y/N] " REPLY
@@ -234,14 +295,26 @@ if [[ -n "$DOWNLOAD_URL" ]]; then
     fi
 fi
 
-# 2nd attempt: GitHub source archive (works even when release assets are missing)
-if [[ "$DOWNLOADED" == false ]] && [[ "$LATEST_VERSION" != *"-manual"* ]]; then
-    SOURCE_URL="https://github.com/${GITHUB_REPO}/archive/refs/tags/v${LATEST_VERSION}.zip"
-    if _download "$SOURCE_URL" "$RELEASE_ZIP" "source archive"; then
+# 2nd attempt: the manifest's declared mirror (GitHub raw when primary is the CDN)
+if [[ "$DOWNLOADED" == false ]] && [[ -n "${MIRROR_URL:-}" ]] && [[ "$MIRROR_URL" != "$DOWNLOAD_URL" ]]; then
+    if _download "$MIRROR_URL" "$RELEASE_ZIP" "mirror zip"; then
         DOWNLOADED=true
     else
-        warn "Source archive download also failed."
+        warn "Mirror download failed."
     fi
+fi
+
+# 3rd attempt: conventional dist path on every known channel (covers a manifest
+# whose url/mirror are stale but the zip is published under the standard name)
+if [[ "$DOWNLOADED" == false ]] && [[ "$LATEST_VERSION" != *"-manual"* ]]; then
+    for _B in "${CHANNELS[@]}"; do
+        ALT_URL="${_B}/dist/sentinel-gate-${LATEST_VERSION}.zip"
+        [[ "$ALT_URL" == "$DOWNLOAD_URL" || "$ALT_URL" == "${MIRROR_URL:-}" ]] && continue
+        if _download "$ALT_URL" "$RELEASE_ZIP" "dist zip (fallback)"; then
+            DOWNLOADED=true; break
+        fi
+    done
+    $DOWNLOADED || warn "Fallback dist downloads also failed."
 fi
 
 if [[ "$DOWNLOADED" == false ]]; then
@@ -254,6 +327,29 @@ if [[ "$DOWNLOADED" == false ]]; then
 fi
 
 ok "Downloaded release archive"
+
+# ── Verify integrity (SHA256) ─────────────────────────────────────────────────
+# Refuse to install code we can't verify when a checksum was published. This is
+# the line of defence against a tampered/MITM'd zip being run as root.
+section "Verifying integrity"
+if [[ -n "$EXPECTED_SHA256" ]]; then
+    _SHA_TOOL=""
+    if command -v sha256sum >/dev/null 2>&1; then _SHA_TOOL="sha256sum"
+    elif command -v shasum >/dev/null 2>&1; then _SHA_TOOL="shasum -a 256"; fi
+    if [[ -z "$_SHA_TOOL" ]]; then
+        die "No sha256 tool (sha256sum/shasum) available — cannot verify download. Install coreutils and retry."
+    fi
+    ACTUAL_SHA256="$($_SHA_TOOL "$RELEASE_ZIP" | awk '{print $1}')"
+    if [[ "${ACTUAL_SHA256,,}" != "${EXPECTED_SHA256,,}" ]]; then
+        err "Checksum MISMATCH — refusing to install."
+        info "  expected: ${EXPECTED_SHA256}"
+        info "  actual:   ${ACTUAL_SHA256}"
+        die "Aborting update (possible corruption or tampering)."
+    fi
+    ok "SHA256 verified: ${ACTUAL_SHA256}"
+else
+    warn "No checksum to verify against — proceeding without integrity check."
+fi
 
 # ── Extract ───────────────────────────────────────────────────────────────────
 section "Extracting update"
@@ -324,6 +420,23 @@ require_once '${INSTALL_DIR}/backend/config/mode.php';
 require_once '${INSTALL_DIR}/backend/lib/Database.php';
 echo 'Database migrations applied.' . PHP_EOL;
 " 2>&1 | while IFS= read -r line; do info "$line"; done
+
+# ── Re-run plugin registration ────────────────────────────────────────────────
+# Code changes between versions sometimes touch how the plugin registers with
+# WHM/cPanel. Overlaying files alone won't re-register, so the freshly-installed
+# install.sh is invoked in --register-only mode (auto-detects mode, no prompts,
+# never touches data, never offers uninstall). Non-fatal: a failure here doesn't
+# undo the update — it just warns.
+section "Re-registering plugin"
+if [[ -f "${INSTALL_DIR}/install.sh" ]]; then
+    if bash "${INSTALL_DIR}/install.sh" --register-only 2>&1 | sed 's/^/  /'; then
+        ok "Plugin re-registered"
+    else
+        warn "Re-registration reported a problem — check WHM → Plugins after upgrade"
+    fi
+else
+    warn "install.sh not found in install dir — skipping re-registration"
+fi
 
 # ── Fix permissions ───────────────────────────────────────────────────────────
 section "Fixing permissions"

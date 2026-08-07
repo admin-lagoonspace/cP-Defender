@@ -13,6 +13,35 @@ CRON_FILE="/etc/cron.d/sentinel-gate"
 LOG_DIR="${INSTALL_DIR}/logs"
 SG_PORT=31150
 
+# ── Arguments ───────────────────────────────────────────────────────────────────
+# --register-only : re-run ONLY the WHM/cPanel (or standalone service) registration
+#                   against an already-installed copy. Used by update.sh after it
+#                   overlays new code, so plugin-registration fixes reach upgrades.
+# --mode MODE     : force install mode (cpanel|standalone), skips the prompt.
+REGISTER_ONLY=false
+INSTALL_MODE=""
+SKIP_DEPS=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --register-only) REGISTER_ONLY=true ;;
+    --no-deps)       SKIP_DEPS=true ;;
+    --mode)          shift; INSTALL_MODE="${1:-}" ;;
+    --mode=*)        INSTALL_MODE="${1#--mode=}" ;;
+    *) ;;
+  esac
+  shift
+done
+
+# Auto-detect mode from a prior install so re-runs/upgrades never need the prompt
+_MODE_PHP="${INSTALL_DIR}/backend/config/mode.php"
+if [[ -z "$INSTALL_MODE" && -f "$_MODE_PHP" ]]; then
+  if grep -q "INSTALL_MODE', 'standalone'" "$_MODE_PHP" 2>/dev/null; then
+    INSTALL_MODE="standalone"
+  elif grep -q "INSTALL_MODE', 'cpanel'" "$_MODE_PHP" 2>/dev/null; then
+    INSTALL_MODE="cpanel"
+  fi
+fi
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
@@ -49,6 +78,56 @@ echo ""
 # ── Pre-flight checks ──────────────────────────────────────────────────────────
 section "Pre-flight checks"
 [[ $EUID -ne 0 ]] && error "Must be run as root"
+
+# ── Dependency bootstrap (best-effort, non-fatal) ─────────────────────────────
+# Install missing runtime dependencies via the host package manager so a bare
+# server reaches full capability instead of silently degrading. Skipped on
+# --register-only and --no-deps. PHP is NOT auto-installed on cPanel hosts —
+# cPanel manages its own PHP and a distro php would conflict.
+if ! $REGISTER_ONLY && ! $SKIP_DEPS; then
+  section "Dependency bootstrap"
+  _PM=""; _INSTALL=""
+  if   command -v apt-get >/dev/null 2>&1; then _PM=apt; _INSTALL="apt-get install -y -q"
+  elif command -v dnf     >/dev/null 2>&1; then _PM=dnf; _INSTALL="dnf install -y -q"
+  elif command -v yum     >/dev/null 2>&1; then _PM=yum; _INSTALL="yum install -y -q"
+  fi
+  if [[ -z "$_PM" ]]; then
+    warn "No supported package manager (apt/dnf/yum) — skipping dependency bootstrap"
+  else
+    info "Package manager: ${_PM}"
+    declare -a _PKGS=()
+    command -v sqlite3   >/dev/null 2>&1 || _PKGS+=( sqlite3 )
+    command -v python3   >/dev/null 2>&1 || _PKGS+=( python3 )
+    command -v ipset     >/dev/null 2>&1 || _PKGS+=( ipset )
+    if [[ "$_PM" == "apt" ]]; then
+      command -v inotifywait >/dev/null 2>&1 || _PKGS+=( inotify-tools )
+      dpkg -s python3-pip   >/dev/null 2>&1 || _PKGS+=( python3-pip )
+    else
+      rpm -q python3-pip    >/dev/null 2>&1 || _PKGS+=( python3-pip )
+    fi
+    # ClamAV — only if no clamscan anywhere (incl. cPanel's 3rdparty path)
+    if ! command -v clamscan >/dev/null 2>&1 && [[ ! -x /usr/local/cpanel/3rdparty/bin/clamscan ]]; then
+      if [[ "$_PM" == "apt" ]]; then _PKGS+=( clamav clamav-freshclam ); else _PKGS+=( clamav clamav-update ); fi
+    fi
+    # PHP + sqlite PDO — ONLY on non-cPanel servers
+    if [[ ! -d /usr/local/cpanel ]]; then
+      command -v php >/dev/null 2>&1 || _PKGS+=( php-cli )
+      if [[ "$_PM" == "apt" ]]; then _PKGS+=( php-sqlite3 ); else _PKGS+=( php-pdo ); fi
+    fi
+    if [[ ${#_PKGS[@]} -eq 0 ]]; then
+      ok "All runtime dependencies already present"
+    else
+      info "Installing: ${_PKGS[*]}"
+      [[ "$_PM" == "apt" ]] && { apt-get update -q >/dev/null 2>&1 || true; }
+      if $_INSTALL "${_PKGS[@]}" >/dev/null 2>&1; then
+        ok "Dependencies installed: ${_PKGS[*]}"
+      else
+        warn "Some packages failed to install (${_PKGS[*]}) — continuing; features may degrade"
+      fi
+    fi
+  fi
+fi
+
 command -v php >/dev/null 2>&1 || error "PHP not found. Install php-cli first."
 PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION;')
 [[ $PHP_VER -lt 7 ]] && error "PHP 7.4+ required (found PHP $PHP_VER)"
@@ -60,7 +139,10 @@ ok "PHP $PHP_VER found"
 # layouts. Data (database, logs, quarantine) is preserved on reinstall —
 # uninstall.sh is the only thing that deletes data.
 section "Pre-install cleanup"
-if command -v systemctl >/dev/null 2>&1; then
+if $REGISTER_ONLY; then
+  info "Register-only mode — skipping cleanup, dirs, files, DB, services"
+fi
+if ! $REGISTER_ONLY && command -v systemctl >/dev/null 2>&1; then
   for _SVC in sentinel-gate-web sentinel-gate-monitor; do
     if systemctl is-active --quiet "${_SVC}" 2>/dev/null; then
       systemctl stop "${_SVC}" 2>/dev/null || true
@@ -68,7 +150,7 @@ if command -v systemctl >/dev/null 2>&1; then
     fi
   done
 fi
-if [[ -d "${INSTALL_DIR}" ]]; then
+if ! $REGISTER_ONLY && [[ -d "${INSTALL_DIR}" ]]; then
   info "Existing installation detected — refreshing code, keeping data"
   for _OLD in "${INSTALL_DIR}/backend" "${INSTALL_DIR}/frontend"; do
     [[ -d "${_OLD}" ]] && rm -rf "${_OLD}" && info "Removed stale code dir: ${_OLD}"
@@ -88,27 +170,37 @@ ok "Pre-install cleanup complete"
 
 # ── Mode selection ─────────────────────────────────────────────────────────────
 section "Installation Mode"
-echo ""
-echo -e "  ${BOLD}Select where you are installing Sentinel Gate:${NC}"
-echo ""
-echo -e "  ${CYAN}1)${NC} ${BOLD}cPanel / WHM Server${NC}"
-echo "     Integrates into WHM as a plugin. Uses cPanel authentication."
-echo "     Accessed via: WHM → Plugins → Sentinel Gate"
-echo ""
-echo -e "  ${CYAN}2)${NC} ${BOLD}Standalone Linux Server${NC} (no cPanel)"
-echo "     Self-contained browser dashboard on port ${SG_PORT}."
-echo "     Works on any Linux distro. No cPanel required."
-echo "     Accessed via: http://YOUR_SERVER_IP:${SG_PORT}"
-echo ""
-read -rp "  Enter choice [1/2]: " MODE_CHOICE
+if [[ -n "$INSTALL_MODE" ]]; then
+  # Mode already known (--mode flag, --register-only, or detected from mode.php)
+  info "Mode: ${BOLD}${INSTALL_MODE}${NC} (auto-detected)"
+elif [[ ! -t 0 ]]; then
+  # Non-interactive (piped) install with no prior mode — default to cpanel
+  INSTALL_MODE="cpanel"
+  info "Non-interactive — defaulting to mode: ${BOLD}cpanel${NC}"
+else
+  echo ""
+  echo -e "  ${BOLD}Select where you are installing Sentinel Gate:${NC}"
+  echo ""
+  echo -e "  ${CYAN}1)${NC} ${BOLD}cPanel / WHM Server${NC}"
+  echo "     Integrates into WHM as a plugin. Uses cPanel authentication."
+  echo "     Accessed via: WHM → Plugins → Sentinel Gate"
+  echo ""
+  echo -e "  ${CYAN}2)${NC} ${BOLD}Standalone Linux Server${NC} (no cPanel)"
+  echo "     Self-contained browser dashboard on port ${SG_PORT}."
+  echo "     Works on any Linux distro. No cPanel required."
+  echo "     Accessed via: http://YOUR_SERVER_IP:${SG_PORT}"
+  echo ""
+  read -rp "  Enter choice [1/2]: " MODE_CHOICE
+  case "$MODE_CHOICE" in
+    2) INSTALL_MODE="standalone" ;;
+    *) INSTALL_MODE="cpanel" ;;
+  esac
+  echo ""
+  info "Mode: ${BOLD}${INSTALL_MODE}${NC}"
+fi
 
-case "$MODE_CHOICE" in
-  2) INSTALL_MODE="standalone" ;;
-  *) INSTALL_MODE="cpanel" ;;
-esac
-
-echo ""
-info "Mode: ${BOLD}${INSTALL_MODE}${NC}"
+# ═══ INSTALL-ONLY SECTIONS (skipped in --register-only mode) ═══════════════════
+if ! $REGISTER_ONLY; then
 
 # ── Standalone: collect admin credentials ──────────────────────────────────────
 if [[ "$INSTALL_MODE" == "standalone" ]]; then
@@ -141,6 +233,7 @@ section "Installing files"
 cp -r "${SCRIPT_DIR}/backend"  "$INSTALL_DIR/"
 cp -r "${SCRIPT_DIR}/frontend" "$INSTALL_DIR/"
 cp    "${SCRIPT_DIR}/VERSION"  "$INSTALL_DIR/"
+[[ -f "${SCRIPT_DIR}/install.sh"   ]] && cp "${SCRIPT_DIR}/install.sh"   "$INSTALL_DIR/"
 [[ -f "${SCRIPT_DIR}/update.sh"   ]] && cp "${SCRIPT_DIR}/update.sh"   "$INSTALL_DIR/"
 [[ -f "${SCRIPT_DIR}/uninstall.sh" ]] && cp "${SCRIPT_DIR}/uninstall.sh" "$INSTALL_DIR/"
 # Keep whm/sentinel.conf version in sync with VERSION file
@@ -157,6 +250,7 @@ chmod -R 700 "$INSTALL_DIR/quarantine"
 chmod -R 700 "$INSTALL_DIR/logs"
 chmod +x "$INSTALL_DIR/backend/cron/scan.php"
 chmod +x "$INSTALL_DIR/backend/daemon/monitor.py"
+[[ -f "$INSTALL_DIR/backend/cli/sentinel.php" ]] && chmod +x "$INSTALL_DIR/backend/cli/sentinel.php"
 ok "Permissions set"
 
 # ── Write mode.php ─────────────────────────────────────────────────────────────
@@ -290,6 +384,26 @@ else
   info "  Pattern-based scanning will be used until ClamAV is installed."
 fi
 
+# ── Kernel tuning for the inotify monitor ─────────────────────────────────────
+# monitor.py watches the filesystem via inotify. The default per-user watch
+# limit (often 8192) is far too low for a busy hosting server — the monitor
+# silently stops receiving events once it's exhausted. Raise it persistently.
+section "Kernel tuning (inotify watch limit)"
+SYSCTL_CONF="/etc/sysctl.d/60-sentinel-gate.conf"
+cat > "${SYSCTL_CONF}" << SYSCTLEOF
+# Sentinel Gate — raise inotify limits for the real-time file monitor
+fs.inotify.max_user_watches = 1048576
+fs.inotify.max_user_instances = 1024
+SYSCTLEOF
+chmod 644 "${SYSCTL_CONF}"
+if command -v sysctl >/dev/null 2>&1; then
+  sysctl -p "${SYSCTL_CONF}" >/dev/null 2>&1 && \
+    ok "inotify limits raised (max_user_watches=1048576)" || \
+    warn "sysctl reload failed — limits apply after next reboot"
+else
+  warn "sysctl not found — ${SYSCTL_CONF} written, applies after reboot"
+fi
+
 # ── Real-time monitor: Python dependency + systemd service ────────────────────
 section "Real-time file monitor"
 if ! command -v python3 >/dev/null 2>&1; then
@@ -356,17 +470,145 @@ CRONEOF
 chmod 644 "${CRON_FILE}"
 ok "Cron jobs installed to ${CRON_FILE}"
 
+# On SELinux-enforcing hosts (CloudLinux/RHEL) a freshly written /etc/cron.d
+# file lacks the system_cron_spool_t context and crond will refuse to run it.
+if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null)" == "Enforcing" ]]; then
+  if command -v semanage >/dev/null 2>&1; then
+    semanage fcontext -a -t system_cron_spool_t "${CRON_FILE}" 2>/dev/null || true
+  fi
+  command -v restorecon >/dev/null 2>&1 && restorecon -Fv "${CRON_FILE}" 2>/dev/null || true
+  ok "SELinux context applied to ${CRON_FILE}"
+fi
+
+fi  # ═══ end INSTALL-ONLY SECTIONS ═══════════════════════════════════════════════
+
 # ── Write install manifest (uninstaller reads this) ───────────────────────────
+# MANIFEST is always defined (the cpanel block below appends to it). On a fresh
+# install we (re)write the base keys; in --register-only we keep the existing one.
 MANIFEST="${INSTALL_DIR}/install-manifest.env"
-{
-  echo "INSTALL_MODE=${INSTALL_MODE}"
-  echo "INSTALL_VERSION=${SG_VERSION}"
-  echo "INSTALL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "INSTALL_DIR=${INSTALL_DIR}"
-  echo "CRON_FILE=${CRON_FILE}"
-  echo "SOURCE_DIR=${SCRIPT_DIR}"
-} > "${MANIFEST}"
-info "Manifest started: ${MANIFEST}"
+if ! $REGISTER_ONLY; then
+  {
+    echo "INSTALL_MODE=${INSTALL_MODE}"
+    echo "INSTALL_VERSION=${SG_VERSION}"
+    echo "INSTALL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "INSTALL_DIR=${INSTALL_DIR}"
+    echo "CRON_FILE=${CRON_FILE}"
+    echo "SOURCE_DIR=${SCRIPT_DIR}"
+  } > "${MANIFEST}"
+  info "Manifest started: ${MANIFEST}"
+else
+  info "Register-only — re-registering plugin against existing install"
+fi
+
+# ── Firewall & WAF integration (CSF/LFD + ModSecurity) ─────────────────────────
+# These wire Sentinel Gate into the server's existing security stack. They are
+# idempotent (guarded by grep) so they run safely on both fresh installs and
+# --register-only upgrades. All entries are removed by uninstall.sh.
+SG_ETC="/etc/sentinel-gate"
+mkdir -p "${SG_ETC}"
+
+# ── CSF / LFD (ConfigServer Firewall) ──
+# Firewall.php already speaks `csf -a/-d` at runtime; here we register the
+# persistent include files CSF reads on every restart, and exempt Sentinel
+# Gate's own long-running root daemons from LFD process tracking so they are
+# never flagged or killed.
+section "CSF / LFD firewall integration"
+if [[ -f /usr/sbin/csf ]]; then
+  touch "${SG_ETC}/csf_allow.txt" "${SG_ETC}/csf_ignore.txt"
+  chmod 600 "${SG_ETC}/csf_allow.txt" "${SG_ETC}/csf_ignore.txt"
+
+  if [[ -f /etc/csf/csf.allow ]] && ! grep -q "sentinel-gate/csf_allow.txt" /etc/csf/csf.allow 2>/dev/null; then
+    echo "Include ${SG_ETC}/csf_allow.txt" >> /etc/csf/csf.allow
+    ok "Registered allow include in csf.allow"
+  fi
+  if [[ -f /etc/csf/csf.ignore ]] && ! grep -q "sentinel-gate/csf_ignore.txt" /etc/csf/csf.ignore 2>/dev/null; then
+    echo "Include ${SG_ETC}/csf_ignore.txt" >> /etc/csf/csf.ignore
+    ok "Registered ignore include in csf.ignore"
+  fi
+  if [[ -f /etc/csf/csf.pignore ]]; then
+    grep -q "sentinel-gate/backend/daemon/monitor.py" /etc/csf/csf.pignore 2>/dev/null || \
+      echo "cmd:.*sentinel-gate/backend/daemon/monitor.py" >> /etc/csf/csf.pignore
+    grep -q "sentinel-gate/backend/standalone-router.php" /etc/csf/csf.pignore 2>/dev/null || \
+      echo "cmd:.*sentinel-gate/backend/standalone-router.php" >> /etc/csf/csf.pignore
+    ok "Exempted Sentinel Gate daemons in csf.pignore"
+  fi
+
+  # `csf -r` reloads csf AND lfd; fall back to a direct lfd restart if absent.
+  if csf -r >/dev/null 2>&1; then
+    ok "CSF reloaded (csf.allow/ignore/pignore active)"
+  else
+    systemctl restart lfd 2>/dev/null || service lfd restart 2>/dev/null || true
+    ok "lfd restarted"
+  fi
+  {
+    echo "CSF_ALLOW_INCLUDE=${SG_ETC}/csf_allow.txt"
+    echo "CSF_IGNORE_INCLUDE=${SG_ETC}/csf_ignore.txt"
+    echo "SG_ETC=${SG_ETC}"
+  } >> "${MANIFEST}"
+else
+  info "CSF not installed — skipping CSF integration (firewalld/iptables fallback stays active)"
+fi
+
+# ── ModSecurity Apache hook ──
+# WAF.php writes custom SecRules under the modsec vendor configs dir. Apache
+# does not load that path automatically, so we add an explicit Include to the
+# ModSecurity user config. The Apache restart at the end of install activates it.
+section "ModSecurity WAF integration"
+MODSEC_USER_CONF=""
+for _MSC in \
+  /etc/apache2/conf.d/modsec/modsec2.user.conf \
+  /etc/apache2/conf.d/modsec2.user.conf \
+  /usr/local/apache/conf/modsec2.user.conf \
+  /etc/httpd/conf.d/mod_security.conf; do
+  [[ -f "${_MSC}" ]] && { MODSEC_USER_CONF="${_MSC}"; break; }
+done
+if [[ -n "${MODSEC_USER_CONF}" ]]; then
+  SG_MODSEC_DIR="/etc/apache2/conf.d/modsec_vendor_configs/sentinel-gate"
+  SG_MODSEC_RULES="${SG_MODSEC_DIR}/custom_rules.conf"
+  mkdir -p "${SG_MODSEC_DIR}"
+  if [[ ! -f "${SG_MODSEC_RULES}" ]]; then
+    cat > "${SG_MODSEC_RULES}" << 'MODRULEEOF'
+# Sentinel Gate — custom ModSecurity rules (managed by the WAF module).
+# Rules added from the dashboard are written here; Apache reload applies them.
+MODRULEEOF
+    chmod 644 "${SG_MODSEC_RULES}"
+  fi
+  if ! grep -q "sentinel-gate/custom_rules.conf" "${MODSEC_USER_CONF}" 2>/dev/null; then
+    {
+      echo ""
+      echo "# Sentinel Gate WAF rules"
+      echo "Include ${SG_MODSEC_RULES}"
+    } >> "${MODSEC_USER_CONF}"
+    ok "Registered WAF Include in ${MODSEC_USER_CONF}"
+  else
+    info "WAF Include already present in ${MODSEC_USER_CONF}"
+  fi
+  {
+    echo "MODSEC_USER_CONF=${MODSEC_USER_CONF}"
+    echo "SG_MODSEC_DIR=${SG_MODSEC_DIR}"
+  } >> "${MANIFEST}"
+else
+  info "ModSecurity user config not found — skipping WAF Apache hook (WAF stays app-level)"
+fi
+
+# ── CLI entrypoint (`sentinel` command) ───────────────────────────────────────
+# Thin bash wrapper in /usr/bin so admins get a `sentinel` command (parity with
+# CPGuard's cpgcli). Placed here (not the install-only block) so upgrades run via
+# --register-only pick it up too. Points at the installed CLI, not the source.
+section "CLI entrypoint"
+if [[ -f "${INSTALL_DIR}/backend/cli/sentinel.php" ]]; then
+  _PHP_BIN="$(command -v php 2>/dev/null || echo /usr/bin/php)"
+  cat > /usr/bin/sentinel << CLIEOF
+#!/usr/bin/env bash
+# Sentinel Gate CLI — installed by install.sh (do not edit)
+exec ${_PHP_BIN} ${INSTALL_DIR}/backend/cli/sentinel.php "\$@"
+CLIEOF
+  chmod 755 /usr/bin/sentinel
+  ok "CLI installed: /usr/bin/sentinel (run: sentinel help)"
+  grep -q "^SG_CLI=" "${MANIFEST}" 2>/dev/null || echo "SG_CLI=/usr/bin/sentinel" >> "${MANIFEST}"
+else
+  info "CLI script not present in install dir — skipping /usr/bin/sentinel"
+fi
 
 # ── Mode-specific setup ────────────────────────────────────────────────────────
 if [[ "$INSTALL_MODE" == "standalone" ]]; then
@@ -603,6 +845,21 @@ ENDCGI
     #  resellers; acls=any means every reseller regardless of their ACL set.)
     # target=_blank — opens the plugin in a new browser tab (not embedded in WHM).
     # Do NOT include 'icon=...' unless you have an actual installed icon file.
+    # ── Install the plugin icon into WHM's addon_plugins directory ───────────
+    # WHM renders the icon referenced by the AppConfig `icon=` field from
+    # whostmgr/docroot/addon_plugins/. Without it the plugin shows a blank tile.
+    ADDON_PLUGINS_DIR="/usr/local/cpanel/whostmgr/docroot/addon_plugins"
+    SG_ICON_SRC="${SCRIPT_DIR}/whm/sentinel_gate.png"
+    SG_ICON_DEST="${ADDON_PLUGINS_DIR}/sentinel_gate.png"
+    if [[ -f "${SG_ICON_SRC}" && -d "${ADDON_PLUGINS_DIR}" ]]; then
+      cp -f "${SG_ICON_SRC}" "${SG_ICON_DEST}"
+      chmod 644 "${SG_ICON_DEST}"
+      ok "  Plugin icon installed: ${SG_ICON_DEST}"
+      echo "WHM_ICON=${SG_ICON_DEST}" >> "${MANIFEST}"
+    else
+      warn "  Icon source or addon_plugins dir missing — plugin will show no icon"
+    fi
+
     info "  Writing AppConfig conf: ${WHM_PLUGIN_CONF}"
     # Remove any stale /var/cpanel/apps/ copy first so register_appconfig writes fresh
     rm -f /var/cpanel/apps/sentinel_gate.conf 2>/dev/null || true
@@ -613,6 +870,7 @@ url=/cgi/sentinel_gate/sentinel_gate.cgi
 entryurl=sentinel_gate/sentinel_gate.cgi
 acls=any
 displayname=Sentinel Gate Security
+icon=sentinel_gate.png
 target=_blank
 APPEOF
     chmod 644 "${WHM_PLUGIN_CONF}"
@@ -892,6 +1150,13 @@ else
   echo -e "${RED}${BOLD}  Installation verification failed — ${TEST_EXIT} test(s) failed${NC}"
   echo -e "${RED}${BOLD}══════════════════════════════════════════════════════${NC}"
   echo ""
+  # During an upgrade (--register-only) NEVER offer uninstall — that would wipe
+  # customer data. Just report and exit non-zero so update.sh can warn.
+  if $REGISTER_ONLY; then
+    warn "Re-registration self-tests reported failures — install left intact."
+    info "Review the FAIL lines above and re-run: bash ${SCRIPT_DIR}/test.sh"
+    exit 1
+  fi
   echo -e "  The plugin was installed but one or more self-tests failed."
   echo -e "  ${BOLD}What would you like to do?${NC}"
   echo ""
