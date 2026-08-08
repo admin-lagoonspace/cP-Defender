@@ -58,6 +58,25 @@ info() { echo -e "  ${CYAN}→${NC}  $*"; }
 warn() { echo -e "  ${YELLOW}⚠${NC}  $*"; }
 die()  { echo -e "  ${RED}✖${NC}  $*" >&2; exit 1; }
 
+# Strip anything that could carry the password out of log output before it is
+# printed. lftp masks PASS itself and GitHub masks registered secrets, but this
+# runs locally too, where neither protection applies.
+# The password is matched LITERALLY via awk index(), never interpolated into a
+# regex — a password containing regex metacharacters would otherwise either
+# break the filter or, worse, fail to match and pass straight through.
+redact() {
+  sed -e 's/^\(---> PASS\).*/ ****/' \
+  | awk -v p="${SG_CDN_PASS:-}" '
+      {
+        if (p != "") {
+          while ((i = index($0, p)) > 0)
+            $0 = substr($0, 1, i-1) "********" substr($0, i + length(p))
+        }
+        print
+      }'
+}
+
+
 # ── Preconditions ─────────────────────────────────────────────────────────────
 [[ -d "$UPLOAD_DIR" ]] || die "No staged upload tree at ${UPLOAD_DIR}. Run: bash scripts/make-release.sh"
 [[ -f "${UPLOAD_DIR}/latest.json" ]] || die "Missing ${UPLOAD_DIR}/latest.json"
@@ -91,19 +110,30 @@ if command -v lftp >/dev/null 2>&1; then
   VERIFY_CERT=yes
   [[ "$SG_CDN_INSECURE" == "1" ]] && VERIFY_CERT=no
 
-  info "Uploading via lftp…"
-  # Script fed on stdin so the password never lands in the process list (ps aux).
-  # Passive mode is forced: a CI runner sits behind NAT, so an active-mode data
-  # channel back to the runner cannot be established.
-  set +e
-  lftp -u "${SG_CDN_USER},${SG_CDN_PASS}" "$URL" <<LFTPEOF 2>&1 | tee /tmp/lftp.log
+  # Try progressively less strict TLS. Each attempt keeps the CONTROL channel
+  # encrypted, so the password is never exposed in any of them.
+  #
+  #   1. TLS 1.2, data channel protected  — preferred
+  #   2. TLS 1.2, data channel in clear   — control (and password) still
+  #      encrypted; only the file bytes are plaintext, and those files are
+  #      published publicly anyway. Needed for servers that cannot resume the
+  #      TLS session on the data connection.
+  #
+  # TLS 1.3 is excluded outright: this server negotiates it by default, and
+  # TLS 1.3 session resumption on the FTPS data channel is broken in Pure-FTPd.
+  # The control connection succeeds (so the cert check passes) and then every
+  # data transfer times out — surfacing only as "max-retries exceeded".
+  run_lftp() { # run_lftp <protect-data:true|false> <logfile>
+    lftp -u "${SG_CDN_USER},${SG_CDN_PASS}" "$URL" <<LFTPEOF >"$2" 2>&1
+debug 3
 set ssl:verify-certificate ${VERIFY_CERT}
+set ssl:priority "NORMAL:-VERS-TLS1.3"
 set ftp:ssl-force true
-set ftp:ssl-protect-data true
+set ftp:ssl-protect-data $1
 set ftp:passive-mode true
-set net:max-retries 3
-set net:timeout 25
-set net:reconnect-interval-base 5
+set net:max-retries 2
+set net:timeout 20
+set net:reconnect-interval-base 4
 set mirror:parallel-transfer-count 1
 mkdir -p ${SG_CDN_PATH}
 mkdir -p ${SG_CDN_PATH}/dist
@@ -111,23 +141,40 @@ mkdir -p ${SG_CDN_PATH}/v${VERSION}
 mirror -R --verbose --overwrite ${UPLOAD_DIR}/ ${SG_CDN_PATH}/
 bye
 LFTPEOF
-  RC=${PIPESTATUS[0]}
+  }
+
+  set +e
+  info "Attempt 1/2 — TLS 1.2, encrypted data channel…"
+  run_lftp true /tmp/lftp1.log
+  RC=$?
+  if [[ $RC -ne 0 ]]; then
+    warn "Attempt 1 failed (exit ${RC}). Server response:"
+    grep -E '^<---|^--->|error|Error|failed' /tmp/lftp1.log | redact | tail -12 | sed 's/^/        /'
+    echo ""
+    info "Attempt 2/2 — TLS 1.2, data channel unencrypted (password still protected)…"
+    run_lftp false /tmp/lftp2.log
+    RC=$?
+    cp -f /tmp/lftp2.log /tmp/lftp.log
+  else
+    cp -f /tmp/lftp1.log /tmp/lftp.log
+  fi
   set -e
 
   if [[ $RC -ne 0 ]]; then
     echo ""
-    err_msg="$(cat /tmp/lftp.log 2>/dev/null | tail -5)"
-    echo -e "  ${RED}✖${NC}  lftp failed (exit ${RC}):"
-    printf '      %s\n' "$err_msg"
+    echo -e "  ${RED}✖${NC}  lftp failed (exit ${RC}). Protocol log:"
+    grep -E '^<---|^--->|error|Error|failed|Fatal' /tmp/lftp.log | redact | tail -25 | sed 's/^/        /'
     echo ""
-    if grep -qiE 'certificate|verify|hostname' /tmp/lftp.log 2>/dev/null; then
-      warn "This looks like a TLS certificate problem."
-      warn "The cert is valid for host.lws-s1.com, NOT defender.lws-s1.com."
-      warn "Upload via the cert's hostname:  SG_CDN_FTP_HOST=host.lws-s1.com"
-      warn "Or, as a last resort:            SG_CDN_INSECURE=1"
-    elif grep -qiE 'max-retries|timeout|refused' /tmp/lftp.log 2>/dev/null; then
-      warn "Connection could not be established. Check that port 21 is reachable"
-      warn "and that the FTP account is not IP-restricted in cPanel."
+    if grep -qiE '530|login|password|authentic' /tmp/lftp.log; then
+      warn "The server REJECTED the credentials (530). Check SG_CDN_USER / SG_CDN_PASS."
+      warn "If the password was rotated recently, update the GitHub secret."
+    elif grep -qiE 'certificate|hostname mismatch' /tmp/lftp.log; then
+      warn "TLS certificate problem — set SG_CDN_FTP_HOST to the cert's hostname."
+    elif grep -qiE 'max-retries|timeout|refused|Connection'; then
+      warn "Data connection could not be established even on TLS 1.2."
+      warn "Most likely the FTP account is IP-restricted, or cPHulk/CSF has"
+      warn "blocked this runner's IP after the earlier failed attempts."
+      warn "Check WHM -> cPHulk Brute Force Protection -> History, and CSF Deny."
     fi
     die "Upload aborted — nothing was published."
   fi
