@@ -117,7 +117,22 @@ if [ "$CUR_VER" = "$NEW_VER" ] \
    && [ -s "${BUILDS_DIR}/${ZIP_NAME}" ] \
    && [ -f "${LATEST_DIR}/VERSION" ] \
    && [ "$(tr -d '[:space:]' < "${LATEST_DIR}/VERSION" 2>/dev/null)" = "$NEW_VER" ]; then
-    exit 0     # silent no-op — keeps the cron log readable
+
+    # Version is unchanged, but get.sh is the bootstrap every new install
+    # downloads and it ships fixes of its own. Refreshing only on a version bump
+    # meant a corrected get.sh sat unpublished until the next release. It is
+    # ~17KB, so just fetch and compare on every run.
+    if fetch_to "${SRC}/get.sh" "/tmp/sg-get-check.$$" 2>/dev/null \
+       && [ -s "/tmp/sg-get-check.$$" ]; then
+        if ! cmp -s "/tmp/sg-get-check.$$" "${DOCROOT}/get.sh" 2>/dev/null; then
+            install -m 644 "/tmp/sg-get-check.$$" "${DOCROOT}/get.sh.tmp" \
+              && mv -f "${DOCROOT}/get.sh.tmp" "${DOCROOT}/get.sh" \
+              && log "refreshed get.sh (bootstrap updated, version unchanged)"
+        fi
+    fi
+    rm -f "/tmp/sg-get-check.$$"
+
+    exit 0     # otherwise a silent no-op — keeps the cron log readable
 fi
 
 log "sync needed: local='${CUR_VER:-none}' upstream='${NEW_VER}'"
