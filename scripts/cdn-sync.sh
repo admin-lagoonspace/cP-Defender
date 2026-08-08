@@ -36,6 +36,8 @@ BRANCH="${SG_BRANCH:-main}"
 SRC="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 LOCKFILE="${SG_LOCK:-/tmp/sg-cdn-sync.lock}"
 KEEP_VERSIONS="${SG_KEEP_VERSIONS:-0}"   # 0 = keep every version forever
+BUILDS_DIR="${SG_BUILDS_DIR:-${DOCROOT}/builds}"   # archive of every release zip
+LATEST_DIR="${SG_LATEST_DIR:-${DOCROOT}/latest}"   # newest build, extracted
 
 ts()  { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 log() { echo "[$(ts)] $*"; }
@@ -111,7 +113,10 @@ ZIP_NAME="sentinel-gate-${NEW_VER}.zip"
 # Fast path: same version AND the artifacts are actually present.
 if [ "$CUR_VER" = "$NEW_VER" ] \
    && [ -s "${DOCROOT}/dist/${ZIP_NAME}" ] \
-   && [ -s "${DOCROOT}/v${NEW_VER}/${ZIP_NAME}" ]; then
+   && [ -s "${DOCROOT}/v${NEW_VER}/${ZIP_NAME}" ] \
+   && [ -s "${BUILDS_DIR}/${ZIP_NAME}" ] \
+   && [ -f "${LATEST_DIR}/VERSION" ] \
+   && [ "$(tr -d '[:space:]' < "${LATEST_DIR}/VERSION" 2>/dev/null)" = "$NEW_VER" ]; then
     exit 0     # silent no-op — keeps the cron log readable
 fi
 
@@ -164,6 +169,57 @@ place "${TMP}/${ZIP_NAME}"   "${DOCROOT}/v${NEW_VER}/${ZIP_NAME}" || die "publis
 place "${TMP}/CHANGELOG.md"  "${DOCROOT}/v${NEW_VER}/CHANGELOG.md"
 place "${TMP}/${ZIP_NAME}"   "${DOCROOT}/dist/${ZIP_NAME}"        || die "publish failed: dist/${ZIP_NAME}"
 place "${TMP}/get.sh"        "${DOCROOT}/get.sh"
+
+# ── builds/ — every release zip, kept permanently ─────────────────────────────
+mkdir -p "${BUILDS_DIR}" || die "cannot create ${BUILDS_DIR}"
+place "${TMP}/${ZIP_NAME}" "${BUILDS_DIR}/${ZIP_NAME}" || die "publish failed: builds/${ZIP_NAME}"
+log "archived builds/${ZIP_NAME}"
+
+# ── latest/ — newest build, EXTRACTED, previous contents wiped ────────────────
+# Extracted into a staging dir and swapped in, rather than wiping latest/ and
+# unpacking in place. A wipe-then-extract leaves latest/ empty or half-written
+# for the duration, and anything reading it during that window sees a broken
+# tree. The swap makes the change effectively instantaneous, and the old tree is
+# only deleted once the new one is fully in place.
+if command -v unzip >/dev/null 2>&1; then
+    STAGE="${DOCROOT}/.latest.staging.$$"
+    rm -rf "$STAGE"
+    mkdir -p "$STAGE" || die "cannot create staging dir"
+
+    if ! unzip -qo "${TMP}/${ZIP_NAME}" -d "$STAGE" 2>/dev/null; then
+        rm -rf "$STAGE"
+        die "extraction failed for ${ZIP_NAME}"
+    fi
+
+    # The archive wraps everything in a single sentinel-gate/ directory. Lift its
+    # contents up so latest/ holds backend/, frontend/, install.sh … directly.
+    INNER="$(find "$STAGE" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    if [ -n "$INNER" ] && [ "$(find "$STAGE" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 ]; then
+        mv "$INNER" "${STAGE}.inner" && rm -rf "$STAGE" && mv "${STAGE}.inner" "$STAGE"
+    fi
+
+    # Confirm the extraction actually produced a build before it replaces a good one
+    if [ ! -f "${STAGE}/VERSION" ] || [ ! -f "${STAGE}/install.sh" ]; then
+        rm -rf "$STAGE"
+        die "extracted tree is missing VERSION/install.sh — refusing to replace latest/"
+    fi
+
+    OLD="${DOCROOT}/.latest.old.$$"
+    rm -rf "$OLD"
+    if [ -d "${LATEST_DIR}" ]; then
+        mv "${LATEST_DIR}" "$OLD" || die "cannot move aside existing latest/"
+    fi
+    if ! mv "$STAGE" "${LATEST_DIR}"; then
+        # Roll back so latest/ is never left missing
+        [ -d "$OLD" ] && mv "$OLD" "${LATEST_DIR}"
+        die "cannot swap in new latest/"
+    fi
+    rm -rf "$OLD"
+    chmod -R a+rX "${LATEST_DIR}" 2>/dev/null || true
+    log "extracted latest/ (wiped previous contents)"
+else
+    log "WARNING: unzip not available — latest/ not refreshed"
+fi
 
 printf '%s\n' "$REMOTE_JSON" > "${TMP}/latest.json"
 place "${TMP}/latest.json"   "${DOCROOT}/v${NEW_VER}/latest.json"
