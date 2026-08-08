@@ -216,7 +216,47 @@ if command -v unzip >/dev/null 2>&1; then
     fi
     rm -rf "$OLD"
     chmod -R a+rX "${LATEST_DIR}" 2>/dev/null || true
-    log "extracted latest/ (wiped previous contents)"
+
+    # ── Harden latest/: serve it, never RUN it ────────────────────────────────
+    # latest/ sits in the public docroot and contains the product's own PHP.
+    # Without this Apache EXECUTES it: backend/lib/*.php run as unauthenticated
+    # web requests, and backend/api/index.php + config/config.php fatal with 500s
+    # that can leak paths depending on display_errors. Nothing here is meant to
+    # run — it is a download tree. Source disclosure is not a concern (the repo
+    # is public); execution is.
+    #
+    # Written on every sync because the wipe-and-replace would otherwise drop it.
+    cat > "${LATEST_DIR}/.htaccess" <<'HTACCESS'
+# Sentinel Gate — this tree is for DOWNLOAD ONLY. Never execute anything in it.
+# Written automatically by cdn-sync.sh on every publish; edits here are lost.
+
+<FilesMatch "\.(php|phtml|php[0-9]|phps|cgi|pl|py|sh)$">
+    SetHandler none
+    ForceType text/plain
+    Options -ExecCGI
+</FilesMatch>
+
+# mod_php, where present
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php5.c>
+    php_flag engine off
+</IfModule>
+
+RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .php8 .phps
+RemoveType    .php .phtml
+
+# Directory listings are required: the installer walks this tree as a
+# last-resort source when every zip path fails.
+Options +Indexes -ExecCGI -FollowSymLinks
+HTACCESS
+    chmod 644 "${LATEST_DIR}/.htaccess" 2>/dev/null || true
+
+    log "extracted latest/ (wiped previous contents; execution disabled)"
 else
     log "WARNING: unzip not available — latest/ not refreshed"
 fi

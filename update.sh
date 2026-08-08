@@ -141,6 +141,12 @@ else
     MANIFEST_JSON=""
     ACTIVE_BASE=""
     for BASE in "${CHANNELS[@]}"; do
+        # latest/VERSION is the extracted build the channel is actually serving.
+        # Six bytes, and it cannot disagree with what is on disk there, so it is
+        # used to cross-check the manifest below.
+        LIVE_VER="$(curl -fsSL --max-time 10 "${BASE}/latest/VERSION" 2>/dev/null | tr -d '[:space:]')"
+        [[ -n "$LIVE_VER" ]] && info "  ${BASE}/latest/ reports v${LIVE_VER}"
+
         info "  Trying: ${BASE}/latest.json"
         for attempt in $(seq 1 $API_RETRIES); do
             [[ $attempt -gt 1 ]] && { warn "  Retrying in ${API_WAIT}s (${attempt}/${API_RETRIES})…"; sleep $API_WAIT; }
@@ -202,7 +208,17 @@ else
     EXPECTED_SHA256="$(echo "$MANIFEST_JSON" | grep -oP '"sha256"\s*:\s*"\K[0-9a-fA-F]+' | head -1)"
     RELEASE_URL="$(echo "$MANIFEST_JSON"    | grep -oP '"notes"\s*:\s*"\K[^"]+' | head -1)"
 
+    # Fall back to the extracted tree if the manifest was unparseable
+    if [[ -z "$LATEST_VERSION" && -n "${LIVE_VER:-}" ]]; then
+        LATEST_VERSION="$LIVE_VER"
+        warn "Manifest unparseable — using v${LATEST_VERSION} from latest/VERSION"
+    fi
     [[ -z "$LATEST_VERSION" ]] && die "Could not parse version from manifest."
+
+    # A manifest disagreeing with the deployed tree means the channel is mid-sync
+    if [[ -n "${LIVE_VER:-}" && "$LIVE_VER" != "$LATEST_VERSION" ]]; then
+        warn "Manifest says v${LATEST_VERSION} but latest/ holds v${LIVE_VER} — channel mid-sync."
+    fi
     [[ -z "$DOWNLOAD_URL"   ]] && DOWNLOAD_URL="${DIST_BASE}/sentinel-gate-${LATEST_VERSION}.zip"
 fi
 
@@ -308,11 +324,15 @@ fi
 # whose url/mirror are stale but the zip is published under the standard name)
 if [[ "$DOWNLOADED" == false ]] && [[ "$LATEST_VERSION" != *"-manual"* ]]; then
     for _B in "${CHANNELS[@]}"; do
-        ALT_URL="${_B}/dist/sentinel-gate-${LATEST_VERSION}.zip"
-        [[ "$ALT_URL" == "$DOWNLOAD_URL" || "$ALT_URL" == "${MIRROR_URL:-}" ]] && continue
-        if _download "$ALT_URL" "$RELEASE_ZIP" "dist zip (fallback)"; then
-            DOWNLOADED=true; break
-        fi
+        for _P in "builds/sentinel-gate-${LATEST_VERSION}.zip" \
+                  "v${LATEST_VERSION}/sentinel-gate-${LATEST_VERSION}.zip" \
+                  "dist/sentinel-gate-${LATEST_VERSION}.zip"; do
+            ALT_URL="${_B}/${_P}"
+            [[ "$ALT_URL" == "$DOWNLOAD_URL" || "$ALT_URL" == "${MIRROR_URL:-}" ]] && continue
+            if _download "$ALT_URL" "$RELEASE_ZIP" "${_P%%/*} zip (fallback)"; then
+                DOWNLOADED=true; break 2
+            fi
+        done
     done
     $DOWNLOADED || warn "Fallback dist downloads also failed."
 fi
