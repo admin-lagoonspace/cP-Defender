@@ -162,7 +162,11 @@ LFTPEOF
 
   if [[ $RC -ne 0 ]]; then
     echo ""
-    echo -e "  ${RED}✖${NC}  lftp failed (exit ${RC}). Protocol log:"
+    echo -e "  ${RED}✖${NC}  lftp failed (exit ${RC})."
+    echo "    ---------- FULL lftp LOG (unfiltered) ----------"
+    redact < /tmp/lftp.log | sed 's/^/      /'
+    echo "    ------------------------------------------------"
+    echo -e "  Filtered highlights:"
     grep -E '^<---|^--->|error|Error|failed|Fatal' /tmp/lftp.log | redact | tail -25 | sed 's/^/        /'
     echo ""
     if grep -qiE '530|login|password|authentic' /tmp/lftp.log; then

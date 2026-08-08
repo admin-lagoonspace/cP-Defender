@@ -126,6 +126,68 @@ jobs:
             echo "::warning::Certificate does NOT validate for ${SG_CDN_FTP_HOST}. Set the SG_CDN_FTP_HOST variable to the host the cert is issued for, or set SG_CDN_INSECURE=1 to skip validation."
           fi
 
+      # Conclusive server-vs-runner test. Prints the runner's public IP, then
+      # proves at each layer whether the SERVER responds: TCP handshake, FTP
+      # banner, TLS, login. Whatever fails first is the answer.
+      - name: Diagnose — is the block server-side?
+        continue-on-error: true
+        env:
+          SG_CDN_USER: ${{ secrets.SG_CDN_USER }}
+          SG_CDN_PASS: ${{ secrets.SG_CDN_PASS }}
+          H: ${{ vars.SG_CDN_FTP_HOST || 'host.lws-s1.com' }}
+        run: |
+          echo "=============================================================="
+          echo " Runner public IP (whitelist THIS if the server is filtering)"
+          echo "=============================================================="
+          curl -s --max-time 15 https://api.ipify.org || echo "(could not determine)"
+          echo ""
+
+          echo "=== 1. DNS ==="
+          getent hosts "$H" || echo "DNS FAILED"
+
+          echo ""
+          echo "=== 2. TCP handshake to port 21 (does the server accept at all?) ==="
+          if timeout 20 bash -c "cat < /dev/null > /dev/tcp/$H/21" 2>/dev/null; then
+            echo "TCP: connection ACCEPTED"
+          else
+            echo "TCP: connection REFUSED or TIMED OUT"
+            echo ">>> The server is not accepting connections from this IP."
+            echo ">>> That is server-side filtering (CSF / cPHulk / host firewall)."
+          fi
+
+          echo ""
+          echo "=== 3. Does the server send an FTP banner? (30s limit) ==="
+          BANNER="$(timeout 30 bash -c "exec 3<>/dev/tcp/$H/21; timeout 20 head -c 200 <&3" 2>/dev/null || true)"
+          if [ -n "$BANNER" ]; then
+            echo "BANNER RECEIVED:"; echo "$BANNER" | tr -d '\r' | head -5
+          else
+            echo "NO BANNER — the TCP port opens but the server never replies."
+            echo ">>> Classic signature of a firewall DROP rule for this IP range."
+          fi
+
+          echo ""
+          echo "=== 4. TLS handshake ==="
+          timeout 30 openssl s_client -connect "$H:21" -starttls ftp -servername "$H" \
+            </dev/null 2>&1 | grep -E '^subject=|Protocol|Verify return code' | head -4 \
+            || echo "TLS handshake did not complete"
+
+          echo ""
+          echo "=== 5. Full FTP login attempt via curl (verbose, password masked) ==="
+          curl -v --ssl-reqd --ftp-pasv --max-time 45 \
+               --config <(printf 'user = "%s:%s"\n' "$SG_CDN_USER" "$SG_CDN_PASS") \
+               "ftp://$H/" --list-only 2>&1 \
+            | sed -E 's/^(> PASS ).*/\1****/' | tail -40 \
+            || echo "curl FTP attempt failed (see above)"
+
+          echo ""
+          echo "=============================================================="
+          echo " READING THIS: if step 2 or 3 fails, the block is SERVER-SIDE."
+          echo " Fix in WHM: ConfigServer Security & Firewall -> Quick Allow"
+          echo " the runner IP above, and cPHulk -> History -> remove any block."
+          echo " GitHub runner IPs ROTATE, so a permanent fix means either"
+          echo " allowing Azure ranges or uploading from a fixed IP instead."
+          echo "=============================================================="
+
       - name: Build release artifacts
         run: bash scripts/make-release.sh
 
