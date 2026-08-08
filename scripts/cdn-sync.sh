@@ -204,6 +204,33 @@ if command -v unzip >/dev/null 2>&1; then
         die "extracted tree is missing VERSION/install.sh — refusing to replace latest/"
     fi
 
+    # ── Remove server-executable code from the public tree ────────────────────
+    # latest/ lives in the docroot, and Apache EXECUTES PHP from it: on this host
+    # backend/lib/*.php returned 200 with an empty body (they ran) and
+    # config.php returned 500 (ran and fataled). Two .htaccess approaches were
+    # tried — SetHandler none, then SetHandler default-handler with RemoveHandler
+    # and ForceType — and BOTH were ignored, because the vhost assigns PHP via a
+    # PHP-FPM proxy handler that .htaccess here is not permitted to override.
+    #
+    # So do not rely on Apache config at all: if the file is not there, it cannot
+    # run. Nothing is lost — the complete build stays available as the checksummed
+    # zip in builds/, dist/ and v<ver>/, which is what installs actually consume.
+    # latest/ exists to serve the shell scripts, VERSION and static assets.
+    #
+    # Set SG_LATEST_FULL=1 to keep the whole tree, only if you have confirmed
+    # PHP execution is genuinely disabled for this directory.
+    if [ "${SG_LATEST_FULL:-0}" != "1" ]; then
+        STRIPPED=$(find "$STAGE" -type f \
+            \( -name '*.php' -o -name '*.phtml' -o -name '*.php[0-9]' \
+               -o -name '*.phps' -o -name '*.cgi' -o -name '*.pl' \) \
+            -print -delete 2>/dev/null | wc -l)
+        # Prune directories left empty by the strip
+        find "$STAGE" -type d -empty -delete 2>/dev/null || true
+        [ "$STRIPPED" -gt 0 ] && log "stripped ${STRIPPED} executable file(s) from latest/ (public docroot)"
+    else
+        log "SG_LATEST_FULL=1 — keeping PHP in latest/; ensure execution is disabled"
+    fi
+
     OLD="${DOCROOT}/.latest.old.$$"
     rm -rf "$OLD"
     if [ -d "${LATEST_DIR}" ]; then

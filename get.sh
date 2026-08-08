@@ -296,6 +296,17 @@ if [[ "$DOWNLOADED" == false ]]; then
     rm -rf "$CAND_DIR"
     if fetch_latest_tree "$BASE" "$CAND_DIR" \
        && [[ -f "${CAND_DIR}/VERSION" && -f "${CAND_DIR}/install.sh" ]]; then
+      # latest/ is published with server-executable files stripped, because it
+      # sits in a public docroot where Apache would run them. That makes it a
+      # browsable reference, NOT an installable build. Verify the backend is
+      # actually present rather than installing a tree with no PHP in it, which
+      # would appear to succeed and leave a broken installation.
+      if [[ ! -f "${CAND_DIR}/backend/api/index.php" ]]; then
+        warn "  latest/ has no backend PHP — it is a reference tree, not an"
+        warn "  installable build. Cannot install from it."
+        rm -rf "$CAND_DIR"
+        continue
+      fi
       TREE_DIR="$CAND_DIR"
       VERSION="$(tr -d '[:space:]' < "${CAND_DIR}/VERSION")"
       SHA=""     # nothing to verify a loose tree against
