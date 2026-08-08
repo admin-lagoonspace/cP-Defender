@@ -230,11 +230,22 @@ if command -v unzip >/dev/null 2>&1; then
 # Sentinel Gate — this tree is for DOWNLOAD ONLY. Never execute anything in it.
 # Written automatically by cdn-sync.sh on every publish; edits here are lost.
 
+# SetHandler default-handler — NOT "none". On cPanel EA4 PHP runs as a PHP-FPM
+# proxy handler assigned in the vhost; "none" merely unsets the local handler and
+# falls through to that inherited one, so .php files kept executing (observed:
+# lib/*.php returned 200 with 0 bytes, config.php returned 500).
+# "default-handler" explicitly forces Apache's core static-file handler.
 <FilesMatch "\.(php|phtml|php[0-9]|phps|cgi|pl|py|sh)$">
-    SetHandler none
+    SetHandler default-handler
     ForceType text/plain
     Options -ExecCGI
 </FilesMatch>
+
+# Belt and braces: strip any inherited proxy/fcgi handler for these extensions
+<IfModule mod_mime.c>
+    RemoveHandler .php .phtml .php3 .php4 .php5 .php6 .php7 .php8 .phps
+    AddType text/plain .php .phtml .phps .cgi .pl .py .sh
+</IfModule>
 
 # mod_php, where present
 <IfModule mod_php.c>
@@ -246,9 +257,6 @@ if command -v unzip >/dev/null 2>&1; then
 <IfModule mod_php5.c>
     php_flag engine off
 </IfModule>
-
-RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .php8 .phps
-RemoveType    .php .phtml
 
 # Directory listings are required: the installer walks this tree as a
 # last-resort source when every zip path fails.
