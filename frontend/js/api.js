@@ -40,6 +40,14 @@ const API = (() => {
         Auth.logout();
       }
 
+      // 402 = the license gate rejected this call. Surface it once, centrally,
+      // so every page gets the same treatment instead of each rendering its own
+      // "Server error". The session stays valid — this is not an auth failure,
+      // and the user still needs the UI to enter a key.
+      if (r.status === 402 && json && json.needs_license) {
+        if (typeof onLicenseBlocked === 'function') onLicenseBlocked(json);
+      }
+
       return json;
     } catch (e) {
       console.error('API fetch error:', e);
@@ -58,6 +66,11 @@ const API = (() => {
     autoLogin:      ()                   => req('GET',  'auth/auto-login'),
     status:         ()                   => req('GET',  'auth/status'),
     changePassword: (username, password) => req('POST', 'auth/change-password', { username, password }),
+
+    // License
+    licenseStatus:   ()    => req('GET',  'license/status'),
+    licenseActivate: (key) => req('POST', 'license/activate', { key }),
+    licenseRefresh:  ()    => req('POST', 'license/refresh'),
 
     // Dashboard
     dashStats: ()  => req('GET', 'dashboard/stats'),

@@ -24,6 +24,7 @@ require_once __DIR__ . '/../lib/RootkitScanner.php';
 require_once __DIR__ . '/../lib/FileIntegrity.php';
 require_once __DIR__ . '/../lib/PHPHardening.php';
 require_once __DIR__ . '/../lib/UpdateChecker.php';
+require_once __DIR__ . '/../lib/License.php';
 
 // ── CORS & Headers ────────────────────────────────────────────────────────────
 header('Content-Type: application/json');
@@ -70,10 +71,42 @@ if (!isset($publicRoutes[$routeKey])) {
     $user = Auth::requireAuth();
 }
 
+// ── License gate ──────────────────────────────────────────────────────────────
+// Deliberately narrow. This is a security product: protection must never stop
+// because of a licensing fault, or a billing/network problem becomes a security
+// incident across every customer at once. Background protection (the scanners,
+// firewall enforcement, the monitor daemon, cron jobs) does not pass through
+// this file at all and is therefore untouched.
+//
+// What IS gated: read/write management endpoints. What stays open even when
+// unlicensed, so an operator can always see state, fix their license, and is
+// never locked out of their own security posture:
+$licenseExempt = [
+    'auth'    => true,   // sign in / out — never lock someone out of the box
+    'license' => true,   // must be reachable to ENTER a key
+    'system'  => true,   // version/health
+];
+if ($user !== null && empty($licenseExempt[$module])) {
+    $lic = License::status();
+    if (!$lic['ui_allowed']) {
+        http_response_code(402);   // Payment Required
+        echo json_encode([
+            'success'       => false,
+            'error'         => $lic['message'],
+            'license_state' => $lic['status'],
+            'code'          => 402,
+            // The UI uses this to show an activation panel rather than an error
+            'needs_license' => true,
+        ]);
+        exit;
+    }
+}
+
 // ── Route dispatcher ──────────────────────────────────────────────────────────
 try {
     $response = match($module) {
         'auth'       => routeAuth($action, $method, $body, $user),
+        'license'    => routeLicense($action, $method, $body, $user),
         'dashboard'  => routeDashboard($action, $method, $query, $user),
         'scanner'    => routeScanner($action, $method, $body, $query, $id, $user),
         'firewall'   => routeFirewall($action, $method, $body, $query, $id, $user),
@@ -192,6 +225,36 @@ function routeAuth(string $action, string $method, array $body, ?array $user): a
         })() : ['success' => false, 'code' => 405],
 
         default  => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+function routeLicense(string $action, string $method, array $body, ?array $user): array {
+    return match($action) {
+        // GET license/status — always reachable, including when unlicensed
+        'status', 'index' => ['success' => true, 'license' => License::status()],
+
+        // POST license/activate {key}
+        'activate' => $method === 'POST' ? (function() use ($body, $user) {
+            Auth::requireRole('admin', $user);
+            $key = trim((string)($body['key'] ?? ''));
+            if ($key === '')
+                return ['success' => false, 'error' => 'License key required', 'code' => 400];
+            $r = License::activate($key);
+            // Never log the key itself
+            Logger::info("License activation attempted by {$user['sub']} — result: {$r['status']}");
+            return ['success' => $r['valid'], 'license' => $r,
+                    'error' => $r['valid'] ? null : $r['message']];
+        })() : ['success' => false, 'code' => 405],
+
+        // POST license/refresh — force a remote re-check
+        'refresh' => $method === 'POST' ? (function() use ($user) {
+            Auth::requireRole('admin', $user);
+            $r = License::refresh();
+            return ['success' => $r['valid'], 'license' => $r,
+                    'error' => $r['valid'] ? null : $r['message']];
+        })() : ['success' => false, 'code' => 405],
+
+        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }
 

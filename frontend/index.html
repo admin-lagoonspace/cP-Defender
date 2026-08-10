@@ -202,7 +202,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.7.1 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.8.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -675,6 +675,43 @@
       <div class="page-header">
         <div><div class="page-title">Settings</div><div class="page-sub">Configure Sentinel Gate modules</div></div>
         <button class="btn btn-primary btn-sm" onclick="saveSettings()">Save Changes</button>
+      </div>
+
+      <!-- ── License ─────────────────────────────────────────────────────── -->
+      <div class="card mb-5" id="license-card">
+        <div class="card-header"><div class="card-title">License</div>
+          <span id="license-badge" class="badge badge-gray">Checking…</span>
+        </div>
+        <div class="card-body">
+          <div id="license-summary" style="font-size:.84rem;color:var(--txt2);line-height:1.6;margin-bottom:14px">
+            Loading license status…
+          </div>
+
+          <div id="license-meta" class="hidden" style="display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:.78rem;margin-bottom:16px">
+            <span style="color:var(--txt3)">Status</span><span id="license-status-val">—</span>
+            <span style="color:var(--txt3)">Expires</span><span id="license-expires-val">—</span>
+            <span style="color:var(--txt3)">Last checked</span><span id="license-checked-val">—</span>
+          </div>
+
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="form-label" for="license-key-input">License key</label>
+            <input class="form-input mono" id="license-key-input" type="text"
+                   placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+          </div>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" onclick="activateLicense()">Activate</button>
+            <button class="btn btn-ghost btn-sm" onclick="refreshLicense()">Re-check now</button>
+          </div>
+
+          <div id="license-error" class="hidden" style="margin-top:12px;font-size:.78rem;color:var(--red2);
+               background:var(--red-dim);border:1px solid rgba(229,49,112,.2);border-radius:8px;padding:9px 12px"></div>
+
+          <div style="margin-top:14px;font-size:.73rem;color:var(--txt3);line-height:1.6">
+            Protection — scanning, firewall, real-time monitoring and quarantine — continues
+            regardless of license state. Only this management interface requires a valid license.
+          </div>
+        </div>
       </div>
 
       <!-- Standalone-mode banner -->

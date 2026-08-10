@@ -854,6 +854,8 @@ function selectPollInterval(seconds) {
 }
 
 async function loadSettings() {
+  loadLicense();   // license card lives on this page
+
   const res = Demo.active
     ? { success: true, data: {
         scan_schedule: 'daily', scan_paths: '/home', auto_quarantine: '1',
@@ -1732,4 +1734,112 @@ async function applyAccountHardening(account) {
   const res = Demo.active ? { success: true, data: { applied: 4 } } : await API.phpApplyAccount(account, settings);
   if (res?.success) { toast(account + ' hardened', 'success'); loadPHPHardening(); }
   else toast(res?.error || 'Harden failed', 'error');
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   License
+   ══════════════════════════════════════════════════════════════════════════════
+   The API returns 402 + needs_license on any gated route. api.js calls
+   onLicenseBlocked() centrally so every page behaves the same way rather than
+   each rendering its own generic error. */
+
+let _licenseBlockedShown = false;
+
+function onLicenseBlocked(payload) {
+  // Only interrupt once per page load — a dashboard fires several parallel
+  // requests and would otherwise stack identical banners.
+  if (_licenseBlockedShown) return;
+  _licenseBlockedShown = true;
+
+  const msg = (payload && payload.error) || 'A valid license is required.';
+  toast(msg, 'error');
+  openPage('settings');
+  setTimeout(() => {
+    const card = document.getElementById('license-card');
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const input = document.getElementById('license-key-input');
+    if (input) input.focus();
+  }, 250);
+  loadLicense();
+}
+
+function _licenseBadgeClass(status) {
+  switch (status) {
+    case 'Active':    return 'badge badge-green';
+    case 'Expired':
+    case 'Suspended':
+    case 'Invalid':   return 'badge badge-red';
+    case 'Unknown':   return 'badge badge-amber';
+    default:          return 'badge badge-gray';
+  }
+}
+
+async function loadLicense() {
+  const badge   = document.getElementById('license-badge');
+  const summary = document.getElementById('license-summary');
+  const meta    = document.getElementById('license-meta');
+  if (!badge) return;
+
+  const res = await API.get('license/status');
+  const lic = res && res.license;
+  if (!lic) {
+    badge.className = 'badge badge-gray';
+    badge.textContent = 'Unavailable';
+    if (summary) summary.textContent = 'Could not read license status.';
+    return;
+  }
+
+  badge.className   = _licenseBadgeClass(lic.status);
+  badge.textContent = lic.status + (lic.degraded ? ' (degraded)' : '');
+  if (summary) summary.textContent = lic.message || '';
+
+  if (meta) {
+    meta.classList.remove('hidden');
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v || '—'; };
+    set('license-status-val', lic.status);
+    set('license-expires-val', lic.expires);
+    set('license-checked-val',
+        lic.checked_at ? new Date(lic.checked_at * 1000).toLocaleString() : 'never');
+  }
+}
+
+function _licenseError(msg) {
+  const box = document.getElementById('license-error');
+  if (!box) return;
+  if (!msg) { box.classList.add('hidden'); box.textContent = ''; return; }
+  box.classList.remove('hidden');
+  box.textContent = msg;
+}
+
+async function activateLicense() {
+  const input = document.getElementById('license-key-input');
+  const key   = input ? input.value.trim() : '';
+  _licenseError('');
+
+  if (!key) { _licenseError('Enter a license key first.'); return; }
+
+  const res = await API.post('license/activate', { key });
+  if (res && res.success) {
+    toast('License activated', 'success');
+    if (input) input.value = '';
+    _licenseBlockedShown = false;   // allow a fresh prompt if it lapses again
+    await loadLicense();
+    // Re-run whatever page the user is on now that the gate has lifted
+    if (typeof refreshDashboard === 'function') refreshDashboard();
+  } else {
+    _licenseError((res && res.error) || 'Activation failed.');
+    await loadLicense();
+  }
+}
+
+async function refreshLicense() {
+  _licenseError('');
+  const res = await API.post('license/refresh');
+  if (res && res.success) {
+    toast('License re-checked', 'success');
+    _licenseBlockedShown = false;
+  } else {
+    _licenseError((res && res.error) || 'Re-check failed.');
+  }
+  await loadLicense();
 }

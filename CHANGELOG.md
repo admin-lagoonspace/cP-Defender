@@ -3,6 +3,33 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.8.0] — 2026-08-08
+
+### Added
+- **Licensing (WHMCS Licensing Addon).** `backend/lib/License.php` verifies the
+  license against the WHMCS licensing server and caches the returned signed local
+  key, so the server is contacted roughly every 15 days rather than on every page
+  load. Local keys are validated through both md5 layers and bound to the issuing
+  hostname, so a key cannot be copied to another server. The `md5hash` echo of our
+  `check_token` is verified with `hash_equals` to reject replayed responses.
+- `sentinel license status | activate <key> | refresh` CLI subcommands. `activate`
+  and `refresh` exit non-zero on a rejected key so scripted installs can branch.
+- `GET license/status`, `POST license/activate`, `POST license/refresh` API routes.
+- **Settings → License** panel: status badge, expiry, last-checked time, key entry
+  and a manual re-check.
+
+### Behaviour
+- **Protection never stops for licensing reasons.** Scanning, firewall
+  enforcement, the real-time monitor and quarantine run regardless of license
+  state — they do not pass through the API and are not gated. Only management
+  endpoints are. An unreachable license server is a warning for a 10-day grace
+  period, not a failure; only an explicit Invalid/Expired/Suspended verdict locks
+  the UI. A licensing fault must never turn into a fleet-wide security incident.
+- `auth`, `license` and `system` routes stay reachable when unlicensed, so an
+  operator can always sign in and enter a key rather than being locked out.
+- Gated calls return `402` with `needs_license`; the UI intercepts this centrally
+  and opens the License panel instead of showing a generic error.
+
 ## [3.7.1] — 2026-08-07
 
 ### Fixed

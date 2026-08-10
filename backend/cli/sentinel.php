@@ -30,6 +30,7 @@ require_once $BASE . '/lib/Logger.php';
 require_once $BASE . '/lib/Scanner.php';
 require_once $BASE . '/lib/Firewall.php';
 require_once $BASE . '/lib/IPReputation.php';
+require_once $BASE . '/lib/License.php';
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 $argv0 = 'sentinel';
@@ -157,6 +158,38 @@ try {
         out((new Scanner())->updateSignatures());
         break;
 
+    case 'license': {
+        $sub = $rest[0] ?? 'status';
+        switch ($sub) {
+        case 'status':
+            out(License::status());
+            break;
+
+        case 'activate': {
+            need_root();
+            $key = $rest[1] ?? '';
+            if ($key === '') fail('usage: sentinel license activate <license-key>');
+            $r = License::activate($key);
+            out($r);
+            // Non-zero exit on a rejected key so scripted installs can branch on it
+            if (!$r['valid']) exit(4);
+            break;
+        }
+
+        case 'refresh': {
+            need_root();
+            $r = License::refresh();
+            out($r);
+            if (!$r['valid']) exit(4);
+            break;
+        }
+
+        default:
+            fail('usage: sentinel license [status|activate <key>|refresh]');
+        }
+        break;
+    }
+
     case 'help':
     case '--help':
     case '-h':
@@ -175,6 +208,9 @@ Usage: sentinel <command> [args] [--json]
   firewall allow   <ip> [note] Whitelist an IP
   reputation <ip>              Look up IP reputation
   update-sigs                  Update malware signatures
+  license status               Show license state
+  license activate <key>       Store and verify a license key
+  license refresh              Force a re-check against the server
 
 Add --json to any command for machine-readable output.
 TXT;
