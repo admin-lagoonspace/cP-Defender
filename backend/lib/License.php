@@ -7,18 +7,19 @@
  *   A signed "local key" is returned and cached so the remote server is only
  *   contacted every LOCALKEY_DAYS, not on every page load.
  *
- * ── FAIL POSTURE — read before changing ──────────────────────────────────────
- * This is a SECURITY product. A licensing fault must never leave a server
- * unprotected: that converts a billing problem into a security incident, and a
- * WHMCS outage would silently disable malware scanning across every customer.
+ * ── ENFORCEMENT POSTURE ──────────────────────────────────────────────────────
+ * EVERY feature is licensed — scanning, firewall, WAF, monitor, quarantine and
+ * the management UI. An unlicensed server gets no functionality.
  *
- * So enforcement is deliberately asymmetric:
- *   * Protection (scanning, firewall, monitor, quarantine) NEVER stops.
- *   * Only the management UI and premium features gate on a license.
- *   * An unreachable license server is a WARNING, not a failure, for
- *     GRACE_DAYS — and even past that it degrades rather than disables.
- * Only an explicit Invalid/Expired/Suspended verdict from the server locks the
- * UI, because that is a real answer rather than an absence of one.
+ * The single deliberate softness is the grace window: a license that verified
+ * successfully keeps working for GRACE_DAYS if the licensing server later
+ * becomes unreachable. This is not a loophole — reaching it requires a local key
+ * that was already signed for THIS hostname, so it cannot be entered without
+ * having been licensed. It exists so an outage at the licensing server does not
+ * disable protection on every paying customer's server at the same moment.
+ *
+ * Past that window, and for Unlicensed/Invalid/Expired/Suspended, everything
+ * stops.
  */
 
 if (!defined('SG_ROOT')) { die('Direct access denied'); }
@@ -65,8 +66,8 @@ class License
         } catch (\Throwable $e) {
             // Any unexpected fault degrades to "unlicensed but protecting"
             self::log('exception: ' . $e->getMessage());
-            self::$cache = self::result('Unknown', false, true, true,
-                'License check failed — protection continues.');
+            self::$cache = self::result('Unknown', false, false, true,
+                'License check failed.');
         }
         return self::$cache;
     }
@@ -78,12 +79,65 @@ class License
     }
 
     /**
-     * Whether the management UI should be usable. Separate from isValid() on
-     * purpose — see the fail-posture note above.
+     * Whether the management UI should be usable.
      */
     public static function uiAllowed(): bool
     {
         return self::status()['ui_allowed'];
+    }
+
+    /**
+     * Whether protection features (scanning, firewall, monitor, quarantine) may
+     * run. Everything is licensed — an unlicensed server gets no functionality.
+     *
+     * This is TRUE only for a license that is, or recently was, good:
+     *   Active                                   -> true
+     *   Active but server unreachable, in grace  -> true  (cached local key)
+     *   Unlicensed / Invalid / Expired / Suspended -> false
+     *   Unreachable past the grace window        -> false
+     *
+     * The grace window is the one deliberate softness, and it is not a loophole:
+     * it requires a previously-verified local key signed for THIS hostname, so it
+     * cannot be reached without having been licensed. It exists so an outage at
+     * the licensing server does not simultaneously disable protection on every
+     * paying customer's server.
+     */
+    public static function protectionAllowed(): bool
+    {
+        return self::status()['protection_allowed'];
+    }
+
+    /**
+     * Hard gate for CLI and cron entry points. Prints a consistent message and
+     * exits non-zero when the licence does not permit the action.
+     */
+    public static function requireValid(string $context = 'This feature'): void
+    {
+        $s = self::status();
+        if ($s['protection_allowed']) { return; }
+
+        $msg = "$context requires a valid Sentinel Gate license.\n"
+             . "  Status : {$s['status']}\n"
+             . "  {$s['message']}\n"
+             . "  Activate with:  sentinel license activate <key>\n";
+        if (PHP_SAPI === 'cli') { fwrite(STDERR, $msg); }
+        self::log("blocked: $context — {$s['status']}");
+        exit(4);
+    }
+
+    /**
+     * Publish the decision where non-PHP components can read it. monitor.py is
+     * Python and cannot validate a signed local key itself; re-implementing the
+     * crypto there would mean two implementations to keep in sync and two places
+     * to get wrong. The daemon reads this flag instead, and the timestamp lets it
+     * refuse to trust a flag that has gone stale (i.e. PHP has stopped running).
+     */
+    public static function publishFlag(): void
+    {
+        $s = self::status();
+        Database::setSetting('license_protection_ok', $s['protection_allowed'] ? '1' : '0');
+        Database::setSetting('license_flag_at', (string)time());
+        Database::setSetting('license_status', $s['status']);
     }
 
     /** Store a license key and immediately verify it remotely. */
@@ -138,7 +192,7 @@ class License
                 }
                 // Past grace. Degrade the UI, but keep protecting.
                 return self::result('Unknown', false, false, true,
-                    'License server unreachable beyond the grace period. Protection continues; management UI locked.');
+                    'License server unreachable beyond the grace period. Features are disabled until the license can be verified.');
             }
             self::log('local key failed validation — discarding');
         }
@@ -272,6 +326,9 @@ class License
             'status'     => $status,
             'valid'      => $valid,
             'ui_allowed' => $ui,
+            // Everything is licensed. Protection tracks validity exactly: a
+            // server that is not licensed gets no functionality at all.
+            'protection_allowed' => $valid,
             'degraded'   => $degraded,
             'message'    => $msg,
             'expires'    => $expires,

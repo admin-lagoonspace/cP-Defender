@@ -101,6 +101,7 @@ try {
 
     case 'scan': {
         need_root();
+        License::requireValid('Scanning');
         $path = '/home';
         $type = 'quick';
         foreach ($rest as $a) {
@@ -119,6 +120,9 @@ try {
     case 'firewall': {
         $sub = $rest[0] ?? 'list';
         $fw  = new Firewall();
+        // Reads are allowed so an operator can always inspect state;
+        // anything that CHANGES protection requires a license.
+        if ($sub !== 'list') License::requireValid('Firewall management');
         switch ($sub) {
         case 'list':
             out(['blocked' => $fw->getBlockedIPs(100, 0), 'rules' => $fw->getRules()]);
@@ -148,6 +152,7 @@ try {
     }
 
     case 'reputation': {
+        License::requireValid('IP reputation lookup');
         $ip = $rest[0] ?? ''; if (!valid_ip($ip)) fail('usage: sentinel reputation <ip>');
         out((new IPReputation())->check($ip));
         break;
@@ -155,6 +160,7 @@ try {
 
     case 'update-sigs':
         need_root();
+        License::requireValid('Signature updates');
         out((new Scanner())->updateSignatures());
         break;
 

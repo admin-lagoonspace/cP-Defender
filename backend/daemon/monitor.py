@@ -194,9 +194,49 @@ def quarantine(conn, path, tid):
         log.warning('Quarantine failed %s: %s', path, e)
 
 def flush(conn):
+    global _running
     db_set(conn,'rt_files_checked',str(_chk))
     db_set(conn,'rt_threats_found', str(_thr))
     db_set(conn,'rt_last_activity', str(int(time.time())))
+
+    # Re-verify while running. Checking only at startup would let a licence that
+    # lapses (or is revoked) keep the daemon alive indefinitely, since this
+    # process can run for weeks.
+    allowed, why = license_ok(conn)
+    if not allowed:
+        log.error('License no longer valid (%s) — stopping monitor', why)
+        db_set(conn, 'rt_monitor_status', 'unlicensed')
+        _running = False
+
+
+# ── License gate ──────────────────────────────────────────────────────────────
+# The daemon cannot validate a signed local key itself — that logic lives in
+# PHP (License.php) and re-implementing the crypto here would mean two
+# implementations to keep in sync and two chances to get it wrong. Instead PHP
+# publishes its decision into the settings table and the daemon reads it.
+#
+# The staleness check matters: if PHP has not run for longer than FLAG_MAX_AGE
+# the flag is treated as untrustworthy rather than as permission. Otherwise a
+# customer could license once, delete the cron that refreshes the flag, and the
+# daemon would keep running on a permission that is never re-verified.
+FLAG_MAX_AGE = 3 * 86400          # 3 days — cron refreshes it hourly
+
+def license_ok(conn):
+    """(allowed, reason)"""
+    ok    = db_get(conn, 'license_protection_ok', '')
+    at    = db_get(conn, 'license_flag_at', '0')
+    state = db_get(conn, 'license_status', 'Unknown')
+    try:
+        age = time.time() - int(at or 0)
+    except ValueError:
+        age = FLAG_MAX_AGE + 1
+
+    if ok != '1':
+        return False, f'license status: {state}'
+    if age > FLAG_MAX_AGE:
+        return False, (f'license flag is {int(age/86400)}d old — not re-verified. '
+                       'Is the Sentinel Gate cron still installed?')
+    return True, state
 
 def watch_paths(conn):
     raw = db_get(conn,'scan_paths','/home')
@@ -265,6 +305,14 @@ def main():
     conn = None
     try:
         conn = db_connect()
+
+        allowed, why = license_ok(conn)
+        if not allowed:
+            log.error('Real-time monitoring requires a valid license (%s)', why)
+            db_set(conn, 'rt_monitor_status', 'unlicensed')
+            db_set(conn, 'rt_engine', 'disabled')
+            return
+
         db_set(conn,'rt_monitor_status','running')
         cpu = get_cpu_limit(conn)
         apply_cpu_priority(cpu)

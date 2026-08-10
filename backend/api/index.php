@@ -72,23 +72,16 @@ if (!isset($publicRoutes[$routeKey])) {
 }
 
 // ── License gate ──────────────────────────────────────────────────────────────
-// Deliberately narrow. This is a security product: protection must never stop
-// because of a licensing fault, or a billing/network problem becomes a security
-// incident across every customer at once. Background protection (the scanners,
-// firewall enforcement, the monitor daemon, cron jobs) does not pass through
-// this file at all and is therefore untouched.
-//
-// What IS gated: read/write management endpoints. What stays open even when
-// unlicensed, so an operator can always see state, fix their license, and is
-// never locked out of their own security posture:
+// EVERY feature is licensed. Only the routes needed to sign in and enter a key
+// stay open — without those an unlicensed server would be unrecoverable, since
+// there would be no way to supply the license that unlocks it.
 $licenseExempt = [
-    'auth'    => true,   // sign in / out — never lock someone out of the box
+    'auth'    => true,   // sign in / out — otherwise the key can never be entered
     'license' => true,   // must be reachable to ENTER a key
-    'system'  => true,   // version/health
 ];
 if ($user !== null && empty($licenseExempt[$module])) {
     $lic = License::status();
-    if (!$lic['ui_allowed']) {
+    if (!$lic['protection_allowed']) {
         http_response_code(402);   // Payment Required
         echo json_encode([
             'success'       => false,

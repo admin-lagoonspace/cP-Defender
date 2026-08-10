@@ -15,6 +15,16 @@ require_once __DIR__ . '/../config/config.php';
 require_once SG_ROOT . '/backend/lib/Database.php';
 require_once SG_ROOT . '/backend/lib/Logger.php';
 require_once SG_ROOT . '/backend/lib/Scanner.php';
+require_once SG_ROOT . '/backend/lib/License.php';
+
+// ── License gate ─────────────────────────────────────────────────────────────
+// Scheduled scans never touch the API, so they must be gated here or an
+// unlicensed server would keep receiving scans indefinitely via cron.
+// publishFlag() also refreshes the flag monitor.py reads — this cron is the
+// most reliable place to keep that fresh, since it runs hourly regardless of
+// whether anyone opens the dashboard.
+License::publishFlag();
+License::requireValid('Scheduled scanning');
 
 $jobId    = null;
 $scanPath = null;

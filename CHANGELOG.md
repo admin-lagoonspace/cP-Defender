@@ -3,6 +3,36 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.8.1] — 2026-08-08
+
+### Changed
+- **Every feature now requires a valid license.** 3.8.0 gated only the
+  management UI; scanning, firewall, WAF, IP reputation and real-time monitoring
+  kept running unlicensed, which gave the product away. Enforcement now covers
+  every path that can do work:
+  - **Web API** — all modules. Only `auth` and `license` stay reachable, because
+    without them an unlicensed server could never be given a key and would be
+    unrecoverable.
+  - **Cron** — `backend/cron/scan.php` exits unless licensed. Scheduled scans
+    never touch the API, so without this an unlicensed server kept scanning
+    hourly forever.
+  - **Monitor daemon** — checked at startup *and* re-checked periodically. A
+    startup-only check would let a license that lapses keep a long-running
+    daemon alive indefinitely.
+  - **CLI** — `scan`, `update-sigs`, `reputation` and firewall write operations.
+    `firewall list` stays open so an operator can still inspect state.
+- The daemon is Python and cannot validate a signed local key, so PHP publishes
+  its decision to the settings table and the daemon reads it. The flag carries a
+  timestamp and is rejected once older than 3 days: otherwise a customer could
+  license once, remove the cron that refreshes it, and run indefinitely on a
+  permission that is never re-verified.
+- The grace window is retained and is the only softness: a license that verified
+  successfully keeps working for 10 days if the licensing server later becomes
+  unreachable. It cannot be reached without having been licensed, since it
+  requires a local key already signed for that hostname. It exists so an outage
+  at the licensing server does not disable protection across every paying
+  customer at the same moment.
+
 ## [3.8.0] — 2026-08-08
 
 ### Added
