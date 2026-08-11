@@ -303,6 +303,12 @@ cat > "${INSTALL_DIR}/backend/config/mode.php" << MODEPHP
 define('INSTALL_MODE', '${INSTALL_MODE}');
 define('SG_ROOT',      '${INSTALL_DIR}');
 define('SG_VERSION',   '${SG_VERSION}');
+// Licensing. SG_LICENSE_SECRET must match the salt configured in the WHMCS
+// licensing addon — it is what makes a cached local key unforgeable. Supply it
+// at install time with SG_LICENSE_SECRET=... ; the placeholder is deliberately
+// obvious so a misconfiguration is visible rather than silently insecure.
+define('SG_WHMCS_URL',     '${SG_WHMCS_URL:-https://clientarea.lagoonspace.net}');
+define('SG_LICENSE_SECRET','${SG_LICENSE_SECRET:-CHANGEME_SET_IN_mode_php}');
 MODEPHP
 ok "Install mode recorded"
 

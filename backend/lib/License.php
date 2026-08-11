@@ -26,14 +26,25 @@ if (!defined('SG_ROOT')) { die('Direct access denied'); }
 
 class License
 {
-    /** WHMCS installation that issues licenses. Override in mode.php. */
-    const WHMCS_URL = 'https://billing.lws-s1.com';
+    /**
+     * WHMCS installation that issues licenses. Verified reachable — a POST to
+     * /modules/servers/licensing/verify.php returns <status>Invalid</status>
+     * for an unknown key, which is the expected addon response format.
+     * Override with SG_WHMCS_URL in mode.php.
+     */
+    const WHMCS_URL = 'https://clientarea.lagoonspace.net';
 
     /**
-     * Salts the local key so ours cannot be produced by another addon user.
-     * MUST match the licensing addon's configured secret. Not a credential the
-     * customer ever sees, but treat it as a secret in this repo's context: it is
-     * what stops a customer forging their own "Active" local key.
+     * Fallback local-key salt. This MUST be overridden with SG_LICENSE_SECRET in
+     * backend/config/mode.php, which is generated per-installation and is NOT in
+     * the repository.
+     *
+     * Why it must not live here: the salt is what makes a local key
+     * unforgeable. This repository is PUBLIC — a value committed here is a value
+     * every customer can read, and anyone who has it can mint their own
+     * "Active" local key and bypass licensing entirely. The constant below is
+     * deliberately an obvious placeholder so a misconfiguration is visible
+     * rather than silently insecure; secretConfigured() reports on it.
      */
     const SECRET = 'CHANGEME_SET_IN_mode_php';
 
@@ -233,7 +244,7 @@ class License
         // Guard against a replayed/spoofed response: WHMCS echoes an md5 of the
         // token we just generated, salted with our secret.
         if (!empty($results['md5hash'])) {
-            $expected = md5(self::SECRET . $checkToken);
+            $expected = md5(self::secret() . $checkToken);
             if (!hash_equals($expected, (string)$results['md5hash'])) {
                 self::log('remote check: md5hash mismatch — response not trusted');
                 return self::result('Invalid', false, false, false,
@@ -241,8 +252,12 @@ class License
             }
         }
 
-        if ($results['status'] === 'Active' && !empty($results['localkey'])) {
-            Database::setSetting('license_localkey', (string)$results['localkey']);
+        // The server does NOT return a local key — the client builds one from the
+        // response. Reading a 'localkey' field off the reply (as an earlier
+        // version did) means nothing is ever cached and every single page load
+        // hits the licensing server.
+        if ($results['status'] === 'Active') {
+            Database::setSetting('license_localkey', self::buildLocalKey($results));
             Database::setSetting('license_checked_at', (string)time());
         }
 
@@ -252,38 +267,67 @@ class License
     // ── Local key handling ───────────────────────────────────────────────────
 
     /**
-     * Validate and decode a stored local key.
+     * Build the cached local key from a successful check, in the exact layout
+     * the WHMCS licensing addon defines:
      *
-     * The key is: base64(serialize(results)) with an md5(data+SECRET) suffix,
-     * then reversed with a second md5(checkdate+SECRET) suffix. Both hashes must
-     * verify, and the domain/ip must still match, or the key is rejected —
-     * otherwise a valid key could simply be copied to another server.
+     *   d = base64(serialize(results))
+     *   d = md5(checkdate + secret) . d          (32-char hash PREPENDED)
+     *   d = strrev(d)
+     *   d = d . md5(d + secret)                  (32-char hash APPENDED)
+     *
+     * checkdate is stored inside the serialised payload, not in the string —
+     * decodeLocalKey() has to unserialise before it can verify the inner hash.
+     */
+    private static function buildLocalKey(array $results): string
+    {
+        $results['checkdate'] = date('Ymd');
+        // Bind to this machine so a key lifted from one server is rejected on another
+        $results['domain'] = self::hostname();
+        $results['ip']     = self::serverIp();
+
+        $d = base64_encode(serialize($results));
+        $d = md5($results['checkdate'] . self::secret()) . $d;
+        $d = strrev($d);
+        $d = $d . md5($d . self::secret());
+        return wordwrap($d, 80, "
+", true);
+    }
+
+    /**
+     * Validate and decode a stored local key — the inverse of buildLocalKey().
+     *
+     * Both md5 layers must verify and the domain must still match, or the key is
+     * rejected: otherwise a valid key could simply be copied to another server.
      *
      * @return array{results:array,checkdate:string}|null
      */
     private static function decodeLocalKey(string $localkey): ?array
     {
-        $localkey = str_replace("\n", '', $localkey);
-        if (strlen($localkey) < 41) { return null; }
+        $localkey = str_replace("
+", '', $localkey);
+        if (strlen($localkey) < 65) { return null; }
 
+        // Outer layer: trailing md5 over everything before it
         $data = substr($localkey, 0, -32);
         $hash = substr($localkey, -32);
-        if (!hash_equals(md5($data . self::SECRET), $hash)) { return null; }
+        if (!hash_equals(md5($data . self::secret()), $hash)) { return null; }
 
-        $data = strrev($data);
-        if (strlen($data) < 41) { return null; }
-        $checkdate = substr($data, 0, 8);
-        $data      = substr($data, 8);
+        // Un-reverse, then the FIRST 32 chars are md5(checkdate + secret)
+        $data      = strrev($data);
+        $innerHash = substr($data, 0, 32);
+        $payload   = substr($data, 32);
 
-        $hash = substr($data, -32);
-        $data = substr($data, 0, -32);
-        if (!hash_equals(md5($checkdate . self::SECRET), $hash)) { return null; }
-
-        $decoded = base64_decode($data, true);
+        $decoded = base64_decode($payload, true);
         if ($decoded === false) { return null; }
 
         $results = @unserialize($decoded, ['allowed_classes' => false]);
-        if (!is_array($results)) { return null; }
+        if (!is_array($results) || empty($results['checkdate'])) { return null; }
+
+        // checkdate lives inside the payload, so the inner hash can only be
+        // verified after unserialising.
+        if (!hash_equals(md5((string)$results['checkdate'] . self::secret()), $innerHash)) {
+            return null;
+        }
 
         // A local key is bound to the machine it was issued for.
         if (!empty($results['domain']) && $results['domain'] !== self::hostname()) {
@@ -291,7 +335,7 @@ class License
             return null;
         }
 
-        $ts = strtotime($checkdate);
+        $ts = strtotime((string)$results['checkdate']);
         if ($ts === false) { return null; }
 
         return ['results' => $results, 'checkdate' => (string)$ts];
@@ -341,6 +385,20 @@ class License
     private static function whmcsUrl(): string
     {
         return defined('SG_WHMCS_URL') ? SG_WHMCS_URL : self::WHMCS_URL;
+    }
+
+    /** The per-installation salt, from mode.php when present. */
+    private static function secret(): string
+    {
+        return defined('SG_LICENSE_SECRET') && SG_LICENSE_SECRET !== ''
+            ? SG_LICENSE_SECRET
+            : self::SECRET;
+    }
+
+    /** False when still running on the placeholder salt. */
+    public static function secretConfigured(): bool
+    {
+        return self::secret() !== 'CHANGEME_SET_IN_mode_php';
     }
 
     private static function hostname(): string

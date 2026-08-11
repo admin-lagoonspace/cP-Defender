@@ -3,6 +3,33 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.8.2] — 2026-08-08
+
+### Fixed
+- **The local-key cache never worked.** The client read `localkey` from the
+  WHMCS response, but the addon does not send one — the client is required to
+  build it from the reply. Nothing was ever cached, so every page load, cron run
+  and CLI call would have made a fresh remote check, hammering the licensing
+  server and failing closed the moment it was briefly unreachable.
+- **`decodeLocalKey()` used the wrong layout.** It read 8 bytes off the front as
+  a date; in the real format the first 32 bytes after `strrev` are
+  `md5(checkdate + secret)`, and `checkdate` lives *inside* the serialised
+  payload, so it can only be verified after unserialising. Any key that had been
+  written would have failed to validate.
+- Both are now implemented to the addon's actual format and proven by a
+  round-trip test: build → decode recovers `Active`, and wrong secret, flipped
+  byte, truncation, host copy and a key forged without the secret are all
+  rejected.
+
+### Changed
+- `SG_WHMCS_URL` defaults to the real licensing server. Verified live: a POST to
+  `/modules/servers/licensing/verify.php` returns `<status>Invalid</status>` for
+  an unknown key, matching the parser.
+- The local-key salt is read from `SG_LICENSE_SECRET` in `mode.php`, written by
+  the installer, rather than being a constant in a public repository.
+- The local key is bound to the issuing hostname and IP at build time, so a key
+  lifted from one server is rejected on another.
+
 ## [3.8.1] — 2026-08-08
 
 ### Changed
