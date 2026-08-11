@@ -2436,7 +2436,23 @@ async function enforceLicenseGate() {
   // their own dashboard, so an unreadable response is allowed through — the API
   // itself still returns 402 on anything gated, so nothing is actually exposed.
   if (!lic) return true;
-  if (lic.protection_allowed) return true;
+  if (lic.protection_allowed) {
+    // Trial counts as allowed, but the operator must be told it is running out
+    // — otherwise protection stops one day with no warning given.
+    if (lic.trial) showTrialBanner(lic.trial_days_left);
+    return true;
+  }
   showActivateScreen(lic);
   return false;
+}
+
+
+/* Trial banner. Shown only while the initial grace period is active — a licence
+   that lapses without warning looks like a fault rather than an expiry. */
+function showTrialBanner(daysLeft) {
+  const el = document.getElementById('trial-banner');
+  if (!el) return;
+  const d = document.getElementById('trial-days');
+  if (d) d.textContent = daysLeft === 1 ? '1 day' : daysLeft + ' days';
+  el.classList.remove('hidden');
 }

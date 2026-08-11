@@ -313,6 +313,12 @@ define('SG_LICENSE_SECRET','${SG_LICENSE_SECRET:-CHANGEME_SET_IN_mode_php}');
 MODEPHP
 ok "Install mode recorded"
 
+# Stamp the install time so the trial starts at install rather than at first
+# login — otherwise a server set up and left alone would still show 3 full days
+# whenever someone eventually opened the dashboard.
+mkdir -p /var/lib/sentinel-gate 2>/dev/null || true
+[[ -f /var/lib/sentinel-gate/installed-at ]] || date +%s > /var/lib/sentinel-gate/installed-at
+
 # ── Initialize database ────────────────────────────────────────────────────────
 section "Initialising database"
 php -r "
@@ -1305,9 +1311,9 @@ if [[ $TEST_EXIT -eq 0 ]]; then
   # Activation is the required next step, and without saying so the operator
   # opens the dashboard, finds every feature refused, and reasonably concludes
   # the install failed.
-  echo -e "  ${YELLOW}${BOLD}┌─ NEXT STEP: ACTIVATE YOUR LICENCE ─────────────────────┐${NC}"
-  echo -e "  ${YELLOW}${BOLD}│${NC}  Sentinel Gate is installed but not yet licensed."
-  echo -e "  ${YELLOW}${BOLD}│${NC}  Protection stays off until a licence is activated."
+  echo -e "  ${YELLOW}${BOLD}┌─ 3-DAY TRIAL ACTIVE ───────────────────────────────────┐${NC}"
+  echo -e "  ${YELLOW}${BOLD}│${NC}  Full protection is running for the next 3 days."
+  echo -e "  ${YELLOW}${BOLD}│${NC}  Activate a licence before then to keep it running."
   echo -e "  ${YELLOW}${BOLD}│${NC}"
   echo -e "  ${YELLOW}${BOLD}│${NC}  From the dashboard: an activation screen is shown on"
   echo -e "  ${YELLOW}${BOLD}│${NC}  first sign-in — paste your key there."

@@ -3,6 +3,31 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.18.0] — 2026-08-08
+
+### Added
+- **3-day trial from install.** A fresh installation runs with full protection
+  for three days, so the product is usable immediately and licensing can be
+  completed afterwards. The dashboard shows a banner with the days remaining —
+  protection stopping one day with no warning would look like a fault rather
+  than an expiry.
+- The installer stamps the trial start at install time, not first login. A
+  server set up and left alone would otherwise still show three full days
+  whenever someone eventually opened the dashboard.
+
+### Trial cannot be reset
+- It applies **only to an install that has never had a key entered**. Storing a
+  key — even one that is rejected — sets `license_ever_entered` permanently, so
+  a customer whose licence expires cannot clear it and be handed another free
+  period, repeatedly.
+- The install timestamp is written to both the database and
+  `/var/lib/sentinel-gate/installed-at`, and the **earliest** of the two is
+  used. Either alone would be trivial to reset; the marker is outside the
+  install directory so an update, which rsyncs it with `--delete`, cannot clear
+  it, and a missing copy is restored from the other rather than starting fresh.
+- Verified across seven scenarios including "expired key cleared on day 1",
+  which correctly grants nothing.
+
 ## [3.17.0] — 2026-08-08
 
 ### Changed

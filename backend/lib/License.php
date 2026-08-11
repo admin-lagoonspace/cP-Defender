@@ -54,6 +54,23 @@ class License
     /** Extra days tolerated when the license server cannot be reached. */
     const GRACE_DAYS = 10;
 
+    /**
+     * Days a brand-new install runs before a licence is required.
+     *
+     * Applies ONLY to an install that has never had a key entered. If it applied
+     * to any not-valid state, a customer whose licence expired could delete the
+     * key and be handed a fresh trial, repeatedly and indefinitely.
+     */
+    const TRIAL_DAYS = 3;
+
+    /**
+     * Install timestamp is written here as well as to the database.
+     * Kept outside the install directory so an update — which rsyncs over it
+     * with --delete — cannot reset the trial, and the EARLIEST of the two is
+     * used so removing one does not extend it either.
+     */
+    const INSTALL_MARKER = '/var/lib/sentinel-gate/installed-at';
+
     /** Seconds to wait on the license server before giving up. */
     const TIMEOUT = 12;
 
@@ -81,6 +98,60 @@ class License
                 'License check failed.');
         }
         return self::$cache;
+    }
+
+    /**
+     * When this installation first ran. Recorded in two places and the earliest
+     * is taken: the database can be edited and the marker file deleted, so
+     * either alone would be trivial to reset.
+     */
+    public static function installedAt(): int
+    {
+        $db   = (int)Database::getSetting('installed_at', 0);
+        $file = 0;
+        if (is_readable(self::INSTALL_MARKER)) {
+            $file = (int)trim((string)@file_get_contents(self::INSTALL_MARKER));
+        }
+
+        $candidates = array_filter([$db, $file]);
+        if (!$candidates) {
+            // First ever call — stamp both.
+            $now = time();
+            Database::setSetting('installed_at', (string)$now);
+            @mkdir(dirname(self::INSTALL_MARKER), 0755, true);
+            @file_put_contents(self::INSTALL_MARKER, (string)$now);
+            return $now;
+        }
+
+        $earliest = min($candidates);
+        // Re-sync whichever copy is missing or later, so a deleted marker is
+        // restored from the database rather than granting a new trial.
+        if ($db === 0 || $db > $earliest)   { Database::setSetting('installed_at', (string)$earliest); }
+        if ($file === 0 || $file > $earliest) {
+            @mkdir(dirname(self::INSTALL_MARKER), 0755, true);
+            @file_put_contents(self::INSTALL_MARKER, (string)$earliest);
+        }
+        return $earliest;
+    }
+
+    /** Whole days remaining in the trial; 0 once it has ended. */
+    public static function trialDaysLeft(): int
+    {
+        $elapsed = (time() - self::installedAt()) / 86400;
+        return (int)max(0, ceil(self::TRIAL_DAYS - $elapsed));
+    }
+
+    /**
+     * Is the trial still usable?
+     *
+     * Requires that no key has ever been entered. Once a key is stored — even a
+     * rejected one — the trial is spent, so it cannot be re-entered by clearing
+     * the key.
+     */
+    private static function trialActive(): bool
+    {
+        if (Database::getSetting('license_ever_entered', '0') === '1') { return false; }
+        return self::trialDaysLeft() > 0;
     }
 
     /** True only for a confirmed-good license. */
@@ -160,6 +231,9 @@ class License
         }
         Database::setSetting('license_key', $key);
         Database::setSetting('license_localkey', '');   // force a remote check
+        // Entering a key ends the trial permanently, so an expired licence
+        // cannot be swapped for another free period by clearing it.
+        Database::setSetting('license_ever_entered', '1');
         self::$cache = null;
         return self::status();
     }
@@ -178,8 +252,17 @@ class License
     {
         $key = (string)Database::getSetting('license_key', '');
         if ($key === '') {
+            if (self::trialActive()) {
+                $left = self::trialDaysLeft();
+                $r = self::result('Trial', true, true, false,
+                    'Trial — ' . $left . ' day' . ($left === 1 ? '' : 's') . ' remaining. '
+                  . 'Activate a licence to keep protection running.');
+                $r['trial']           = true;
+                $r['trial_days_left'] = $left;
+                return $r;
+            }
             return self::result('Unlicensed', false, false, false,
-                'No license key configured. Enter one in Settings → License.');
+                'No licence key configured. Enter one to switch on protection.');
         }
 
         // 1. Try the cached local key first — avoids hitting WHMCS every load.
