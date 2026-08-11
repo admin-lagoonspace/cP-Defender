@@ -57,15 +57,12 @@
 <!-- ══ TOP BAR ═══════════════════════════════════════════════════════════════ -->
 <header class="topbar">
   <div class="topbar-brand">
-    <!-- Full horizontal lockup. The wordmark is part of the artwork, so there is
-         deliberately no HTML text here — duplicating it would render the name
-         twice, which is the bug fixed in 3.9.1.
-         onerror keeps the brand legible if the asset is missing rather than
-         leaving an empty broken-image box in the header. -->
-    <img src="images/logo-lockup.png" alt="Sentinel Gate — Server Protection"
-         class="brand-lockup"
-         onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
-    <div class="brand-fallback" style="display:none">
+    <!-- Same file as the login hero, cropped by CSS to the shield mark. The
+         wordmark is cropped out here, so the HTML text carries the name — this
+         is not the 3.9.1 duplication, which was two full lockups stacked. -->
+    <img src="images/logo-lockup.png" alt="" class="brand-lockup" aria-hidden="true"
+         onerror="this.style.display='none'">
+    <div>
       <div class="brand-name">Sentinel Gate</div>
       <div class="brand-sub">Server Protection</div>
     </div>
