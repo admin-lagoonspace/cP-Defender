@@ -1,8 +1,11 @@
 # Installation & Uninstallation
 
-Sentinel Gate installs on cPanel/WHM servers and on standalone Linux servers
-with a single command. The installer detects which kind of server it is on and
-configures itself accordingly.
+Sentinel Gate is a complete server security suite for cPanel/WHM and standalone
+Linux servers. It installs with a single command and brings its own firewall,
+malware scanner, rootkit detection and web application firewall — there is
+nothing to download or configure beforehand.
+
+**Every installation includes a 3-day trial with full protection active.**
 
 ---
 
@@ -16,9 +19,9 @@ configures itself accordingly.
 | **Disk space** | ~50 MB, plus room for quarantine and logs |
 | **Network** | Outbound HTTPS to `defender.lws-s1.com` |
 
-You do not need to install ClamAV beforehand. If it is already present the
-scanner will use it; if not, Sentinel Gate uses its own pattern-based engine
-until you install it.
+You do **not** need to install ClamAV, CSF, ModSecurity or rkhunter first.
+Sentinel Gate installs what it needs and includes its own engines where no
+third-party tool is present.
 
 ---
 
@@ -47,10 +50,41 @@ Installation takes one to three minutes.
    - **cPanel/WHM** — registers the WHM plugin, adds the Apache alias, installs
      the per-account plugin for the Jupiter and Paper Lantern themes
    - **Standalone Linux** — starts a self-contained dashboard on port `31150`
-5. Installs scheduled scans and the real-time file monitor service
-6. Runs a self-test and reports the result
+5. Sets up the firewall engine, installing `nftables` if no packet filter exists
+6. Installs ClamAV and downloads malware signatures
+7. Installs scheduled scans and the real-time file monitor
+8. Runs a self-test and reports the result
 
 If the checksum does not match, the installer stops rather than continuing.
+
+---
+
+## Your 3-day trial
+
+Full protection is active immediately after installation for **three days**. The
+dashboard shows the days remaining.
+
+To keep protection running after the trial, activate a licence:
+
+> **Settings → Licence → Enter licence key**
+
+Or from the command line:
+
+```bash
+sentinel license activate YOUR-LICENCE-KEY
+sentinel license status
+```
+
+The licence is verified once and then cached locally, so day-to-day use does not
+depend on network access. The licensing server is contacted again roughly every
+15 days.
+
+If the licensing server is temporarily unreachable, an already-verified licence
+keeps working for 10 days so a network problem never interrupts protection.
+
+**When the trial ends without a licence**, the dashboard shows an activation
+screen and protection pauses until a key is entered. Your settings, scan history
+and quarantined files are all retained.
 
 ---
 
@@ -81,28 +115,33 @@ hash and cannot be recovered.
 
 ---
 
-## Activating your license
+## What is included
 
-Sentinel Gate requires a license key. Enter it at:
+| Feature | Notes |
+|---|---|
+| **Malware scanning** | ClamAV plus a built-in pattern engine that needs no signature database |
+| **Firewall** | Built in. Uses CSF or firewalld if already present, otherwise manages nftables or iptables directly |
+| **Web application firewall** | Installs and configures ModSecurity with the OWASP Core Rule Set |
+| **Rootkit detection** | Built-in engine; also uses rkhunter when installed |
+| **IP reputation** | Checks your server against 25 public blocklists |
+| **Real-time monitoring** | Watches for file changes as they happen |
+| **Scheduled scans** | Configurable in Settings |
 
-> **Settings → License → Enter license key**
+Nothing here requires a separate purchase or install.
 
-Or from the command line:
+### Enabling the web application firewall
 
-```bash
-sentinel license activate YOUR-LICENSE-KEY
-sentinel license status
-```
+The WAF is not switched on automatically, because a misconfigured rule can block
+legitimate visitors. To enable it:
 
-The license is verified against our licensing server and then cached locally, so
-routine use does not depend on network access. The server is contacted again
-roughly every 15 days.
+> **WAF → Install ModSecurity + OWASP CRS**
 
-**If the licensing server is temporarily unreachable, protection continues.**
-Scanning, the firewall, the real-time monitor and quarantine keep running
-regardless of license state — a licensing problem is never allowed to leave a
-server unprotected. Only the management interface is gated, and only after an
-extended grace period or an explicit rejection.
+It starts in **Detection only** — attacks are logged but not blocked. Review the
+audit log, then switch to **Blocking** when you are satisfied the rules are not
+matching normal traffic.
+
+The Sentinel Gate dashboard is always exempt from the rules, so a false positive
+cannot lock you out of the page you would need to turn the WAF off.
 
 ---
 
@@ -137,7 +176,7 @@ curl -fsSL .../get.sh | SG_ADMIN_PASS='your-password' bash -s -- --mode standalo
 | `--admin-user NAME` | Standalone admin username (default: `admin`) |
 | `--admin-pass PASS` | Standalone admin password (prefer `SG_ADMIN_PASS`) |
 | `--no-deps` | Do not install operating-system packages |
-| `SG_VERSION=3.7.1` | Install a specific version rather than the latest |
+| `SG_VERSION=3.18.0` | Install a specific version rather than the latest |
 
 ---
 
@@ -146,6 +185,7 @@ curl -fsSL .../get.sh | SG_ADMIN_PASS='your-password' bash -s -- --mode standalo
 ```bash
 sentinel status
 sentinel version
+sentinel license status
 ```
 
 To re-run the full self-test:
@@ -158,22 +198,28 @@ bash /usr/local/sentinel-gate/test.sh
 
 ## Updating
 
+Sentinel Gate checks for updates daily. When one is available a button appears
+in the top right of the dashboard — click it and the update runs with a progress
+display, then reloads.
+
+If the update fails at any point it is **rolled back automatically** to the
+previous version. Your settings, database and quarantine are preserved either
+way.
+
+To update from the command line instead:
+
 ```bash
 bash /usr/local/sentinel-gate/update.sh
 ```
-
-Your database, settings, quarantine and logs are preserved. A backup is written
-to `/var/backups/sentinel-gate/` before anything is changed.
 
 Non-interactive, or pinned to a specific version:
 
 ```bash
 bash /usr/local/sentinel-gate/update.sh --yes
-bash /usr/local/sentinel-gate/update.sh --version 3.7.1
+bash /usr/local/sentinel-gate/update.sh --version 3.18.0
 ```
 
-Sentinel Gate also checks for updates daily and shows a notice in the dashboard
-when a new version is available.
+A backup is written to `/var/backups/sentinel-gate/` before anything is changed.
 
 ---
 
@@ -189,11 +235,12 @@ bash /usr/local/sentinel-gate/uninstall.sh
 
 ### What is removed
 
-- The `sentinel-gate-monitor` and `sentinel-gate-web` services
+- The monitor, web and firewall services
 - Scheduled scan cron jobs
-- The Apache configuration and alias
+- The Apache configuration, alias, and the WAF include
+- The Sentinel Gate firewall rules — only ours; anything belonging to CSF,
+  firewalld or you is left untouched
 - WHM plugin registration and the per-account plugin from both themes
-- Feature flags and the WHM menu entry
 - `/usr/local/sentinel-gate/` and all data within it
 - The `sentinel` command-line tool
 
@@ -209,7 +256,7 @@ entry is still visible, log out of WHM and back in.
 ### Reinstalling later
 
 Run the install command again. Nothing from a previous installation is left
-behind, so it is a clean install. Your license key can be re-entered and will
+behind, so it is a clean install. Your licence key can be re-entered and will
 re-activate on the same server.
 
 ---
@@ -230,6 +277,19 @@ bash <(curl -fsSL https://raw.githubusercontent.com/admin-lagoonspace/cP-Defende
 The download was corrupted or altered in transit. The installer stops rather
 than installing it. Run the command again; if it keeps happening, contact
 support — do not bypass the check.
+
+**The dashboard shows an activation screen**
+The trial has ended, or the licence could not be verified. Enter your key, or use
+`sentinel license refresh` to re-check. `sentinel license identity` shows the
+domain and IP this server reports, which is what a licence is bound to.
+
+**Malware scanning reports no signatures**
+The ClamAV signature download did not finish. It retries on the weekly schedule,
+and scanning continues on the built-in pattern engine meanwhile. To retry now:
+
+```bash
+sentinel update-sigs
+```
 
 **Installation finished but reported failed tests**
 The plugin is installed. Review the failed items in the output, then re-run:
@@ -258,8 +318,10 @@ systemctl status sentinel-gate-web
 | Path | Contents |
 |---|---|
 | `/usr/local/sentinel-gate/` | Application, database, quarantine, logs |
-| `/etc/cron.d/sentinel-gate` | Scheduled scans |
+| `/etc/cron.d/sentinel-gate` | Scheduled tasks |
 | `/etc/systemd/system/sentinel-gate-monitor.service` | Real-time file monitor |
+| `/etc/systemd/system/sentinel-gate-firewall.service` | Restores firewall rules at boot |
+| `/etc/sentinel-gate/` | Firewall and WAF configuration |
 | `/usr/bin/sentinel` | Command-line interface |
 | `/var/backups/sentinel-gate/` | Backups taken before each update |
 
