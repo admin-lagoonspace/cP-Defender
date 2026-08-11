@@ -121,6 +121,7 @@ stop_service() {
         rm -f "${svc_file}" && ok "Removed service file: ${svc_file}" || true
 }
 
+stop_service "sentinel-gate-firewall" "/etc/systemd/system/sentinel-gate-firewall.service"
 stop_service "sentinel-gate-web"     "${WEB_SERVICE}"
 stop_service "sentinel-gate-monitor" "${MONITOR_SERVICE}"
 command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload 2>/dev/null || true
@@ -133,6 +134,27 @@ for PID_FILE in "${WEB_PID_FILE}" "${INSTALL_DIR}/web.pid" \
     kill "${PID}" 2>/dev/null && ok "Killed process PID ${PID}" || true
     rm -f "${PID_FILE}" 2>/dev/null || true
 done
+
+# ── 1b. Remove our firewall table/chain ───────────────────────────────────────
+# Only the namespaced table we created is removed; rules belonging to CSF,
+# firewalld or the operator are never touched.
+section "Removing firewall rules"
+if [[ -f "${INSTALL_DIR}/backend/lib/FirewallEngine.php" ]] && command -v php >/dev/null 2>&1; then
+    php -r "
+define('SG_API', true);
+require_once '${INSTALL_DIR}/backend/config/mode.php';
+require_once '${INSTALL_DIR}/backend/lib/Database.php';
+require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php';
+FirewallEngine::teardown();
+" 2>/dev/null && ok "Sentinel Gate firewall rules removed" || warn "Could not remove firewall rules"
+else
+    # Fall back to removing the namespace directly if the code is already gone
+    nft delete table inet sentinel_gate 2>/dev/null && ok "nftables table removed" || true
+    iptables -D INPUT -j SENTINEL_GATE 2>/dev/null || true
+    iptables -F SENTINEL_GATE 2>/dev/null || true
+    iptables -X SENTINEL_GATE 2>/dev/null && ok "iptables chain removed" || true
+fi
+rm -rf /etc/sentinel-gate/nftables.rules /etc/sentinel-gate/iptables.rules 2>/dev/null || true
 
 # ── 2. Remove cron jobs ────────────────────────────────────────────────────────
 section "Removing cron jobs"

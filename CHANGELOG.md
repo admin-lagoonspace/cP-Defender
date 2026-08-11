@@ -3,6 +3,48 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.12.0] — 2026-08-08
+
+### Added
+- **Built-in firewall engine** (`backend/lib/FirewallEngine.php`). Sentinel Gate
+  now manages the packet filter itself — no separate firewall has to be
+  downloaded, installed or learned first.
+  - Backends, in precedence order: **CSF** (respected if already installed),
+    **firewalld**, **nftables**, **iptables**. Order matters: detecting iptables
+    first would be wrong on every modern RHEL host, where iptables exists but
+    firewalld owns the ruleset and would flush our rules on its next reload.
+  - All rules live in a dedicated namespace — `table inet sentinel_gate` or the
+    `SENTINEL_GATE` chain — so nothing belonging to another tool or the operator
+    is ever touched, and the uninstaller can remove exactly what we added.
+  - nftables uses named sets, so matching stays O(1) no matter how many
+    addresses are blocked. One rule per IP degrades badly past a few thousand.
+  - `flags interval` sets accept CIDR, so a whole offending range can be blocked.
+- **Automatic firewall provisioning.** If no packet filter exists at all, the
+  installer installs nftables rather than leaving the firewall UI inert.
+- `GET firewall/engine` and `POST firewall/engine-init`.
+
+### Fixed
+- **Blocked IPs no longer disappear on reboot.** nftables and iptables keep
+  rules in kernel memory only, and nothing was persisting them — so after a
+  restart every block was gone while the database still listed them as active.
+  The product was reporting protection it was not providing. Rules are now saved
+  to `/etc/sentinel-gate/` and re-applied by a `sentinel-gate-firewall` boot
+  unit ordered before the network comes up.
+- **No longer writes loose rules into INPUT.** The previous fallback ran
+  `iptables -I INPUT -s <ip> -j DROP`, which is indistinguishable from anyone
+  else's rules, cannot be cleanly removed, and is silently erased by firewalld.
+- `latest.json` had drifted to 3.9.1 while `VERSION` said 3.11.0, so the update
+  channel was advertising an old build. Realigned.
+
+### Note on provenance
+- The engine is a **clean-room implementation**, deliberately not derived from
+  CSF or CPGuard. CSF was discontinued on 2025-08-31 and released as-is under
+  **GPLv3**; code derived from it would make Sentinel Gate a derivative work and
+  oblige us to publish its source under GPLv3, which is incompatible with
+  licensing it commercially. CPGuard is proprietary. Behaviour and features are
+  not copyrightable — only code is — so the same capabilities are implemented
+  from first principles against the kernel's own interfaces.
+
 ## [3.11.0] — 2026-08-08
 
 ### Added

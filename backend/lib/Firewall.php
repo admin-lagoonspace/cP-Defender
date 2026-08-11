@@ -15,14 +15,15 @@ class Firewall {
     public function blockIP(string $ip, string $reason = '', bool $permanent = false, int $ttl = 86400): array {
         $this->validateIP($ip);
 
-        // Write to CSF deny if available
-        if ($this->isCSFInstalled()) {
-            $comment = escapeshellarg("# Sentinel Gate: $reason");
-            $ttlFlag = $permanent ? '' : "-t $ttl";
-            exec(CSF_BIN . " -d $ip $ttlFlag 2>&1", $out, $code);
-        } else {
-            exec(IPTABLES_BIN . " -I INPUT -s $ip -j DROP 2>&1", $out, $code);
-        }
+        // Delegate to the built-in engine. It picks the right backend
+        // (CSF / firewalld / nftables / iptables), keeps our rules inside a
+        // namespaced table so nothing else is disturbed, and persists them so a
+        // reboot does not silently discard every block while the database keeps
+        // reporting them as active.
+        require_once __DIR__ . '/FirewallEngine.php';
+        $res  = FirewallEngine::block($ip);
+        $out  = [$res['output'] ?? ''];
+        $code = ($res['success'] ?? false) ? 0 : 1;
 
         // Record in DB
         $existing = Database::fetchOne("SELECT id FROM blocked_ips WHERE ip_address = ?", [$ip]);
@@ -49,11 +50,10 @@ class Firewall {
     public function unblockIP(string $ip): array {
         $this->validateIP($ip);
 
-        if ($this->isCSFInstalled()) {
-            exec(CSF_BIN . " -dr $ip 2>&1", $out, $code);
-        } else {
-            exec(IPTABLES_BIN . " -D INPUT -s $ip -j DROP 2>&1", $out, $code);
-        }
+        require_once __DIR__ . '/FirewallEngine.php';
+        $res  = FirewallEngine::unblock($ip);
+        $out  = [$res['output'] ?? ''];
+        $code = ($res['success'] ?? false) ? 0 : 1;
 
         Database::query("DELETE FROM blocked_ips WHERE ip_address = ?", [$ip]);
         $this->logEvent('unblock_ip', "Unblocked IP $ip");
@@ -63,11 +63,10 @@ class Firewall {
     public function allowIP(string $ip, string $comment = ''): array {
         $this->validateIP($ip);
 
-        if ($this->isCSFInstalled()) {
-            exec(CSF_BIN . " -a $ip " . escapeshellarg($comment) . " 2>&1", $out, $code);
-        } else {
-            exec(IPTABLES_BIN . " -I INPUT -s $ip -j ACCEPT 2>&1", $out, $code);
-        }
+        require_once __DIR__ . '/FirewallEngine.php';
+        $res  = FirewallEngine::allow($ip);
+        $out  = [$res['output'] ?? ''];
+        $code = ($res['success'] ?? false) ? 0 : 1;
 
         return ['success' => $code === 0, 'output' => implode("\n", $out)];
     }

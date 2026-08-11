@@ -25,6 +25,7 @@ require_once __DIR__ . '/../lib/FileIntegrity.php';
 require_once __DIR__ . '/../lib/PHPHardening.php';
 require_once __DIR__ . '/../lib/UpdateChecker.php';
 require_once __DIR__ . '/../lib/License.php';
+require_once __DIR__ . '/../lib/FirewallEngine.php';
 
 // ── CORS & Headers ────────────────────────────────────────────────────────────
 header('Content-Type: application/json');
@@ -360,6 +361,18 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
 }
 
 function routeFirewall(string $action, string $method, array $body, array $q, ?string $id, ?array $user): array {
+    // Built-in engine status / setup, before the existing actions
+    if ($action === 'engine') {
+        return ['success' => true, 'data' => FirewallEngine::backendInfo()];
+    }
+    if ($action === 'engine-init' && $method === 'POST') {
+        Auth::requireRole('admin', $user);
+        $r = FirewallEngine::initialise();
+        Logger::info('Firewall engine init: ' . json_encode($r));
+        return ['success' => (bool)($r['success'] ?? false), 'data' => $r,
+                'error' => $r['error'] ?? null];
+    }
+
     $fw = new Firewall();
     Auth::requireRole('admin', $user);
 

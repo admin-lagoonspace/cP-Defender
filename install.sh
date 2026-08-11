@@ -503,6 +503,70 @@ SVCEOF
   fi
 fi
 
+# ── Built-in firewall ─────────────────────────────────────────────────────────
+# The product ships its own packet-filter manager so an operator does not have
+# to install and learn a separate firewall first. It defers to CSF or firewalld
+# when either is already in charge — overwriting a firewall the server is
+# already managing would be worse than adding nothing.
+section "Firewall engine"
+FW_INIT="$(/usr/bin/php -r "
+define('SG_API', true);
+require_once '${INSTALL_DIR}/backend/config/mode.php';
+require_once '${INSTALL_DIR}/backend/lib/Database.php';
+require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php';
+\$i = FirewallEngine::backendInfo();
+echo \$i['backend'];
+" 2>/dev/null || echo unknown)"
+info "Detected firewall backend: ${FW_INIT}"
+
+if [[ "$FW_INIT" == "none" ]]; then
+  # Nothing usable present — install a packet filter rather than leaving the
+  # firewall UI inert. nftables is the modern default on every supported distro.
+  warn "No packet filter found — installing nftables…"
+  if   command -v dnf >/dev/null 2>&1; then dnf install -y -q nftables >/dev/null 2>&1
+  elif command -v yum >/dev/null 2>&1; then yum install -y -q nftables >/dev/null 2>&1
+  elif command -v apt-get >/dev/null 2>&1; then apt-get install -y -q nftables >/dev/null 2>&1
+  fi
+  command -v nft >/dev/null 2>&1     && ok "nftables installed"     || warn "Could not install nftables — the firewall UI will be read-only"
+fi
+
+/usr/bin/php -r "
+define('SG_API', true);
+require_once '${INSTALL_DIR}/backend/config/mode.php';
+require_once '${INSTALL_DIR}/backend/lib/Database.php';
+require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php';
+\$r = FirewallEngine::initialise();
+echo (\$r['success'] ? 'OK ' : 'FAIL ') . (\$r['message'] ?? \$r['error'] ?? '');
+" 2>&1 | sed 's/^/  /' || warn "Firewall init reported an error"
+
+# Restore rules at boot. nftables and iptables keep rules in kernel memory only,
+# so without this every block silently disappears on reboot while the database
+# still reports them as active — the product claiming protection it is not
+# providing.
+if command -v systemctl >/dev/null 2>&1 && [[ -d /etc/systemd/system ]]; then
+  cat > /etc/systemd/system/sentinel-gate-firewall.service << FWEOF
+[Unit]
+Description=Sentinel Gate firewall rule restore
+DefaultDependencies=no
+After=network-pre.target
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/php -r "define('SG_API',true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; FirewallEngine::restore();"
+
+[Install]
+WantedBy=multi-user.target
+FWEOF
+  chmod 644 /etc/systemd/system/sentinel-gate-firewall.service
+  systemctl daemon-reload
+  systemctl enable sentinel-gate-firewall 2>/dev/null && ok "Boot-time rule restore enabled"
+  echo "FIREWALL_SERVICE=/etc/systemd/system/sentinel-gate-firewall.service" >> "${MANIFEST}"
+fi
+echo "FIREWALL_BACKEND=${FW_INIT}" >> "${MANIFEST}"
+
 # ── Cron jobs ──────────────────────────────────────────────────────────────────
 section "Cron jobs"
 cat > "${CRON_FILE}" << CRONEOF
