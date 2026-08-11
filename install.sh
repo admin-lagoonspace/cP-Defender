@@ -421,14 +421,57 @@ Database::setSetting('clamscan_path','${CLAMSCAN_BIN}');
 echo 'ClamAV path stored' . PHP_EOL;
 " 2>/dev/null || true
   if [[ -n "${FRESHCLAM_BIN}" ]]; then
-    info "Updating ClamAV signatures via ${FRESHCLAM_BIN}…"
-    "${FRESHCLAM_BIN}" --quiet 2>/dev/null && ok "ClamAV signatures updated" || warn "ClamAV signature update failed (non-critical, will retry via cron)"
+    # On Debian/Ubuntu the clamav-freshclam DAEMON starts automatically on
+    # install and holds a lock on the database directory. A manual freshclam run
+    # then fails with "can't lock" — which previously surfaced as a vague
+    # "signature update failed" and left a scanner with no signatures at all.
+    # Stop it for the initial fetch, then hand the job back to it.
+    _FC_WAS_RUNNING=false
+    if systemctl is-active --quiet clamav-freshclam 2>/dev/null; then
+      _FC_WAS_RUNNING=true
+      systemctl stop clamav-freshclam 2>/dev/null || true
+    fi
+
+    # A first-time download is several hundred MB. Bounded so a slow or blocked
+    # mirror cannot hang the installer indefinitely.
+    info "Downloading ClamAV signatures (first run can take a few minutes)…"
+    if timeout 900 "${FRESHCLAM_BIN}" --quiet 2>&1 | tail -3 | sed 's/^/    /'; then
+      ok "ClamAV signatures downloaded"
+    else
+      warn "Signature download did not complete — the scheduler retries weekly"
+    fi
+
+    # Verify rather than assume. clamscan is unusable without a database, and
+    # reporting the scanner as ready when it cannot match anything is worse than
+    # saying so plainly.
+    _SIGDIR=""
+    for _d in /var/lib/clamav /usr/local/share/clamav /usr/share/clamav; do
+      [[ -f "$_d/main.cvd" || -f "$_d/main.cld" || -f "$_d/daily.cvd" || -f "$_d/daily.cld" ]] && { _SIGDIR="$_d"; break; }
+    done
+    if [[ -n "$_SIGDIR" ]]; then
+      ok "Signature database present: ${_SIGDIR}"
+    else
+      warn "No ClamAV signature database found — malware scanning will fall back"
+      warn "to the built-in pattern engine until signatures download successfully."
+    fi
+
+    # Hand ongoing updates to the daemon where one exists, so signatures stay
+    # current between our weekly scheduler run.
+    for _svc in clamav-freshclam freshclam clamav-freshclam.service; do
+      if systemctl list-unit-files 2>/dev/null | grep -q "^${_svc}"; then
+        systemctl enable --now "$_svc" 2>/dev/null && ok "Automatic signature updates enabled (${_svc})"
+        break
+      fi
+    done
+    $_FC_WAS_RUNNING && systemctl start clamav-freshclam 2>/dev/null || true
   else
     warn "freshclam not found — signatures will not be auto-updated"
   fi
 else
   warn "ClamAV not detected in any standard location."
   info "  Checked: /usr/bin, /usr/local/bin, /usr/local/cpanel/3rdparty/bin, /opt/clamav/bin"
+  info "  Scanning continues using the built-in pattern engine, which needs no"
+  info "  signature database — ClamAV adds broader coverage rather than being required."
   info "  Install on cPanel: yum install -y clamav clamav-update"
   info "  Install on Debian/Ubuntu: apt install -y clamav"
   info "  Pattern-based scanning will be used until ClamAV is installed."

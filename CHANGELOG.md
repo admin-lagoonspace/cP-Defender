@@ -3,6 +3,38 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.16.0] — 2026-08-08
+
+### Fixed
+- **ClamAV was installed and then never used on cPanel servers.** `runClamScan`
+  tested the hardcoded `CLAMSCAN_BIN` (`/usr/bin/clamscan`), but cPanel ships
+  ClamAV at `/usr/local/cpanel/3rdparty/bin/clamscan`. The installer detects the
+  real path and stores it in `clamscan_path` — which nothing read. Every scan on
+  those servers silently fell back to the pattern engine while ClamAV sat
+  installed and idle. The scanner now resolves the stored path, then the
+  constant, then the known locations.
+- **Scans no longer run against an empty signature database.** A freshly
+  installed ClamAV has no signatures until `freshclam` completes, and clamscan
+  errors on every file until then. The scanner now checks for a signature
+  database and uses the pattern engine — which needs none — when it is absent.
+- **Signature download on Debian/Ubuntu.** The `clamav-freshclam` daemon starts
+  automatically on install and locks the database directory, so the installer's
+  manual `freshclam` run failed with a lock error. That surfaced only as a vague
+  "signature update failed" and left the scanner with no signatures at all. The
+  daemon is now stopped for the initial fetch and handed the job afterwards.
+
+### Changed
+- The initial signature download is bounded (15 min) so a slow or blocked mirror
+  cannot hang the installer indefinitely.
+- The installer **verifies** the signature database exists rather than assuming
+  the download worked, and says plainly when it does not — reporting the scanner
+  as ready when it cannot match anything is worse than admitting the gap.
+- `clamav-freshclam` is enabled so signatures stay current between the
+  scheduler's weekly update.
+- When ClamAV is absent entirely the installer now states that scanning
+  continues via the built-in pattern engine, which needs no signature database —
+  ClamAV broadens coverage rather than being required.
+
 ## [3.15.0] — 2026-08-08
 
 ### Added

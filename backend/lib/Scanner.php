@@ -115,8 +115,43 @@ class Scanner {
     /**
      * Run ClamAV scan on a path (synchronous, used by cron)
      */
+    /**
+     * Resolve the clamscan binary.
+     *
+     * The CLAMSCAN_BIN constant is /usr/bin/clamscan, but cPanel ships ClamAV at
+     * /usr/local/cpanel/3rdparty/bin/clamscan. The installer detects the real
+     * location and stores it in the clamscan_path setting — which this used to
+     * ignore, so on every cPanel server ClamAV was installed and then silently
+     * never used, with scans quietly falling back to the pattern engine.
+     */
+    public static function clamscanBin(): ?string {
+        $stored = (string)Database::getSetting('clamscan_path', '');
+        if ($stored !== '' && is_executable($stored)) { return $stored; }
+        if (is_executable(CLAMSCAN_BIN)) { return CLAMSCAN_BIN; }
+        foreach (['/usr/bin/clamscan', '/usr/local/bin/clamscan',
+                  '/usr/local/cpanel/3rdparty/bin/clamscan', '/opt/clamav/bin/clamscan'] as $p) {
+            if (is_executable($p)) { return $p; }
+        }
+        return null;
+    }
+
+    /** True when a signature database exists — clamscan is unusable without one. */
+    public static function clamSignaturesPresent(): bool {
+        foreach (['/var/lib/clamav', '/usr/local/share/clamav', '/usr/share/clamav',
+                  '/usr/local/cpanel/3rdparty/share/clamav'] as $d) {
+            foreach (['main.cvd', 'main.cld', 'daily.cvd', 'daily.cld'] as $f) {
+                if (is_file($d . '/' . $f)) { return true; }
+            }
+        }
+        return false;
+    }
+
     public function runClamScan(string $path, int $jobId): array {
-        if (!file_exists(CLAMSCAN_BIN)) {
+        $bin = self::clamscanBin();
+        // No binary, or a binary with no signature database — clamscan would
+        // either be missing or error out on every file. The pattern engine needs
+        // no database, so it is the correct fallback in both cases.
+        if ($bin === null || !self::clamSignaturesPresent()) {
             return $this->runPatternScan($path, $jobId);
         }
 
@@ -124,7 +159,7 @@ class Scanner {
         $cmd  = sprintf(
             'nice -n%d ionice -c3 %s --recursive --infected --no-summary --max-filesize=50M --max-scansize=200M %s 2>&1',
             $nice,
-            CLAMSCAN_BIN,
+            $bin,
             escapeshellarg($path)
         );
 
