@@ -3,6 +3,22 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.9.1] — 2026-08-08
+
+### Fixed
+- **The Sentinel Gate brand appeared twice.** The topbar brand already occupies
+  the sidebar-width column, and a second identical lockup was added directly
+  below it in the sidebar — so the logo and name rendered twice, stacked. The
+  sidebar copy is removed, along with its now-dead CSS.
+- **Removed the "cPANEL" pill from the top right.** The install mode is already
+  shown in the sidebar footer; repeating it in the header added nothing.
+- **The brand collided with the navigation below 900px.** `--sidebar-w` drops to
+  `0` at that breakpoint so the sidebar can slide away, which also collapsed
+  `.topbar-brand` to its padding — the name then wrapped to two lines and
+  overlapped the first nav item. The brand lives in the topbar, which is always
+  visible, so it now keeps a 200px floor independent of the sidebar, and the
+  name and tagline no longer wrap. Verified at 735px and 1280px.
+
 ## [3.9.0] — 2026-08-08
 
 ### Added

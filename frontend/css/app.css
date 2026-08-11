@@ -133,20 +133,27 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
 
 .topbar-brand {
   width: var(--sidebar-w);
+  /* --sidebar-w drops to 0 below 900px so the sidebar can slide away. Without a
+     floor the brand collapses to its padding and the name overflows into the
+     nav. The brand is in the topbar, which is always visible, so it must keep
+     its own width independent of the sidebar. */
+  min-width: 200px;
   display: flex; align-items: center; gap: 11px;
   padding: 0 22px;
   border-right: 1px solid var(--border);
   height: 100%; flex-shrink: 0;
+  overflow: hidden;
 }
 .brand-icon {
   width: 34px; height: 38px;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
 }
-.brand-name { font-weight: 800; font-size: .96rem; letter-spacing: -.02em; line-height: 1.15; }
+.brand-name { font-weight: 800; font-size: .96rem; letter-spacing: -.02em; line-height: 1.15; white-space: nowrap; }
 .brand-sub  {
   font-size: .58rem; font-weight: 700; letter-spacing: .1em;
   text-transform: uppercase; color: var(--primary3); margin-top: 2px;
+  white-space: nowrap;
 }
 
 .topbar-nav {
@@ -214,22 +221,9 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   border-right: 1px solid var(--border);
   position: fixed; top: var(--topbar-h); bottom: 0; left: 0;
   overflow-y: auto; z-index: 100;
-  padding: 0 0 80px;
-}
-
-.sidebar-brand {
-  display: flex; align-items: center; gap: 11px;
-  padding: 18px 20px 16px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 10px;
-}
-.sidebar-brand-name {
-  font-size: .95rem; font-weight: 800;
-  color: var(--txt); letter-spacing: -.02em; line-height: 1.15;
-}
-.sidebar-brand-tagline {
-  font-size: .58rem; font-weight: 700; letter-spacing: .1em;
-  text-transform: uppercase; color: var(--primary3); margin-top: 3px;
+  /* Top padding was previously supplied by the sidebar brand block, which was
+     removed as a duplicate of the topbar brand directly above it. */
+  padding: 10px 0 80px;
 }
 
 .sidebar-section-label {
@@ -572,12 +566,6 @@ select.form-input { cursor: pointer; }
 .module-name  { font-size: .82rem; font-weight: 700; }
 .module-desc  { font-size: .73rem; color: var(--txt3); line-height: 1.55; }
 
-/* ── Mode pill (topbar) ──────────────────────────────────────────────────────── */
-#mode-pill {
-  font-size: .65rem; padding: 3px 10px; border-radius: 20px;
-  background: var(--primary-dim); color: var(--primary3);
-  border: 1px solid rgba(127,90,240,.2); font-weight: 600; letter-spacing: .04em;
-}
 
 /* ── Responsive ──────────────────────────────────────────────────────────────── */
 @media (max-width: 1200px) {

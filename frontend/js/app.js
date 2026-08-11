@@ -48,13 +48,6 @@ function applyModeUI(mode) {
     ? '<span style="font-size:.68rem;padding:3px 10px;border-radius:20px;background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3);letter-spacing:.05em">⚡ STANDALONE LINUX</span>'
     : '<span style="font-size:.68rem;padding:3px 10px;border-radius:20px;background:rgba(59,130,246,.15);color:var(--blue);border:1px solid rgba(59,130,246,.3);letter-spacing:.05em">🖥 cPANEL / WHM</span>';
 
-  // Topbar mode pill
-  const pill = document.getElementById('mode-pill');
-  if (pill && Auth.isLoggedIn()) {
-    pill.style.display = '';
-    pill.textContent   = isStandalone ? '⚡ STANDALONE' : '🖥 cPANEL';
-  }
-
   // Sidebar version / mode label
   const sideLabel = document.getElementById('sidebar-mode-label');
   if (sideLabel) {
