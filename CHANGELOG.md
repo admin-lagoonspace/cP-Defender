@@ -3,6 +3,34 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.14.0] — 2026-08-08
+
+### Added
+- **Blocklist matrix UI** on IP Reputation. Shows all 25 services with the
+  server's own IP prefilled, listed entries sorted to the top and highlighted,
+  each with its reason and a delisting link. `refused` is shown distinctly from
+  `clean`, since a refused query is an unknown result rather than a pass.
+- **Built-in rootkit scan UI** on Rootkit Scan — a second button that runs the
+  native engine, with findings sorted by severity and each showing why it
+  matters.
+
+### Fixed
+- **XSS in the new tables.** They interpolated values into `innerHTML` through
+  an `esc()` helper that did not exist anywhere in the codebase, so the calls
+  would have thrown. Escaping is not optional here: blocklist reasons derive
+  from DNS answers and rootkit findings embed filesystem paths, so a file named
+  `<img onerror=…>` would have executed script in the admin's browser — from
+  inside the tool meant to detect that attacker. `esc()` is now defined and
+  verified against several payloads.
+
+### Known gaps
+- **WAF has no engine of its own.** It reads ModSecurity's configuration and
+  audit log; with ModSecurity absent it reports status and nothing else. Unlike
+  the firewall, rootkit and blocklist modules, no built-in replacement is
+  provided — real request filtering has to sit in the request path (an Apache
+  module or a PHP prepend), which is a different architecture rather than an
+  addition to this class. Documented rather than silently left looking complete.
+
 ## [3.13.0] — 2026-08-08
 
 ### Added

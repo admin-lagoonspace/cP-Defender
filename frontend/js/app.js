@@ -122,7 +122,7 @@ function openPage(name) {
     case 'scanner':   loadThreats();        break;
     case 'firewall':  loadFirewall();       break;
     case 'waf':       loadWAF();            break;
-    case 'iprep':     loadTopAttackers();   break;
+    case 'iprep':     loadTopAttackers(); loadServerIpForBlocklist();   break;
     case 'events':    loadEvents();         break;
     case 'settings':  loadSettings();       break;
     case 'botshield': loadBotShield();      break;
@@ -2056,4 +2056,159 @@ function _demoUpdate() {
     _setProgress(steps[i][0], steps[i][1]);
     i++;
   }, 900);
+}
+
+
+/* HTML-escape before interpolating into innerHTML.
+   Not optional here: blocklist "reason" text derives from DNS answers, and
+   rootkit findings embed filesystem paths — an attacker who can create a file
+   named `<img onerror=...>` would otherwise get script execution in the
+   admin's browser, from inside the tool meant to detect them. */
+function esc(v) {
+  if (v === null || v === undefined) return '';
+  return String(v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   Blocklist matrix
+   ══════════════════════════════════════════════════════════════════════════════
+   Every list is shown separately rather than as one score, because delisting
+   requires knowing WHICH service lists you — a single number cannot tell an
+   operator where to go. */
+
+async function loadServerIpForBlocklist() {
+  const input = document.getElementById('bl-ip');
+  if (!input || input.value.trim()) return;
+  if (Demo.active) { input.value = '203.0.113.10'; input.placeholder = ''; return; }
+  const res = await API.get('iprep/server-ips');
+  const ips = (res && res.data) || [];
+  input.value = ips[0] || '';
+  input.placeholder = ips.length ? '' : 'enter an IP address';
+}
+
+function _blBadge(status) {
+  return status === 'listed'  ? 'badge badge-red'
+       : status === 'refused' ? 'badge badge-amber'
+       : 'badge badge-green';
+}
+
+async function runBlocklistCheck() {
+  const ipEl = document.getElementById('bl-ip');
+  const ip   = ipEl ? ipEl.value.trim() : '';
+  if (!ip) { toast('Enter an IP address to check', 'error'); return; }
+
+  document.getElementById('bl-progress').classList.remove('hidden');
+  document.getElementById('bl-empty').classList.add('hidden');
+  document.getElementById('bl-results').classList.add('hidden');
+
+  const res = Demo.active ? _demoBlocklists(ip)
+                          : await API.get('iprep/blocklists?ip=' + encodeURIComponent(ip));
+
+  document.getElementById('bl-progress').classList.add('hidden');
+  const d = res && res.data;
+  if (!d || d.error) {
+    document.getElementById('bl-empty').classList.remove('hidden');
+    toast((d && d.error) || 'Blocklist check failed', 'error');
+    return;
+  }
+
+  const badge = document.getElementById('bl-summary');
+  badge.textContent = d.listed
+    ? d.listed + ' of ' + d.checked + ' lists — ' + d.risk
+    : 'Clean on all ' + d.checked + ' lists';
+  badge.className = d.listed
+    ? (d.risk === 'critical' || d.risk === 'high' ? 'badge badge-red' : 'badge badge-amber')
+    : 'badge badge-green';
+
+  // Listed entries first. An operator opening this page needs the problems, not
+  // to scroll past two dozen clean rows to find them.
+  const rank = s => s === 'listed' ? 0 : s === 'refused' ? 1 : 2;
+  const rows = d.results.slice().sort(
+    (a, b) => rank(a.status) - rank(b.status) || b.weight - a.weight);
+
+  document.getElementById('bl-tbody').innerHTML = rows.map(function (r) {
+    const hl = r.status === 'listed' ? ' style="background:var(--red-dim)"' : '';
+    const link = r.site
+      ? '<a href="' + esc(r.site) + '" target="_blank" rel="noopener" class="btn btn-ghost btn-xs">Delist</a>'
+      : '—';
+    return '<tr' + hl + '>'
+      + '<td class="primary">' + esc(r.name)
+      + '<div style="font-size:.68rem;color:var(--txt3)">' + esc(r.zone) + '</div></td>'
+      + '<td><span class="badge badge-gray">' + esc(r.category) + '</span></td>'
+      + '<td><span class="' + _blBadge(r.status) + '">' + esc(r.status) + '</span></td>'
+      + '<td style="font-size:.75rem">' + esc(r.reason || '—') + '</td>'
+      + '<td>' + link + '</td></tr>';
+  }).join('');
+
+  document.getElementById('bl-results').classList.remove('hidden');
+}
+
+function _demoBlocklists(ip) {
+  const mk = (name, zone, cat, w, status, reason) =>
+    ({ name, zone, category: cat, weight: w, status,
+       listed: status === 'listed', reason, site: 'https://example.org/delist' });
+  return { success: true, data: {
+    ip, checked: 25, listed: 2, score: 33, risk: 'medium',
+    results: [
+      mk('Spamhaus ZEN', 'zen.spamhaus.org', 'composite', 25, 'listed', 'PBL — not a legitimate mail sender'),
+      mk('UCEPROTECT L1', 'dnsbl-1.uceprotect.net', 'spam', 12, 'listed', 'Listed (127.0.0.2)'),
+      mk('Barracuda BRBL', 'b.barracudacentral.org', 'spam', 18, 'refused', 'The list refused this query'),
+      mk('SpamCop', 'bl.spamcop.net', 'spam', 18, 'clean', null),
+      mk('SORBS Aggregate', 'dnsbl.sorbs.net', 'composite', 12, 'clean', null),
+      mk('CBL / abuseat', 'cbl.abuseat.org', 'exploit', 20, 'clean', null),
+      mk('Blocklist.de', 'bl.blocklist.de', 'exploit', 15, 'clean', null),
+      mk('PSBL', 'psbl.surriel.com', 'spam', 10, 'clean', null),
+    ] } };
+}
+
+/* ── Built-in rootkit engine ───────────────────────────────────────────────── */
+
+async function runBuiltinRootkitScan() {
+  toast('Running built-in rootkit scan…', 'info');
+  const res = Demo.active ? _demoRootkit() : await API.post('rootkit/scan-builtin', {});
+  const d = res && res.data;
+  if (!d) { toast('Built-in scan failed', 'error'); return; }
+
+  document.getElementById('rk-builtin-card').classList.remove('hidden');
+
+  const crit = d.summary.critical || 0;
+  const high = d.summary.high || 0;
+  const badge = document.getElementById('rk-builtin-badge');
+  badge.textContent = d.clean ? 'Clean' : crit + ' critical · ' + high + ' high';
+  badge.className   = d.clean ? 'badge badge-green'
+                    : (crit ? 'badge badge-red' : 'badge badge-amber');
+
+  document.getElementById('rk-builtin-meta').textContent =
+    d.checks + ' checks in ' + d.duration + 's · ' + d.findings.length + ' finding(s)';
+  document.getElementById('rk-builtin-clean').classList.toggle('hidden', !d.clean);
+
+  const order = { critical: 0, high: 1, medium: 2, low: 3 };
+  const rows = d.findings.slice().sort((a, b) => order[a.severity] - order[b.severity]);
+
+  document.getElementById('rk-builtin-tbody').innerHTML = rows.map(function (f) {
+    return '<tr>'
+      + '<td><span class="sev sev-' + esc(f.severity) + '">' + esc(f.severity) + '</span></td>'
+      + '<td class="primary" style="font-size:.78rem">' + esc(f.finding) + '</td>'
+      + '<td style="font-size:.73rem;color:var(--txt3)">' + esc(f.explanation) + '</td>'
+      + '</tr>';
+  }).join('');
+
+  toast(d.clean ? 'No critical findings' : (crit + high) + ' significant finding(s)',
+        d.clean ? 'success' : 'error');
+}
+
+function _demoRootkit() {
+  return { success: true, data: {
+    checks: 11, duration: 2.4, clean: false,
+    summary: { critical: 1, high: 1, medium: 1, low: 0 },
+    findings: [
+      { severity: 'critical', finding: '/etc/ld.so.preload is populated: /lib/.so/libx.so',
+        explanation: 'This forces a library into every dynamically linked process — the standard userland rootkit hook.' },
+      { severity: 'high', finding: 'Unexpected SUID root binary: /usr/local/bin/.hst',
+        explanation: 'A SUID root binary outside the known set grants privilege escalation to any user.' },
+      { severity: 'medium', finding: 'sshd permits direct root login',
+        explanation: 'PermitRootLogin yes lets an attacker brute-force root directly.' },
+    ] } };
 }

@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.13.0">
+<link rel="stylesheet" href="css/app.css?v=3.14.0">
 </head>
 <body>
 <div id="app">
@@ -191,7 +191,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.13.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.14.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -594,6 +594,49 @@
         <div>
           <div class="page-title">IP Reputation</div>
           <div class="page-sub">RBL/DNSBL checks · AbuseIPDB · GeoIP</div>
+        </div>
+      </div>
+
+      <!-- ── Blocklist matrix ─────────────────────────────────────────────── -->
+      <div class="card mb-5">
+        <div class="card-header">
+          <div class="card-title">Blocklist Status — This Server</div>
+          <span id="bl-summary" class="badge badge-gray">Not checked</span>
+        </div>
+        <div class="card-body">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:16px">
+            <div class="form-group" style="flex:1;min-width:200px;margin:0">
+              <label class="form-label" for="bl-ip">Address to check</label>
+              <input class="form-input mono" id="bl-ip" type="text" placeholder="detecting server IP…">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="runBlocklistCheck()">Check all lists</button>
+          </div>
+
+          <div id="bl-progress" class="hidden" style="font-size:.8rem;color:var(--txt2);margin-bottom:12px">
+            Querying blocklists… this takes a few seconds.
+          </div>
+
+          <div id="bl-empty" style="font-size:.8rem;color:var(--txt3);line-height:1.6">
+            Checks this server's IP against 25 public blocklists. Any service that lists
+            you is highlighted, with the reason and a link to request delisting.
+          </div>
+
+          <div id="bl-results" class="hidden">
+            <div style="overflow-x:auto">
+              <table class="sg-table">
+                <thead><tr>
+                  <th>Blocklist</th><th>Category</th><th>Status</th>
+                  <th>Reason</th><th>Delisting</th>
+                </tr></thead>
+                <tbody id="bl-tbody"></tbody>
+              </table>
+            </div>
+            <div style="margin-top:12px;font-size:.72rem;color:var(--txt3);line-height:1.6">
+              <strong>Refused</strong> means the service declined the query (several block
+              public resolvers) — the result is unknown, not clean. Policy listings such as
+              dynamic-IP ranges are normal for residential addresses and are not evidence of abuse.
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1329,7 +1372,30 @@
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-ghost btn-sm" onclick="loadRootkit()">↺ Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="runBuiltinRootkitScan()"
+                  title="Native scan — works with no third-party tools installed">⚡ Built-in Scan</button>
           <button class="btn btn-primary btn-sm" id="rootkit-scan-btn" onclick="runRootkitScan()">🔍 Start Scan</button>
+        </div>
+      </div>
+
+      <!-- ── Built-in engine results ──────────────────────────────────────── -->
+      <div class="card mb-5 hidden" id="rk-builtin-card">
+        <div class="card-header">
+          <div class="card-title">Built-in Engine Results</div>
+          <span id="rk-builtin-badge" class="badge badge-gray">—</span>
+        </div>
+        <div class="card-body">
+          <div id="rk-builtin-meta" style="font-size:.78rem;color:var(--txt2);margin-bottom:14px"></div>
+          <div id="rk-builtin-clean" class="hidden"
+               style="font-size:.84rem;color:var(--green2)">
+            No critical or high-severity findings.
+          </div>
+          <div style="overflow-x:auto">
+            <table class="sg-table" id="rk-builtin-table">
+              <thead><tr><th>Severity</th><th>Finding</th><th>Why it matters</th></tr></thead>
+              <tbody id="rk-builtin-tbody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -1552,9 +1618,9 @@
 <!-- ══ TOAST CONTAINER ═══════════════════════════════════════════════════════ -->
 <div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px"></div>
 
-<script src="js/api.js?v=3.13.0"></script>
+<script src="js/api.js?v=3.14.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.13.0"></script>
+<script src="js/app.js?v=3.14.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
