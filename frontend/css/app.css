@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    Sentinel Gate — UI v2
-   Palette: sampled from the Sentinel Gate logo
-   #0a0d16 navy bg · #1e6fe8 blue primary · #2cb67d emerald · #94a3b8 muted
+   Palette: HappyHues #4 — Charcoal · Violet · Emerald
+   #16161a bg · #7f5af0 primary · #2cb67d green · #94a1b2 muted
    ═══════════════════════════════════════════════════════════════════════════ */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
@@ -10,40 +10,38 @@
 
 /* ── Design Tokens ──────────────────────────────────────────────────────────── */
 :root {
-  /* Backgrounds — navy-tinted charcoal, tuned to the logo's deep navy shield
-     rather than a neutral grey, so the artwork sits in the surface instead of
-     on top of it. */
-  --bg0:   #0a0d16;
-  --bg1:   #101625;
-  --bg2:   #161d2e;
-  --card:  #151b2b;
-  --card2: #1c2438;
+  /* Backgrounds */
+  --bg0:   #0d0d10;
+  --bg1:   #16161a;
+  --bg2:   #1c1c22;
+  --card:  #242629;
+  --card2: #2c2d32;
 
   /* Borders */
-  --border:       rgba(74,158,255,.14);
-  --border2:      rgba(74,158,255,.07);
-  --border-hover: rgba(74,158,255,.34);
+  --border:       rgba(127,90,240,.14);
+  --border2:      rgba(127,90,240,.07);
+  --border-hover: rgba(127,90,240,.32);
 
-  /* Primary — sampled from the logo wordmark and shield highlights */
-  --primary:      #1e6fe8;
-  --primary2:     #4a9eff;
-  --primary3:     #8fc4ff;
-  --primary-dim:  rgba(30,111,232,.14);
-  --primary-glow: rgba(74,158,255,.24);
+  /* Primary — Violet #7f5af0 */
+  --primary:      #7f5af0;
+  --primary2:     #9d7ef5;
+  --primary3:     #b8a0fa;
+  --primary-dim:  rgba(127,90,240,.13);
+  --primary-glow: rgba(127,90,240,.22);
 
-  /* Compat aliases — a lot of inline styles still reference --blue* */
-  --blue:     #1e6fe8;
-  --blue2:    #4a9eff;
-  --blue3:    #0d47a1;
-  --blue-dim: rgba(30,111,232,.14);
+  /* Compat aliases (keep --blue* so existing JS/HTML still works) */
+  --blue:     #7f5af0;
+  --blue2:    #9d7ef5;
+  --blue3:    #6040d0;
+  --blue-dim: rgba(127,90,240,.13);
 
-  /* Status — the emerald matches the server LEDs in the logo */
+  /* Status */
   --green:      #2cb67d;
   --green2:     #3dd68c;
   --green-dim:  rgba(44,182,125,.14);
-  --red:        #e5484d;
-  --red2:       #f2666b;
-  --red-dim:    rgba(229,72,77,.14);
+  --red:        #e53170;
+  --red2:       #f25f8a;
+  --red-dim:    rgba(229,49,112,.14);
   --amber:      #f2c94c;
   --amber2:     #f6d96e;
   --amber-dim:  rgba(242,201,76,.14);
@@ -52,10 +50,10 @@
   --cyan-dim:   rgba(34,211,238,.1);
 
   /* Text */
-  --txt:   #f4f8ff;
-  --txt2:  #94a3b8;
-  --txt3:  #56617a;
-  --txt4:  #2a3346;
+  --txt:   #fffffe;
+  --txt2:  #94a1b2;
+  --txt3:  #555a65;
+  --txt4:  #2c2f38;
 
   /* Radius / Shadows */
   --radius:    14px;
@@ -93,8 +91,8 @@ body::before {
   position: fixed; top: -300px; left: 50%; transform: translateX(-50%);
   width: 1000px; height: 600px; border-radius: 50%;
   background: radial-gradient(ellipse,
-    rgba(30,111,232,.10) 0%,
-    rgba(30,111,232,.04) 50%,
+    rgba(127,90,240,.09) 0%,
+    rgba(127,90,240,.03) 50%,
     transparent 70%);
   pointer-events: none; z-index: 0;
 }
@@ -133,34 +131,19 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   -webkit-backdrop-filter: blur(24px) saturate(180%);
 }
 
-/* Topbar brand column — one continuous logo space, no icon/text split.
-
-   The panel is transparent: scripts/prep-logo.py preprocesses the supplied
-   artwork so the asset is already correct for a dark surface. It trims the empty
-   margins (an untrimmed export fits its MARGINS to the box and renders at ~35%
-   of the panel) and recolours the near-neutral dark wordmark to near-white,
-   leaving the blues untouched — a blanket invert would destroy the shield.
-
-   object-fit: contain, because the asset is now trimmed to its content: there is
-   no dead space left to crop, and cover would start eating the wordmark. */
 .topbar-brand {
   width: var(--sidebar-w);
+  /* --sidebar-w drops to 0 below 900px so the sidebar can slide away. Without a
+     floor the brand collapses to its padding and the name overflows into the
+     nav. The brand is in the topbar, which is always visible, so it must keep
+     its own width independent of the sidebar. */
   min-width: 200px;
-  display: flex; align-items: center;
-  padding: 0 16px;
+  display: flex; align-items: center; gap: 11px;
+  padding: 0 22px;
   border-right: 1px solid var(--border);
   height: 100%; flex-shrink: 0;
   overflow: hidden;
 }
-.brand-lockup {
-  max-width: 100%;
-  max-height: calc(var(--topbar-h) - 20px);
-  width: auto; height: auto;
-  object-fit: contain;
-  display: block;
-}
-.brand-fallback { text-align: left; }
-
 .brand-icon {
   width: 34px; height: 38px;
   display: flex; align-items: center; justify-content: center;
@@ -184,7 +167,7 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   cursor: pointer; transition: all .15s;
   border: none; background: none; position: relative;
 }
-.nav-item:hover { color: var(--txt); background: rgba(30,111,232,.09); }
+.nav-item:hover { color: var(--txt); background: rgba(127,90,240,.08); }
 .nav-item.active { color: var(--txt); font-weight: 600; }
 .nav-item.active::after {
   content: '';
@@ -222,10 +205,10 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   display: flex; align-items: center; justify-content: center;
   font-size: .72rem; font-weight: 700; color: #fff;
   cursor: pointer;
-  box-shadow: 0 0 0 2px rgba(30,111,232,.25);
+  box-shadow: 0 0 0 2px rgba(127,90,240,.25);
   transition: box-shadow .2s;
 }
-.avatar:hover { box-shadow: 0 0 0 3px rgba(30,111,232,.45); }
+.avatar:hover { box-shadow: 0 0 0 3px rgba(127,90,240,.45); }
 
 .layout { display: flex; padding-top: var(--topbar-h); min-height: 100vh; }
 
@@ -258,11 +241,11 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   border-radius: var(--radius-sm);
   position: relative; border: 1px solid transparent;
 }
-.sidebar-item:hover { color: var(--txt); background: rgba(30,111,232,.09); }
+.sidebar-item:hover { color: var(--txt); background: rgba(127,90,240,.08); }
 .sidebar-item.active {
   color: var(--txt); font-weight: 600;
-  background: linear-gradient(135deg, rgba(30,111,232,.2) 0%, rgba(30,111,232,.1) 100%);
-  border-color: rgba(30,111,232,.2);
+  background: linear-gradient(135deg, rgba(127,90,240,.2) 0%, rgba(127,90,240,.1) 100%);
+  border-color: rgba(127,90,240,.2);
 }
 
 /* SVG icons inside sidebar items */
@@ -348,7 +331,7 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   opacity: .55; pointer-events: none;
 }
 .stat-card.blue::after  { background: radial-gradient(circle, var(--primary-glow), transparent 70%); }
-.stat-card.red::after   { background: radial-gradient(circle, rgba(229,72,77,.22), transparent 70%); }
+.stat-card.red::after   { background: radial-gradient(circle, rgba(229,49,112,.22), transparent 70%); }
 .stat-card.green::after { background: radial-gradient(circle, rgba(44,182,125,.18), transparent 70%); }
 .stat-card.amber::after { background: radial-gradient(circle, rgba(242,201,76,.18), transparent 70%); }
 /* Gradient top bar */
@@ -381,7 +364,7 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
 .section-heading .count-badge {
   background: var(--primary-dim); color: var(--primary3);
   font-size: .66rem; font-weight: 600; letter-spacing: .04em;
-  padding: 2px 9px; border-radius: 20px; border: 1px solid rgba(30,111,232,.2);
+  padding: 2px 9px; border-radius: 20px; border: 1px solid rgba(127,90,240,.2);
 }
 
 /* ── Progress Bars ──────────────────────────────────────────────────────────── */
@@ -400,8 +383,8 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   padding: 3px 10px; border-radius: 20px;
   font-size: .67rem; font-weight: 600; letter-spacing: .03em;
 }
-.badge-blue  { background: var(--primary-dim); color: var(--primary3); border: 1px solid rgba(30,111,232,.2); }
-.badge-red   { background: var(--red-dim);     color: #fb7185;          border: 1px solid rgba(229,72,77,.2); }
+.badge-blue  { background: var(--primary-dim); color: var(--primary3); border: 1px solid rgba(127,90,240,.2); }
+.badge-red   { background: var(--red-dim);     color: #fb7185;          border: 1px solid rgba(229,49,112,.2); }
 .badge-green { background: var(--green-dim);   color: var(--green2);    border: 1px solid rgba(44,182,125,.2); }
 .badge-amber { background: var(--amber-dim);   color: var(--amber2);    border: 1px solid rgba(242,201,76,.2); }
 .badge-gray  { background: rgba(255,255,255,.05); color: var(--txt2);   border: 1px solid var(--border); }
@@ -416,22 +399,22 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
 }
 .btn-primary {
   background: linear-gradient(135deg, var(--primary) 0%, var(--primary2) 100%);
-  color: #fff; box-shadow: 0 4px 16px rgba(30,111,232,.35);
+  color: #fff; box-shadow: 0 4px 16px rgba(127,90,240,.35);
 }
 .btn-primary:hover {
-  background: linear-gradient(135deg, #1559c4 0%, var(--primary) 100%);
-  box-shadow: 0 6px 22px rgba(30,111,232,.5); transform: translateY(-1px);
+  background: linear-gradient(135deg, #6b46d9 0%, var(--primary) 100%);
+  box-shadow: 0 6px 22px rgba(127,90,240,.5); transform: translateY(-1px);
 }
 .btn-danger {
   background: linear-gradient(135deg, var(--red) 0%, var(--red2) 100%);
-  color: #fff; box-shadow: 0 4px 14px rgba(229,72,77,.3);
+  color: #fff; box-shadow: 0 4px 14px rgba(229,49,112,.3);
 }
-.btn-danger:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(229,72,77,.45); }
+.btn-danger:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(229,49,112,.45); }
 .btn-ghost {
   background: rgba(255,255,255,.04); color: var(--txt2); border: 1px solid var(--border);
 }
 .btn-ghost:hover {
-  color: var(--txt); background: rgba(30,111,232,.09); border-color: var(--border-hover);
+  color: var(--txt); background: rgba(127,90,240,.08); border-color: var(--border-hover);
 }
 .btn-sm { padding: 6px 13px; font-size: .76rem; }
 .btn-xs { padding: 3px 9px; font-size: .68rem; }
@@ -445,17 +428,17 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   background: rgba(13,13,16,.6); border-bottom: 1px solid var(--border);
 }
 .sg-table tbody tr { border-bottom: 1px solid var(--border2); transition: background .12s; }
-.sg-table tbody tr:hover { background: rgba(30,111,232,.06); }
+.sg-table tbody tr:hover { background: rgba(127,90,240,.05); }
 .sg-table td { padding: 11px 14px; font-size: .8rem; color: var(--txt2); vertical-align: middle; }
 .sg-table td.primary { color: var(--txt); font-weight: 500; }
 .sg-table td.mono { font-family: var(--font-mono); font-size: .75rem; }
 
 /* ── Severity Badges ─────────────────────────────────────────────────────────── */
 .sev { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: var(--radius-xs); font-size: .67rem; font-weight: 600; letter-spacing: .03em; }
-.sev-critical { background: rgba(229,72,77,.18); color: #fb7185; border: 1px solid rgba(229,72,77,.3); }
-.sev-high     { background: rgba(229,72,77,.1);  color: #fca5a5; border: 1px solid rgba(229,72,77,.18); }
+.sev-critical { background: rgba(229,49,112,.18); color: #fb7185; border: 1px solid rgba(229,49,112,.3); }
+.sev-high     { background: rgba(229,49,112,.1);  color: #fca5a5; border: 1px solid rgba(229,49,112,.18); }
 .sev-medium   { background: var(--amber-dim);     color: var(--amber2); border: 1px solid rgba(242,201,76,.22); }
-.sev-low      { background: var(--primary-dim);   color: var(--primary3); border: 1px solid rgba(30,111,232,.2); }
+.sev-low      { background: var(--primary-dim);   color: var(--primary3); border: 1px solid rgba(127,90,240,.2); }
 .sev-info     { background: var(--cyan-dim);      color: var(--cyan2); border: 1px solid rgba(34,211,238,.18); }
 
 /* ── Forms ──────────────────────────────────────────────────────────────────── */
@@ -535,7 +518,7 @@ select.form-input { cursor: pointer; }
   position: fixed; inset: 0; z-index: 9998;
   display: flex; align-items: center; justify-content: center;
   background:
-    radial-gradient(ellipse at 25% 25%, rgba(30,111,232,.18) 0%, transparent 55%),
+    radial-gradient(ellipse at 25% 25%, rgba(127,90,240,.16) 0%, transparent 55%),
     radial-gradient(ellipse at 78% 75%, rgba(44,182,125,.1) 0%, transparent 50%),
     var(--bg0);
 }
@@ -576,7 +559,7 @@ select.form-input { cursor: pointer; }
 }
 .module-card:hover {
   border-color: var(--border-hover); transform: translateY(-2px);
-  box-shadow: var(--shadow-sm), 0 0 0 1px rgba(30,111,232,.15);
+  box-shadow: var(--shadow-sm), 0 0 0 1px rgba(127,90,240,.15);
 }
 .module-card-header { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
 .module-status-dot  { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }

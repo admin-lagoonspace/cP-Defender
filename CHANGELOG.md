@@ -3,6 +3,24 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.10.4] — 2026-08-08
+
+### Reverted
+- **All logo work from 3.10.0–3.10.3 is reverted.** `frontend/css/app.css` is
+  byte-identical to 3.9.1 and `frontend/index.html` differs only by the version
+  string. Restored:
+  - The inline SVG shield mark plus HTML wordmark in the topbar
+  - The violet palette (#7f5af0 primary, #0d0d10 background)
+  Removed: the image-based lockup, the white brand plate, the crop rules,
+  `scripts/prep-logo.py`, and the generated logo assets.
+
+### Note
+- Asset cache-busting (`app.css?v=<version>`) was introduced during the logo work
+  and is reverted with it, so the stylesheet is served from a plain URL again.
+  That is an independent fix worth reinstating on its own — without it a browser
+  keeps serving a cached stylesheet after an update, which is exactly why this
+  revert appeared not to work until the cache was bypassed.
+
 ## [3.10.3] — 2026-08-08
 
 ### Added

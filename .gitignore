@@ -46,8 +46,3 @@ _wtest.txt
 # CDN upload credentials — keep these OUT of the repo, always
 .sentinel-cdn.env
 *.env.local
-
-# Placeholder logo used to verify the topbar crop. The REAL asset must be saved
-# to frontend/images/logo-lockup.png before release; this rule stops a stand-in
-# being committed or shipped by accident.
-frontend/images/logo-lockup.png
