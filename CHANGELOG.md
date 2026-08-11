@@ -3,6 +3,50 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.13.0] — 2026-08-08
+
+### Added
+- **Built-in rootkit engine** (`backend/lib/RootkitEngine.php`). Detection now
+  works on a bare server. The previous scanner wrapped rkhunter/chkrootkit and
+  returned "rkhunter is not installed" when neither was present — inert on
+  exactly the machines most likely to need it. rkhunter is still layered on top
+  when available for its curated signature database; this is the floor, not a
+  replacement.
+
+  Checks are mostly **behavioural rather than signature-based**, because
+  signature lists age badly. A rootkit can rename its files; it cannot hide a
+  process or preload a library without ceasing to be a rootkit:
+  - `/etc/ld.so.preload` and global `LD_PRELOAD` — the standard userland hook
+  - **Hidden processes**: `/proc` compared against `ps`. A PID visible in one and
+    not the other means the userland tool is lying, which catches a rootkit whose
+    files are entirely unknown to us
+  - **Package integrity**: `rpm -Vf` / `dpkg --verify` on core binaries — the
+    strongest check available, comparing against the distribution's own hashes
+    rather than any list we ship
+  - Orphaned kernel modules, unexpected SUID binaries, hidden files in system
+    directories, UID 0 accounts, empty passwords, promiscuous interfaces,
+    cron droppers (`curl|sh`), and sshd misconfiguration
+  - Every finding carries a severity **and an explanation** of why it is
+    suspicious, since several checks have legitimate causes
+- `POST rootkit/scan-builtin`
+
+- **Full blocklist matrix** (`backend/lib/BlocklistRegistry.php`). IP reputation
+  now checks **25 DNSBL/RBL services** and reports each one separately, instead
+  of four collapsed into a single score. Delisting requires knowing *which*
+  service lists you, which a single number cannot tell an operator — each result
+  carries the return code, the decoded reason, and the delisting URL.
+  - Lists are **weighted by category**: an exploit/botnet listing scores far
+    higher than a policy listing such as a dynamic-IP range, which is normal for
+    residential space and not evidence of abuse. A flat count would rank those
+    equally.
+  - **Refusal answers are not treated as listings.** Several zones (Spamhaus in
+    particular) return `127.255.255.x` to public resolvers meaning "query
+    refused". Counting that as a hit would report every address on the internet
+    as blacklisted. Reported as `refused` — result unknown, explicitly not clean.
+  - `iprep/server-ips` detects the host's own public addresses, which is what an
+    operator most wants checked.
+- `GET iprep/blocklists?ip=…` and `GET iprep/server-ips`
+
 ## [3.12.0] — 2026-08-08
 
 ### Added

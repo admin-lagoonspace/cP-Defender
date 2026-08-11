@@ -26,6 +26,8 @@ require_once __DIR__ . '/../lib/PHPHardening.php';
 require_once __DIR__ . '/../lib/UpdateChecker.php';
 require_once __DIR__ . '/../lib/License.php';
 require_once __DIR__ . '/../lib/FirewallEngine.php';
+require_once __DIR__ . '/../lib/RootkitEngine.php';
+require_once __DIR__ . '/../lib/BlocklistRegistry.php';
 
 // ── CORS & Headers ────────────────────────────────────────────────────────────
 header('Content-Type: application/json');
@@ -452,6 +454,25 @@ function routeWAF(string $action, string $method, array $body, array $q, ?array 
 }
 
 function routeIPRep(string $action, string $method, array $body, array $q, ?array $user): array {
+    // GET iprep/blocklists?ip=... — full per-service matrix for the UI, so an
+    // operator can see WHICH list to request delisting from. A single collapsed
+    // score cannot answer that.
+    if ($action === 'blocklists') {
+        $ip = trim((string)($q['ip'] ?? ''));
+        if ($ip === '') {
+            $ips = BlocklistRegistry::serverIps();
+            $ip  = $ips[0] ?? '';
+        }
+        if ($ip === '') {
+            return ['success' => false, 'error' => 'No IP supplied and none detected', 'code' => 400];
+        }
+        return ['success' => true, 'data' => BlocklistRegistry::checkAll($ip)];
+    }
+    // GET iprep/server-ips — the addresses this host actually sends from
+    if ($action === 'server-ips') {
+        return ['success' => true, 'data' => BlocklistRegistry::serverIps()];
+    }
+
     $rep = new IPReputation();
     return match($action) {
         'check' => ['success' => true, 'data' => $rep->check($q['ip'] ?? $body['ip'] ?? '')],
@@ -783,6 +804,16 @@ function routeCMSGuard(string $action, string $method, array $body, array $q, ?a
 // Rootkit Scanner
 // ════════════════════════════════════════════════════════════════════════════
 function routeRootkit(string $action, string $method, array $body, array $q, ?string $id, ?array $user): array {
+    // Native engine — works with no third-party tools installed. rkhunter is
+    // still used on top when available for its curated signature database.
+    if ($action === 'scan-builtin' && $method === 'POST') {
+        Auth::requireRole('admin', $user);
+        $r = RootkitEngine::scan();
+        Logger::info('Built-in rootkit scan: ' . $r['summary']['critical'] . ' critical, '
+                   . $r['summary']['high'] . ' high');
+        return ['success' => true, 'data' => $r];
+    }
+
     $rk = new RootkitScanner();
     return match($action) {
         'status'   => ['success' => true, 'data' => $rk->getStatus()],
