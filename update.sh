@@ -27,6 +27,86 @@ err()     { echo -e "  ${RED}✖${NC}  $*" >&2; }
 section() { echo -e "\n${BOLD}${BLUE}▶ $*${NC}"; }
 die()     { err "$*"; exit 1; }
 
+# ── Progress state, for the dashboard ─────────────────────────────────────────
+# Written OUTSIDE the install directory on purpose: the update rsyncs over
+# ${INSTALL_DIR} with --delete, so anything kept inside would be destroyed
+# mid-run — exactly when the UI most needs to read it.
+STATE_DIR="${SG_STATE_DIR:-/var/lib/sentinel-gate}"
+STATE_FILE="${STATE_DIR}/update-state.json"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+STATE_PHASE="idle"; STATE_PCT=0; STATE_STATUS="running"
+state() {   # state <phase> <pct> [message]
+    STATE_PHASE="$1"; STATE_PCT="$2"
+    local msg="${3:-$1}"
+    cat > "${STATE_FILE}.tmp" 2>/dev/null <<JSON || return 0
+{
+  "status":       "${STATE_STATUS}",
+  "phase":        "${STATE_PHASE}",
+  "percent":      ${STATE_PCT},
+  "message":      "${msg//\"/}",
+  "from_version": "${CURRENT_VERSION:-}",
+  "to_version":   "${LATEST_VERSION:-}",
+  "pid":          $$,
+  "updated_at":   $(date +%s)
+}
+JSON
+    mv -f "${STATE_FILE}.tmp" "$STATE_FILE" 2>/dev/null || true
+}
+state_done()   { STATE_STATUS="success";     state "done" 100 "${1:-Update complete}"; }
+state_failed() { STATE_STATUS="failed";      state "failed" "${STATE_PCT}" "${1:-Update failed}"; }
+state_rolled() { STATE_STATUS="rolled_back"; state "rolled_back" 100 "${1:-Rolled back to the previous version}"; }
+
+# ── Rollback ──────────────────────────────────────────────────────────────────
+# Armed only once the overlay starts. Before that nothing has been modified, so
+# a failure needs no repair — arming earlier would restore a snapshot over an
+# installation that was never touched.
+ROLLBACK_ARMED=false
+CODE_SNAPSHOT=""
+
+rollback() {
+    $ROLLBACK_ARMED || return 0
+    [[ -n "$CODE_SNAPSHOT" && -d "$CODE_SNAPSHOT" ]] || {
+        err "No code snapshot — cannot roll back automatically."
+        return 1
+    }
+    echo ""
+    warn "Update failed — rolling back to v${CURRENT_VERSION}…"
+    STATE_STATUS="running"; state "rollback" 90 "Restoring previous version"
+
+    # Code first, then user data on top: the data restore must win, so settings,
+    # database and quarantine survive regardless of what the snapshot contains.
+    for dir in "${UPDATE_DIRS[@]}"; do
+        [[ -d "${CODE_SNAPSHOT}/${dir}" ]] || continue
+        rsync -a --delete "${CODE_SNAPSHOT}/${dir}/" "${INSTALL_DIR}/${dir}/" 2>/dev/null             && ok "Restored code: ${dir}/"
+    done
+    for file in "${UPDATE_FILES[@]}"; do
+        [[ -f "${CODE_SNAPSHOT}/${file}" ]] || continue
+        cp -f "${CODE_SNAPSHOT}/${file}" "${INSTALL_DIR}/${file}" 2>/dev/null             && ok "Restored: ${file}"
+    done
+    for item in "${PRESERVE[@]}"; do
+        src="${BACKUP_DIR}/$(basename "$item")"
+        [[ -e "$src" ]] || continue
+        mkdir -p "$(dirname "$item")"
+        cp -a "$src" "$(dirname "$item")/" 2>/dev/null && ok "Restored data: $item"
+    done
+
+    chmod +x "${INSTALL_DIR}"/*.sh 2>/dev/null || true
+    systemctl start sentinel-gate-monitor 2>/dev/null || true
+
+    state_rolled "Rolled back to v${CURRENT_VERSION}. Your settings and data are intact."
+    err "Rolled back to v${CURRENT_VERSION}. No changes were kept."
+}
+
+on_error() {
+    local rc=$?
+    [[ $rc -eq 0 ]] && return 0
+    state_failed "Update failed at: ${STATE_PHASE}"
+    rollback
+    exit $rc
+}
+trap on_error ERR
+
 # ── Config ────────────────────────────────────────────────────────────────────
 # Updates are pulled from a PUBLIC releases channel, NOT the private source repo.
 # This means no GitHub credentials ever ship to customer servers. The channel
@@ -274,6 +354,7 @@ if [[ "$AUTO_YES" == false ]]; then
 fi
 
 # ── Backup user data ──────────────────────────────────────────────────────────
+state "backup" 30 "Backing up your data"
 section "Backing up user data"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}_v${CURRENT_VERSION}"
@@ -297,6 +378,7 @@ echo "$CURRENT_VERSION" > "${BACKUP_DIR}/from_version.txt"
 ok "Backup created at: ${BACKUP_DIR}"
 
 # ── Download latest release ───────────────────────────────────────────────────
+state "download" 15 "Downloading v${LATEST_VERSION}"
 section "Downloading v${LATEST_VERSION}"
 
 DOWNLOADED=false
@@ -393,6 +475,26 @@ section "Applying update"
 UPDATE_DIRS=( backend frontend whm )
 UPDATE_FILES=( VERSION install.sh uninstall.sh update.sh )
 
+# ── Snapshot the current code so a failure can be undone ─────────────────────
+# The existing backup covers USER DATA only. Without a code copy a half-applied
+# overlay leaves a mixed-version install with no way back.
+state "snapshot" 45 "Snapshotting current version"
+CODE_SNAPSHOT="${BACKUP_DIR}/code"
+mkdir -p "$CODE_SNAPSHOT"
+for dir in "${UPDATE_DIRS[@]}"; do
+    [[ -d "${INSTALL_DIR}/${dir}" ]] || continue
+    cp -a "${INSTALL_DIR}/${dir}" "${CODE_SNAPSHOT}/" 2>/dev/null || true
+done
+for file in "${UPDATE_FILES[@]}"; do
+    [[ -f "${INSTALL_DIR}/${file}" ]] || continue
+    cp -a "${INSTALL_DIR}/${file}" "${CODE_SNAPSHOT}/" 2>/dev/null || true
+done
+ok "Code snapshot: ${CODE_SNAPSHOT}"
+
+# From here on a failure must undo what has been written.
+ROLLBACK_ARMED=true
+state "applying" 55 "Applying v${LATEST_VERSION}"
+
 for dir in "${UPDATE_DIRS[@]}"; do
     src="${EXTRACTED_ROOT}/${dir}"
     [[ -d "$src" ]] || continue
@@ -421,6 +523,7 @@ chmod +x "${INSTALL_DIR}/backend/cron/scan.php"     2>/dev/null || true
 chmod +x "${INSTALL_DIR}/backend/cron/update-check.php" 2>/dev/null || true
 
 # ── Restore user data over the fresh install ──────────────────────────────────
+state "restore" 75 "Restoring your settings and data"
 section "Restoring user data"
 for item in "${PRESERVE[@]}"; do
     src="${BACKUP_DIR}/$(basename "$item")"
@@ -432,6 +535,7 @@ for item in "${PRESERVE[@]}"; do
 done
 
 # ── Run DB migrations ─────────────────────────────────────────────────────────
+state "migrate" 85 "Running database migrations"
 section "Running database migrations"
 # Trigger a PHP call that initialises Database (runs all migrations/ALTER guards)
 php -r "
@@ -520,6 +624,10 @@ echo ""
 ok "Updated from v${CURRENT_VERSION} → ${BOLD}v${NEW_VERSION}${NC}"
 ok "All settings, quarantine, and logs preserved"
 ok "Backup saved to: ${BACKUP_DIR}"
+
+# Completed — disarm rollback and publish the final state.
+ROLLBACK_ARMED=false
+state_done "Updated to v${NEW_VERSION}"
 echo ""
 info "If anything looks wrong, restore your backup:"
 info "  cp -a ${BACKUP_DIR}/database ${INSTALL_DIR}/"

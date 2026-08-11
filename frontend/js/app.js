@@ -161,7 +161,10 @@ function closeModal(id) { document.getElementById(id)?.classList.add('hidden'); 
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 async function checkForUpdates(forceLive = false) {
-  if (Demo.active) return;
+  if (Demo.active) {
+    showUpdateButton({ update_available: true, latest_version: '3.11.0' });
+    return;
+  }
   try {
     const res = forceLive
       ? await API.updateCheck()
@@ -173,6 +176,8 @@ async function checkForUpdates(forceLive = false) {
     const newVer  = document.getElementById('update-new-version');
     const curVer  = document.getElementById('update-cur-version');
     const relLink = document.getElementById('update-release-link');
+
+    showUpdateButton(d);
 
     if (d.update_available) {
       if (banner)  { banner.style.display  = 'flex'; }
@@ -1900,4 +1905,155 @@ async function updateSignaturesNow() {
   } else {
     toast((res && res.error) || 'Definition update failed', 'error');
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   Self-update
+   ══════════════════════════════════════════════════════════════════════════════
+   The update replaces the very code that serves the API, so this cannot be a
+   single request-and-wait. The server starts the updater detached and writes
+   progress to a file outside the install directory; the UI polls that.
+
+   The important consequence: mid-update the API is BEING OVERWRITTEN, so polls
+   will fail — connection refused, 502, half-written PHP. Those are expected, not
+   errors, and must not abort the flow. Only a long unbroken run of failures
+   means something is actually wrong. */
+
+let _updPoll = null;
+let _updFails = 0;
+let _updStarted = 0;
+
+function _el(id) { return document.getElementById(id); }
+
+function showUpdateButton(info) {
+  const btn = _el('update-now-btn');
+  if (!btn) return;
+  if (info && info.update_available) {
+    _el('update-btn-version').textContent = 'v' + (info.latest_version || '?');
+    btn.classList.remove('hidden');
+  } else {
+    btn.classList.add('hidden');
+  }
+}
+
+function _setProgress(pct, msg, title) {
+  const f = _el('update-bar-fill'), p = _el('update-pct'),
+        m = _el('update-msg'),      t = _el('update-title');
+  if (f) f.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  if (p) p.textContent = Math.round(pct) + '%';
+  if (m && msg) m.textContent = msg;
+  if (t && title) t.textContent = title;
+}
+
+async function startUpdate() {
+  if (Demo.active) { _demoUpdate(); return; }
+
+  const overlay = _el('update-overlay');
+  overlay.classList.remove('hidden');
+  _el('update-close').classList.add('hidden');
+  _el('update-spinner').className = 'update-spinner';
+  _setProgress(1, 'Starting update…', 'Updating Sentinel Gate');
+
+  const res = await API.post('update/run', {});
+  if (!res || !res.success) {
+    // 409 means one is already running — attach to it rather than failing.
+    if (res && res.data && res.data.status === 'running') {
+      _pollUpdate();
+      return;
+    }
+    _updateFailed((res && res.error) || 'Could not start the update.');
+    return;
+  }
+
+  _updFails = 0;
+  _updStarted = Date.now();
+  _pollUpdate();
+}
+
+function _pollUpdate() {
+  clearInterval(_updPoll);
+  _updPoll = setInterval(async () => {
+    let d = null;
+    try {
+      const r = await API.get('update/progress');
+      d = r && r.data;
+    } catch (_) { d = null; }
+
+    if (!d) {
+      // Expected while the API's own files are being replaced. Give it a long
+      // rope — 40 polls at 2s is over a minute of tolerated unavailability —
+      // before calling it a failure.
+      if (++_updFails > 40) {
+        clearInterval(_updPoll);
+        _updateFailed('Lost contact with the server. Check logs/update.log.');
+      }
+      return;
+    }
+    _updFails = 0;
+
+    _setProgress(d.percent || 0, d.message || '');
+
+    if (d.status === 'success') {
+      clearInterval(_updPoll);
+      _el('update-spinner').className = 'update-spinner done';
+      _setProgress(100, d.message || 'Update complete', 'Updated successfully');
+      _el('update-close').classList.remove('hidden');
+      // Give the services a moment to come back before reloading.
+      setTimeout(finishUpdate, 2500);
+    } else if (d.status === 'rolled_back') {
+      clearInterval(_updPoll);
+      _el('update-spinner').className = 'update-spinner failed';
+      _setProgress(100,
+        d.message || 'Rolled back to the previous version. Your data is intact.',
+        'Update failed — rolled back');
+      _el('update-close').classList.remove('hidden');
+    } else if (d.status === 'failed') {
+      clearInterval(_updPoll);
+      _updateFailed(d.message || 'The update failed.');
+    }
+  }, 2000);
+}
+
+function _updateFailed(msg) {
+  clearInterval(_updPoll);
+  _el('update-spinner').className = 'update-spinner failed';
+  _setProgress(100, msg, 'Update failed');
+  _el('update-close').classList.remove('hidden');
+}
+
+function finishUpdate() {
+  // Full reload, not just a data refresh: the JS and CSS themselves have been
+  // replaced on disk, so the running page is the OLD build talking to the NEW
+  // backend. Reloading is the only way to get a consistent pair.
+  window.location.reload();
+}
+
+/* Demo-mode walkthrough so the flow can be reviewed without a real update. */
+function _demoUpdate() {
+  const overlay = _el('update-overlay');
+  overlay.classList.remove('hidden');
+  _el('update-close').classList.add('hidden');
+  _el('update-spinner').className = 'update-spinner';
+  const steps = [
+    [5,  'Checking for updates…'],
+    [15, 'Downloading v3.11.0…'],
+    [30, 'Backing up your data…'],
+    [45, 'Snapshotting current version…'],
+    [55, 'Applying v3.11.0…'],
+    [75, 'Restoring your settings and data…'],
+    [85, 'Running database migrations…'],
+    [100,'Update complete'],
+  ];
+  let i = 0;
+  const t = setInterval(() => {
+    if (i >= steps.length) {
+      clearInterval(t);
+      _el('update-spinner').className = 'update-spinner done';
+      _setProgress(100, 'Updated to v3.11.0', 'Updated successfully');
+      _el('update-close').classList.remove('hidden');
+      return;
+    }
+    _setProgress(steps[i][0], steps[i][1]);
+    i++;
+  }, 900);
 }

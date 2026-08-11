@@ -578,3 +578,71 @@ select.form-input { cursor: pointer; }
   .grid-62, .grid-2 { grid-template-columns: 1fr; }
   .modules-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   UPDATE — flashing button + progress overlay
+══════════════════════════════════════════════════════════════════════════════ */
+
+/* The button pulses to draw the eye, but the animation is disabled under
+   prefers-reduced-motion: a permanently flashing control is genuinely
+   uncomfortable for some users, and the colour alone still reads as "action". */
+.update-flash {
+  background: linear-gradient(135deg, var(--amber) 0%, #f59e0b 100%);
+  color: #1a1200;
+  font-weight: 700;
+  border: none;
+  animation: update-pulse 1.6s ease-in-out infinite;
+}
+.update-flash:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.update-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #1a1200; display: inline-block; margin-right: 2px;
+}
+@keyframes update-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(242,201,76,.55); }
+  50%      { box-shadow: 0 0 0 7px rgba(242,201,76,0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-flash { animation: none; }
+}
+
+#update-overlay {
+  position: fixed; inset: 0; z-index: 4000;
+  background: rgba(8,10,18,.86);
+  backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+}
+#update-overlay.hidden { display: none !important; }
+
+.update-panel {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 34px 38px;
+  width: 100%; max-width: 430px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+.update-spinner {
+  width: 46px; height: 46px; margin: 0 auto 18px;
+  border: 3px solid rgba(255,255,255,.12);
+  border-top-color: var(--primary2);
+  border-radius: 50%;
+  animation: update-spin .9s linear infinite;
+}
+@keyframes update-spin { to { transform: rotate(360deg); } }
+/* Swapped for a static state once the run ends, so a finished update does not
+   keep spinning as though it were still working. */
+.update-spinner.done   { animation: none; border-color: var(--green); border-top-color: var(--green); }
+.update-spinner.failed { animation: none; border-color: var(--red2);   border-top-color: var(--red2); }
+
+.update-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 6px; }
+.update-msg   { font-size: .82rem; color: var(--txt2); min-height: 20px; margin-bottom: 16px; }
+.update-bar   { height: 6px; border-radius: 6px; background: var(--bg2); overflow: hidden; }
+.update-bar-fill {
+  height: 100%; width: 0;
+  background: linear-gradient(90deg, var(--primary), var(--primary2));
+  border-radius: 6px; transition: width .4s ease;
+}
+.update-pct   { font-size: .72rem; color: var(--txt3); margin-top: 7px; }
+.update-note  { font-size: .72rem; color: var(--txt3); line-height: 1.6; margin-top: 16px; }

@@ -3,6 +3,37 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.11.0] — 2026-08-08
+
+### Added
+- **One-click update from the dashboard.** A pulsing amber button appears top
+  right when a new version is published. Clicking it runs the update behind a
+  progress overlay; on success the dashboard reloads, on failure the previous
+  version is restored automatically. Settings, database and quarantine are
+  preserved either way.
+- **Automatic rollback in `update.sh`.** It previously backed up user data only
+  and, on failure, printed manual restore instructions — a half-applied overlay
+  left a mixed-version install with no way back. It now snapshots the current
+  code before the overlay begins, arms an ERR trap, and on any failure restores
+  code then data (data last, so settings always win) and reports `rolled_back`.
+- Progress is published to `/var/lib/sentinel-gate/update-state.json` —
+  deliberately outside the install directory, which the updater rsyncs with
+  `--delete` mid-run.
+- `POST update/run` starts the updater **detached** via `setsid nohup`; a
+  synchronous run would be killed partway through, because the update replaces
+  the very PHP serving the request. `GET update/progress` reports state, marks a
+  run that stops writing for 15 minutes as failed rather than spinning forever,
+  and refuses to start a second run over a live one.
+- The poller tolerates the API being unavailable for ~80 seconds. Mid-update the
+  backend is being overwritten, so failed polls are expected rather than errors.
+- The update button honours `prefers-reduced-motion`.
+
+### Fixed
+- Asset cache-busting reinstated (`app.css?v=<version>`, stamped by
+  `make-release.sh`). It was reverted with the logo work in 3.10.4, and for this
+  feature it is not cosmetic: a cached `app.js` has no `startUpdate()`, so the
+  update button would silently do nothing after an upgrade.
+
 ## [3.10.4] — 2026-08-08
 
 ### Reverted

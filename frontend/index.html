@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/app.css?v=3.11.0">
 </head>
 <body>
 <div id="app">
@@ -101,6 +101,23 @@
   </div>
 </header>
 
+<!-- ══ UPDATE OVERLAY ═══════════════════════════════════════════════════════ -->
+<div id="update-overlay" class="hidden">
+  <div class="update-panel">
+    <div class="update-spinner" id="update-spinner"></div>
+    <div class="update-title"  id="update-title">Updating Sentinel Gate</div>
+    <div class="update-msg"    id="update-msg">Starting…</div>
+    <div class="update-bar"><div class="update-bar-fill" id="update-bar-fill"></div></div>
+    <div class="update-pct"    id="update-pct">0%</div>
+    <div class="update-note">
+      Your settings, database and quarantine are preserved. If the update fails
+      it is rolled back automatically to the previous version.
+    </div>
+    <button id="update-close" class="btn btn-primary btn-sm hidden"
+            onclick="finishUpdate()" style="margin-top:16px">Reload dashboard</button>
+  </div>
+</div>
+
 <!-- ══ LAYOUT ════════════════════════════════════════════════════════════════ -->
 <div class="layout">
 
@@ -174,7 +191,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.10.4 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.11.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -209,6 +226,11 @@
           <div class="page-sub" id="dash-server-info">Loading server info…</div>
         </div>
         <div style="display:flex;gap:8px">
+          <button id="update-now-btn" class="btn btn-sm update-flash hidden"
+                  onclick="startUpdate()" title="A new version is available">
+            <span class="update-dot"></span>
+            <span>Update to <span id="update-btn-version">—</span></span>
+          </button>
           <button class="btn btn-ghost btn-sm" onclick="refreshDashboard()">↺ Refresh</button>
           <button class="btn btn-primary btn-sm" onclick="openPage('scanner');startScan()">▶ Run Scan</button>
         </div>
@@ -1530,9 +1552,9 @@
 <!-- ══ TOAST CONTAINER ═══════════════════════════════════════════════════════ -->
 <div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px"></div>
 
-<script src="js/api.js"></script>
+<script src="js/api.js?v=3.11.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js"></script>
+<script src="js/app.js?v=3.11.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {

@@ -840,6 +840,72 @@ function routeUpdate(string $action, string $method, ?array $user): array {
             ? ['success' => true, 'data' => UpdateChecker::checkForUpdates()]
             : ['success' => false, 'code' => 405],
 
+        // POST update/run — start the updater DETACHED.
+        // It must not run inside this request: the update replaces the very PHP
+        // that is serving it, so a synchronous call would be killed partway
+        // through, leaving a half-applied install with nothing to report it.
+        'run' => $method === 'POST' ? (function() {
+            $state = '/var/lib/sentinel-gate/update-state.json';
+
+            // Refuse to start a second run over a live one.
+            if (is_readable($state)) {
+                $cur = json_decode((string)file_get_contents($state), true);
+                if (is_array($cur) && ($cur['status'] ?? '') === 'running'
+                    && (time() - (int)($cur['updated_at'] ?? 0)) < 900) {
+                    return ['success' => false, 'error' => 'An update is already running',
+                            'data' => $cur, 'code' => 409];
+                }
+            }
+
+            $script = SG_ROOT . '/update.sh';
+            if (!is_file($script)) {
+                return ['success' => false, 'error' => 'update.sh not found', 'code' => 500];
+            }
+
+            @mkdir('/var/lib/sentinel-gate', 0755, true);
+            // Seed the state immediately so the UI has something to poll before
+            // the script has had a chance to write anything itself.
+            @file_put_contents($state, json_encode([
+                'status' => 'running', 'phase' => 'starting', 'percent' => 1,
+                'message' => 'Starting update…',
+                'from_version' => SG_VERSION, 'to_version' => '',
+                'updated_at' => time(),
+            ]));
+
+            $log = SG_LOGS . '/update.log';
+            // setsid + nohup so the updater survives this request ending, and
+            // </dev/null so it can never block waiting on input.
+            $cmd = sprintf('setsid nohup bash %s --yes </dev/null >> %s 2>&1 & echo $!',
+                escapeshellarg($script), escapeshellarg($log));
+            $pid = trim((string)@shell_exec($cmd));
+
+            Logger::info('Update started from dashboard (pid ' . $pid . ')');
+            return ['success' => true, 'started' => true, 'pid' => $pid];
+        })() : ['success' => false, 'code' => 405],
+
+        // GET update/progress — read the state file the updater writes.
+        // Deliberately outside SG_ROOT: the update rsyncs over the install dir
+        // with --delete, so state kept inside would vanish mid-run.
+        'progress' => (function() {
+            $state = '/var/lib/sentinel-gate/update-state.json';
+            if (!is_readable($state)) {
+                return ['success' => true, 'data' => ['status' => 'idle', 'percent' => 0]];
+            }
+            $d = json_decode((string)file_get_contents($state), true);
+            if (!is_array($d)) {
+                return ['success' => true, 'data' => ['status' => 'idle', 'percent' => 0]];
+            }
+            // A 'running' state that has stopped being written means the updater
+            // died outright (OOM, kill). Report it rather than spinning forever.
+            if (($d['status'] ?? '') === 'running'
+                && (time() - (int)($d['updated_at'] ?? 0)) > 900) {
+                $d['status']  = 'failed';
+                $d['message'] = 'Update stopped responding. Check logs/update.log.';
+            }
+            $d['current_version'] = SG_VERSION;
+            return ['success' => true, 'data' => $d];
+        })(),
+
         default  => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }

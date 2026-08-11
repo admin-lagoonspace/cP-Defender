@@ -67,6 +67,10 @@ const API = (() => {
     status:         ()                   => req('GET',  'auth/status'),
     changePassword: (username, password) => req('POST', 'auth/change-password', { username, password }),
 
+    // Update
+    updateRun:      ()  => req('POST', 'update/run', {}),
+    updateProgress:()  => req('GET',  'update/progress'),
+
     // License
     licenseStatus:   ()    => req('GET',  'license/status'),
     licenseActivate: (key) => req('POST', 'license/activate', { key }),
