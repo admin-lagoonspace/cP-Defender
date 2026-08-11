@@ -1302,6 +1302,20 @@ if [[ $TEST_EXIT -eq 0 ]]; then
   fi
 
   echo ""
+  # Activation is the required next step, and without saying so the operator
+  # opens the dashboard, finds every feature refused, and reasonably concludes
+  # the install failed.
+  echo -e "  ${YELLOW}${BOLD}┌─ NEXT STEP: ACTIVATE YOUR LICENCE ─────────────────────┐${NC}"
+  echo -e "  ${YELLOW}${BOLD}│${NC}  Sentinel Gate is installed but not yet licensed."
+  echo -e "  ${YELLOW}${BOLD}│${NC}  Protection stays off until a licence is activated."
+  echo -e "  ${YELLOW}${BOLD}│${NC}"
+  echo -e "  ${YELLOW}${BOLD}│${NC}  From the dashboard: an activation screen is shown on"
+  echo -e "  ${YELLOW}${BOLD}│${NC}  first sign-in — paste your key there."
+  echo -e "  ${YELLOW}${BOLD}│${NC}"
+  echo -e "  ${YELLOW}${BOLD}│${NC}  Or from the shell:"
+  echo -e "  ${YELLOW}${BOLD}│${NC}    ${BOLD}sentinel license activate <your-key>${NC}"
+  echo -e "  ${YELLOW}${BOLD}└────────────────────────────────────────────────────────┘${NC}"
+  echo ""
   echo -e "  ${BOLD}Install dir:${NC}  ${INSTALL_DIR}"
   echo -e "  ${BOLD}Manifest:${NC}     ${MANIFEST}"
   echo -e "  ${BOLD}Logs:${NC}         ${LOG_DIR}/"

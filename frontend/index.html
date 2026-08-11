@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.16.0">
+<link rel="stylesheet" href="css/app.css?v=3.17.0">
 </head>
 <body>
 <div id="app">
@@ -46,6 +46,69 @@
       </div>
     </form>
 
+  </div>
+</div>
+
+<!-- ══ ACTIVATION SCREEN ════════════════════════════════════════════════════ -->
+<!-- Shown instead of the dashboard when the licence is not valid. Installing is
+     deliberately open to everyone; this is where the product asks to be paid
+     for. It is a designed state, not an error state — the previous behaviour
+     surfaced a red toast and dropped the user into Settings, which reads like
+     something broke rather than like an expected next step. -->
+<div id="activate-screen" class="hidden">
+  <div class="activate-card">
+    <div class="activate-mark">
+      <svg width="46" height="52" viewBox="0 0 34 38" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="ac-og" x1="17" y1="7" x2="26" y2="19" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#fb923c"/><stop offset="1" stop-color="#ef4444"/></linearGradient>
+          <linearGradient id="ac-bl" x1="8" y1="10" x2="17" y2="28" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+          <linearGradient id="ac-tl" x1="17" y1="19" x2="26" y2="30" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#34d399"/><stop offset="1" stop-color="#059669"/></linearGradient>
+        </defs>
+        <path d="M17 1L2 7V19C2 28 8.8 35.2 17 37.5C25.2 35.2 32 28 32 19V7L17 1Z" fill="#111e38" stroke="rgba(59,130,246,0.3)" stroke-width="0.5"/>
+        <path d="M17 7.5L25 11V19H17V7.5Z" fill="url(#ac-og)"/>
+        <path d="M9 11L17 7.5V27.5L9 30.5V19V11Z" fill="url(#ac-bl)"/>
+        <path d="M17 19H25V19.5L21 30L17 27.5V19Z" fill="url(#ac-tl)"/>
+      </svg>
+    </div>
+
+    <div class="activate-title">Activate Sentinel Gate</div>
+    <div class="activate-sub" id="activate-sub">
+      Sentinel Gate is installed and ready. Enter your licence key to switch on
+      protection for this server.
+    </div>
+
+    <div class="form-group" style="margin-bottom:12px;text-align:left">
+      <label class="form-label" for="activate-key">Licence key</label>
+      <input class="form-input mono" id="activate-key" type="text"
+             placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+    </div>
+
+    <button class="btn btn-primary" id="activate-btn"
+            style="width:100%;justify-content:center;padding:11px;font-weight:700"
+            onclick="submitActivation()">Activate</button>
+
+    <div id="activate-error" class="hidden"
+         style="margin-top:12px;font-size:.78rem;color:var(--red2);background:var(--red-dim);
+                border:1px solid rgba(229,49,112,.2);border-radius:8px;padding:9px 12px;text-align:left"></div>
+
+    <div class="activate-features">
+      <div class="activate-features-title">Included with a licence</div>
+      <div class="activate-feature">Malware scanning — ClamAV plus the built-in pattern engine</div>
+      <div class="activate-feature">Firewall — built in, no separate install needed</div>
+      <div class="activate-feature">Web application firewall with the OWASP Core Rule Set</div>
+      <div class="activate-feature">Rootkit detection, IP reputation across 25 blocklists</div>
+      <div class="activate-feature">Real-time file monitoring and scheduled scans</div>
+    </div>
+
+    <div class="activate-foot">
+      Already licensed but seeing this? Check that this server can reach the
+      licence server, then
+      <a href="#" onclick="recheckActivation();return false">re-check now</a>.
+      <span id="activate-status-line"></span>
+    </div>
   </div>
 </div>
 
@@ -191,7 +254,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.16.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.17.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -1661,9 +1724,9 @@
 <!-- ══ TOAST CONTAINER ═══════════════════════════════════════════════════════ -->
 <div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px"></div>
 
-<script src="js/api.js?v=3.16.0"></script>
+<script src="js/api.js?v=3.17.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.16.0"></script>
+<script src="js/app.js?v=3.17.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {

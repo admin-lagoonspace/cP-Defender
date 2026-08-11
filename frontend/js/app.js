@@ -82,6 +82,12 @@ const Auth = {
       if (av && u.username) av.textContent = u.username.slice(0,2).toUpperCase();
       applyModeUI(State.installMode);
       detectMode(); // async: fetches live version from API and updates sidebar
+
+      // Licence gate, checked before the dashboard loads rather than after.
+      // Letting the pages load first means every panel fires a request that is
+      // refused with 402 and renders empty behind the activation screen.
+      enforceLicenseGate();
+
       return true;
     }
     // Not logged in — detect mode for login screen
@@ -1776,16 +1782,13 @@ function onLicenseBlocked(payload) {
   if (_licenseBlockedShown) return;
   _licenseBlockedShown = true;
 
-  const msg = (payload && payload.error) || 'A valid license is required.';
-  toast(msg, 'error');
-  openPage('settings');
-  setTimeout(() => {
-    const card = document.getElementById('license-card');
-    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const input = document.getElementById('license-key-input');
-    if (input) input.focus();
-  }, 250);
-  loadLicense();
+  // Show the activation screen rather than a red toast plus a jump to Settings.
+  // A licence that has not been entered yet is an expected setup step, not a
+  // fault, and presenting it as an error makes a working install look broken.
+  showActivateScreen({
+    status:  (payload && payload.license_state) || 'Unlicensed',
+    message: (payload && payload.error) || '',
+  });
 }
 
 function _licenseBadgeClass(status) {
@@ -2330,4 +2333,110 @@ function _demoWafInstall() {
     { ok: true, message: 'Apache reloaded — WAF active in DetectionOnly' },
   ], note: 'Running in DetectionOnly: attacks are logged, not blocked. '
          + 'Review the audit log, then switch to blocking.' } };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   Activation gate
+   ══════════════════════════════════════════════════════════════════════════════
+   Anyone may install; the product asks to be licensed here. This replaces the
+   previous behaviour, which surfaced the 402 as a red error toast and dropped
+   the user into Settings — that reads like a fault rather than the expected
+   next step after installing.
+
+   The screen is shown ahead of the dashboard rather than on top of a broken
+   one, so no panel ever renders half-empty against a refused API. */
+
+function showActivateScreen(lic) {
+  const el = document.getElementById('activate-screen');
+  if (!el) return;
+
+  const sub = document.getElementById('activate-sub');
+  const line = document.getElementById('activate-status-line');
+
+  if (lic && lic.status && lic.status !== 'Unlicensed') {
+    // An explicit verdict deserves its own wording — "enter your key" is wrong
+    // advice for a key that exists but has expired.
+    const msg = {
+      Expired:   'This licence has expired. Renew it, then re-check.',
+      Suspended: 'This licence is suspended. Please contact support.',
+      Invalid:   'This licence key is not valid for this server.',
+      Unknown:   'The licence server could not be reached, so the licence could not be confirmed.',
+    }[lic.status] || (lic.message || '');
+    if (sub) sub.textContent = msg;
+  }
+  if (line && lic && lic.status) {
+    line.textContent = ' Current status: ' + lic.status + '.';
+  }
+
+  el.classList.remove('hidden');
+  const input = document.getElementById('activate-key');
+  if (input) setTimeout(() => input.focus(), 150);
+}
+
+function hideActivateScreen() {
+  const el = document.getElementById('activate-screen');
+  if (el) el.classList.add('hidden');
+}
+
+function _activateError(msg) {
+  const box = document.getElementById('activate-error');
+  if (!box) return;
+  if (!msg) { box.classList.add('hidden'); box.textContent = ''; return; }
+  box.classList.remove('hidden');
+  box.textContent = msg;
+}
+
+async function submitActivation() {
+  const input = document.getElementById('activate-key');
+  const btn   = document.getElementById('activate-btn');
+  const key   = input ? input.value.trim() : '';
+  _activateError('');
+
+  if (!key) { _activateError('Enter your licence key.'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Activating…';
+
+  const res = Demo.active ? { success: true } : await API.post('license/activate', { key });
+
+  btn.disabled = false;
+  btn.textContent = 'Activate';
+
+  if (res && res.success) {
+    hideActivateScreen();
+    toast('Licence activated — protection is on', 'success');
+    // Reload rather than refresh in place: every page was blocked while
+    // unlicensed, so their state is stale or empty.
+    setTimeout(() => window.location.reload(), 700);
+  } else {
+    _activateError((res && res.error) || 'Activation failed. Check the key and try again.');
+  }
+}
+
+async function recheckActivation() {
+  _activateError('');
+  const res = Demo.active ? { success: true } : await API.post('license/refresh', {});
+  if (res && res.success) {
+    hideActivateScreen();
+    setTimeout(() => window.location.reload(), 500);
+  } else {
+    _activateError((res && res.error) || 'Still not licensed.');
+  }
+}
+
+/**
+ * Called once after sign-in, before the dashboard loads.
+ * Returns true when the app may proceed.
+ */
+async function enforceLicenseGate() {
+  if (Demo.active) return true;
+  const res = await API.get('license/status');
+  const lic = res && res.license;
+  // A licence check that cannot complete must not lock a paying customer out of
+  // their own dashboard, so an unreadable response is allowed through — the API
+  // itself still returns 402 on anything gated, so nothing is actually exposed.
+  if (!lic) return true;
+  if (lic.protection_allowed) return true;
+  showActivateScreen(lic);
+  return false;
 }

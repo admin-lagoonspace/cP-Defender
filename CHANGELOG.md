@@ -3,6 +3,29 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.17.0] — 2026-08-08
+
+### Changed
+- **Installing is open to everyone; the product asks to be licensed in the UI.**
+  Enforcement is unchanged — nothing runs unlicensed — but the unlicensed state
+  is now a designed step instead of a failure state.
+- **New activation screen.** Shown on first sign-in in place of the dashboard,
+  with the key field, what a licence includes, and a re-check link. Previously
+  the 402 surfaced as a red error toast plus a jump into Settings, which made a
+  working install look broken.
+- The gate runs **before** the dashboard loads, not after. Letting the pages
+  load first meant every panel fired a request that was refused and rendered
+  empty behind the message.
+- Each verdict gets its own wording. "Enter your key" is wrong advice for a key
+  that exists but has expired, so Expired, Suspended, Invalid and Unknown each
+  say what actually applies.
+- A licence check that cannot complete no longer blocks the dashboard. The API
+  still refuses every gated route, so nothing is exposed — but a paying customer
+  is not locked out of their own interface by a network blip.
+- The installer now ends by telling the operator to activate. Without it they
+  open the dashboard, find everything refused, and reasonably conclude the
+  install failed.
+
 ## [3.16.0] — 2026-08-08
 
 ### Fixed
