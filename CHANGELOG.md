@@ -3,6 +3,26 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.10.0] — 2026-08-08
+
+### Changed
+- **New logo, and the UI palette now follows it.** The interface was violet
+  (#7f5af0) from the 3.4.0 redesign while the new logo is blue; a blue mark on a
+  violet interface reads as inconsistent, most obviously in the topbar where the
+  two sit side by side. The logo is the fixed brand asset, so the UI moved:
+  primary is now #1e6fe8 sampled from the wordmark, with #4a9eff highlights, and
+  backgrounds shifted from neutral charcoal to navy-tinted (#0a0d16) so the
+  artwork sits in the surface rather than on top of it. Emerald is retained for
+  success states — it matches the server LEDs in the logo.
+- The topbar and login screen use the full horizontal lockup. The wordmark is
+  part of the artwork, so the separate HTML "Sentinel Gate" text is gone —
+  keeping both would render the name twice, which is the duplication fixed in
+  3.9.1.
+- The lockup is constrained by height, not width, so a wide horizontal asset
+  cannot push the navigation out of the topbar.
+- If the logo file is missing the markup falls back to styled text, rather than
+  leaving a broken-image box in the header.
+
 ## [3.9.1] — 2026-08-08
 
 ### Fixed

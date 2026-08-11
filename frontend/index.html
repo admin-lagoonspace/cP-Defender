@@ -16,9 +16,14 @@
   <div class="login-card card-accent" style="box-shadow:0 0 0 1px rgba(59,130,246,.2),0 24px 64px rgba(0,0,0,.7),0 0 80px rgba(59,130,246,.06)">
 
     <!-- Logo -->
-    <div class="login-logo" style="margin-bottom:20px">
-      <img src="images/logo.png" alt="Sentinel Gate" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
-      <div id="login-mode-sub" style="font-size:.75rem;color:var(--blue2);margin-top:5px;font-weight:600;letter-spacing:.03em">cPanel Security Suite</div>
+    <div class="login-logo" style="margin-bottom:22px">
+      <img src="images/logo-lockup.png" alt="Sentinel Gate — Server Protection"
+           style="width:100%;max-width:300px;height:auto;margin:0 auto;display:block"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+      <div style="display:none">
+        <div style="font-size:1.3rem;font-weight:800;letter-spacing:-.02em">Sentinel Gate</div>
+        <div style="font-size:.7rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--primary3);margin-top:4px">Server Protection</div>
+      </div>
     </div>
 
     <!-- Mode badge — updated by JS on load (shows cPanel mode by default) -->
@@ -52,33 +57,17 @@
 <!-- ══ TOP BAR ═══════════════════════════════════════════════════════════════ -->
 <header class="topbar">
   <div class="topbar-brand">
-    <!-- Shield icon mark — inline SVG so it renders crisp at any size with no background bleed -->
-    <div class="brand-icon">
-      <svg width="34" height="38" viewBox="0 0 34 38" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="tb-og" x1="17" y1="7" x2="26" y2="19" gradientUnits="userSpaceOnUse">
-            <stop stop-color="#fb923c"/><stop offset="1" stop-color="#ef4444"/>
-          </linearGradient>
-          <linearGradient id="tb-bl" x1="8" y1="10" x2="17" y2="28" gradientUnits="userSpaceOnUse">
-            <stop stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/>
-          </linearGradient>
-          <linearGradient id="tb-tl" x1="17" y1="19" x2="26" y2="30" gradientUnits="userSpaceOnUse">
-            <stop stop-color="#34d399"/><stop offset="1" stop-color="#059669"/>
-          </linearGradient>
-        </defs>
-        <!-- Shield -->
-        <path d="M17 1L2 7V19C2 28 8.8 35.2 17 37.5C25.2 35.2 32 28 32 19V7L17 1Z" fill="#111e38" stroke="rgba(59,130,246,0.25)" stroke-width="0.5"/>
-        <!-- Orange wedge (top-right) -->
-        <path d="M17 7.5L25 11V19H17V7.5Z" fill="url(#tb-og)"/>
-        <!-- Blue wedge (left) -->
-        <path d="M9 11L17 7.5V27.5L9 30.5V19V11Z" fill="url(#tb-bl)"/>
-        <!-- Teal wedge (bottom-right) -->
-        <path d="M17 19H25V19.5L21 30L17 27.5V19Z" fill="url(#tb-tl)"/>
-      </svg>
-    </div>
-    <div>
+    <!-- Full horizontal lockup. The wordmark is part of the artwork, so there is
+         deliberately no HTML text here — duplicating it would render the name
+         twice, which is the bug fixed in 3.9.1.
+         onerror keeps the brand legible if the asset is missing rather than
+         leaving an empty broken-image box in the header. -->
+    <img src="images/logo-lockup.png" alt="Sentinel Gate — Server Protection"
+         class="brand-lockup"
+         onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+    <div class="brand-fallback" style="display:none">
       <div class="brand-name">Sentinel Gate</div>
-      <div class="brand-sub">Security Suite</div>
+      <div class="brand-sub">Server Protection</div>
     </div>
   </div>
 
@@ -174,7 +163,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.9.1 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.10.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
