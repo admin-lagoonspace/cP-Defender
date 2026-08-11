@@ -3,6 +3,27 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.10.3] — 2026-08-08
+
+### Added
+- `scripts/prep-logo.py` — prepares supplied artwork for the dark UI. It reports
+  what the file actually is (transparency, content box) and writes three
+  variants: a trimmed transparent lockup with a light wordmark for the dark UI,
+  one with original colours for light surfaces, and a 256x256 shield icon.
+
+  Two problems it solves, both hit repeatedly by hand:
+  - An untrimmed export is mostly empty margin, so a `contain` fit sizes the
+    MARGINS to the box and the logo renders at roughly a third of the space.
+  - A wordmark drawn dark for white backgrounds is dark-on-dark once placed on
+    the topbar. Only near-neutral dark pixels are recoloured, so the shield's
+    blues survive — a blanket invert would destroy the artwork. Measured on a
+    representative asset: 116,476 dark pixels lightened, 98,923 blue retained.
+
+### Changed
+- The brand panel is transparent again; the white plate added in 3.10.2 is gone.
+  It only existed to keep a dark wordmark readable, and preprocessing removes
+  that need.
+
 ## [3.10.2] — 2026-08-08
 
 ### Changed

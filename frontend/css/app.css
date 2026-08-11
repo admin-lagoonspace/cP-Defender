@@ -135,38 +135,31 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
 
 /* Topbar brand column — one continuous logo space, no icon/text split.
 
-   The supplied lockup is dark-navy artwork on WHITE. That constrains the panel:
-   knocking the white out would leave the "Sentinel Gate" wordmark dark-on-dark
-   and effectively invisible, so the panel is light and the logo sits on it
-   seamlessly. Swap in a transparent asset with light text and this can simply
-   become `background: transparent`.
+   The panel is transparent: scripts/prep-logo.py preprocesses the supplied
+   artwork so the asset is already correct for a dark surface. It trims the empty
+   margins (an untrimmed export fits its MARGINS to the box and renders at ~35%
+   of the panel) and recolours the near-neutral dark wordmark to near-white,
+   leaving the blues untouched — a blanket invert would destroy the shield.
 
-   The source is a 3:2 frame but the artwork occupies a roughly 3.2:1 band across
-   the middle — the rest is empty margin. `contain` therefore fits the MARGINS
-   and leaves the logo at ~35% of the panel width. `cover` with a centred origin
-   crops the empty top and bottom instead, so the artwork fills the space. The
-   crop only ever removes whitespace, never the wordmark. */
+   object-fit: contain, because the asset is now trimmed to its content: there is
+   no dead space left to crop, and cover would start eating the wordmark. */
 .topbar-brand {
   width: var(--sidebar-w);
   min-width: 200px;
-  display: flex; align-items: center; justify-content: center;
-  padding: 0 10px;
+  display: flex; align-items: center;
+  padding: 0 16px;
   border-right: 1px solid var(--border);
   height: 100%; flex-shrink: 0;
-  background: #ffffff;
   overflow: hidden;
 }
 .brand-lockup {
-  width: 100%;
-  height: calc(var(--topbar-h) - 16px);
-  object-fit: cover;
-  object-position: center;
+  max-width: 100%;
+  max-height: calc(var(--topbar-h) - 20px);
+  width: auto; height: auto;
+  object-fit: contain;
   display: block;
 }
-/* Only shown if the asset is missing — then the panel has no light background
-   to sit on, so revert it to the dark chrome and use readable text. */
 .brand-fallback { text-align: left; }
-.topbar-brand:has(.brand-lockup[style*="display: none"]) { background: transparent; }
 
 .brand-icon {
   width: 34px; height: 38px;
