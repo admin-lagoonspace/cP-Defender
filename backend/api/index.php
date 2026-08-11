@@ -28,6 +28,7 @@ require_once __DIR__ . '/../lib/License.php';
 require_once __DIR__ . '/../lib/FirewallEngine.php';
 require_once __DIR__ . '/../lib/RootkitEngine.php';
 require_once __DIR__ . '/../lib/BlocklistRegistry.php';
+require_once __DIR__ . '/../lib/WAFInstaller.php';
 
 // ── CORS & Headers ────────────────────────────────────────────────────────────
 header('Content-Type: application/json');
@@ -428,6 +429,23 @@ function routeFirewall(string $action, string $method, array $body, array $q, ?s
 }
 
 function routeWAF(string $action, string $method, array $body, array $q, ?array $user): array {
+    // Provisioning — install and manage ModSecurity + OWASP CRS ourselves, so
+    // the operator does not have to set the engine up before the WAF page works.
+    if ($action === 'engine-status') {
+        return ['success' => true, 'data' => WAFInstaller::status()];
+    }
+    if ($action === 'engine-install' && $method === 'POST') {
+        Auth::requireRole('admin', $user);
+        $r = WAFInstaller::install();
+        Logger::info('WAF install: ' . ($r['success'] ? 'ok' : ($r['error'] ?? 'failed')));
+        return ['success' => (bool)$r['success'], 'data' => $r, 'error' => $r['error'] ?? null];
+    }
+    if ($action === 'engine-mode' && $method === 'POST') {
+        Auth::requireRole('admin', $user);
+        $r = WAFInstaller::setMode((string)($body['mode'] ?? ''));
+        return ['success' => (bool)$r['success'], 'data' => $r, 'error' => $r['error'] ?? null];
+    }
+
     $waf = new WAF();
     return match($action) {
         'status'     => ['success' => true, 'data' => $waf->getStatus()],

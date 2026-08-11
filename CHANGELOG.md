@@ -3,6 +3,32 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.15.0] — 2026-08-08
+
+### Added
+- **WAF engine provisioning** (`backend/lib/WAFInstaller.php`). Sentinel Gate
+  installs and configures ModSecurity and the OWASP Core Rule Set itself,
+  closing the last wrapper-without-an-engine gap. Detects the platform
+  (EA4/cPanel, RHEL httpd, Debian) and installs the right package.
+- WAF page shows engine status and offers a one-click install with a
+  step-by-step log, then a mode selector once it is running.
+- `GET waf/engine-status`, `POST waf/engine-install`, `POST waf/engine-mode`.
+
+### Safety decisions
+- A fresh install runs in **DetectionOnly** — attacks are logged, not blocked.
+  A WAF that rejects legitimate traffic is worse than none, because the operator
+  hears about it from customers. Switching to blocking is deliberate and
+  confirmed.
+- **Apache config is validated before any reload.** An invalid include would
+  otherwise take the web server down on restart, and with it every hosted site.
+  If validation fails the include is removed and nothing is reloaded.
+- `/sentinel-gate` is exempted from the rules, so a false positive cannot lock
+  the operator out of the page needed to turn the WAF off.
+- The install button only appears when a supported package manager exists — a
+  button that always fails is worse than no button.
+- The uninstaller removes the Apache include; left behind it would reference a
+  deleted config and Apache would fail its next restart.
+
 ## [3.14.0] — 2026-08-08
 
 ### Added

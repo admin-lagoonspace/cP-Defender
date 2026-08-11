@@ -121,7 +121,7 @@ function openPage(name) {
     case 'dashboard': refreshDashboard();   break;
     case 'scanner':   loadThreats();        break;
     case 'firewall':  loadFirewall();       break;
-    case 'waf':       loadWAF();            break;
+    case 'waf':       loadWAF(); loadWafEngine();            break;
     case 'iprep':     loadTopAttackers(); loadServerIpForBlocklist();   break;
     case 'events':    loadEvents();         break;
     case 'settings':  loadSettings();       break;
@@ -2211,4 +2211,123 @@ function _demoRootkit() {
       { severity: 'medium', finding: 'sshd permits direct root login',
         explanation: 'PermitRootLogin yes lets an attacker brute-force root directly.' },
     ] } };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   WAF engine provisioning
+   ══════════════════════════════════════════════════════════════════════════════
+   WAF.php only reads ModSecurity's config and audit log, so with ModSecurity
+   absent the page reported status and protected nothing. This installs and
+   manages the engine from the dashboard. */
+
+async function loadWafEngine() {
+  const badge = document.getElementById('waf-engine-badge');
+  if (!badge) return;
+
+  const res = Demo.active ? _demoWafEngine() : await API.get('waf/engine-status');
+  const d = res && res.data;
+  if (!d) {
+    badge.className = 'badge badge-gray';
+    badge.textContent = 'Unavailable';
+    return;
+  }
+
+  const ready = d.modsecurity_installed && d.crs_installed;
+  badge.className = ready
+    ? (d.mode === 'on' ? 'badge badge-green' : 'badge badge-amber')
+    : 'badge badge-red';
+  badge.textContent = !d.modsecurity_installed ? 'Not installed'
+                    : !d.crs_installed         ? 'No ruleset'
+                    : d.mode === 'on'          ? 'Blocking'
+                    : d.mode === 'detectiononly' ? 'Detection only'
+                    : 'Installed';
+
+  const summary = document.getElementById('waf-engine-summary');
+  summary.textContent = ready
+    ? (d.mode === 'on'
+        ? 'ModSecurity is enforcing the OWASP Core Rule Set.'
+        : 'ModSecurity is installed and logging matches, but not blocking them yet.')
+    : 'No web application firewall engine is active on this server. '
+    + 'Sentinel Gate can install and configure ModSecurity with the OWASP Core Rule Set.';
+
+  document.getElementById('waf-engine-meta').classList.remove('hidden');
+  const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+  set('waf-ms-val',  d.modsecurity_installed ? ('installed ' + (d.modsecurity_version || '')) : 'not installed');
+  set('waf-crs-val', d.crs_installed ? ('v' + (d.crs_version || '?')) : 'not installed');
+  set('waf-mode-val', d.mode === 'unknown' ? '—' : d.mode);
+
+  // Offer install only when it can actually succeed — a button that always
+  // fails is worse than no button.
+  const btn = document.getElementById('waf-install-btn');
+  const sel = document.getElementById('waf-mode-select');
+  btn.classList.toggle('hidden', ready || !d.can_install);
+  sel.classList.toggle('hidden', !ready);
+  if (ready) sel.value = d.mode === 'unknown' ? 'detectiononly' : d.mode;
+
+  if (!ready && !d.can_install) {
+    summary.textContent += ' (No supported package manager was found, so this '
+                        +  'server cannot be provisioned automatically.)';
+  }
+}
+
+async function installWafEngine() {
+  const btn = document.getElementById('waf-install-btn');
+  const log = document.getElementById('waf-install-log');
+  btn.disabled = true;
+  btn.textContent = 'Installing…';
+  log.classList.remove('hidden');
+  log.textContent = 'Installing ModSecurity and the OWASP Core Rule Set. This can take a minute…';
+
+  const res = Demo.active ? _demoWafInstall() : await API.post('waf/engine-install', {});
+  const d = res && res.data;
+
+  const lines = ((d && d.steps) || []).map(s => (s.ok ? '[ok]   ' : '[fail] ') + s.message);
+  if (d && d.error)  lines.push('[fail] ' + d.error);
+  if (d && d.note)   lines.push('', d.note);
+  log.textContent = lines.join('\n') || 'No output.';
+
+  btn.disabled = false;
+  btn.textContent = 'Install ModSecurity + OWASP CRS';
+
+  if (res && res.success) {
+    toast('WAF engine installed — running in detection only', 'success');
+  } else {
+    toast((res && res.error) || 'WAF installation failed', 'error');
+  }
+  loadWafEngine();
+}
+
+async function setWafEngineMode(mode) {
+  // Blocking mode can turn away real visitors if a rule misfires, so it is
+  // confirmed rather than applied on a stray change event.
+  if (mode === 'on' && !confirm(
+      'Switch the WAF to blocking mode?\n\n'
+    + 'Requests matching a rule will be rejected. Review the audit log first — '
+    + 'a false positive will turn away legitimate visitors.')) {
+    loadWafEngine();
+    return;
+  }
+  const res = Demo.active ? { success: true } : await API.post('waf/engine-mode', { mode });
+  toast(res && res.success ? 'WAF mode updated' : ((res && res.error) || 'Could not change mode'),
+        res && res.success ? 'success' : 'error');
+  loadWafEngine();
+}
+
+function _demoWafEngine() {
+  return { success: true, data: {
+    modsecurity_installed: false, modsecurity_version: null,
+    crs_installed: false, crs_path: null, crs_version: null,
+    mode: 'unknown', apache: 'ea4', package_manager: 'dnf',
+    can_install: true, managed_by_us: false } };
+}
+
+function _demoWafInstall() {
+  return { success: true, data: { success: true, steps: [
+    { ok: true, message: 'Installed ea-apache24-mod_security2' },
+    { ok: true, message: 'Installed OWASP CRS 4.7.0' },
+    { ok: true, message: 'Wrote Sentinel Gate WAF config (DetectionOnly)' },
+    { ok: true, message: 'Apache configuration validated' },
+    { ok: true, message: 'Apache reloaded — WAF active in DetectionOnly' },
+  ], note: 'Running in DetectionOnly: attacks are logged, not blocked. '
+         + 'Review the audit log, then switch to blocking.' } };
 }

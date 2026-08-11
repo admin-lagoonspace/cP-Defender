@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.14.0">
+<link rel="stylesheet" href="css/app.css?v=3.15.0">
 </head>
 <body>
 <div id="app">
@@ -191,7 +191,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.14.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.15.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -542,6 +542,49 @@
             <option value="Off">Disabled</option>
           </select>
           <button class="btn btn-primary btn-sm" onclick="setWAFMode()">Apply Mode</button>
+        </div>
+      </div>
+
+      <!-- ── WAF engine provisioning ──────────────────────────────────────── -->
+      <div class="card mb-5" id="waf-engine-card">
+        <div class="card-header">
+          <div class="card-title">WAF Engine</div>
+          <span id="waf-engine-badge" class="badge badge-gray">Checking…</span>
+        </div>
+        <div class="card-body">
+          <div id="waf-engine-summary" style="font-size:.84rem;color:var(--txt2);line-height:1.6;margin-bottom:14px">
+            Checking for ModSecurity and the OWASP Core Rule Set…
+          </div>
+
+          <div id="waf-engine-meta" class="hidden"
+               style="display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:.78rem;margin-bottom:16px">
+            <span style="color:var(--txt3)">ModSecurity</span><span id="waf-ms-val">—</span>
+            <span style="color:var(--txt3)">OWASP CRS</span><span id="waf-crs-val">—</span>
+            <span style="color:var(--txt3)">Mode</span><span id="waf-mode-val">—</span>
+          </div>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm hidden" id="waf-install-btn"
+                    onclick="installWafEngine()">Install ModSecurity + OWASP CRS</button>
+            <select class="form-input hidden" id="waf-mode-select" style="width:auto"
+                    onchange="setWafEngineMode(this.value)">
+              <option value="detectiononly">Detection only (log, do not block)</option>
+              <option value="on">Blocking (enforce rules)</option>
+              <option value="off">Off</option>
+            </select>
+            <button class="btn btn-ghost btn-sm" onclick="loadWafEngine()">↺ Refresh</button>
+          </div>
+
+          <div id="waf-install-log" class="hidden"
+               style="margin-top:14px;font-size:.75rem;font-family:var(--font-mono);
+                      background:var(--bg2);border-radius:8px;padding:10px 12px;max-height:200px;overflow:auto"></div>
+
+          <div style="margin-top:14px;font-size:.72rem;color:var(--txt3);line-height:1.6">
+            A new install starts in <strong>Detection only</strong> — attacks are logged but
+            not blocked. Review the audit log before switching to blocking, since a false
+            positive in blocking mode turns away real visitors. The Sentinel Gate dashboard
+            is always exempt, so a bad rule cannot lock you out of this page.
+          </div>
         </div>
       </div>
 
@@ -1618,9 +1661,9 @@
 <!-- ══ TOAST CONTAINER ═══════════════════════════════════════════════════════ -->
 <div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px"></div>
 
-<script src="js/api.js?v=3.14.0"></script>
+<script src="js/api.js?v=3.15.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.14.0"></script>
+<script src="js/app.js?v=3.15.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {

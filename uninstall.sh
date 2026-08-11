@@ -156,6 +156,13 @@ else
 fi
 rm -rf /etc/sentinel-gate/nftables.rules /etc/sentinel-gate/iptables.rules 2>/dev/null || true
 
+# Remove the WAF include we added to Apache. Left in place it would reference a
+# deleted config and Apache would fail its next restart.
+for _WAFINC in /etc/apache2/conf.d/zz-sentinel-gate-waf.conf                /etc/httpd/conf.d/zz-sentinel-gate-waf.conf                /etc/apache2/conf-enabled/zz-sentinel-gate-waf.conf; do
+    [[ -f "$_WAFINC" ]] && rm -f "$_WAFINC" && ok "Removed WAF include: $_WAFINC" || true
+done
+rm -rf /etc/sentinel-gate/waf 2>/dev/null || true
+
 # ── 2. Remove cron jobs ────────────────────────────────────────────────────────
 section "Removing cron jobs"
 for _CRON in "${CRON_FILE}" /etc/cron.d/sentinel-gate /etc/cron.d/sentinel_gate; do
