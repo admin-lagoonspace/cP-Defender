@@ -3,6 +3,22 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.10.2] — 2026-08-08
+
+### Changed
+- **The topbar brand column is now a single logo space.** It previously held a
+  cropped icon plus separate HTML text, which read as two elements rather than
+  one brand. It is now one image filling the panel, with no text beside it — the
+  supplied lockup already contains the wordmark.
+- The panel has a light background. The lockup is dark-navy artwork on white, so
+  knocking the white out would leave the wordmark dark-on-dark and effectively
+  invisible. Swapping in a transparent asset with light text reduces this to
+  `background: transparent`.
+- Sizing uses `cover`, not `contain`. The artwork occupies a ~3.2:1 band across
+  the middle of a 3:2 frame, so `contain` fitted the empty margins and left the
+  logo at 35% of the panel width; `cover` crops the blank top and bottom instead
+  and fills 90%. The crop only removes whitespace, never the wordmark.
+
 ## [3.10.1] — 2026-08-08
 
 ### Changed

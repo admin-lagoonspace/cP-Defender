@@ -133,38 +133,40 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   -webkit-backdrop-filter: blur(24px) saturate(180%);
 }
 
+/* Topbar brand column — one continuous logo space, no icon/text split.
+
+   The supplied lockup is dark-navy artwork on WHITE. That constrains the panel:
+   knocking the white out would leave the "Sentinel Gate" wordmark dark-on-dark
+   and effectively invisible, so the panel is light and the logo sits on it
+   seamlessly. Swap in a transparent asset with light text and this can simply
+   become `background: transparent`.
+
+   The source is a 3:2 frame but the artwork occupies a roughly 3.2:1 band across
+   the middle — the rest is empty margin. `contain` therefore fits the MARGINS
+   and leaves the logo at ~35% of the panel width. `cover` with a centred origin
+   crops the empty top and bottom instead, so the artwork fills the space. The
+   crop only ever removes whitespace, never the wordmark. */
 .topbar-brand {
   width: var(--sidebar-w);
-  /* --sidebar-w drops to 0 below 900px so the sidebar can slide away. Without a
-     floor the brand collapses to its padding and the name overflows into the
-     nav. The brand is in the topbar, which is always visible, so it must keep
-     its own width independent of the sidebar. */
   min-width: 200px;
-  display: flex; align-items: center; gap: 11px;
-  padding: 0 22px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 10px;
   border-right: 1px solid var(--border);
   height: 100%; flex-shrink: 0;
+  background: #ffffff;
   overflow: hidden;
 }
-/* Topbar logo.
-   The asset is a 3:2 artwork with the shield mark occupying roughly the left
-   half and empty space to the right — no wordmark, so nothing has to be cropped
-   out to avoid duplicating the name.
-   The crop window is portrait-ish (34x38) because the mark itself is taller than
-   wide; a square window would pull in the empty right-hand space and shrink the
-   mark. object-position sits slightly left of centre to frame the shield with
-   its firewall bricks.
-   This works because the artwork's own background is dark navy and matches the
-   UI surface, so the crop reads as an icon rather than a pasted-on tile. */
 .brand-lockup {
-  height: 38px;
-  width: 34px;
+  width: 100%;
+  height: calc(var(--topbar-h) - 16px);
   object-fit: cover;
-  object-position: 22% 48%;
-  border-radius: 7px;
+  object-position: center;
   display: block;
-  flex-shrink: 0;
 }
+/* Only shown if the asset is missing — then the panel has no light background
+   to sit on, so revert it to the dark chrome and use readable text. */
+.brand-fallback { text-align: left; }
+.topbar-brand:has(.brand-lockup[style*="display: none"]) { background: transparent; }
 
 .brand-icon {
   width: 34px; height: 38px;
