@@ -3,6 +3,26 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.10.1] — 2026-08-08
+
+### Changed
+- Logo artwork switched to the shield/server/firewall mark. It carries no
+  wordmark, so the product name is now always rendered as text on the login
+  screen rather than only as an error fallback — otherwise the login would show
+  a picture and no product name. The topbar crop was retuned for the new
+  composition (the mark occupies roughly the left half of a 3:2 frame).
+
+### Fixed
+- **Frontend assets are now cache-busted with the version.** A browser holding a
+  cached `app.css` rendered the unstyled logo at its natural 1536px, covering the
+  entire page. On a customer server the same staleness would silently pair new
+  markup with old styles after an update. `index.html` references
+  `app.css?v=<version>`, and `make-release.sh` re-stamps it on every build so it
+  cannot drift.
+- Both `<img>` tags carry intrinsic `width`/`height`. If the stylesheet is
+  cached, delayed or missing, the image is still bounded instead of rendering at
+  full size, and the box is reserved so the topbar does not reflow while loading.
+
 ## [3.10.0] — 2026-08-08
 
 ### Changed

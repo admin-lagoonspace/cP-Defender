@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/app.css?v=3.10.1">
 </head>
 <body>
 <div id="app">
@@ -17,13 +17,16 @@
 
     <!-- Logo -->
     <div class="login-logo" style="margin-bottom:22px">
-      <img src="images/logo-lockup.png" alt="Sentinel Gate — Server Protection"
-           style="width:100%;max-width:300px;height:auto;margin:0 auto;display:block"
-           onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
-      <div style="display:none">
-        <div style="font-size:1.3rem;font-weight:800;letter-spacing:-.02em">Sentinel Gate</div>
-        <div style="font-size:.7rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--primary3);margin-top:4px">Server Protection</div>
-      </div>
+      <!-- This artwork carries no wordmark, so the name is ALWAYS shown here
+           rather than only as an error fallback — hiding it would leave the
+           login screen with a picture and no product name. -->
+      <img src="images/logo-lockup.png" alt="" width="150" height="110"
+           style="width:150px;height:110px;object-fit:cover;object-position:22% 48%;
+                  border-radius:14px;margin:0 auto 14px;display:block"
+           onerror="this.style.display='none'">
+      <div style="font-size:1.35rem;font-weight:800;letter-spacing:-.02em">Sentinel Gate</div>
+      <div style="font-size:.7rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+                  color:var(--primary3);margin-top:5px">Server Protection</div>
     </div>
 
     <!-- Mode badge — updated by JS on load (shows cPanel mode by default) -->
@@ -61,7 +64,7 @@
          wordmark is cropped out here, so the HTML text carries the name — this
          is not the 3.9.1 duplication, which was two full lockups stacked. -->
     <img src="images/logo-lockup.png" alt="" class="brand-lockup" aria-hidden="true"
-         onerror="this.style.display='none'">
+         width="34" height="38" onerror="this.style.display='none'">
     <div>
       <div class="brand-name">Sentinel Gate</div>
       <div class="brand-sub">Server Protection</div>
@@ -160,7 +163,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.10.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.10.1 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -1516,9 +1519,9 @@
 <!-- ══ TOAST CONTAINER ═══════════════════════════════════════════════════════ -->
 <div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px"></div>
 
-<script src="js/api.js"></script>
+<script src="js/api.js?v=3.10.1"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js"></script>
+<script src="js/app.js?v=3.10.1"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {

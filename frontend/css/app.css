@@ -147,21 +147,21 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   overflow: hidden;
 }
 /* Topbar logo.
-   The supplied asset is a wide banner (~2.2:1) with a full background scene, not
-   a tight lockup. Shown whole at a 34px topbar height the shield would render
-   about 15px across and the hexagon/streak background would be visual noise at
-   that scale. So the same file is CROPPED here to the shield mark on the left —
-   object-fit: cover with a left origin — and used in full on the login screen,
-   where there is room for it. One asset, two presentations, no second export.
-
-   The banner's own dark navy background is why this works at all: it matches the
-   UI surface, so the crop reads as an icon rather than a pasted-on rectangle. */
+   The asset is a 3:2 artwork with the shield mark occupying roughly the left
+   half and empty space to the right — no wordmark, so nothing has to be cropped
+   out to avoid duplicating the name.
+   The crop window is portrait-ish (34x38) because the mark itself is taller than
+   wide; a square window would pull in the empty right-hand space and shrink the
+   mark. object-position sits slightly left of centre to frame the shield with
+   its firewall bricks.
+   This works because the artwork's own background is dark navy and matches the
+   UI surface, so the crop reads as an icon rather than a pasted-on tile. */
 .brand-lockup {
   height: 38px;
-  width: 42px;                /* crop window — shows the shield, not the wordmark */
+  width: 34px;
   object-fit: cover;
-  object-position: 6% center; /* the shield sits just inside the left edge */
-  border-radius: 8px;
+  object-position: 22% 48%;
+  border-radius: 7px;
   display: block;
   flex-shrink: 0;
 }

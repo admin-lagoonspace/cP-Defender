@@ -42,6 +42,14 @@ warn() { echo -e "  ${YELLOW}⚠${NC}  $*"; }
 
 VERSION="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION")"
 [[ -n "$VERSION" ]] || { echo "VERSION file empty"; exit 1; }
+
+# Stamp the cache-busting query on frontend assets. Without this a browser keeps
+# serving the previous app.css/app.js after an update — which during development
+# rendered an unstyled 1536px logo over the whole page, and on a customer server
+# would silently mix new markup with old styles.
+if [[ -f "${REPO_DIR}/frontend/index.html" ]]; then
+  sed -i -E "s#(css/app\.css|js/api\.js|js/app\.js)(\?v=[^\"]*)?#\1?v=${VERSION}#g"     "${REPO_DIR}/frontend/index.html"
+fi
 info "Building Sentinel Gate v${VERSION}"
 
 # ── Stage the payload (code only — mirrors what install.sh consumes) ───────────
