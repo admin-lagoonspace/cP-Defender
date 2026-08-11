@@ -202,7 +202,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.8.3 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.9.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -708,8 +708,9 @@
                background:var(--red-dim);border:1px solid rgba(229,49,112,.2);border-radius:8px;padding:9px 12px"></div>
 
           <div style="margin-top:14px;font-size:.73rem;color:var(--txt3);line-height:1.6">
-            Protection — scanning, firewall, real-time monitoring and quarantine — continues
-            regardless of license state. Only this management interface requires a valid license.
+            All features require a valid license — scanning, firewall, WAF, real-time
+            monitoring and this interface. A verified license keeps working for 10 days
+            if the licensing server is temporarily unreachable.
           </div>
         </div>
       </div>
@@ -754,8 +755,78 @@
                 <option value="hourly">Every Hour</option>
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
-                <option value="manual">Manual Only</option>
+                <option value="off">Manual Only</option>
               </select>
+            </div>
+
+            <!-- Scan timing — shown only when the schedule needs it -->
+            <div class="grid-2" style="gap:12px">
+              <div class="form-group" id="wrap-scan-time">
+                <label class="form-label">Run at</label>
+                <input class="form-input" id="set-scan-time" type="time" value="02:00">
+              </div>
+              <div class="form-group" id="wrap-scan-day">
+                <label class="form-label">Day of week</label>
+                <select class="form-input" id="set-scan-day">
+                  <option value="0">Sunday</option><option value="1">Monday</option>
+                  <option value="2">Tuesday</option><option value="3">Wednesday</option>
+                  <option value="4">Thursday</option><option value="5">Friday</option>
+                  <option value="6">Saturday</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Scheduled scan type</label>
+              <select class="form-input" id="set-scan-type">
+                <option value="full">Full scan</option>
+                <option value="quick">Quick scan</option>
+              </select>
+            </div>
+
+            <!-- Virus definitions -->
+            <div style="border-top:1px solid var(--border);margin:18px 0 14px;padding-top:14px">
+              <div class="card-title" style="margin-bottom:12px">Virus Definitions</div>
+              <div class="grid-2" style="gap:12px">
+                <div class="form-group">
+                  <label class="form-label">Update definitions</label>
+                  <select class="form-input" id="set-sig-schedule">
+                    <option value="weekly">Weekly (recommended)</option>
+                    <option value="daily">Daily</option>
+                    <option value="off">Never</option>
+                  </select>
+                </div>
+                <div class="form-group" id="wrap-sig-day">
+                  <label class="form-label">Day of week</label>
+                  <select class="form-input" id="set-sig-day">
+                    <option value="0">Sunday</option><option value="1">Monday</option>
+                    <option value="2">Tuesday</option><option value="3">Wednesday</option>
+                    <option value="4">Thursday</option><option value="5">Friday</option>
+                    <option value="6">Saturday</option>
+                  </select>
+                </div>
+              </div>
+              <div style="font-size:.75rem;color:var(--txt3);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                <span>Last updated: <span id="sig-last-update">never</span></span>
+                <button class="btn btn-ghost btn-xs" onclick="updateSignaturesNow()">Update now</button>
+              </div>
+            </div>
+
+            <!-- IP reputation -->
+            <div style="border-top:1px solid var(--border);margin:18px 0 14px;padding-top:14px">
+              <div class="card-title" style="margin-bottom:12px">IP Reputation</div>
+              <div class="form-group">
+                <label class="form-label">Refresh reputation data</label>
+                <select class="form-input" id="set-iprep-schedule">
+                  <option value="daily">Daily (recommended)</option>
+                  <option value="hourly">Every hour</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="off">Never</option>
+                </select>
+              </div>
+              <div style="font-size:.75rem;color:var(--txt3)">
+                Last run: <span id="iprep-last-run">never</span>
+                &middot; <span id="iprep-last-count">0</span> address(es) checked
+              </div>
             </div>
             <div class="form-group">
               <label class="form-label">Scan Paths (comma-separated)</label>

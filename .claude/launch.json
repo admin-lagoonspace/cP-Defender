@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sentinel-demo",
+      "runtimeExecutable": "C:\\Users\\rohan\\OneDrive\\code\\cP-Defender\\python\\python.exe",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8899",
+        "--directory",
+        "C:\\Users\\rohan\\OneDrive\\code\\cP-Defender\\frontend"
+      ],
+      "port": 8899
+    }
+  ]
+}

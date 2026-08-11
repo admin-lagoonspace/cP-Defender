@@ -3,6 +3,42 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.9.0] — 2026-08-08
+
+### Added
+- **User-configurable schedules.** `scan_schedule` existed as a setting and the
+  UI already had the dropdown, but nothing consumed it — the crontab was
+  hardcoded, so changing it did nothing. `backend/cron/scheduler.php` now runs
+  every 15 minutes and decides what is due from the settings, which are the
+  single source of truth.
+- **Scheduled IP reputation refresh** (default daily, configurable hourly /
+  daily / weekly / off). Previously reputation was only ever checked on demand.
+  Each run re-checks addresses seen attacking the server in the last 7 days,
+  capped at 200, so the work does not grow without bound.
+- Settings → Scanner now exposes scan schedule, run time, day, and scan type;
+  Virus Definitions exposes update frequency, day, last-updated and an "Update
+  now" button; IP Reputation exposes refresh frequency with last-run and count.
+- Timing fields are shown only when the chosen schedule uses them, so nobody
+  sets a "day of week" on a daily schedule and wonders why it is ignored.
+
+### Changed
+- The installer writes one cron line (the dispatcher) instead of four fixed
+  jobs. Rewriting `/etc/cron.d` whenever a dropdown changes would need root at
+  runtime, race with the file being read, and drift from the UI if any single
+  write failed.
+- Scheduling is elapsed-time based, not wall-clock match: a task that misses its
+  window because of a reboot or a slow tick runs late rather than being skipped
+  until the next day. Verified with 13 cases including missed windows and that
+  40 consecutive ticks after a completed daily run produce zero re-fires.
+
+### Fixed
+- The License panel still stated that protection continues without a license.
+  That stopped being true in 3.8.1, when every feature became licensed.
+
+### Note
+- Weekly virus-definition updates already existed (`0 1 * * 0`) and continue,
+  now driven by the setting rather than the crontab.
+
 ## [3.8.3] — 2026-08-08
 
 ### Fixed

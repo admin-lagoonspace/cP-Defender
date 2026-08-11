@@ -863,6 +863,12 @@ async function loadSettings() {
         rate_limit_ssh: '5', rate_limit_http: '100',
         firewall_enabled: '1', waf_enabled: '1', bot_shield_enabled: '1', ip_rep_enabled: '1',
         cpu_limit_percent: '50', rt_poll_interval: '300',
+        scan_time: '02:00', scan_day: '0', scan_type: 'full',
+        sig_update_schedule: 'weekly', sig_update_day: '0',
+        iprep_schedule: 'daily',
+        sig_last_update: String(Math.floor(Date.now()/1000) - 3*86400),
+        iprep_last_run:  String(Math.floor(Date.now()/1000) - 9*3600),
+        iprep_last_count: '183',
       }}
     : await API.getSettings();
 
@@ -873,7 +879,22 @@ async function loadSettings() {
   const chk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = val === '1' || val === true; };
 
   set('set-scan-schedule', d.scan_schedule);
+  set('set-scan-time',     d.scan_time || '02:00');
+  set('set-scan-day',      d.scan_day  || '0');
+  set('set-scan-type',     d.scan_type || 'full');
+  set('set-sig-schedule',  d.sig_update_schedule || 'weekly');
+  set('set-sig-day',       d.sig_update_day || '0');
+  set('set-iprep-schedule',d.iprep_schedule || 'daily');
   set('set-scan-paths',    d.scan_paths);
+
+  // Last-run readouts
+  const ts = v => (v && +v) ? new Date(+v * 1000).toLocaleString() : 'never';
+  const txt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+  txt('sig-last-update',  ts(d.sig_last_update));
+  txt('iprep-last-run',   ts(d.iprep_last_run));
+  txt('iprep-last-count', d.iprep_last_count || '0');
+
+  syncScheduleFields();
   chk('set-auto-quar',     d.auto_quarantine);
   chk('set-email-alerts',  d.email_alerts);
   set('set-alert-email',   d.alert_email);
@@ -898,8 +919,14 @@ async function loadSettings() {
 async function saveSettings() {
   const g = id => document.getElementById(id);
   const data = {
-    scan_schedule:      g('set-scan-schedule')?.value,
-    scan_paths:         g('set-scan-paths')?.value,
+    scan_schedule:       g('set-scan-schedule')?.value,
+    scan_time:           g('set-scan-time')?.value,
+    scan_day:            g('set-scan-day')?.value,
+    scan_type:           g('set-scan-type')?.value,
+    sig_update_schedule: g('set-sig-schedule')?.value,
+    sig_update_day:      g('set-sig-day')?.value,
+    iprep_schedule:      g('set-iprep-schedule')?.value,
+    scan_paths:          g('set-scan-paths')?.value,
     auto_quarantine:    g('set-auto-quar')?.checked ? '1' : '0',
     email_alerts:       g('set-email-alerts')?.checked ? '1' : '0',
     alert_email:        g('set-alert-email')?.value,
@@ -1780,7 +1807,12 @@ async function loadLicense() {
   const meta    = document.getElementById('license-meta');
   if (!badge) return;
 
-  const res = await API.get('license/status');
+  const res = Demo.active
+    ? { license: { status:'Active', valid:true, ui_allowed:true, protection_allowed:true,
+                   degraded:false, message:'License active.', expires:'2027-08-08',
+                   checked_at: Math.floor(Date.now()/1000) - 2*86400,
+                   domain:'srv1.example.com', ip:'203.0.113.10' } }
+    : await API.get('license/status');
   const lic = res && res.license;
   if (!lic) {
     badge.className = 'badge badge-gray';
@@ -1842,4 +1874,37 @@ async function refreshLicense() {
     _licenseError((res && res.error) || 'Re-check failed.');
   }
   await loadLicense();
+}
+
+
+/* ── Schedule field visibility ────────────────────────────────────────────────
+   Only show the inputs a given schedule actually uses. Leaving "day of week"
+   visible on a daily schedule invites the user to set a value that is silently
+   ignored, and then to report it as a bug. */
+function syncScheduleFields() {
+  const vis = (id, on) => { const e = document.getElementById(id); if (e) e.style.display = on ? '' : 'none'; };
+  const val = id => document.getElementById(id)?.value;
+
+  const scan = val('set-scan-schedule');
+  vis('wrap-scan-time', scan === 'daily' || scan === 'weekly');
+  vis('wrap-scan-day',  scan === 'weekly');
+
+  vis('wrap-sig-day', val('set-sig-schedule') === 'weekly');
+}
+
+['set-scan-schedule', 'set-sig-schedule'].forEach(id => {
+  document.addEventListener('change', e => {
+    if (e.target && e.target.id === id) syncScheduleFields();
+  });
+});
+
+async function updateSignaturesNow() {
+  toast('Updating virus definitions…', 'info');
+  const res = await API.updateSigs();
+  if (res && res.success) {
+    toast('Virus definitions updated', 'success');
+    loadSettings();
+  } else {
+    toast((res && res.error) || 'Definition update failed', 'error');
+  }
 }

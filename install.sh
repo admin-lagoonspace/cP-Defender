@@ -292,6 +292,7 @@ chmod -R 700 "$INSTALL_DIR/database"
 chmod -R 700 "$INSTALL_DIR/quarantine"
 chmod -R 700 "$INSTALL_DIR/logs"
 chmod +x "$INSTALL_DIR/backend/cron/scan.php"
+chmod +x "$INSTALL_DIR/backend/cron/scheduler.php" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/backend/daemon/monitor.py"
 [[ -f "$INSTALL_DIR/backend/cli/sentinel.php" ]] && chmod +x "$INSTALL_DIR/backend/cli/sentinel.php"
 ok "Permissions set"
@@ -507,12 +508,10 @@ section "Cron jobs"
 cat > "${CRON_FILE}" << CRONEOF
 # Sentinel Gate — scheduled tasks
 MAILTO=""
-# Hourly quick scan
-0 * * * * root /usr/bin/php ${INSTALL_DIR}/backend/cron/scan.php quick >> ${LOG_DIR}/cron.log 2>&1
-# Daily full scan at 2am
-0 2 * * * root /usr/bin/php ${INSTALL_DIR}/backend/cron/scan.php full  >> ${LOG_DIR}/cron.log 2>&1
-# Weekly signature update Sunday 1am
-0 1 * * 0 root /usr/bin/php ${INSTALL_DIR}/backend/cron/scan.php update-sigs >> ${LOG_DIR}/cron.log 2>&1
+# Task scheduler — decides what is due from the user's Settings. Runs every
+# 15 min; exits silently when nothing is due. Schedules are changed in the UI,
+# NOT by editing this file.
+*/15 * * * * root /usr/bin/php ${INSTALL_DIR}/backend/cron/scheduler.php >> ${LOG_DIR}/cron.log 2>&1
 # Daily update check at 8am
 0 8 * * * root SG_ROOT=${INSTALL_DIR} /usr/bin/php ${INSTALL_DIR}/backend/cron/update-check.php >> ${LOG_DIR}/cron.log 2>&1
 CRONEOF

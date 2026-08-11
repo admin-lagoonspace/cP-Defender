@@ -147,6 +147,15 @@ class Database {
             -- Default settings
             INSERT OR IGNORE INTO settings (key, value) VALUES
                 ('scan_schedule',           'daily'),
+                ('scan_time',               '02:00'),
+                ('scan_day',                '0'),
+                ('scan_type',               'full'),
+                ('sig_update_schedule',     'weekly'),
+                ('sig_update_time',         '01:00'),
+                ('sig_update_day',          '0'),
+                ('iprep_schedule',          'daily'),
+                ('iprep_time',              '03:00'),
+                ('iprep_day',               '0'),
                 ('scan_paths',              '/home'),
                 ('email_alerts',            '1'),
                 ('alert_email',             ''),
