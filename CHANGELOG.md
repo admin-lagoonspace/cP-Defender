@@ -3,6 +3,28 @@
 All notable changes to Sentinel Gate are documented here. This project follows
 semantic versioning (X.Y.Z): patch = fixes, minor = new features, major = infra.
 
+## [3.8.3] — 2026-08-08
+
+### Fixed
+- **The reported server IP differed between web and CLI contexts**, which would
+  have broken one-license-per-IP enforcement. `$_SERVER['SERVER_ADDR']` only
+  exists during a web request, so the dashboard reported the address Apache bound
+  to while cron and the CLI reported the DNS answer. On multi-homed, NAT'd or
+  proxied hosts those differ, and WHMCS would see one license checking in from
+  two addresses — which reads as a conflict and can invalidate a paying customer.
+  Resolution is now deterministic in every context and pinned on first use, so a
+  transient DNS change cannot silently re-identify the server.
+
+### Added
+- `sentinel license identity` and an `identity` block on `license status`,
+  showing the exact domain/IP/dir sent to WHMCS. A one-license-per-server
+  rejection is almost always explained by these values, and previously there was
+  no way to see them.
+- An `Invalid` verdict now explains that the license may already be active on
+  another server and points at reissue. WHMCS returns `Invalid` both for an
+  unknown key and for one bound elsewhere; the customer cannot tell those apart,
+  and the second becomes the common support case once conflicts are enforced.
+
 ## [3.8.2] — 2026-08-08
 
 ### Fixed

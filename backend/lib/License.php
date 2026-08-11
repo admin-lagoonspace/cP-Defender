@@ -358,8 +358,15 @@ class License
                     'License suspended. Contact support.', $expires);
             case 'Invalid':
             default:
+                // WHMCS returns Invalid both for an unknown key and for a key
+                // already bound to a different server. The customer cannot tell
+                // those apart from "invalid", and the second is by far the more
+                // common support case once one-license-per-IP/domain is enforced.
                 return self::result('Invalid', false, false, false,
-                    'License key invalid for this server.', $expires);
+                    'License not valid for this server (' . self::hostname() . ' / '
+                    . self::serverIp() . '). If this license is already active on '
+                    . 'another server, reissue it from the client area — each '
+                    . 'license is valid on one server only.', $expires);
         }
     }
 
@@ -377,6 +384,10 @@ class License
             'message'    => $msg,
             'expires'    => $expires,
             'checked_at' => (int)Database::getSetting('license_checked_at', 0),
+            // What WHMCS is matching this license against. A "one license per
+            // IP/domain" rejection is almost always explained by these values.
+            'domain'     => self::hostname(),
+            'ip'         => self::serverIp(),
         ];
     }
 
@@ -408,11 +419,67 @@ class License
         return strtolower(preg_replace('/:\d+$/', '', (string)$h));
     }
 
+    /**
+     * The IP this server reports to the licensing server.
+     *
+     * MUST be identical in every execution context. An earlier version preferred
+     * $_SERVER['SERVER_ADDR'], which only exists during a web request — so the
+     * dashboard reported the address Apache bound to while cron and the CLI
+     * reported the DNS answer. On a multi-homed, NAT'd or proxied host those
+     * differ, and WHMCS would see a single license checking in from two
+     * addresses. With "Allow IP Conflict" disabled (which is what enforces one
+     * license per IP) that reads as a conflict and can invalidate a legitimate
+     * customer.
+     *
+     * Resolution is therefore deterministic and derived only from the hostname,
+     * and the answer is pinned on first use so a transient DNS change cannot
+     * silently re-identify the server.
+     */
     private static function serverIp(): string
     {
-        if (!empty($_SERVER['SERVER_ADDR'])) { return (string)$_SERVER['SERVER_ADDR']; }
-        $ip = @gethostbyname(self::hostname());
-        return ($ip && $ip !== self::hostname()) ? $ip : '127.0.0.1';
+        $pinned = (string)Database::getSetting('license_pinned_ip', '');
+        if ($pinned !== '' && filter_var($pinned, FILTER_VALIDATE_IP)) {
+            return $pinned;
+        }
+
+        $host = self::hostname();
+        $ip   = @gethostbyname($host);
+        if (!$ip || $ip === $host || !filter_var($ip, FILTER_VALIDATE_IP)) {
+            // Last resort: the primary outbound address. Never SERVER_ADDR —
+            // that is web-only and would reintroduce the context split.
+            $ip = self::outboundIp() ?: '127.0.0.1';
+        }
+
+        if ($ip !== '127.0.0.1') {
+            Database::setSetting('license_pinned_ip', $ip);
+        }
+        return $ip;
+    }
+
+    /** Primary outbound address, without sending anything (UDP connect only). */
+    private static function outboundIp(): string
+    {
+        $sock = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        if (!$sock) { return ''; }
+        @socket_connect($sock, '8.8.8.8', 53);
+        @socket_getsockname($sock, $addr);
+        @socket_close($sock);
+        return (is_string($addr) && filter_var($addr, FILTER_VALIDATE_IP)) ? $addr : '';
+    }
+
+    /**
+     * The identity this install presents to the licensing server. Exposed so
+     * support can see exactly what WHMCS is matching against when a customer
+     * reports a conflict.
+     */
+    public static function identity(): array
+    {
+        return [
+            'domain'    => self::hostname(),
+            'ip'        => self::serverIp(),
+            'dir'       => defined('SG_ROOT') ? SG_ROOT : __DIR__,
+            'pinned_ip' => (string)Database::getSetting('license_pinned_ip', ''),
+        ];
     }
 
     private static function rand(int $n): string

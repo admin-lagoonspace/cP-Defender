@@ -168,7 +168,7 @@ try {
         $sub = $rest[0] ?? 'status';
         switch ($sub) {
         case 'status':
-            out(License::status());
+            out(License::status() + ['identity' => License::identity()]);
             break;
 
         case 'activate': {
@@ -190,8 +190,12 @@ try {
             break;
         }
 
+        case 'identity':
+            out(License::identity());
+            break;
+
         default:
-            fail('usage: sentinel license [status|activate <key>|refresh]');
+            fail('usage: sentinel license [status|activate <key>|refresh|identity]');
         }
         break;
     }
@@ -217,6 +221,7 @@ Usage: sentinel <command> [args] [--json]
   license status               Show license state
   license activate <key>       Store and verify a license key
   license refresh              Force a re-check against the server
+  license identity             Show the domain/IP this server reports
 
 Add --json to any command for machine-readable output.
 TXT;
