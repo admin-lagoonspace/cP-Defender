@@ -51,6 +51,14 @@ if git ls-remote --tags origin "refs/tags/${TAG}" 2>/dev/null | grep -q "${TAG}"
     die "Tag ${TAG} already exists on origin. Bump VERSION or delete the tag first."
 fi
 
+# ── 0. Version bump sanity check ───────────────────────────────────────────────
+# Fails the release when the bump does not match the commits. The convention was
+# documented in CHANGELOG.md and still drifted three times, so it is enforced
+# here rather than trusted to memory. SG_SKIP_VERSION_CHECK=1 overrides.
+if [[ "${SG_SKIP_VERSION_CHECK:-0}" != "1" ]]; then
+    bash "${REPO_ROOT}/scripts/check-version-bump.sh" --strict || exit 1
+fi
+
 # ── 1. Build the package + manifest ────────────────────────────────────────────
 info "Building release artifacts…"
 bash scripts/make-release.sh >/dev/null
