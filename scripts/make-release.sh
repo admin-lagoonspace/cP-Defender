@@ -84,7 +84,9 @@ ok "SHA256: ${SHA}"
 CDN_BASE="${SG_CDN_BASE:-https://defender.lws-s1.com/sentinel-gate/code}"
 DL_URL="${CDN_BASE}/dist/${ZIP_NAME}"
 MIRROR_URL="https://raw.githubusercontent.com/${RELEASES_REPO}/${RELEASES_BRANCH}/dist/${ZIP_NAME}"
-NOTES_URL="https://github.com/${RELEASES_REPO}/blob/${RELEASES_BRANCH}/CHANGELOG.md"
+# Notes point at THIS version's notes, not the full history. A user opening the
+# notes for the release they just installed wants the one section.
+NOTES_URL="${CDN_BASE}/v${VERSION}/CHANGELOG.md"
 cat > "${OUT_DIR}/latest.json" << JSON
 {
   "version": "${VERSION}",
@@ -121,7 +123,19 @@ cp -f "$ZIP_PATH"              "${UPLOAD_DIR}/dist/${ZIP_NAME}"
 cp -f "$ZIP_PATH"              "${VER_DIR}/${ZIP_NAME}"
 cp -f "${OUT_DIR}/latest.json" "${UPLOAD_DIR}/latest.json"
 cp -f "${OUT_DIR}/latest.json" "${VER_DIR}/latest.json"
-[[ -f "${REPO_DIR}/CHANGELOG.md" ]] && cp -f "${REPO_DIR}/CHANGELOG.md" "${VER_DIR}/CHANGELOG.md"
+# Version-specific notes ONLY. This used to copy the whole CHANGELOG.md, which
+# meant every v<v>/CHANGELOG.md on the CDN was an identical 600-line dump of the
+# entire project history. dist/notes-<v>.md is committed so cdn-sync.sh (which
+# pulls from GitHub raw and has no v<v>/ path to read) gets the same single
+# section rather than falling back to the full file.
+NOTES_FILE="${OUT_DIR}/notes-${VERSION}.md"
+if bash "${REPO_DIR}/scripts/extract-notes.sh" "${VERSION}" > "${NOTES_FILE}" 2>/dev/null; then
+    cp -f "${NOTES_FILE}" "${VER_DIR}/CHANGELOG.md"
+    ok "Release notes: $(wc -l < "${NOTES_FILE}") lines (this version only)"
+else
+    rm -f "${NOTES_FILE}"
+    warn "No CHANGELOG section for ${VERSION} — add one before publishing"
+fi
 # get.sh is served from the CDN too so the one-line installer needs no GitHub
 [[ -f "${REPO_DIR}/get.sh" ]] && cp -f "${REPO_DIR}/get.sh" "${UPLOAD_DIR}/get.sh"
 

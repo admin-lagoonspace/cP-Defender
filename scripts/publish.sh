@@ -80,7 +80,8 @@ STAGE_LIST=(
   VERSION CHANGELOG.md install.sh uninstall.sh update.sh get.sh
   backend/config/config.php backend/cli/sentinel.php
   frontend/index.html whm/sentinel.conf whm/sentinel_gate.png
-  scripts/make-release.sh scripts/publish.sh
+  scripts/make-release.sh scripts/publish.sh scripts/extract-notes.sh
+  scripts/check-version-bump.sh "dist/notes-${VER}.md"
   "$ZIP" latest.json
 )
 for f in "${STAGE_LIST[@]}"; do [[ -e "$f" ]] && git add "$f"; done

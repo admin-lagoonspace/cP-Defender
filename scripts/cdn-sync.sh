@@ -170,9 +170,12 @@ fi
 
 # ── Optional extras (absence is not fatal) ────────────────────────────────────
 fetch_to "${SRC}/get.sh"                       "${TMP}/get.sh"       || log "note: get.sh not fetched"
-fetch_to "${SRC}/v${NEW_VER}/CHANGELOG.md"     "${TMP}/CHANGELOG.md" 2>/dev/null \
-  || fetch_to "${SRC}/CHANGELOG.md"            "${TMP}/CHANGELOG.md" 2>/dev/null \
-  || log "note: CHANGELOG.md not fetched"
+# Version-specific notes only. The old fallback here was the repo-root
+# CHANGELOG.md, so every version folder ended up holding the full project
+# history; dropped deliberately — no notes beats the wrong notes.
+fetch_to "${SRC}/dist/notes-${NEW_VER}.md"      "${TMP}/CHANGELOG.md" 2>/dev/null \
+  || fetch_to "${SRC}/v${NEW_VER}/CHANGELOG.md" "${TMP}/CHANGELOG.md" 2>/dev/null \
+  || log "note: no version-specific notes for ${NEW_VER}"
 
 # ── Publish atomically. Manifest LAST. ────────────────────────────────────────
 place() { # place <src> <dest>
