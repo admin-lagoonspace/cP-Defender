@@ -78,6 +78,29 @@ else
 fi
 ok "SHA256: ${SHA}"
 
+# ── Syntax gate ───────────────────────────────────────────────────────────────
+# Every PHP file must parse before it can be packaged. This is here because a
+# release shipped with an API that returned 501 to every request and the build
+# had no opinion about it at all: nothing in the pipeline ever executed or even
+# parsed the code it was zipping.
+if command -v php >/dev/null 2>&1; then
+    _BAD=0
+    while IFS= read -r _f; do
+        if ! php -l "$_f" >/dev/null 2>&1; then
+            echo "  PARSE ERROR: $_f"
+            php -l "$_f" 2>&1 | sed 's/^/    /'
+            _BAD=$((_BAD+1))
+        fi
+    done < <(find "${REPO_DIR}/backend" -name '*.php' -type f)
+    if [[ $_BAD -gt 0 ]]; then
+        echo "Refusing to build: ${_BAD} PHP file(s) failed to parse." >&2
+        exit 1
+    fi
+    ok "PHP syntax: all files parse"
+else
+    warn "php not found — SKIPPING syntax gate (build unverified)"
+fi
+
 # ── Manifest ──────────────────────────────────────────────────────────────────
 # Primary download is our own CDN (no API limits, reachable when GitHub is
 # firewalled); get.sh/update.sh fall back to the GitHub raw mirror on failure.

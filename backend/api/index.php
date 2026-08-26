@@ -4,9 +4,34 @@
  * Endpoint: /sentinel-gate/api/{module}/{action}
  */
 
-// Suppress PHP notices/warnings so they never corrupt the JSON output
-error_reporting(0);
+// Errors must never be PRINTED (that corrupts the JSON body) but they must
+// always be RECORDED. The previous error_reporting(0) did both, which meant a
+// failure could only ever surface in the UI as "Server error" with no trace
+// anywhere on the server — undiagnosable without editing the source.
+error_reporting(E_ALL);
 @ini_set('display_errors', '0');
+@ini_set('log_errors', '1');
+@ini_set('error_log', '/usr/local/sentinel-gate/logs/php-error.log');
+
+// A fatal (parse error in an included file, missing class, exhausted memory)
+// bypasses the try/catch below and would otherwise send an empty 200 or an HTML
+// error page. Either way the client gets a non-JSON body and shows "Server
+// error". This guarantees a JSON envelope no matter how the request dies.
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if ($e === null || !in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        return;
+    }
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json');
+    }
+    echo json_encode([
+        'success' => false,
+        'error'   => 'Internal error — see logs/php-error.log',
+        'detail'  => $e['message'] . ' in ' . $e['file'] . ':' . $e['line'],
+    ]);
+});
 
 define('SG_API', true);
 require_once __DIR__ . '/../config/config.php';
@@ -47,11 +72,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 $clientIP = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
 
 // ── Route parsing ─────────────────────────────────────────────────────────────
-$path   = trim(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH), '/');
-$parts  = explode('/', $path);
-// Strip prefix if running under /sentinel-gate/api/
-$apiIdx = array_search('api', $parts);
-$parts  = $apiIdx !== false ? array_slice($parts, $apiIdx + 1) : $parts;
+// Three ways in, tried in order of how much they depend on the web server:
+//
+//   1. ?r=module/action   — works everywhere. No rewrite rule, no PATH_INFO
+//                           support required. This is what the UI sends, and it
+//                           is the only form that survives being served by
+//                           cpsrvd, Apache CGI, mod_php and the standalone
+//                           router without per-server configuration.
+//   2. PATH_INFO          — set when a CGI wrapper is invoked as
+//                           api.cgi/module/action.
+//   3. REQUEST_URI        — the original scheme, kept for the Apache alias with
+//                           a rewrite. Note it searched for the literal segment
+//                           'api', which silently mis-parsed under any path not
+//                           containing one (e.g. /cgi/sentinel_gate/api.cgi).
+$route = isset($_GET['r']) ? trim((string)$_GET['r'], '/') : '';
+
+if ($route === '' && !empty($_SERVER['PATH_INFO'])) {
+    $route = trim((string)$_SERVER['PATH_INFO'], '/');
+}
+
+if ($route !== '') {
+    $parts = explode('/', $route);
+} else {
+    $path   = trim((string)parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH), '/');
+    $parts  = $path === '' ? [] : explode('/', $path);
+    $apiIdx = array_search('api', $parts, true);
+    $parts  = $apiIdx !== false ? array_slice($parts, $apiIdx + 1) : $parts;
+}
+
+// Never let a path segment carry a query fragment or traversal through.
+$parts = array_values(array_filter(array_map(function ($seg) {
+    return preg_replace('/[^A-Za-z0-9_.-]/', '', (string)$seg);
+}, $parts), function ($seg) {
+    return $seg !== '' && $seg !== '.' && $seg !== '..';
+}));
 
 $module = $parts[0] ?? '';
 $action = $parts[1] ?? 'index';

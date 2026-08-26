@@ -942,49 +942,79 @@ APACHEEOF
     mkdir -p "${WHM_CGI_DIR}"
     info "  WHM CGI dir: ${WHM_CGI_DIR}"
 
-    # ── Step 2: Write the CGI script ──────────────────────────────────────────
-    # Opens the Apache-hosted Sentinel Gate frontend in a new browser tab.
-    # The AppConfig conf sets target=_blank so WHM triggers a new tab; the CGI
-    # then redirects it to the correct URL.
-    # cpsrvd does NOT use the system PATH for CGI — must use absolute Perl path.
+    # ── Step 2: Serve the app from cpsrvd, not Apache ─────────────────────────
+    # The CGI used to redirect to https://<host>/sentinel-gate/, handing the app
+    # to Apache. That was wrong for a WHM plugin in two ways that only show up on
+    # a real server:
+    #
+    #   1. Apache only executes PHP in an aliased directory if a loaded module
+    #      claims the handler. On EA4 that may be mod_php, mod_lsapi, PHP-FPM or
+    #      suPHP — four different correct answers, and guessing wrong returns
+    #      "501 Not supported" for every API call, which is exactly what happened.
+    #   2. Even when it works, Apache runs the code as the web user. This product
+    #      needs root: nft/iptables, quarantine, clamscan, reading /proc.
+    #
+    # cpsrvd has neither problem. It executes CGI in the WHM docroot as root, it
+    # is always present on a cPanel box, and the UI and API then share one origin
+    # so no CORS or cross-port session juggling is involved.
+
+    # PHP interpreter for the API CGI. php-cgi is strongly preferred: the CLI SAPI
+    # ignores header() and http_response_code(), so the 401/402 statuses the UI
+    # depends on would be flattened to 200.
+    SG_PHP_CGI=""
+    for _c in /usr/local/cpanel/3rdparty/bin/php-cgi \
+              /opt/cpanel/ea-php83/root/usr/bin/php-cgi \
+              /opt/cpanel/ea-php82/root/usr/bin/php-cgi \
+              /opt/cpanel/ea-php81/root/usr/bin/php-cgi \
+              /opt/cpanel/ea-php80/root/usr/bin/php-cgi \
+              /usr/bin/php-cgi; do
+      [[ -x "$_c" ]] && { SG_PHP_CGI="$_c"; break; }
+    done
+    if [[ -z "$SG_PHP_CGI" ]]; then
+      warn "  No php-cgi found — API status codes will be degraded"
+      SG_PHP_CGI="/usr/local/cpanel/3rdparty/bin/php"
+    fi
+    info "  API CGI interpreter: ${SG_PHP_CGI}"
+
+    # Copy the UI into the CGI directory so cpsrvd serves it same-origin.
+    # cpsrvd serves static files from this directory (this is how CSF ships its
+    # css and images), and executes the .cgi entry points.
+    info "  Publishing UI into ${WHM_CGI_DIR}"
+    cp -rf "${INSTALL_DIR}/frontend/." "${WHM_CGI_DIR}/" 2>/dev/null || true
+
+    # The API endpoint: a sibling of the UI, so './api.cgi' resolves from it.
+    WHM_API_CGI="${WHM_CGI_DIR}/api.cgi"
+    cat > "${WHM_API_CGI}" << ENDAPICGI
+#!${SG_PHP_CGI}
+<?php
+// Sentinel Gate — API entry point under cpsrvd (runs as root).
+// Routing arrives as ?r=module/action, so no rewrite or PATH_INFO is needed.
+require '${INSTALL_DIR}/backend/api/index.php';
+ENDAPICGI
+    chmod 755 "${WHM_API_CGI}"
+    ok "  API CGI written: ${WHM_API_CGI}"
+    echo "WHM_API_CGI=${WHM_API_CGI}" >> "${MANIFEST}"
+
+    # The plugin entry point: serve the UI directly rather than redirecting.
     _CPANEL_PERL="/usr/local/cpanel/3rdparty/bin/perl"
     [[ ! -x "${_CPANEL_PERL}" ]] && _CPANEL_PERL=$(command -v perl 2>/dev/null || echo "/usr/bin/perl")
-    info "  Perl interpreter for CGI: ${_CPANEL_PERL}"
-
     info "  Writing CGI: ${WHM_CGI}"
     cat > "${WHM_CGI}" << ENDCGI
 #!${_CPANEL_PERL}
 use strict;
 use warnings;
-my \$host = \$ENV{HTTP_HOST} || \$ENV{SERVER_NAME} || '';
-unless (\$host) {
-    \$host = \`hostname -f 2>/dev/null\`; chomp \$host;
-    \$host ||= \`hostname 2>/dev/null\`;  chomp \$host;
-    \$host ||= 'localhost';
+# Emit the dashboard from this directory. Assets (css/, js/, images/) sit
+# alongside and are served by cpsrvd, and the API is ./api.cgi — one origin,
+# running as root, with nothing depending on Apache.
+my \$doc = "${WHM_CGI_DIR}/index.html";
+print "Content-Type: text/html; charset=utf-8\r\n\r\n";
+if (open(my \$fh, '<', \$doc)) {
+    local \$/ = undef;
+    print <\$fh>;
+    close \$fh;
+} else {
+    print "<h2>Sentinel Gate</h2><p>UI not found at \$doc</p>";
 }
-\$host =~ s/:.*//;
-my \$url = "https://\$host/sentinel-gate/";
-print "Content-Type: text/html\r\n\r\n";
-print <<"ENDHTML";
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta http-equiv="refresh" content="0; url=\$url">
-  <title>Sentinel Gate</title>
-  <style>body{background:#020617;color:#e2e8f0;font-family:system-ui,sans-serif;
-    display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-    .b{text-align:center} a{color:#38bdf8;text-decoration:none}</style>
-</head>
-<body><div class="b">
-  <div style="font-size:2rem;margin-bottom:12px">&#x1F6E1;</div>
-  <h2 style="margin-bottom:8px">Sentinel Gate Security</h2>
-  <p style="color:#94a3b8;font-size:.9rem">Opening dashboard&hellip;</p>
-  <p style="margin-top:14px;font-size:.8rem"><a href="\$url">Click here if not redirected</a></p>
-</div>
-<script>window.location.href='\$url';</script>
-</body></html>
-ENDHTML
 ENDCGI
     chmod 755 "${WHM_CGI}"
     if [[ -f "${WHM_CGI}" ]]; then
@@ -992,6 +1022,29 @@ ENDCGI
       echo "WHM_CGI=${WHM_CGI}" >> "${MANIFEST}"
     else
       warn "  CGI write FAILED: ${WHM_CGI}"
+    fi
+
+    # Pin the UI to this endpoint so it does not have to discover it.
+    cat > "${WHM_CGI_DIR}/config.js" << ENDCFG
+// Written by the installer. The API is a sibling CGI under cpsrvd.
+window.SG_API_BASE = './api.cgi';
+ENDCFG
+    ok "  API base pinned: ./api.cgi"
+
+    # ── Prove the API actually answers, here, now ─────────────────────────────
+    # The installer previously reported success without ever invoking the API,
+    # which is how a build whose every endpoint returned 501 was handed over as
+    # working. Execute it directly and require JSON back.
+    info "  Testing API CGI…"
+    _API_OUT=$(cd "${WHM_CGI_DIR}" && REQUEST_METHOD=GET QUERY_STRING="r=auth/status" \
+               SCRIPT_FILENAME="${WHM_API_CGI}" REDIRECT_STATUS=200 \
+               "${SG_PHP_CGI}" "${WHM_API_CGI}" 2>&1 | tail -5)
+    if printf '%s' "$_API_OUT" | grep -q '{'; then
+      ok "  API responds with JSON"
+    else
+      warn "  API did NOT return JSON. Output was:"
+      printf '%s\n' "$_API_OUT" | sed 's/^/      /'
+      warn "  The dashboard will not load until this is resolved."
     fi
 
     # ── Step 3: Write AppConfig conf file ALONGSIDE the CGI ──────────────────

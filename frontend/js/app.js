@@ -208,7 +208,29 @@ async function refreshDashboard() {
     ? Demo.mockDashStats()
     : await API.dashStats();
 
-  if (!data?.success) return;
+  // A failed load must never leave the page asserting a security posture. The
+  // markup ships with "Protected" pre-rendered, so returning silently here left
+  // a green tick and an empty dashboard on a server whose API was answering 501
+  // to every request — the single most misleading thing this product could do.
+  if (!data?.success) {
+    const icon   = document.getElementById('dash-scan-icon');
+    const status = document.getElementById('dash-scan-status');
+    const badge  = document.getElementById('dash-scan-badge');
+    const meta   = document.getElementById('dash-scan-meta');
+    const info   = document.getElementById('dash-server-info');
+
+    if (icon)   icon.textContent = '⛔';
+    if (status) { status.textContent = 'Status unknown'; status.style.color = 'var(--red)'; }
+    if (badge)  { badge.className = 'badge badge-red'; badge.textContent = 'API unreachable'; }
+    if (meta)   meta.textContent = (data && data.error) || 'Could not reach the Sentinel Gate API.';
+    if (info)   info.textContent = 'Could not reach the API — protection status cannot be confirmed.';
+
+    ['stat-files','stat-threats','stat-fw','stat-waf'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '—';
+    });
+    return;
+  }
 
   // Server info
   const s = data.server;

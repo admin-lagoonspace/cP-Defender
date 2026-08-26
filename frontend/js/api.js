@@ -4,7 +4,82 @@
  */
 
 const API = (() => {
-  const BASE = './backend/api';
+  // Where the API lives depends on how this page is being served, and that is
+  // not knowable at build time:
+  //
+  //   • WHM plugin  — cpsrvd serves us from /cgi/sentinel_gate/, and the API is
+  //                   a sibling CGI running as root in the same origin.
+  //   • standalone  — the bundled router serves /backend/api directly.
+  //   • Apache      — an aliased directory, which only executes PHP if the
+  //                   server has a handler module claiming it. It may not.
+  //
+  // The previous hardcoded relative base assumed the Apache case and produced a
+  // 501/404 HTML body everywhere else, which surfaced as "Server error" on every
+  // panel at once. So the base is discovered instead of assumed: each candidate
+  // is probed once, and the first that answers with JSON wins.
+  const CANDIDATES = [
+    window.SG_API_BASE || '',      // stamped by the installer when it knows
+    './api.cgi',                   // cpsrvd (WHM) — same origin, runs as root
+    './backend/api/index.php',     // Apache alias, explicit file: no rewrite needed
+    './backend/api',               // Apache alias relying on DirectoryIndex+rewrite
+  ].filter(Boolean);
+
+  const CACHE_KEY = 'sg_api_base';
+  let BASE = null;
+  let resolving = null;
+
+  // Routing travels in ?r= rather than as extra path segments. Path-based
+  // routing needs either mod_rewrite or PATH_INFO, and neither is guaranteed —
+  // a query parameter is understood by every server we run under.
+  function buildUrl(base, path) {
+    const clean = String(path).replace(/^\//, '');
+    const qi    = clean.indexOf('?');
+    const route = qi === -1 ? clean : clean.slice(0, qi);
+    const extra = qi === -1 ? ''    : clean.slice(qi + 1);
+    let url = base + (base.indexOf('?') === -1 ? '?' : '&') + 'r=' + encodeURIComponent(route);
+    if (extra) url += '&' + extra;
+    return url;
+  }
+
+  async function probe(base) {
+    try {
+      const r = await fetch(buildUrl(base, 'auth/status'), {
+        headers: { 'Authorization': `Bearer ${token()}` },
+      });
+      const text = await r.text();
+      JSON.parse(text);          // a JSON body is the proof, whatever the status
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function resolveBase() {
+    if (BASE) return BASE;
+
+    let cached = null;
+    try { cached = sessionStorage.getItem(CACHE_KEY); } catch (_) {}
+    if (cached) { BASE = cached; return BASE; }
+
+    if (!resolving) {
+      resolving = (async () => {
+        for (const cand of CANDIDATES) {
+          if (await probe(cand)) {
+            BASE = cand;
+            try { sessionStorage.setItem(CACHE_KEY, cand); } catch (_) {}
+            console.info('Sentinel Gate API base:', cand);
+            return cand;
+          }
+        }
+        // Nothing answered. Fall back to the first candidate so calls still
+        // produce a real error rather than throwing on a null base.
+        BASE = CANDIDATES[0];
+        console.error('Sentinel Gate: no API endpoint responded. Tried:', CANDIDATES);
+        return BASE;
+      })();
+    }
+    return resolving;
+  }
 
   function token() {
     return localStorage.getItem('sg_token') || '';
@@ -20,7 +95,8 @@ const API = (() => {
     };
     if (data && method !== 'GET') opts.body = JSON.stringify(data);
 
-    const url = BASE + '/' + path.replace(/^\//, '');
+    const base = await resolveBase();
+    const url  = buildUrl(base, path);
     try {
       const r = await fetch(url, opts);
 
@@ -56,6 +132,9 @@ const API = (() => {
   }
 
   return {
+    resolveBase,
+    baseUrl: () => BASE,
+
     get:    (path)        => req('GET',    path),
     post:   (path, data)  => req('POST',   path, data),
     put:    (path, data)  => req('PUT',    path, data),

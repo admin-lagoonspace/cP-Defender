@@ -15,7 +15,7 @@ nothing to download or configure beforehand.
 |---|---|
 | **Access** | root, via SSH |
 | **Operating system** | Any Linux. cPanel hosts are RHEL-family — AlmaLinux, CloudLinux, CentOS, RHEL |
-| **PHP** | 7.4 or newer, with the `sqlite3` and `pdo` extensions |
+| **PHP** | 8.0 or newer, with the `sqlite3` and `pdo` extensions |
 | **Disk space** | ~50 MB, plus room for quarantine and logs |
 | **Network** | Outbound HTTPS to `defender.lws-s1.com` |
 
@@ -94,8 +94,9 @@ and quarantined files are all retained.
 
 > **WHM → Plugins → Sentinel Gate Security**
 
-You can also open it directly at `https://your-server-hostname/sentinel-gate/`.
-Sign in with your existing WHM credentials — there is no separate account.
+The dashboard opens inside WHM. It is served by cPanel's own web server, so it
+runs with the privileges the firewall and scanner need and shares your WHM
+session — there is no separate account and nothing to sign into.
 
 If the plugin does not appear in the menu, log out of WHM and back in. cPanel
 caches its navigation. If it is still missing:
