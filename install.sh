@@ -301,9 +301,14 @@ ok "Permissions set"
 cat > "${INSTALL_DIR}/backend/config/mode.php" << MODEPHP
 <?php
 // Written by install.sh — do not edit manually
-define('INSTALL_MODE', '${INSTALL_MODE}');
-define('SG_ROOT',      '${INSTALL_DIR}');
-define('SG_VERSION',   '${SG_VERSION}');
+//
+// config.php defines SG_ROOT and SG_VERSION and THEN includes this file, so
+// redefining them unconditionally emitted a "Constant already defined" warning
+// on every single request. Guarded, so this file can be included either before
+// config.php (as the CLI entry points do) or after it.
+if (!defined('INSTALL_MODE')) { define('INSTALL_MODE', '${INSTALL_MODE}'); }
+if (!defined('SG_ROOT'))      { define('SG_ROOT',      '${INSTALL_DIR}'); }
+if (!defined('SG_VERSION'))   { define('SG_VERSION',   '${SG_VERSION}'); }
 // Licensing. SG_LICENSE_SECRET must match the salt configured in the WHMCS
 // licensing addon — it is what makes a cached local key unforgeable. Supply it
 // at install time with SG_LICENSE_SECRET=... ; the placeholder is deliberately
@@ -560,7 +565,7 @@ fi
 section "Firewall engine"
 FW_INIT="$(/usr/bin/php -r "
 define('SG_API', true);
-require_once '${INSTALL_DIR}/backend/config/mode.php';
+require_once '${INSTALL_DIR}/backend/config/config.php';
 require_once '${INSTALL_DIR}/backend/lib/Database.php';
 require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php';
 \$i = FirewallEngine::backendInfo();
@@ -581,7 +586,7 @@ fi
 
 /usr/bin/php -r "
 define('SG_API', true);
-require_once '${INSTALL_DIR}/backend/config/mode.php';
+require_once '${INSTALL_DIR}/backend/config/config.php';
 require_once '${INSTALL_DIR}/backend/lib/Database.php';
 require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php';
 \$r = FirewallEngine::initialise();
@@ -604,7 +609,7 @@ Wants=network-pre.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/php -r "define('SG_API',true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; FirewallEngine::restore();"
+ExecStart=/usr/bin/php -r "define('SG_API',true); require_once '${INSTALL_DIR}/backend/config/config.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; FirewallEngine::restore();"
 
 [Install]
 WantedBy=multi-user.target
@@ -871,6 +876,44 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
     info "PHP handler: ${PHP_HANDLER}"
   fi
 
+  # ── What should https://<host>/sentinel-gate/ serve? ──────────────────────
+  # On cPanel: NOT the app. That copy cannot work — Apache has no PHP handler
+  # for this directory and would run it as the web user anyway — yet it looks
+  # identical to the real dashboard and silently fails every API call. Anyone
+  # with an old bookmark lands there and sees a login form that can never
+  # succeed. It now redirects to the WHM plugin, which is the working UI.
+  #
+  # The redirect is computed client-side from location.hostname so no hostname
+  # is baked into the config at install time.
+  if [[ "${INSTALL_MODE}" == "cpanel" ]]; then
+    SG_WEB_DIR="${INSTALL_DIR}/whm/webredirect"
+    mkdir -p "${SG_WEB_DIR}"
+    cat > "${SG_WEB_DIR}/index.html" << 'ENDREDIR'
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Sentinel Gate</title>
+<style>body{background:#0b1020;color:#e2e8f0;font-family:system-ui,-apple-system,
+Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;
+height:100vh;margin:0;text-align:center}a{color:#a78bfa}</style></head>
+<body><div>
+  <div style="font-size:2.2rem;margin-bottom:12px">&#x1F6E1;&#xFE0F;</div>
+  <h2 style="margin:0 0 8px;font-size:1.2rem">Sentinel Gate</h2>
+  <p style="color:#94a3b8;font-size:.9rem" id="m">Taking you to the dashboard&hellip;</p>
+  <p style="margin-top:16px;font-size:.85rem"><a id="l" href="#">Open the dashboard</a></p>
+</div>
+<script>
+// The dashboard runs under WHM (cpsrvd), which is what gives it the privileges
+// the firewall and scanner need. This address is only a signpost.
+var u = 'https://' + location.hostname + ':2087/cgi/sentinel_gate/sentinel_gate.cgi';
+document.getElementById('l').href = u;
+location.replace(u);
+</script>
+</body></html>
+ENDREDIR
+    ok "  /sentinel-gate/ redirects to the WHM plugin"
+  else
+    SG_WEB_DIR="${INSTALL_DIR}/frontend"
+  fi
+
   # ── Write Apache alias config ──
   APACHE_CONF="${APACHE_CONF_D}/sentinel-gate.conf"
   info "Writing Apache alias config: ${APACHE_CONF}"
@@ -879,7 +922,7 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
 # API alias MUST come before the root alias (more-specific path first)
 <IfModule mod_alias.c>
   Alias /sentinel-gate/backend/api ${INSTALL_DIR}/backend/api
-  Alias /sentinel-gate             ${INSTALL_DIR}/frontend
+  Alias /sentinel-gate             ${SG_WEB_DIR}
 </IfModule>
 
 <Directory "${INSTALL_DIR}/backend/api">
@@ -903,7 +946,7 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
   Require all denied
 </Directory>
 
-<Directory "${INSTALL_DIR}/frontend">
+<Directory "${SG_WEB_DIR}">
   Options -Indexes
   AllowOverride None
   Require all granted
@@ -1021,7 +1064,8 @@ use warnings;
 # alongside and are served by cpsrvd, and the API is ./api.cgi — one origin,
 # running as root, with nothing depending on Apache.
 my \$doc = "${WHM_CGI_DIR}/index.html";
-print "Content-Type: text/html; charset=utf-8\r\n\r\n";
+print "Content-Type: text/html; charset=utf-8\r\n";
+print "Cache-Control: no-store, must-revalidate\r\n\r\n";
 if (open(my \$fh, '<', \$doc)) {
     local \$/ = undef;
     print <\$fh>;
