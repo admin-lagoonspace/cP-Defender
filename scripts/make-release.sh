@@ -83,12 +83,23 @@ ok "SHA256: ${SHA}"
 # release shipped with an API that returned 501 to every request and the build
 # had no opinion about it at all: nothing in the pipeline ever executed or even
 # parsed the code it was zipping.
-if command -v php >/dev/null 2>&1; then
+# Prefer the repo-local interpreter: the maintainer builds on Windows, where
+# there is no system php, so "command -v php" found nothing and the gate quietly
+# skipped itself on every single release. A gate that silently does nothing is
+# worse than no gate — it reads green. Absence is now a hard failure unless
+# overridden on purpose.
+SG_PHP=""
+for _p in "${REPO_DIR}/php/php.exe" "${REPO_DIR}/php/php"; do
+    [[ -x "$_p" ]] && { SG_PHP="$_p"; break; }
+done
+[[ -z "$SG_PHP" ]] && command -v php >/dev/null 2>&1 && SG_PHP="php"
+
+if [[ -n "$SG_PHP" ]]; then
     _BAD=0
     while IFS= read -r _f; do
-        if ! php -l "$_f" >/dev/null 2>&1; then
+        if ! "$SG_PHP" -l "$_f" >/dev/null 2>&1; then
             echo "  PARSE ERROR: $_f"
-            php -l "$_f" 2>&1 | sed 's/^/    /'
+            "$SG_PHP" -l "$_f" 2>&1 | sed 's/^/    /'
             _BAD=$((_BAD+1))
         fi
     done < <(find "${REPO_DIR}/backend" -name '*.php' -type f)
@@ -97,8 +108,13 @@ if command -v php >/dev/null 2>&1; then
         exit 1
     fi
     ok "PHP syntax: all files parse"
+elif [[ "${SG_ALLOW_UNVERIFIED:-0}" == "1" ]]; then
+    warn "No PHP interpreter — syntax gate SKIPPED by SG_ALLOW_UNVERIFIED=1"
 else
-    warn "php not found — SKIPPING syntax gate (build unverified)"
+    echo "No PHP interpreter found. The syntax gate cannot run." >&2
+    echo "  Put one at ${REPO_DIR}/php/php.exe, install php, or set" >&2
+    echo "  SG_ALLOW_UNVERIFIED=1 to build without parsing the code." >&2
+    exit 1
 fi
 
 # ── Manifest ──────────────────────────────────────────────────────────────────

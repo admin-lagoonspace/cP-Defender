@@ -46,3 +46,6 @@ _wtest.txt
 # CDN upload credentials — keep these OUT of the repo, always
 .sentinel-cdn.env
 *.env.local
+
+# Repo-local PHP used by the build syntax gate (36MB, not source)
+php/
