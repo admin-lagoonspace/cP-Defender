@@ -176,6 +176,20 @@ def main():
         else:
             ok("all API routes execute and return JSON")
 
+    # 2e. the regression suite
+    if php:
+        r = subprocess.run([php, os.path.join(REPO, "tests", "run.php")],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            fail("regression tests failed:")
+            for line in (r.stdout or "").strip().splitlines():
+                if "FAIL" in line or "CRASH" in line or "assertions failed" in line:
+                    print("        " + line.strip())
+            problems += 1
+        else:
+            last = [l for l in (r.stdout or "").strip().splitlines() if "assertions" in l]
+            ok("regression tests: " + (last[-1].strip() if last else "passed"))
+
     # 3 + 4. config.php sanity
     cfg = os.path.join(REPO, "backend", "config", "config.php")
     if not os.path.exists(cfg) or os.path.getsize(cfg) == 0:

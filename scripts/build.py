@@ -23,15 +23,40 @@ import os
 import re
 import subprocess
 import sys
+import time
 import zipfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ITEMS = ["backend", "frontend", "whm", "install.sh", "uninstall.sh",
          "update.sh", "test.sh", "VERSION"]
-SKIP_DIRS = {".git", "__pycache__", "node_modules"}
+# Development tooling must never reach a customer server. ITEMS already omits
+# these, but naming them makes the intent explicit and survives someone adding a
+# directory to ITEMS later.
+SKIP_DIRS = {".git", "__pycache__", "node_modules", "tests", "scripts", "php", ".github"}
+NEVER_PACKAGE = ("/tests/", "/scripts/", "/php/", "/.github/", "/.git/")
 SKIP_FILES = {".DS_Store", "Thumbs.db"}
 CDN = "https://defender.lws-s1.com/sentinel-gate/code"
 MIRROR = "https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main"
+
+
+def discard(path):
+    """Delete a rejected archive, and never let the deletion mask the rejection.
+
+    A failed os.remove() once raised over the top of the real error, so the
+    build reported a PermissionError instead of "development files leaked into
+    the package" -- and left the bad zip on disk to be published by the next
+    step. If it cannot be removed, say so loudly; the caller still returns 1.
+    """
+    for _ in range(5):
+        try:
+            os.remove(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            time.sleep(0.3)
+    print("  WARNING: could not delete the rejected archive: %s" % path)
+    print("           delete it by hand before publishing anything.")
 
 
 def main():
@@ -86,21 +111,46 @@ def main():
     # ── Verify the PACKAGED payload, not just the source tree ─────────────────
     with zipfile.ZipFile(zip_path) as z:
         names = z.namelist()
+        leaked = [n for n in names if any(seg in n for seg in NEVER_PACKAGE)]
+        if leaked:
+            print("\nDevelopment files leaked into the package: %s" % leaked[:8])
+            discard(zip_path)
+            return 1
         empties = [n for n in names if n.endswith(".php") and z.getinfo(n).file_size == 0]
         if empties:
             print("\nPackaged payload contains empty PHP files: %s" % empties)
-            os.remove(zip_path)
+            discard(zip_path)
             return 1
         cfg = [n for n in names if n.endswith("backend/config/config.php")]
         if not cfg:
             print("\nPackaged payload has no config.php")
-            os.remove(zip_path)
+            discard(zip_path)
             return 1
         body = z.read(cfg[0]).decode("utf-8")
         if "define('SG_ROOT'" not in body:
             print("\nPackaged config.php does not define SG_ROOT")
-            os.remove(zip_path)
+            discard(zip_path)
             return 1
+
+    # The packaging test asserts against the finished zip, so it cannot run in
+    # preflight — the zip does not exist yet. Run it here, where it can.
+    php = None
+    for cand in (os.path.join(REPO, "php", "php.exe"), os.path.join(REPO, "php", "php")):
+        if os.path.exists(cand):
+            php = cand
+            break
+    if php:
+        r = subprocess.run([php, os.path.join(REPO, "tests", "test_packaging.php")],
+                           capture_output=True, text=True)
+        bad = [l for l in (r.stdout or "").splitlines() if l.startswith("FAIL ")]
+        if r.returncode != 0 or bad:
+            print("\nPackaging test failed:")
+            for l in (bad or (r.stdout or r.stderr).splitlines()[:5]):
+                print("  " + l)
+            discard(zip_path)
+            return 1
+        n = len([l for l in (r.stdout or "").splitlines() if l.startswith("PASS ")])
+        print("  packaging: %d assertions passed against the finished zip" % n)
 
     data = open(zip_path, "rb").read()
     sha = hashlib.sha256(data).hexdigest()

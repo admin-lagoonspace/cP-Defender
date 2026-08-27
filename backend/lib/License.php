@@ -71,6 +71,25 @@ class License
      */
     const INSTALL_MARKER = '/var/lib/sentinel-gate/installed-at';
 
+    /**
+     * Where the install timestamp is stamped outside the install directory.
+     *
+     * Deliberately outside SG_ROOT: update.sh rsyncs the install dir with
+     * --delete, so a marker kept inside would vanish on every update and hand
+     * out a fresh trial each time.
+     *
+     * Overridable with SG_INSTALL_MARKER so a test can point it at a sandbox.
+     * Without that the path is machine-global, and the test suite both depended
+     * on and corrupted real state — a stale marker from an earlier run reported
+     * an expired trial on a fresh install.
+     */
+    public static function markerPath(): string
+    {
+        return defined('SG_INSTALL_MARKER') && SG_INSTALL_MARKER !== ''
+            ? SG_INSTALL_MARKER
+            : self::INSTALL_MARKER;
+    }
+
     /** Seconds to wait on the license server before giving up. */
     const TIMEOUT = 12;
 
@@ -109,8 +128,8 @@ class License
     {
         $db   = (int)Database::setting('installed_at', 0);
         $file = 0;
-        if (is_readable(self::INSTALL_MARKER)) {
-            $file = (int)trim((string)@file_get_contents(self::INSTALL_MARKER));
+        if (is_readable(self::markerPath())) {
+            $file = (int)trim((string)@file_get_contents(self::markerPath()));
         }
 
         $candidates = array_filter([$db, $file]);
@@ -118,8 +137,8 @@ class License
             // First ever call — stamp both.
             $now = time();
             Database::setSetting('installed_at', (string)$now);
-            @mkdir(dirname(self::INSTALL_MARKER), 0755, true);
-            @file_put_contents(self::INSTALL_MARKER, (string)$now);
+            @mkdir(dirname(self::markerPath()), 0755, true);
+            @file_put_contents(self::markerPath(), (string)$now);
             return $now;
         }
 
@@ -128,8 +147,8 @@ class License
         // restored from the database rather than granting a new trial.
         if ($db === 0 || $db > $earliest)   { Database::setSetting('installed_at', (string)$earliest); }
         if ($file === 0 || $file > $earliest) {
-            @mkdir(dirname(self::INSTALL_MARKER), 0755, true);
-            @file_put_contents(self::INSTALL_MARKER, (string)$earliest);
+            @mkdir(dirname(self::markerPath()), 0755, true);
+            @file_put_contents(self::markerPath(), (string)$earliest);
         }
         return $earliest;
     }
