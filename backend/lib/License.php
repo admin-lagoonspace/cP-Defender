@@ -107,7 +107,7 @@ class License
      */
     public static function installedAt(): int
     {
-        $db   = (int)Database::getSetting('installed_at', 0);
+        $db   = (int)Database::setting('installed_at', 0);
         $file = 0;
         if (is_readable(self::INSTALL_MARKER)) {
             $file = (int)trim((string)@file_get_contents(self::INSTALL_MARKER));
@@ -150,7 +150,7 @@ class License
      */
     private static function trialActive(): bool
     {
-        if (Database::getSetting('license_ever_entered', '0') === '1') { return false; }
+        if (Database::setting('license_ever_entered', '0') === '1') { return false; }
         return self::trialDaysLeft() > 0;
     }
 
@@ -250,7 +250,7 @@ class License
 
     private static function evaluate(): array
     {
-        $key = (string)Database::getSetting('license_key', '');
+        $key = (string)Database::setting('license_key', '');
         if ($key === '') {
             if (self::trialActive()) {
                 $left = self::trialDaysLeft();
@@ -266,7 +266,7 @@ class License
         }
 
         // 1. Try the cached local key first — avoids hitting WHMCS every load.
-        $localkey = (string)Database::getSetting('license_localkey', '');
+        $localkey = (string)Database::setting('license_localkey', '');
         if ($localkey !== '') {
             $decoded = self::decodeLocalKey($localkey);
             if ($decoded !== null) {
@@ -466,7 +466,7 @@ class License
             'degraded'   => $degraded,
             'message'    => $msg,
             'expires'    => $expires,
-            'checked_at' => (int)Database::getSetting('license_checked_at', 0),
+            'checked_at' => (int)Database::setting('license_checked_at', 0),
             // What WHMCS is matching this license against. A "one license per
             // IP/domain" rejection is almost always explained by these values.
             'domain'     => self::hostname(),
@@ -520,7 +520,7 @@ class License
      */
     private static function serverIp(): string
     {
-        $pinned = (string)Database::getSetting('license_pinned_ip', '');
+        $pinned = (string)Database::setting('license_pinned_ip', '');
         if ($pinned !== '' && filter_var($pinned, FILTER_VALIDATE_IP)) {
             return $pinned;
         }
@@ -561,7 +561,7 @@ class License
             'domain'    => self::hostname(),
             'ip'        => self::serverIp(),
             'dir'       => defined('SG_ROOT') ? SG_ROOT : __DIR__,
-            'pinned_ip' => (string)Database::getSetting('license_pinned_ip', ''),
+            'pinned_ip' => (string)Database::setting('license_pinned_ip', ''),
         ];
     }
 

@@ -311,7 +311,7 @@ CONF;
 
     private static function disableConfig(): void
     {
-        $inc = (string)Database::getSetting('waf_include_path', '');
+        $inc = (string)Database::setting('waf_include_path', '');
         if ($inc !== '' && is_file($inc)) { @unlink($inc); }
     }
 

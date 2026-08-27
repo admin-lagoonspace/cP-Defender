@@ -178,7 +178,15 @@ try {
     };
 } catch (Throwable $e) {
     Logger::error("API error [$module/$action]: " . $e->getMessage());
-    $response = ['success' => false, 'error' => 'Internal server error', 'code' => 500];
+    // Include the detail. The caller is an authenticated WHM root session, and
+    // "Internal server error" with the cause hidden in a log file cost several
+    // diagnosis cycles that a single line on screen would have ended.
+    $response = [
+        'success' => false,
+        'error'   => 'Internal server error',
+        'detail'  => $e->getMessage() . ' in ' . basename($e->getFile()) . ':' . $e->getLine(),
+        'code'    => 500,
+    ];
 }
 
 $code = $response['code'] ?? 200;
@@ -364,7 +372,7 @@ function routeDashboard(string $action, string $method, array $q, ?array $user):
                     'hostname'   => gethostname(),
                     'php_version'=> PHP_VERSION,
                     'uptime'     => shell_exec('uptime -p 2>/dev/null') ?? '',
-                    'load'       => sys_getloadavg(),
+                    'load'       => (function_exists('sys_getloadavg') ? sys_getloadavg() : [0, 0, 0]),
                 ],
             ];
         })(),

@@ -150,6 +150,32 @@ def main():
     if not hits:
         ok("no calls to non-public methods across classes")
 
+    # 2c. every cross-class static call resolves (tokenizer-based, exact)
+    if php:
+        r = subprocess.run([php, os.path.join(REPO, "scripts", "check-calls.php")],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            for line in (r.stdout + r.stderr).strip().splitlines():
+                if line.strip():
+                    fail(line.strip())
+            problems += 1
+        else:
+            ok("every cross-class static call resolves to a public method")
+
+    # 2d. every read-only route actually executes
+    if php:
+        r = subprocess.run([php, os.path.join(REPO, "scripts", "smoke.php")],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            fail("API smoke test failed:")
+            for line in r.stdout.strip().splitlines():
+                if line.startswith("  ") and ("[x]" in line or "not JSON" in line
+                                              or "internal error" in line or "FATAL" in line):
+                    print("        " + line.strip())
+            problems += 1
+        else:
+            ok("all API routes execute and return JSON")
+
     # 3 + 4. config.php sanity
     cfg = os.path.join(REPO, "backend", "config", "config.php")
     if not os.path.exists(cfg) or os.path.getsize(cfg) == 0:

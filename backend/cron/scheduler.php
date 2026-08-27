@@ -59,11 +59,11 @@ if (!License::protectionAllowed()) {
 $now = time();
 
 function setting(string $k, string $default): string {
-    $v = (string)Database::getSetting($k, $default);
+    $v = (string)Database::setting($k, $default);
     return $v === '' ? $default : $v;
 }
 
-function lastRun(string $task): int  { return (int)Database::getSetting("last_run_$task", 0); }
+function lastRun(string $task): int  { return (int)Database::setting("last_run_$task", 0); }
 function markRun(string $task): void { Database::setSetting("last_run_$task", (string)time()); }
 
 /**

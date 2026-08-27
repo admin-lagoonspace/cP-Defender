@@ -125,7 +125,7 @@ class Scanner {
      * never used, with scans quietly falling back to the pattern engine.
      */
     public static function clamscanBin(): ?string {
-        $stored = (string)Database::getSetting('clamscan_path', '');
+        $stored = (string)Database::setting('clamscan_path', '');
         if ($stored !== '' && is_executable($stored)) { return $stored; }
         if (is_executable(CLAMSCAN_BIN)) { return CLAMSCAN_BIN; }
         foreach (['/usr/bin/clamscan', '/usr/local/bin/clamscan',
