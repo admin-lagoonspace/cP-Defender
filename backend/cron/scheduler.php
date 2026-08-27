@@ -34,6 +34,13 @@ require_once SG_ROOT . '/backend/lib/Logger.php';
 require_once SG_ROOT . '/backend/lib/Scanner.php';
 require_once SG_ROOT . '/backend/lib/IPReputation.php';
 require_once SG_ROOT . '/backend/lib/License.php';
+// Newly scheduled modules. Omitting these is a fatal on the first cron run,
+// which nothing would have reported until a panel stayed empty for a week.
+require_once SG_ROOT . '/backend/lib/CMSGuard.php';
+require_once SG_ROOT . '/backend/lib/BotShield.php';
+require_once SG_ROOT . '/backend/lib/RootkitScanner.php';
+require_once SG_ROOT . '/backend/lib/RootkitEngine.php';
+require_once SG_ROOT . '/backend/lib/FileIntegrity.php';
 
 $force  = null;
 $dryRun = false;
@@ -163,6 +170,66 @@ $tasks = [
             slog("  refreshed reputation for $n address(es)");
             Database::setSetting('iprep_last_run', (string)time());
             Database::setSetting('iprep_last_count', (string)$n);
+        },
+    ],
+
+    // ── Modules that were never scheduled ────────────────────────────────────
+    // CMS Guard, Bot Shield, rootkit and file integrity all read their panels
+    // from database tables, and NOTHING wrote to those tables unless the user
+    // happened to press a button. So every one of them showed zero for ever and
+    // read as broken. Building the module and then never running it is the
+    // single most common fault in this codebase.
+
+    'cmsguard' => [
+        'schedule' => setting('cmsguard_schedule', 'daily'),
+        'time'     => setting('cmsguard_time', '04:00'),
+        'day'      => (int)setting('cmsguard_day', '0'),
+        'run'      => function () {
+            $found = (new CMSGuard())->scanInstalls();
+            slog('  CMS discovery found ' . count($found) . ' install(s)');
+        },
+    ],
+
+    'botshield' => [
+        // Hourly: log lines age out, and a bot seen only in yesterday's rotated
+        // access log cannot be acted on at all.
+        'schedule' => setting('botshield_schedule', 'hourly'),
+        'time'     => setting('botshield_time', '00:00'),
+        'day'      => (int)setting('botshield_day', '0'),
+        'run'      => function () {
+            $r = (new BotShield())->runAnalysis();
+            slog('  bot analysis: ' . (int)($r['blocked'] ?? 0) . ' blocked, '
+                 . (int)($r['skipped'] ?? 0) . ' already known');
+        },
+    ],
+
+    'rootkit' => [
+        'schedule' => setting('rootkit_schedule', 'weekly'),
+        'time'     => setting('rootkit_time', '05:00'),
+        'day'      => (int)setting('rootkit_day', '0'),
+        'run'      => function () {
+            // runScan() refuses when rkhunter/chkrootkit are absent, which is
+            // the normal case on a clean box. The built-in engine has no such
+            // dependency, so fall back to it rather than silently doing nothing.
+            $rs = new RootkitScanner();
+            $r  = $rs->runScan();
+            if (isset($r['error'])) {
+                slog('  rkhunter/chkrootkit unavailable — using built-in engine');
+                $r = RootkitEngine::scan();
+            }
+            $n = (int)($r['findings'] ?? (is_array($r['findings'] ?? null) ? count($r['findings']) : 0));
+            slog('  rootkit scan: ' . $n . ' finding(s)');
+        },
+    ],
+
+    'integrity' => [
+        'schedule' => setting('integrity_schedule', 'daily'),
+        'time'     => setting('integrity_time', '06:00'),
+        'day'      => (int)setting('integrity_day', '0'),
+        'run'      => function () {
+            // runCheck('') walks every watched path.
+            $r = (new FileIntegrity())->runCheck('');
+            slog('  integrity check: ' . (int)($r['changed'] ?? 0) . ' change(s)');
         },
     ],
 ];

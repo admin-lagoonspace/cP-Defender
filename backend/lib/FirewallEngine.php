@@ -378,8 +378,31 @@ class FirewallEngine
         return trim(self::sh('systemctl is-active ' . escapeshellarg($svc) . ' 2>/dev/null')['out']) === 'active';
     }
 
+    /**
+     * Command runner, replaceable by tests.
+     *
+     * Every write path in this class ends in a shell command against nft,
+     * iptables, csf or apachectl. None of those exist on a development machine,
+     * so none of this code could be executed before it reached a customer's
+     * server -- which is exactly how the write paths came to be the last
+     * untested part of the product. Injecting the runner makes the decision
+     * logic testable without pretending the tools are present.
+     *
+     * @var (callable(string):array{out:string,code:int})|null
+     */
+    private static $runner = null;
+
+    /** @param (callable(string):array{out:string,code:int})|null $runner */
+    public static function setRunner(?callable $runner): void
+    {
+        self::$runner = $runner;
+    }
+
     private static function sh(string $cmd): array
     {
+        if (self::$runner !== null) {
+            return (self::$runner)($cmd);
+        }
         $out = [];
         $code = 0;
         @exec($cmd . ' 2>&1', $out, $code);

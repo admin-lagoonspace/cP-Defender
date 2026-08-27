@@ -1025,16 +1025,35 @@ async function loadMonitorStats() {
 
   const card = document.getElementById('rt-monitor-card');
   if (card) card.style.borderLeftColor = d.running ? 'var(--green)' : 'var(--red)';
+  // A monitor can be running and yet doing nothing: wrong watch paths, a dead
+  // loop, inotify watches exhausted. That state used to render as a green
+  // "Active" badge beside counters stuck at zero, which is the least useful
+  // thing the card could say. The daemon stamps rt_last_activity as it works,
+  // so silence is measurable — report it.
   const badge = document.getElementById('rt-status-badge');
   if (badge) {
-    badge.className   = 'badge ' + (d.running ? 'badge-green' : 'badge-red');
-    badge.textContent = d.running ? 'Active' : 'Stopped';
+    if (!d.running) {
+      badge.className = 'badge badge-red';   badge.textContent = 'Stopped';
+    } else if (d.stale) {
+      badge.className = 'badge badge-amber'; badge.textContent = 'No activity';
+    } else {
+      badge.className = 'badge badge-green'; badge.textContent = 'Active';
+    }
   }
   const icon = document.getElementById('rt-icon');
-  if (icon) icon.textContent = d.running ? '🔍' : '⏸';
+  if (icon) icon.textContent = !d.running ? '⏸' : (d.stale ? '⚠️' : '🔍');
+
+  if (card) {
+    card.style.borderLeftColor = !d.running ? 'var(--red)'
+                               : (d.stale ? 'var(--amber, #f59e0b)' : 'var(--green)');
+  }
 
   const rtPaths  = document.getElementById('rt-paths');
-  if (rtPaths)  rtPaths.textContent  = (d.watch_paths || []).join(', ');
+  // "Watching ..." with nothing after it was the placeholder showing through.
+  if (rtPaths) {
+    const paths = (d.watch_paths || []).filter(Boolean);
+    rtPaths.textContent = paths.length ? paths.join(', ') : 'no paths configured';
+  }
   const rtEngine = document.getElementById('rt-engine');
   if (rtEngine) rtEngine.textContent = d.engine || 'polling';
 

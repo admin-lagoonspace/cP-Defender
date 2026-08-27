@@ -20,7 +20,7 @@ if (file_exists(__DIR__ . '/mode.php')) {
 }
 
 if (!defined('INSTALL_MODE')) { define('INSTALL_MODE', 'cpanel'); }
-if (!defined('SG_VERSION'))   { define('SG_VERSION',  '3.19.10'); }
+if (!defined('SG_VERSION'))   { define('SG_VERSION',  '3.20.0'); }
 if (!defined('SG_ROOT'))      { define('SG_ROOT',     dirname(__DIR__, 2)); }
 if (!defined('SG_DB'))        { define('SG_DB',       SG_ROOT . '/database/sentinel.db'); }
 if (!defined('SG_LOGS'))      { define('SG_LOGS',     SG_ROOT . '/logs'); }

@@ -193,6 +193,7 @@ class BotShield {
             }
 
             Logger::info("BotShield: blocked bot IP $ip — $reason");
+            Logger::event('bot_blocked', 'medium', $ip, 'web', "Bot blocked: {$reason}");
             return true;
         } catch (Exception $e) {
             Logger::error('BotShield::blockBot — ' . $e->getMessage());

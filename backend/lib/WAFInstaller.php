@@ -27,9 +27,58 @@ if (!defined('SG_ROOT')) { die('Direct access denied'); }
 
 class WAFInstaller
 {
+    /**
+     * Command runner, replaceable by tests.
+     *
+     * Every write path in this class ends in a shell command against nft,
+     * iptables, csf or apachectl. None of those exist on a development machine,
+     * so none of this code could be executed before it reached a customer's
+     * server -- which is exactly how the write paths came to be the last
+     * untested part of the product. Injecting the runner makes the decision
+     * logic testable without pretending the tools are present.
+     *
+     * @var (callable(string):array{out:string,code:int})|null
+     */
+    private static $runner = null;
+
+    /** @param (callable(string):array{out:string,code:int})|null $runner */
+    public static function setRunner(?callable $runner): void
+    {
+        self::$runner = $runner;
+    }
+
+    /** Run a command through the injected runner when one is set. */
+    private static function sh(string $cmd): array
+    {
+        if (self::$runner !== null) {
+            return (self::$runner)($cmd);
+        }
+        $out = [];
+        $code = 0;
+        @exec($cmd . ' 2>&1', $out, $code);
+        return ['out' => implode("\n", $out), 'code' => $code];
+    }
+
     const CRS_VERSION = '4.7.0';
     const CRS_URL     = 'https://github.com/coreruleset/coreruleset/archive/refs/tags/v%s.tar.gz';
     const SG_CONF_DIR = '/etc/sentinel-gate/waf';
+
+    /**
+     * Where our WAF config is written. Overridable so the write paths can be
+     * exercised without writing into /etc on a developer's machine — the reason
+     * these paths had never been run before reaching a customer.
+     */
+    private static ?string $confDir = null;
+
+    /**
+     * Where the Apache include is dropped. Overridable for the same reason as
+     * confDir(): the write path is otherwise unreachable without a real Apache.
+     */
+    private static ?string $includeDir = null;
+
+    public static function setConfDir(?string $dir): void { self::$confDir = $dir; }
+    public static function setIncludeDir(?string $dir): void { self::$includeDir = $dir; }
+    public static function confDir(): string { return self::$confDir ?? self::SG_CONF_DIR; }
 
     // ── Status ───────────────────────────────────────────────────────────────
 
@@ -47,7 +96,7 @@ class WAFInstaller
             'apache'                => self::apacheFlavour(),
             'package_manager'       => self::pkgManager(),
             'can_install'           => self::pkgManager() !== null,
-            'managed_by_us'         => is_file(self::SG_CONF_DIR . '/sentinel-waf.conf'),
+            'managed_by_us'         => is_file(self::confDir() . '/sentinel-waf.conf'),
         ];
     }
 
@@ -85,7 +134,7 @@ class WAFInstaller
         foreach ([
             '/etc/apache2/conf.d/modsec_vendor_configs/OWASP3/crs-setup.conf',
             '/etc/httpd/modsecurity.d/owasp-crs/crs-setup.conf',
-            self::SG_CONF_DIR . '/coreruleset/crs-setup.conf',
+            self::confDir() . '/coreruleset/crs-setup.conf',
         ] as $p) {
             if (is_file($p)) { return dirname($p); }
         }
@@ -106,7 +155,7 @@ class WAFInstaller
 
     public static function currentMode(): string
     {
-        $f = self::SG_CONF_DIR . '/sentinel-waf.conf';
+        $f = self::confDir() . '/sentinel-waf.conf';
         if (is_readable($f)) {
             $c = (string)@file_get_contents($f);
             if (preg_match('/^\s*SecRuleEngine\s+(\w+)/mi', $c, $m)) {
@@ -206,7 +255,7 @@ class WAFInstaller
 
     private static function installCrs(): array
     {
-        $dir = self::SG_CONF_DIR;
+        $dir = self::confDir();
         @mkdir($dir, 0750, true);
         $tgz = $dir . '/crs.tar.gz';
         $url = sprintf(self::CRS_URL, self::CRS_VERSION);
@@ -241,8 +290,8 @@ class WAFInstaller
     /** Write our include, and reference it from Apache. */
     private static function writeConfig(string $mode, ?string $crsDir): array
     {
-        @mkdir(self::SG_CONF_DIR, 0750, true);
-        $conf = self::SG_CONF_DIR . '/sentinel-waf.conf';
+        @mkdir(self::confDir(), 0750, true);
+        $conf = self::confDir() . '/sentinel-waf.conf';
 
         $rules = '';
         if ($crsDir) {
@@ -291,11 +340,18 @@ CONF;
         }
         @chmod($conf, 0644);
 
-        $incDir = [
-            'ea4'    => '/etc/apache2/conf.d',
-            'httpd'  => '/etc/httpd/conf.d',
-            'debian' => '/etc/apache2/conf-enabled',
-        ][self::apacheFlavour()] ?? null;
+        // apacheFlavour() returns null on a machine with no Apache, and using
+        // null as an array offset is deprecated in PHP 8.1+ — it emitted a
+        // notice on every call. Look the key up only when there is one.
+        $flavour = self::apacheFlavour();
+        $incDir  = self::$includeDir;
+        if ($incDir === null && $flavour !== null) {
+            $incDir = [
+                'ea4'    => '/etc/apache2/conf.d',
+                'httpd'  => '/etc/httpd/conf.d',
+                'debian' => '/etc/apache2/conf-enabled',
+            ][$flavour] ?? null;
+        }
         if ($incDir === null || !is_dir($incDir)) {
             return ['success' => false, 'error' => 'Could not locate the Apache config directory'];
         }
@@ -339,11 +395,11 @@ CONF;
     public static function validateApache(): array
     {
         foreach (['/usr/sbin/apachectl', '/usr/sbin/httpd', 'apachectl', 'apache2ctl'] as $bin) {
-            @exec(escapeshellarg($bin) . ' -t 2>&1', $o, $c);
-            if (!empty($o)) {
-                return ['ok' => $c === 0, 'output' => implode("\n", array_slice($o, -5))];
+            $r = self::sh(escapeshellarg($bin) . ' -t');
+            if (trim($r['out']) !== '') {
+                $o = explode("\n", $r['out']);
+                return ['ok' => $r['code'] === 0, 'output' => implode("\n", array_slice($o, -5))];
             }
-            $o = [];
         }
         // No validator available: report it rather than claiming success.
         return ['ok' => false, 'output' => 'Could not run an Apache syntax check'];
@@ -354,9 +410,8 @@ CONF;
         foreach (['/scripts/restartsrv_httpd', '/usr/sbin/apachectl graceful',
                   '/usr/sbin/apache2ctl graceful', 'systemctl reload httpd',
                   'systemctl reload apache2'] as $cmd) {
-            @exec($cmd . ' 2>&1', $o, $c);
-            if ($c === 0) { return; }
-            $o = [];
+            $r = self::sh($cmd);
+            if ($r['code'] === 0) { return; }
         }
     }
 
@@ -364,7 +419,7 @@ CONF;
     public static function remove(): void
     {
         self::disableConfig();
-        @unlink(self::SG_CONF_DIR . '/sentinel-waf.conf');
+        @unlink(self::confDir() . '/sentinel-waf.conf');
         self::reloadApache();
     }
 }

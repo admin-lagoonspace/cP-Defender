@@ -85,12 +85,18 @@ $t = microtime(true);
 
 try {
     $threats = $scanner->runClamScan($scanPath, $jobId);
-    $files   = countFiles($scanPath);
     $ms      = (int)((microtime(true)-$t)*1000);
 
+    // files_scanned is written incrementally by the scan itself. It used to be
+    // overwritten here with countFiles($scanPath) -- a fresh directory walk
+    // performed AFTER the scan, which counted what was present rather than what
+    // was examined, and only ever appeared once the job had already finished.
+    $row   = Database::fetchOne('SELECT files_scanned FROM scan_jobs WHERE id=?', [$jobId]);
+    $files = (int)($row['files_scanned'] ?? 0);
+
     Database::query(
-        'UPDATE scan_jobs SET status=?,finished_at=?,files_scanned=?,threats_found=? WHERE id=?',
-        ['done', time(), $files, count($threats), $jobId]
+        'UPDATE scan_jobs SET status=?,finished_at=?,threats_found=? WHERE id=?',
+        ['done', time(), count($threats), $jobId]
     );
     Database::setSetting('last_scan', (string)time());
 

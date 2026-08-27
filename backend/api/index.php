@@ -176,6 +176,10 @@ try {
         'update'     => routeUpdate($action, $method, $user),
         default      => ['success' => false, 'error' => "Unknown module: $module", 'code' => 404],
     };
+} catch (InvalidArgumentException $e) {
+    // Bad input from the caller, not a fault in the server. Reported as 400 so
+    // the UI can show the reason instead of "Internal server error".
+    $response = ['success' => false, 'error' => $e->getMessage(), 'code' => 400];
 } catch (Throwable $e) {
     Logger::error("API error [$module/$action]: " . $e->getMessage());
     // Include the detail. The caller is an authenticated WHM root session, and

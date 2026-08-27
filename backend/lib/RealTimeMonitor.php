@@ -11,25 +11,72 @@ class RealTimeMonitor {
     private string $logFile;
     private string $serviceFile;
 
-    public function __construct() {
-        $this->daemonScript = SG_ROOT . '/backend/daemon/monitor.py';
-        $this->pidFile      = '/var/run/sentinel-gate-monitor.pid';
-        $this->logFile      = SG_LOGS . '/monitor.log';
-        $this->serviceFile  = '/etc/systemd/system/sentinel-gate-monitor.service';
+    /**
+     * How shell commands are run. Injectable so the status logic can be tested
+     * without systemd: the previous code called exec() directly, which made
+     * every branch of it unreachable from a test and is why "Active" could be
+     * displayed beside empty counters for so long without anyone noticing.
+     *
+     * @var callable(string):array{0:string[],1:int}
+     */
+    private $exec;
+
+    public function __construct(?array $paths = null, ?callable $exec = null) {
+        $this->daemonScript = $paths['daemon']  ?? SG_ROOT . '/backend/daemon/monitor.py';
+        $this->pidFile      = $paths['pid']     ?? '/var/run/sentinel-gate-monitor.pid';
+        $this->logFile      = $paths['log']     ?? SG_LOGS . '/monitor.log';
+        $this->serviceFile  = $paths['service'] ?? '/etc/systemd/system/sentinel-gate-monitor.service';
+
+        $this->exec = $exec ?? function (string $cmd): array {
+            $out = [];
+            $code = 0;
+            exec($cmd, $out, $code);
+            return [$out, $code];
+        };
+    }
+
+    /** @return array{0:string[],1:int} */
+    private function run(string $cmd): array {
+        return ($this->exec)($cmd);
     }
 
     // ── Status ──────────────────────────────────────────────────────────────
 
+    /**
+     * Is the daemon actually running?
+     *
+     * The PID file is written by the daemon itself and lives in /var/run, which
+     * is tmpfs: it disappears on reboot, and a crash can leave it behind
+     * pointing at a PID that no longer exists or has been reused. Systemd is
+     * the authority on a service it manages, so it is consulted whenever the
+     * PID file does not give a clear answer. Reporting "stopped" for a running
+     * monitor is exactly as harmful as the reverse.
+     */
     public function isRunning(): bool {
-        if (!file_exists($this->pidFile)) return false;
-        $pid = (int) trim(file_get_contents($this->pidFile));
-        if ($pid <= 0) return false;
-        return file_exists("/proc/$pid");
+        if (file_exists($this->pidFile)) {
+            $pid = (int) trim((string) @file_get_contents($this->pidFile));
+            if ($pid > 0 && file_exists("/proc/$pid")) {
+                return true;
+            }
+        }
+        return $this->isServiceActive();
+    }
+
+    /** systemd's view: the unit is loaded AND running right now. */
+    public function isServiceActive(): bool {
+        if (!file_exists($this->serviceFile)) { return false; }
+        [$out, ] = $this->run('systemctl is-active sentinel-gate-monitor 2>/dev/null');
+        return trim($out[0] ?? '') === 'active';
     }
 
     public function getStatus(): array {
         $running      = $this->isRunning();
-        $pid          = $running ? (int) trim(file_get_contents($this->pidFile)) : null;
+        // Running may be true on systemd's word alone, with no PID file present
+        // — reading it unconditionally warned on every request in that case.
+        $pid = null;
+        if ($running && is_readable($this->pidFile)) {
+            $pid = (int) trim((string) @file_get_contents($this->pidFile)) ?: null;
+        }
         $filesChecked = (int) (Database::setting('rt_files_checked') ?? 0);
         $threatsFound = (int) (Database::setting('rt_threats_found') ?? 0);
         $lastActivity = Database::setting('rt_last_activity');
@@ -50,18 +97,29 @@ class RealTimeMonitor {
         // Watch paths
         $paths = Database::setting('scan_paths', '/home');
 
+        // A daemon can be "running" and yet doing nothing — wrong watch paths,
+        // an exception in its loop, inotify watches exhausted. It stamps
+        // rt_last_activity as it works, so silence is measurable and worth
+        // surfacing rather than showing a green badge and empty counters.
+        $age   = $lastActivity !== null ? max(0, time() - (int) $lastActivity) : null;
+        $stale = $running && ($age === null || $age > 3600);
+
         return [
-            'running'       => $running,
-            'pid'           => $pid,
-            'engine'        => $engine,
-            'watch_paths'   => array_map('trim', explode(',', $paths)),
-            'files_checked' => $filesChecked,
-            'threats_found' => $threatsFound,
-            'detections_24h'=> (int) $rt24h,
-            'detections_all'=> (int) $rtTotal,
-            'last_activity' => $lastActivity,
-            'log_file'      => $this->logFile,
-            'service_active'=> $this->isServiceEnabled(),
+            'running'           => $running,
+            'pid'               => $pid,
+            'engine'            => $engine,
+            'watch_paths'       => array_map('trim', explode(',', $paths)),
+            'files_checked'     => $filesChecked,
+            'threats_found'     => $threatsFound,
+            'detections_24h'    => (int) $rt24h,
+            'detections_all'    => (int) $rtTotal,
+            'last_activity'     => $lastActivity !== null ? (int) $lastActivity : null,
+            'last_activity_age' => $age,
+            'stale'             => $stale,
+            'log_file'          => $this->logFile,
+            'service_installed' => file_exists($this->serviceFile),
+            'service_enabled'   => $this->isServiceEnabled(),
+            'service_active'    => $this->isServiceActive(),
         ];
     }
 
@@ -213,10 +271,16 @@ WantedBy=multi-user.target
 UNIT;
     }
 
-    private function isServiceEnabled(): bool {
-        if (!file_exists($this->serviceFile)) return false;
-        exec('systemctl is-enabled sentinel-gate-monitor 2>/dev/null', $out);
-        return ($out[0] ?? '') === 'enabled';
+    /**
+     * Enabled means "starts at boot". It does NOT mean running — a unit can be
+     * enabled and dead. getStatus() used to report this as `service_active`,
+     * so the dashboard displayed "Active" for a monitor that was not running,
+     * beside counters that stayed empty because nothing was watching anything.
+     */
+    public function isServiceEnabled(): bool {
+        if (!file_exists($this->serviceFile)) { return false; }
+        [$out, ] = $this->run('systemctl is-enabled sentinel-gate-monitor 2>/dev/null');
+        return trim($out[0] ?? '') === 'enabled';
     }
 
     /**
@@ -326,8 +390,8 @@ UNIT;
     // ── Engine detection ──────────────────────────────────────────────────────
 
     private function detectEngine(): string {
-        exec('/usr/bin/python3 -c "import inotify_simple; print(\'inotify\')" 2>/dev/null', $out, $code);
-        return ($code === 0 && ($out[0] ?? '') === 'inotify') ? 'inotify' : 'polling';
+        [$out, $code] = $this->run('/usr/bin/python3 -c "import inotify_simple; print(\'inotify\')" 2>/dev/null');
+        return ($code === 0 && trim($out[0] ?? '') === 'inotify') ? 'inotify' : 'polling';
     }
 
     // ── Stats summary for dashboard ───────────────────────────────────────────
@@ -336,11 +400,14 @@ UNIT;
         $status = $this->getStatus();
         return [
             'enabled'        => $status['running'],
+            'running'        => $status['running'],
+            'stale'          => $status['stale'],
             'engine'         => $status['engine'],
             'watch_paths'    => $status['watch_paths'],
             'files_checked'  => $status['files_checked'],
             'detections_24h' => $status['detections_24h'],
             'detections_all' => $status['detections_all'],
+            'last_activity'  => $status['last_activity'],
         ];
     }
 }

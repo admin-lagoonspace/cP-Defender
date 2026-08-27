@@ -180,6 +180,66 @@ foreach ($files as $file) {
     }
 }
 
+// ── Pass 3: (new Foo())->bar() ───────────────────────────────────────────────
+// The static checker missed `(new FileIntegrity())->checkAll()` in the cron
+// scheduler -- a method that does not exist, in code that would only run once a
+// day and fail silently into a log nobody reads. The router and scheduler are
+// built on this pattern, so it needs the same treatment.
+foreach ($files as $file) {
+    $tokens = token_get_all(must_read($file));
+    $n = count($tokens);
+
+    for ($i = 0; $i < $n; $i++) {
+        if (!is_array($tokens[$i]) || $tokens[$i][0] !== T_NEW) { continue; }
+
+        // class name directly after `new`
+        $cls = null; $j = $i + 1;
+        for (; $j < $n; $j++) {
+            if (is_array($tokens[$j]) && $tokens[$j][0] === T_WHITESPACE) { continue; }
+            if (is_array($tokens[$j]) && $tokens[$j][0] === T_STRING) { $cls = $tokens[$j][1]; }
+            break;
+        }
+        if ($cls === null || isset($ignore[$cls]) || !isset($methods[$cls])) { continue; }
+
+        // walk past the constructor's parenthesis pair
+        $depth = 0; $k = $j;
+        for (; $k < $n; $k++) {
+            $t = $tokens[$k];
+            if (is_string($t) && $t === '(') { $depth++; }
+            elseif (is_string($t) && $t === ')') { $depth--; if ($depth === 0) { $k++; break; } }
+        }
+        // and any closing paren of `(new Foo(...))`
+        for (; $k < $n; $k++) {
+            if (is_array($tokens[$k]) && $tokens[$k][0] === T_WHITESPACE) { continue; }
+            if (is_string($tokens[$k]) && $tokens[$k] === ')') { continue; }
+            break;
+        }
+        if (!(is_array($tokens[$k] ?? null) && $tokens[$k][0] === T_OBJECT_OPERATOR)) { continue; }
+
+        $meth = null; $line = $tokens[$i][2];
+        for ($m2 = $k + 1; $m2 < $n; $m2++) {
+            if (is_array($tokens[$m2]) && $tokens[$m2][0] === T_WHITESPACE) { continue; }
+            if (is_array($tokens[$m2]) && $tokens[$m2][0] === T_STRING) { $meth = $tokens[$m2][1]; }
+            break;
+        }
+        if ($meth === null) { continue; }
+
+        $rel = str_replace(dirname(__DIR__) . DIRECTORY_SEPARATOR, '', $file);
+        if (!isset($methods[$cls][$meth])) {
+            $near = [];
+            foreach (array_keys($methods[$cls]) as $cand) {
+                $a = strtolower($cand); $b = strtolower($meth);
+                if (str_contains($b, $a) || str_contains($a, $b)) { $near[] = $cls . '->' . $cand . '()'; }
+            }
+            $hint = $near ? '  (did you mean ' . implode(', ', array_slice($near, 0, 3)) . '?)' : '';
+            $problems[] = sprintf('MISSING    %s:%d  (new %s)->%s()%s', $rel, $line, $cls, $meth, $hint);
+        } elseif ($methods[$cls][$meth] !== 'public') {
+            $problems[] = sprintf('NONPUBLIC  %s:%d  (new %s)->%s() is %s',
+                                  $rel, $line, $cls, $meth, $methods[$cls][$meth]);
+        }
+    }
+}
+
 $problems = array_values(array_unique($problems));
 sort($problems);
 

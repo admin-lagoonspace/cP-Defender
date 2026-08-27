@@ -99,8 +99,9 @@ class Scanner {
         // Launch async via background process with CPU throttling
         $nice = self::getCpuNice();
         $cmd  = sprintf(
-            'nice -n%d php %s/backend/cron/scan.php --job-id=%d --path=%s > %s/scan_%d.log 2>&1 &',
+            'nice -n%d %s %s/backend/cron/scan.php --job-id=%d --path=%s > %s/scan_%d.log 2>&1 &',
             $nice,
+            escapeshellarg(self::phpBinary()),
             SG_ROOT,
             $jobId,
             escapeshellarg($path),
@@ -135,6 +136,27 @@ class Scanner {
         return null;
     }
 
+    /**
+     * A PHP binary that certainly exists.
+     *
+     * The scan worker was launched with a bare `php`, which relies on PATH. The
+     * API runs under cpsrvd, whose environment is not a login shell, and on
+     * cPanel the `php` that PATH resolves to may not be an EasyApache build at
+     * all. PHP_BINARY is whatever is running this code right now, so it is the
+     * one interpreter guaranteed to work.
+     */
+    public static function phpBinary(): string
+    {
+        if (defined('PHP_BINARY') && PHP_BINARY !== '' && is_executable(PHP_BINARY)) {
+            return PHP_BINARY;
+        }
+        foreach (['/usr/local/cpanel/3rdparty/bin/php', '/opt/cpanel/ea-php82/root/usr/bin/php',
+                  '/usr/bin/php', '/usr/local/bin/php'] as $cand) {
+            if (is_executable($cand)) { return $cand; }
+        }
+        return 'php';
+    }
+
     /** True when a signature database exists — clamscan is unusable without one. */
     public static function clamSignaturesPresent(): bool {
         foreach (['/var/lib/clamav', '/usr/local/share/clamav', '/usr/share/clamav',
@@ -146,6 +168,124 @@ class Scanner {
         return false;
     }
 
+    /**
+     * Write progress to the job row.
+     *
+     * files_scanned was only written once, at the very end of the scan, and
+     * even then it was countFiles() re-walking the directory afterwards rather
+     * than a count of what had been examined. So the UI read 0 for the entire
+     * duration of a scan and the dashboard stayed empty — reported as "I ran a
+     * scan and nothing updated".
+     *
+     * Cheap enough to call every batch: one UPDATE against a single row.
+     */
+    public static function recordProgress(int $jobId, int $filesScanned, int $threatsFound): void
+    {
+        if ($jobId <= 0) { return; }
+        Database::query(
+            'UPDATE scan_jobs SET files_scanned = ?, threats_found = ? WHERE id = ?',
+            [$filesScanned, $threatsFound, $jobId]
+        );
+    }
+
+    /** Directories that are never worth scanning. */
+    private const SCAN_SKIP_DIRS = [
+        'node_modules', '.git', '.svn', 'cache', '.cache', 'proc', 'sys', 'dev',
+    ];
+
+    /**
+     * Every regular file under $path, lazily.
+     *
+     * A generator so a scan of /home does not build a list of every file on the
+     * server in memory before examining any of them.
+     *
+     * @return Generator<string>
+     */
+    private function walkFiles(string $path): Generator
+    {
+        if (is_file($path)) { yield $path; return; }
+        if (!is_dir($path)) { return; }
+
+        $dirIt = new RecursiveDirectoryIterator(
+            $path,
+            FilesystemIterator::SKIP_DOTS | FilesystemIterator::CURRENT_AS_FILEINFO
+        );
+        $filter = new RecursiveCallbackFilterIterator($dirIt, function ($current) {
+            if ($current->isLink()) { return false; }   // symlink loops
+            if ($current->isDir()) {
+                return !in_array(strtolower($current->getFilename()), self::SCAN_SKIP_DIRS, true);
+            }
+            return true;
+        });
+
+        foreach (new RecursiveIteratorIterator($filter, RecursiveIteratorIterator::LEAVES_ONLY) as $file) {
+            if ($file->isFile()) { yield $file->getPathname(); }
+        }
+    }
+
+    /**
+     * Hand one batch of paths to clamscan.
+     *
+     * --file-list keeps the command line bounded: passing thousands of paths as
+     * arguments hits ARG_MAX and fails outright on a large account.
+     *
+     * @param string[] $files
+     * @return array<int,array<string,mixed>>
+     */
+    private function scanBatch(string $bin, array $files, int $jobId): array
+    {
+        if (!$files) { return []; }
+
+        $listFile = tempnam(sys_get_temp_dir(), 'sg-scan-');
+        if ($listFile === false) { return []; }
+        file_put_contents($listFile, implode("\n", $files) . "\n");
+
+        $nice = self::getCpuNice();
+        $cmd  = sprintf(
+            'nice -n%d ionice -c3 %s --infected --no-summary --max-filesize=50M --max-scansize=200M --file-list=%s 2>&1',
+            $nice,
+            escapeshellarg($bin),
+            escapeshellarg($listFile)
+        );
+
+        $output = [];
+        exec($cmd, $output);
+        @unlink($listFile);
+
+        $threats = [];
+        foreach ($output as $line) {
+            if (preg_match('/^(.+):\s+(.+)\s+FOUND$/', $line, $m)) {
+                $threats[] = $this->recordThreat($m[1], $m[2], $jobId);
+            }
+        }
+        return $threats;
+    }
+
+    /** Persist one ClamAV detection and report it. */
+    private function recordThreat(string $filePath, string $threatName, int $jobId): array
+    {
+        $threatId = Database::insert('threats', [
+            'scan_job_id'  => $jobId,
+            'file_path'    => $filePath,
+            'threat_name'  => $threatName,
+            'threat_type'  => $this->classifyThreat($threatName),
+            'severity'     => $this->getSeverity($threatName),
+            'hash'         => file_exists($filePath) ? hash_file('sha256', $filePath) : null,
+            'size'         => file_exists($filePath) ? filesize($filePath) : 0,
+            'status'       => 'active',
+            'cpanel_user'  => self::getCpanelUser($filePath),
+        ]);
+
+        Logger::event('malware_detected', $this->getSeverity($threatName), '',
+                      $filePath, "Malware detected: {$threatName}");
+
+        if (Database::setting('auto_quarantine') === '1') {
+            $this->quarantine($filePath, $threatId);
+        }
+
+        return ['id' => $threatId, 'file' => $filePath, 'name' => $threatName];
+    }
+
     public function runClamScan(string $path, int $jobId): array {
         $bin = self::clamscanBin();
         // No binary, or a binary with no signature database — clamscan would
@@ -155,11 +295,42 @@ class Scanner {
             return $this->runPatternScan($path, $jobId);
         }
 
+        // Batched rather than one recursive invocation. A single clamscan over
+        // /home reports nothing until it finishes — which for a real account is
+        // many minutes of a UI showing "Files: 0" and a progress bar that could
+        // not move. Batching gives a real, rising count.
+        $batchSize = max(25, min(1000, (int) (Database::setting('scan_batch_size', '200') ?? 200)));
+
+        $threats = [];
+        $batch   = [];
+        $scanned = 0;
+
+        foreach ($this->walkFiles($path) as $file) {
+            $batch[] = $file;
+            if (count($batch) < $batchSize) { continue; }
+
+            $threats = array_merge($threats, $this->scanBatch($bin, $batch, $jobId));
+            $scanned += count($batch);
+            $batch = [];
+            self::recordProgress($jobId, $scanned, count($threats));
+        }
+
+        if ($batch) {
+            $threats = array_merge($threats, $this->scanBatch($bin, $batch, $jobId));
+            $scanned += count($batch);
+        }
+
+        self::recordProgress($jobId, $scanned, count($threats));
+        return $threats;
+    }
+
+    /** Retained for callers that want the old one-shot behaviour. */
+    private function runClamScanLegacy(string $path, int $jobId, string $bin): array {
         $nice = self::getCpuNice();
         $cmd  = sprintf(
             'nice -n%d ionice -c3 %s --recursive --infected --no-summary --max-filesize=50M --max-scansize=200M %s 2>&1',
             $nice,
-            $bin,
+            escapeshellarg($bin),
             escapeshellarg($path)
         );
 
@@ -185,6 +356,18 @@ class Scanner {
                 ]);
                 $threats[] = ['id' => $threatId, 'file' => $filePath, 'name' => $threatName];
 
+                // Record it on the Security Events timeline too. That page had
+                // exactly two writers in the whole product — a failed login and
+                // one firewall path — so it was empty on every server no matter
+                // what the scanner found.
+                Logger::event(
+                    'malware_detected',
+                    $this->getSeverity($threatName),
+                    '',
+                    $filePath,
+                    "Malware detected: {$threatName}"
+                );
+
                 // Auto-quarantine if enabled
                 if (Database::setting('auto_quarantine') === '1') {
                     $this->quarantine($filePath, $threatId);
@@ -201,8 +384,17 @@ class Scanner {
     public function runPatternScan(string $path, int $jobId): array {
         $threats = [];
         $files   = $this->getPhpFiles($path);
+        $scanned = 0;
 
         foreach ($files as $file) {
+            // Counted before the size check: the file WAS examined and skipped,
+            // and a progress counter that stalls on a directory of large files
+            // looks identical to a dead scan.
+            $scanned++;
+            if ($scanned % 100 === 0) {
+                self::recordProgress($jobId, $scanned, count($threats));
+            }
+
             if (filesize($file) > SCAN_MAX_SIZE) continue;
 
             $content = @file_get_contents($file);
@@ -248,6 +440,8 @@ class Scanner {
             }
         }
 
+
+        self::recordProgress($jobId, $scanned, count($threats));
         return $threats;
     }
 

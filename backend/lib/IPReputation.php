@@ -152,11 +152,18 @@ class IPReputation {
         ];
     }
 
+    /**
+     * A library must not end the request.
+     *
+     * This printed its own JSON and called exit(), which bypasses the router's
+     * error envelope, skips its headers, and makes the method impossible to
+     * test or to call from cron -- a validation failure would silently kill a
+     * scheduled task mid-run. Throwing lets the router decide the status code
+     * and keeps every caller's control flow intact.
+     */
     private function validateIP(string $ip): void {
         if (!filter_var($ip, FILTER_VALIDATE_IP)) {
-            http_response_code(400);
-            echo json_encode(['success' => false, 'error' => 'Invalid IP']);
-            exit;
+            throw new InvalidArgumentException('Invalid IP');
         }
     }
 }
