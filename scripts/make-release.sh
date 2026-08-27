@@ -108,6 +108,42 @@ if [[ -n "$SG_PHP" ]]; then
         exit 1
     fi
     ok "PHP syntax: all files parse"
+
+    # php -l reports success on an EMPTY file, so a truncated-to-zero source
+    # passes the parse gate cleanly. That is not hypothetical: 3.19.2 shipped a
+    # zero-byte config.php and this gate called it green. Size and content are
+    # checked separately from syntax.
+    _EMPTY=0
+    while IFS= read -r _f; do
+        if [[ ! -s "$_f" ]]; then
+            echo "  EMPTY FILE: $_f"
+            _EMPTY=$((_EMPTY+1))
+        fi
+    done < <(find "${REPO_DIR}/backend" -name '*.php' -type f)
+    if [[ $_EMPTY -gt 0 ]]; then
+        echo "Refusing to build: ${_EMPTY} PHP file(s) are empty." >&2
+        exit 1
+    fi
+
+    # config.php is required by every other file; if it loses its defines the
+    # whole product dies with "Direct access denied" and nothing else explains
+    # why. Assert the constants the guards actually test for.
+    _CFG="${REPO_DIR}/backend/config/config.php"
+    for _need in SG_ROOT SG_VERSION SG_DB QUARANTINE_DIR; do
+        if ! grep -q "define('${_need}'" "$_CFG"; then
+            echo "Refusing to build: config.php does not define ${_need}" >&2
+            exit 1
+        fi
+    done
+
+    # The version in config.php must match ./VERSION, or the UI reports one
+    # version while the updater compares another.
+    _CFGVER="$(grep -oP "SG_VERSION',\s*'\K[^']+" "$_CFG" || true)"
+    if [[ "$_CFGVER" != "$VERSION" ]]; then
+        echo "Refusing to build: config.php says ${_CFGVER}, VERSION says ${VERSION}" >&2
+        exit 1
+    fi
+    ok "config.php: constants present, version ${_CFGVER}"
 elif [[ "${SG_ALLOW_UNVERIFIED:-0}" == "1" ]]; then
     warn "No PHP interpreter — syntax gate SKIPPED by SG_ALLOW_UNVERIFIED=1"
 else

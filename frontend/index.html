@@ -6,12 +6,47 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.19.2">
+<link rel="stylesheet" href="css/app.css?v=3.19.3">
 </head>
 <body>
 <div id="app">
 
 <!-- ══ LOGIN SCREEN ══════════════════════════════════════════════════════════ -->
+<script>
+// WHM renders a plugin inside its own content frame, which leaves the dashboard
+// sharing a tab with cPanel's navigation — cramped, and every reload bounces
+// back to WHM home. Detect the frame and move to a tab of our own.
+//
+// window.open outside a click gesture can be blocked, so a blocked popup is
+// treated as expected rather than an error: the frame is replaced with a single
+// prominent link, which IS a gesture and always works.
+(function () {
+  if (window.top === window.self) { return; }
+  window.__SG_FRAMED = true;
+  var url = window.location.href;
+  var opened = null;
+  try { opened = window.open(url, '_blank', 'noopener'); } catch (e) { opened = null; }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    document.body.innerHTML =
+      '<div style="min-height:100vh;display:flex;align-items:center;'
+    + 'justify-content:center;background:#0b1020;color:#e2e8f0;'
+    + 'font-family:system-ui,-apple-system,Segoe UI,sans-serif;text-align:center">'
+    + '<div style="max-width:420px;padding:32px">'
+    + '<div style="font-size:2.4rem;margin-bottom:14px">\uD83D\uDEE1\uFE0F</div>'
+    + '<h2 style="margin:0 0 10px;font-size:1.25rem">Sentinel Gate</h2>'
+    + '<p style="color:#94a3b8;font-size:.9rem;margin:0 0 22px">'
+    + (opened ? 'Opened in a new tab.' : 'Opens in its own tab for the full dashboard.')
+    + '</p>'
+    + '<a href="' + url + '" target="_blank" rel="noopener" '
+    + 'style="display:inline-block;background:#7c5cff;color:#fff;text-decoration:none;'
+    + 'padding:11px 22px;border-radius:9px;font-weight:600;font-size:.92rem">'
+    + (opened ? 'Open again' : 'Open Sentinel Gate') + '</a>'
+    + '</div></div>';
+  });
+})();
+</script>
+
 <div id="login-screen">
   <div class="login-card card-accent" style="box-shadow:0 0 0 1px rgba(59,130,246,.2),0 24px 64px rgba(0,0,0,.7),0 0 80px rgba(59,130,246,.06)">
 
@@ -254,7 +289,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.19.2 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.19.3 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -1745,12 +1780,15 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.19.2"></script>
+<script src="js/api.js?v=3.19.3"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.19.2"></script>
+<script src="js/app.js?v=3.19.3"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  // Framed: the breakout script above has taken over the document.
+  if (window.__SG_FRAMED) { return; }
+
   // Already have a valid token — go straight to dashboard
   if (Auth.init()) {
     openPage('dashboard');
@@ -1761,7 +1799,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── cPanel auto-login (silent) ─────────────────────────────────────────
     // In cPanel mode REMOTE_USER is set by the cPanel webserver; attempt SSO
     // silently before showing the login form.
-    if (State.installMode === 'cpanel') {
+    // Attempt SSO unless we positively know this is a standalone install.
+    // This used to require detectMode() to have succeeded first, so a single
+    // failed request left the user staring at a login form on a server where
+    // WHM had already authenticated them. The endpoint itself refuses in
+    // standalone mode, so asking is always safe.
+    if (State.installMode !== 'standalone') {
       try {
         const res = await API.autoLogin();
         if (res?.success) {
