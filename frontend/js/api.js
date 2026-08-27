@@ -266,6 +266,11 @@ const API = (() => {
     phpApply:          (settings)   => req('POST', 'phphard/apply',         { settings }),
     phpApplyAccount:   (acct, sets) => req('POST', 'phphard/apply-account', { account: acct, settings: sets }),
 
+    // Log Analyzer
+    // The `logs` module has existed server-side all along; there was simply no
+    // client method for it, so the Log Analyzer page could never load anything.
+    logsRecent: (lines) => req('GET', `logs/recent?lines=${lines || 200}`),
+
     // Update checker
     updateStatus: ()  => req('GET',  'update/status'),
     updateCheck:  ()  => req('POST', 'update/check', {}),

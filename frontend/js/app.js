@@ -382,12 +382,50 @@ async function startScan() {
     const job = st.data?.job;
     if (!job) return;
 
-    const pct = job.status === 'done' ? 100 : Math.min(99, Math.floor(Math.random() * 5) + 50);
-    document.getElementById('scan-progress-bar').style.width = `${pct}%`;
-    document.getElementById('scan-progress-pct').textContent = `${pct}%`;
+    // There is no honest percentage to show. A scan walks the filesystem
+    // without counting it first, so the total is unknown until the scan ends —
+    // and the previous code filled that gap with Math.random(), which is why a
+    // scan that had examined ZERO files displayed "51%". Fabricating progress
+    // in a security product is worse than admitting the total is unknown.
+    //
+    // So: an indeterminate bar while running, and real counters beside it. The
+    // file count IS known and IS truthful, which makes it the useful signal.
+    const bar  = document.getElementById('scan-progress-bar');
+    const pctEl = document.getElementById('scan-progress-pct');
+    const done = job.status === 'done';
+
+    if (done) {
+      bar.classList.remove('indeterminate');
+      bar.style.width = '100%';
+      pctEl.textContent = '100%';
+    } else {
+      // Width is set by the animation, not by a made-up number.
+      bar.classList.add('indeterminate');
+      bar.style.width = '';
+      pctEl.textContent = fmtNum(job.files_scanned || 0) + ' files';
+    }
+
     document.getElementById('scan-live-files').textContent = fmtNum(job.files_scanned || 0);
     document.getElementById('scan-live-threats').textContent = job.threats_found || 0;
     document.getElementById('scan-live-status').textContent = job.status;
+
+    // A running job whose file count never moves is stuck, not working. Say so
+    // rather than animating a bar forever: the scan runs detached, so the UI
+    // cannot see it die.
+    if (!done) {
+      if (State._lastScanFiles === (job.files_scanned || 0)) {
+        State._scanStallTicks = (State._scanStallTicks || 0) + 1;
+      } else {
+        State._scanStallTicks = 0;
+      }
+      State._lastScanFiles = job.files_scanned || 0;
+
+      const txt = document.getElementById('scan-progress-text');
+      if (State._scanStallTicks >= 15 && txt) {          // ~30s of no movement
+        txt.textContent = 'No files scanned yet — the scan process may not be running. '
+                        + 'Check logs/scanner.log.';
+      }
+    }
 
     if (job.status === 'done' || job.status === 'error') {
       clearInterval(State.scanInterval);

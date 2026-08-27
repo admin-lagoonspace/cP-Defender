@@ -701,3 +701,25 @@ select.form-input { cursor: pointer; }
 }
 .activate-foot a { color: var(--primary3); text-decoration: none; }
 .activate-foot a:hover { text-decoration: underline; }
+
+
+/* Progress with an unknown total.
+   A scan does not count the filesystem before walking it, so there is no
+   percentage to show until it finishes. This says "working" without claiming
+   to know how far along it is. */
+.progress-bar.indeterminate,
+.progress-fill.indeterminate {
+  width: 35% !important;
+  animation: sg-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes sg-indeterminate {
+  0%   { margin-left: 0;   }
+  50%  { margin-left: 65%; }
+  100% { margin-left: 0;   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar.indeterminate,
+  .progress-fill.indeterminate { animation: none; width: 100% !important; opacity: .45; }
+}
