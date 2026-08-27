@@ -1026,53 +1026,48 @@ APACHEEOF
     cp -rf "${INSTALL_DIR}/frontend/." "${WHM_CGI_DIR}/" 2>/dev/null || true
 
     # The API endpoint: a sibling of the UI, so './api.cgi' resolves from it.
-    WHM_API_CGI="${WHM_CGI_DIR}/api.cgi"
-    # A shell wrapper, not a PHP file with a #! line on top.
+    # ── ONE entry point, because AppConfig authorises exactly one ─────────────
+    # cpsrvd refuses to execute any CGI in the WHM docroot that is not
+    # registered with AppConfig, returning a 403 HTML page:
     #
-    # Under the CGI SAPI a leading shebang is not reliably stripped, and when it
-    # is not, it is emitted as the first bytes of the response body. The client
-    # then sees "#!/opt/cpanel/..." followed by JSON, fails to parse it, and
-    # reports "Server error" — indistinguishable from the server being broken.
+    #   "WHM is configured to disallow execution of unregistered applications
+    #    when logged in as root or a reseller with the all ACL"
     #
-    # Handing php-cgi the target through SCRIPT_FILENAME sidesteps that: the file
-    # it parses is ordinary PHP with no shebang, and php-cgi emits the CGI status
-    # and headers itself, so http_response_code() (401, 402) survives intact.
-    # REDIRECT_STATUS is required or php-cgi refuses to run at all.
-    cat > "${WHM_API_CGI}" << ENDAPICGI
-#!/bin/sh
-# Sentinel Gate — API entry point under cpsrvd (runs as root).
-# Routing arrives as ?r=module/action: no rewrite or PATH_INFO needed.
-SCRIPT_FILENAME="${INSTALL_DIR}/backend/api/index.php"
-PATH_TRANSLATED="\${SCRIPT_FILENAME}"
-REDIRECT_STATUS=200
-export SCRIPT_FILENAME PATH_TRANSLATED REDIRECT_STATUS
-exec "${SG_PHP_CGI}"
-ENDAPICGI
-    chmod 755 "${WHM_API_CGI}"
-    ok "  API CGI written: ${WHM_API_CGI}"
-    echo "WHM_API_CGI=${WHM_API_CGI}" >> "${MANIFEST}"
+    # A separate api.cgi was therefore 403 on every request from the browser,
+    # while the same file ran fine from the shell — which is why this survived
+    # several releases of shell-side testing. Registering a second application
+    # would work but adds a second WHM menu entry, and relaxing the setting
+    # (permit_unregistered_apps_as_root) weakens the server to suit us.
+    #
+    # So the single registered CGI serves both: a request carrying ?r= is the
+    # API, anything else is the dashboard. Static assets are untouched by this —
+    # cpsrvd serves css/js/images as files, not applications.
+    rm -f "${WHM_CGI_DIR}/api.cgi"
 
-    # The plugin entry point: serve the UI directly rather than redirecting.
-    _CPANEL_PERL="/usr/local/cpanel/3rdparty/bin/perl"
-    [[ ! -x "${_CPANEL_PERL}" ]] && _CPANEL_PERL=$(command -v perl 2>/dev/null || echo "/usr/bin/perl")
     info "  Writing CGI: ${WHM_CGI}"
     cat > "${WHM_CGI}" << ENDCGI
-#!${_CPANEL_PERL}
-use strict;
-use warnings;
-# Emit the dashboard from this directory. Assets (css/, js/, images/) sit
-# alongside and are served by cpsrvd, and the API is ./api.cgi — one origin,
-# running as root, with nothing depending on Apache.
-my \$doc = "${WHM_CGI_DIR}/index.html";
-print "Content-Type: text/html; charset=utf-8\r\n";
-print "Cache-Control: no-store, must-revalidate\r\n\r\n";
-if (open(my \$fh, '<', \$doc)) {
-    local \$/ = undef;
-    print <\$fh>;
-    close \$fh;
-} else {
-    print "<h2>Sentinel Gate</h2><p>UI not found at \$doc</p>";
-}
+#!/bin/sh
+# Sentinel Gate — the one AppConfig-registered entry point (runs as root).
+#   ?r=module/action  -> REST API, handed to php-cgi
+#   anything else     -> the dashboard
+#
+# php-cgi is given its target through SCRIPT_FILENAME so the file it parses is
+# ordinary PHP with no shebang, and it emits CGI status lines itself, keeping
+# 401/402 intact. REDIRECT_STATUS is required or php-cgi refuses to run.
+case "\${QUERY_STRING}" in
+  *r=*)
+    SCRIPT_FILENAME="${INSTALL_DIR}/backend/api/index.php"
+    PATH_TRANSLATED="\${SCRIPT_FILENAME}"
+    REDIRECT_STATUS=200
+    export SCRIPT_FILENAME PATH_TRANSLATED REDIRECT_STATUS
+    exec "${SG_PHP_CGI}"
+    ;;
+esac
+
+printf 'Content-Type: text/html; charset=utf-8\r\n'
+printf 'Cache-Control: no-store, must-revalidate\r\n'
+printf '\r\n'
+cat "${WHM_CGI_DIR}/index.html"
 ENDCGI
     chmod 755 "${WHM_CGI}"
     if [[ -f "${WHM_CGI}" ]]; then
@@ -1084,10 +1079,12 @@ ENDCGI
 
     # Pin the UI to this endpoint so it does not have to discover it.
     cat > "${WHM_CGI_DIR}/config.js" << ENDCFG
-// Written by the installer. The API is a sibling CGI under cpsrvd.
-window.SG_API_BASE = './api.cgi';
+// Written by the installer. The API is served by the same registered CGI as
+// the dashboard: AppConfig authorises exactly one application per directory, so
+// a separate endpoint is refused by cpsrvd with 403.
+window.SG_API_BASE = './sentinel_gate.cgi';
 ENDCFG
-    ok "  API base pinned: ./api.cgi"
+    ok "  API base pinned: ./sentinel_gate.cgi"
 
     # ── Prove the API actually answers, here, now ─────────────────────────────
     # The installer previously reported success without ever invoking the API,
@@ -1100,7 +1097,7 @@ ENDCFG
     # substring match would happily pass.
     _API_OUT=$(cd "${WHM_CGI_DIR}" && REQUEST_METHOD=GET QUERY_STRING="r=auth/status" \
                REMOTE_USER=root SERVER_PROTOCOL=HTTP/1.1 \
-               "${WHM_API_CGI}" 2>&1)
+               "${WHM_CGI}" 2>&1)
     _API_BODY=$(printf '%s' "$_API_OUT" | sed -n '/^[[:space:]]*$/,$p' | sed '1d')
     [[ -z "$_API_BODY" ]] && _API_BODY="$_API_OUT"
     if printf '%s' "$_API_BODY" | grep -q '^[[:space:]]*{'; then

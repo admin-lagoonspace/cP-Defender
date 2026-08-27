@@ -19,7 +19,10 @@ const API = (() => {
   // is probed once, and the first that answers with JSON wins.
   const CANDIDATES = [
     window.SG_API_BASE || '',      // stamped by the installer when it knows
-    './api.cgi',                   // cpsrvd (WHM) — same origin, runs as root
+    './sentinel_gate.cgi',         // cpsrvd (WHM): the ONE AppConfig-registered
+                                   // entry point. A second CGI in that directory
+                                   // is refused by cpsrvd with a 403 HTML page.
+    './api.cgi',                   // pre-3.19.5 layout, kept for a stale install
     './backend/api/index.php',     // Apache alias, explicit file: no rewrite needed
     './backend/api',               // Apache alias relying on DirectoryIndex+rewrite
   ].filter(Boolean);
