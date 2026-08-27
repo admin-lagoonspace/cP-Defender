@@ -984,12 +984,26 @@ APACHEEOF
 
     # The API endpoint: a sibling of the UI, so './api.cgi' resolves from it.
     WHM_API_CGI="${WHM_CGI_DIR}/api.cgi"
+    # A shell wrapper, not a PHP file with a #! line on top.
+    #
+    # Under the CGI SAPI a leading shebang is not reliably stripped, and when it
+    # is not, it is emitted as the first bytes of the response body. The client
+    # then sees "#!/opt/cpanel/..." followed by JSON, fails to parse it, and
+    # reports "Server error" — indistinguishable from the server being broken.
+    #
+    # Handing php-cgi the target through SCRIPT_FILENAME sidesteps that: the file
+    # it parses is ordinary PHP with no shebang, and php-cgi emits the CGI status
+    # and headers itself, so http_response_code() (401, 402) survives intact.
+    # REDIRECT_STATUS is required or php-cgi refuses to run at all.
     cat > "${WHM_API_CGI}" << ENDAPICGI
-#!${SG_PHP_CGI}
-<?php
-// Sentinel Gate — API entry point under cpsrvd (runs as root).
-// Routing arrives as ?r=module/action, so no rewrite or PATH_INFO is needed.
-require '${INSTALL_DIR}/backend/api/index.php';
+#!/bin/sh
+# Sentinel Gate — API entry point under cpsrvd (runs as root).
+# Routing arrives as ?r=module/action: no rewrite or PATH_INFO needed.
+SCRIPT_FILENAME="${INSTALL_DIR}/backend/api/index.php"
+PATH_TRANSLATED="\${SCRIPT_FILENAME}"
+REDIRECT_STATUS=200
+export SCRIPT_FILENAME PATH_TRANSLATED REDIRECT_STATUS
+exec "${SG_PHP_CGI}"
 ENDAPICGI
     chmod 755 "${WHM_API_CGI}"
     ok "  API CGI written: ${WHM_API_CGI}"
@@ -1036,15 +1050,22 @@ ENDCFG
     # which is how a build whose every endpoint returned 501 was handed over as
     # working. Execute it directly and require JSON back.
     info "  Testing API CGI…"
+    # Invoke the wrapper exactly as cpsrvd does, and require a body whose FIRST
+    # non-header character is '{'. Merely containing a brace is not enough: the
+    # failure being guarded against is stray bytes preceding valid JSON, which a
+    # substring match would happily pass.
     _API_OUT=$(cd "${WHM_CGI_DIR}" && REQUEST_METHOD=GET QUERY_STRING="r=auth/status" \
-               SCRIPT_FILENAME="${WHM_API_CGI}" REDIRECT_STATUS=200 \
-               "${SG_PHP_CGI}" "${WHM_API_CGI}" 2>&1 | tail -5)
-    if printf '%s' "$_API_OUT" | grep -q '{'; then
+               REMOTE_USER=root SERVER_PROTOCOL=HTTP/1.1 \
+               "${WHM_API_CGI}" 2>&1)
+    _API_BODY=$(printf '%s' "$_API_OUT" | sed -n '/^[[:space:]]*$/,$p' | sed '1d')
+    [[ -z "$_API_BODY" ]] && _API_BODY="$_API_OUT"
+    if printf '%s' "$_API_BODY" | grep -q '^[[:space:]]*{'; then
       ok "  API responds with JSON"
     else
-      warn "  API did NOT return JSON. Output was:"
-      printf '%s\n' "$_API_OUT" | sed 's/^/      /'
+      warn "  API did NOT return clean JSON. Raw output was:"
+      printf '%s\n' "$_API_OUT" | head -20 | sed 's/^/      /'
       warn "  The dashboard will not load until this is resolved."
+      warn "  Interpreter used: ${SG_PHP_CGI}"
     fi
 
     # ── Step 3: Write AppConfig conf file ALONGSIDE the CGI ──────────────────

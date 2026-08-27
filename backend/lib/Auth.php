@@ -62,9 +62,53 @@ class Auth {
         return $data;
     }
 
+    /**
+     * The Authorization header, however this server chose to deliver it.
+     *
+     * getallheaders() exists under mod_php and PHP-FPM but NOT under the CGI
+     * SAPI, which is what cpsrvd uses to run WHM plugins — calling it there is a
+     * fatal error on every authenticated request. CGI also frequently drops the
+     * Authorization header entirely, or renames it, so $_SERVER is checked in
+     * the several places it is known to appear.
+     */
+    private static function authHeader(): string {
+        foreach (['HTTP_AUTHORIZATION', 'REDIRECT_HTTP_AUTHORIZATION'] as $k) {
+            if (!empty($_SERVER[$k])) {
+                return (string)$_SERVER[$k];
+            }
+        }
+        if (function_exists('getallheaders')) {
+            $headers = getallheaders();
+            if (is_array($headers)) {
+                foreach ($headers as $name => $value) {
+                    if (strcasecmp($name, 'Authorization') === 0) {
+                        return (string)$value;
+                    }
+                }
+            }
+        }
+        // Last resort: rebuild from $_SERVER, which every SAPI populates.
+        foreach ($_SERVER as $k => $v) {
+            if (strcasecmp($k, 'HTTP_AUTHORIZATION') === 0) {
+                return (string)$v;
+            }
+        }
+        return '';
+    }
+
     public static function requireAuth(): array {
-        $headers = getallheaders();
-        $auth = $headers['Authorization'] ?? $headers['authorization'] ?? '';
+        $auth = self::authHeader();
+
+        // Under cpsrvd the request is already authenticated — the user got here
+        // through WHM, which sets REMOTE_USER. Accept that rather than rejecting
+        // a legitimately signed-in root because CGI dropped a header.
+        if ($auth === '' && !empty($_SERVER['REMOTE_USER']) && INSTALL_MODE !== 'standalone') {
+            $remote = (string)$_SERVER['REMOTE_USER'];
+            return [
+                'sub'  => $remote,
+                'role' => ($remote === 'root' || $remote === 'cpanel') ? 'admin' : 'user',
+            ];
+        }
 
         if (!str_starts_with($auth, 'Bearer ')) {
             self::deny('Missing authorization token');
