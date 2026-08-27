@@ -616,8 +616,19 @@ class License
 
     private static function log(string $msg): void
     {
+        // Logger::write() is PRIVATE. Calling it threw an Error, and because
+        // this method is itself called from the catch block in status(), the
+        // failure replaced whatever it was reporting — every licence check
+        // became a fatal and every page that consults one went blank.
+        //
+        // The @ was worse than useless here: it suppresses warnings, not
+        // Errors, so it silenced nothing while implying the call was risky.
         if (class_exists('Logger')) {
-            @Logger::write('license', $msg);
+            try {
+                Logger::info('license: ' . $msg);
+            } catch (Throwable $e) {
+                // Logging must never be the thing that breaks a request.
+            }
         }
     }
 }

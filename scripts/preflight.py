@@ -65,6 +65,49 @@ def php_files():
     return sorted(out)
 
 
+def strip_php_comments(src):
+    """Remove // # and /* */ comments so scans do not match prose."""
+    out = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    out = re.sub(r"(?m)//[^\n]*", "", out)
+    out = re.sub(r"(?m)#[^\n]*", "", out)
+    return out
+
+
+def private_call_scan():
+    """Find Foo::bar() where bar() is private/protected in class Foo.
+
+    php -l cannot see this: it is a runtime Error, not a syntax error. It cost a
+    release. License::log() called the private Logger::write(), and because it
+    ran inside a catch block the resulting fatal REPLACED the error it was
+    reporting, so every page that consulted a licence went blank.
+    """
+    declared = {}
+    sources = {}
+    for f in php_files():
+        src = strip_php_comments(open(f, encoding="utf-8", errors="replace").read())
+        sources[f] = src
+        m = re.search(r"\bclass\s+(\w+)", src)
+        if not m:
+            continue
+        cls = m.group(1)
+        for d in re.finditer(r"\b(?:private|protected)\s+static\s+function\s+(\w+)", src):
+            declared.setdefault(cls, set()).add(d.group(1))
+
+    hits = []
+    for f, src in sources.items():
+        m = re.search(r"\bclass\s+(\w+)", src)
+        owner = m.group(1) if m else None
+        for c in re.finditer(r"\b(\w+)::(\w+)\s*\(", src):
+            cls, meth = c.group(1), c.group(2)
+            if cls == owner or cls in ("self", "static", "parent"):
+                continue
+            if meth in declared.get(cls, ()):
+                line = src[:c.start()].count("\n") + 1
+                hits.append("%s:%d calls %s::%s(), which is not public"
+                            % (os.path.relpath(f, REPO), line, cls, meth))
+    return sorted(set(hits))
+
+
 def main():
     php = None
     if "--php" in sys.argv:
@@ -98,6 +141,14 @@ def main():
         problems += bad
         if bad == 0:
             ok("all %d PHP files parse (%s)" % (len(files), os.path.basename(php)))
+
+    # 2b. cross-class private calls
+    hits = private_call_scan()
+    for h in hits:
+        fail(h)
+    problems += len(hits)
+    if not hits:
+        ok("no calls to non-public methods across classes")
 
     # 3 + 4. config.php sanity
     cfg = os.path.join(REPO, "backend", "config", "config.php")

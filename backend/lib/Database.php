@@ -3,6 +3,14 @@
  * Sentinel Gate — SQLite Database Layer
  */
 
+// The scheduled tasks installed before 3.19.4 load mode.php only, which records
+// SG_ROOT but not SG_DB, so every cron run died with "Undefined constant SG_DB".
+// update.sh does not rewrite those cron files, so a corrected installer is not
+// enough on its own — derive the path when it is absent.
+if (!defined('SG_DB') && defined('SG_ROOT')) {
+    define('SG_DB', SG_ROOT . '/database/sentinel.db');
+}
+
 class Database {
     private static ?PDO $pdo = null;
 

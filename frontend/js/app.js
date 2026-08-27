@@ -222,7 +222,10 @@ async function refreshDashboard() {
     if (icon)   icon.textContent = '⛔';
     if (status) { status.textContent = 'Status unknown'; status.style.color = 'var(--red)'; }
     if (badge)  { badge.className = 'badge badge-red'; badge.textContent = 'API unreachable'; }
-    if (meta)   meta.textContent = (data && data.error) || 'Could not reach the Sentinel Gate API.';
+    // Prefer the server's detail over the generic line: pointing the user at a
+    // log file they then have to go and read is a worse answer than the error.
+    if (meta)   meta.textContent = (data && (data.detail || data.error))
+                                   || 'Could not reach the Sentinel Gate API.';
     if (info)   info.textContent = 'Could not reach the API — protection status cannot be confirmed.';
 
     ['stat-files','stat-threats','stat-fw','stat-waf'].forEach(id => {

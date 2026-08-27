@@ -4,20 +4,27 @@
  * Adjust paths after installation via install.sh
  */
 
-define('SG_VERSION',  '3.19.5');
-define('SG_ROOT',     dirname(__DIR__, 2));
-define('SG_DB',       SG_ROOT . '/database/sentinel.db');
-define('SG_LOGS',     SG_ROOT . '/logs');
-define('SG_TMP',      '/tmp/sentinel-gate');
-
 // ── Install Mode ──────────────────────────────────────────────────────────────
-// Written by install.sh into backend/config/mode.php
-// Values: 'cpanel' | 'standalone'
+// mode.php is written by install.sh and records the install mode, the install
+// directory and the licensing settings. It is loaded FIRST and its values win,
+// because it describes this particular installation.
+//
+// It used to be loaded after the defines below, so an older mode.php that set
+// SG_ROOT and SG_VERSION unconditionally logged two "Constant already defined"
+// warnings on every request. Ordering it first and guarding the defines makes
+// this file correct against any vintage of mode.php — which matters because
+// `install.sh --register-only`, the path taken by update.sh, does not rewrite
+// mode.php.
 if (file_exists(__DIR__ . '/mode.php')) {
     require_once __DIR__ . '/mode.php';
-} else {
-    define('INSTALL_MODE', 'cpanel');
 }
+
+if (!defined('INSTALL_MODE')) { define('INSTALL_MODE', 'cpanel'); }
+if (!defined('SG_VERSION'))   { define('SG_VERSION',  '3.19.6'); }
+if (!defined('SG_ROOT'))      { define('SG_ROOT',     dirname(__DIR__, 2)); }
+if (!defined('SG_DB'))        { define('SG_DB',       SG_ROOT . '/database/sentinel.db'); }
+if (!defined('SG_LOGS'))      { define('SG_LOGS',     SG_ROOT . '/logs'); }
+if (!defined('SG_TMP'))       { define('SG_TMP',      '/tmp/sentinel-gate'); }
 
 // Standalone web server port
 define('SG_PORT', 31150);
