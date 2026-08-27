@@ -1519,7 +1519,7 @@ async function removeBotWhitelist(id) {
 // ── CMS Guard ─────────────────────────────────────────────────────────────────
 async function loadCMSGuard() {
   const [statsRes, installsRes] = await Promise.all([
-    Demo.active ? { success: true, data: { total: 4, wordpress: 3, joomla: 1, drupal: 0, outdated: 2, installs_with_issues: 3 } } : API.cmsStats(),
+    Demo.active ? { success: true, data: { total_installs: 4, wordpress: 3, joomla: 1, drupal: 0, outdated: 2, installs_with_issues: 3, last_scan_at: Math.floor(Date.now()/1000), ever_scanned: true } } : API.cmsStats(),
     Demo.active ? { success: true, data: [
       { id:1, cms_type:'wordpress', version:'6.2.1', cpanel_user:'alice', install_path:'/home/alice/public_html', issues:'["xmlrpc_enabled","login_exposed"]', outdated:1, status:'warning' },
       { id:2, cms_type:'wordpress', version:'6.4.2', cpanel_user:'bob',   install_path:'/home/bob/public_html',   issues:'[]', outdated:0, status:'ok' },
@@ -1529,7 +1529,13 @@ async function loadCMSGuard() {
 
   if (statsRes?.success) {
     const d = statsRes.data;
-    document.getElementById('cms-stat-total').textContent    = fmtNum(d?.total || 0);
+    // The API returns total_installs. This read d.total — the key the DEMO
+    // fixture uses — so the counter showed 0 no matter how many sites were
+    // found. The demo shape and the real shape had drifted apart, and only the
+    // demo was ever looked at. Both are accepted now; test_cmsguard.php asserts
+    // the real one exists.
+    const total = d?.total_installs ?? d?.total ?? 0;
+    document.getElementById('cms-stat-total').textContent    = fmtNum(total);
     document.getElementById('cms-stat-outdated').textContent = fmtNum(d?.outdated || 0);
     document.getElementById('cms-stat-issues').textContent   = fmtNum(d?.installs_with_issues || 0);
     document.getElementById('cms-stat-wp').textContent       = fmtNum(d?.wordpress || 0);
@@ -1542,7 +1548,16 @@ async function loadCMSGuard() {
   const tbody = document.getElementById('cms-installs-body');
   if (!tbody) return;
   if (!installs.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:28px">Click "Scan Server" to discover CMS installations</td></tr>';
+    // Distinguish "nothing here" from "we have not looked yet". A server with
+    // WordPress on it showing "0 websites" reads as a broken product; saying no
+    // scan has run reads as a next step.
+    const everScanned = statsRes?.data?.ever_scanned;
+    const msg = everScanned
+      ? 'No CMS installations found. Scan again if you have added sites since '
+        + (statsRes.data.last_scan_at ? reltime(statsRes.data.last_scan_at) : 'the last scan') + '.'
+      : 'No scan has run yet — click "Scan Server" to discover CMS installations.';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:28px">'
+                    + esc(msg) + '</td></tr>';
     return;
   }
   tbody.innerHTML = installs.map(c => {

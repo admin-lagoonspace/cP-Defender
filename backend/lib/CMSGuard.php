@@ -13,13 +13,57 @@ class CMSGuard {
         'drupal'    => '10.0',
     ];
 
-    /** Scan roots */
+    /** Scan roots used when cPanel userdata is unavailable. */
     private array $scanRoots = [
         '/home',
         '/var/www',
     ];
 
-    public function __construct() {
+    /**
+     * cPanel's own record of every document root on the box. Each domain, addon
+     * domain and subdomain has a file here naming its documentroot, which makes
+     * it authoritative — far better than guessing directory layouts.
+     */
+    private string $cpanelUserdata = '/var/cpanel/userdata';
+
+    /**
+     * How far below a document root to look for a CMS.
+     *
+     * WordPress is very often NOT at the document root: /public_html/blog,
+     * /public_html/shop, and addon domains under /public_html/example.com are
+     * all routine. The previous code checked the document root and nothing
+     * else, so a server full of WordPress sites reported zero.
+     */
+    private int $maxDepth = 3;
+
+    /**
+     * Never descend into these. They are CMS internals or dependency trees:
+     * walking them costs a great deal of time and cannot contain a separate
+     * installation.
+     */
+    private const SKIP_DIRS = [
+        'wp-content', 'wp-includes', 'wp-admin', 'node_modules', 'vendor',
+        'cgi-bin', '.git', '.svn', '.well-known', 'cache', 'tmp', 'temp',
+        'administrator', 'libraries', 'core', 'modules', 'sites', 'media',
+        'uploads', 'backup', 'backups', '.trash', 'mail', 'etc', 'logs',
+    ];
+
+    /** Stop rather than walking a pathological tree forever. */
+    private const MAX_DIRS = 20000;
+
+    private int $dirsSeen = 0;
+
+    /**
+     * @param string[]|null $scanRoots      override for tests
+     * @param string|null   $cpanelUserdata override for tests
+     */
+    public function __construct(?array $scanRoots = null, ?string $cpanelUserdata = null) {
+        if ($scanRoots !== null)      { $this->scanRoots = $scanRoots; }
+        if ($cpanelUserdata !== null) { $this->cpanelUserdata = $cpanelUserdata; }
+
+        $depth = (int)(Database::setting('cms_scan_depth', '3') ?? 3);
+        if ($depth >= 0 && $depth <= 6) { $this->maxDepth = $depth; }
+
         $this->ensureSchema();
     }
 
@@ -42,31 +86,96 @@ class CMSGuard {
 
     // ── Scan ──────────────────────────────────────────────────────────────────
 
-    public function scanInstalls(): array {
-        $found = [];
+    /**
+     * Every document root worth searching.
+     *
+     * cPanel's userdata is consulted first and is authoritative: it lists the
+     * document root of every domain, addon domain and subdomain. Globbing
+     * /home/<user>/public_html finds only the primary domain of each account,
+     * which is why a server hosting several WordPress sites could report none.
+     *
+     * @return string[]
+     */
+    public function candidateDocroots(): array {
+        $dirs = [];
 
-        foreach ($this->scanRoots as $root) {
-            if (!is_dir($root)) continue;
-
-            // /home/*/public_html  and /var/www/html  and /var/www/*/html
-            $candidates = array_merge(
-                glob("$root/*/public_html", GLOB_ONLYDIR) ?: [],
-                glob("$root/html",          GLOB_ONLYDIR) ?: [],
-                glob("$root/*/html",        GLOB_ONLYDIR) ?: []
-            );
-
-            foreach ($candidates as $dir) {
-                $dir = rtrim($dir, '/');
-
-                if ($this->isWordPress($dir)) {
-                    $found[] = $this->buildWordPressRecord($dir);
-                } elseif ($this->isJoomla($dir)) {
-                    $found[] = $this->buildJoomlaRecord($dir);
-                } elseif ($this->isDrupal($dir)) {
-                    $found[] = $this->buildDrupalRecord($dir);
-                }
+        foreach (glob($this->cpanelUserdata . '/*/*') ?: [] as $file) {
+            // Skip cPanel's own cache/lock siblings; only the plain domain
+            // files carry a documentroot.
+            if (!is_file($file) || preg_match('/\.(cache|lock|json)$/', $file)) {
+                continue;
+            }
+            $body = @file_get_contents($file);
+            if ($body === false) { continue; }
+            if (preg_match('/^\s*documentroot:\s*(.+)$/m', $body, $m)) {
+                $dir = rtrim(trim($m[1], " \t\"'"), '/');
+                if ($dir !== '' && is_dir($dir)) { $dirs[] = $dir; }
             }
         }
+
+        foreach ($this->scanRoots as $root) {
+            if (!is_dir($root)) { continue; }
+            foreach ([
+                glob("$root/*/public_html", GLOB_ONLYDIR),
+                glob("$root/html",          GLOB_ONLYDIR),
+                glob("$root/*/html",        GLOB_ONLYDIR),
+            ] as $set) {
+                foreach ($set ?: [] as $dir) { $dirs[] = rtrim($dir, '/'); }
+            }
+        }
+
+        return array_values(array_unique($dirs));
+    }
+
+    /** The CMS record for this exact directory, or null if it is not one. */
+    private function detect(string $dir): ?array {
+        if ($this->isWordPress($dir)) { return $this->buildWordPressRecord($dir); }
+        if ($this->isJoomla($dir))    { return $this->buildJoomlaRecord($dir); }
+        if ($this->isDrupal($dir))    { return $this->buildDrupalRecord($dir); }
+        return null;
+    }
+
+    /**
+     * Search $dir and, to $depth levels, the directories beneath it.
+     *
+     * Descent stops as soon as a CMS matches: everything below a WordPress root
+     * belongs to that installation, not to a new one.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private function findInstallsUnder(string $dir, int $depth): array {
+        if ($this->dirsSeen++ > self::MAX_DIRS) { return []; }
+
+        $record = $this->detect($dir);
+        if ($record !== null) { return [$record]; }
+        if ($depth <= 0) { return []; }
+
+        $found = [];
+        foreach (glob($dir . '/*', GLOB_ONLYDIR) ?: [] as $sub) {
+            $base = basename($sub);
+            if ($base === '' || $base[0] === '.') { continue; }
+            if (in_array(strtolower($base), self::SKIP_DIRS, true)) { continue; }
+            // A symlink can point back up the tree; following it can loop.
+            if (is_link($sub)) { continue; }
+            $found = array_merge($found, $this->findInstallsUnder($sub, $depth - 1));
+        }
+        return $found;
+    }
+
+    public function scanInstalls(): array {
+        $found = [];
+        $this->dirsSeen = 0;
+
+        foreach ($this->candidateDocroots() as $dir) {
+            $found = array_merge($found, $this->findInstallsUnder($dir, $this->maxDepth));
+        }
+
+        // Two document roots can resolve to the same directory (an addon domain
+        // parked on the primary). install_path is UNIQUE, so de-duplicate here
+        // rather than letting the insert fail.
+        $unique = [];
+        foreach ($found as $rec) { $unique[$rec['install_path']] = $rec; }
+        $found = array_values($unique);
 
         // Upsert into DB
         foreach ($found as $install) {
@@ -91,6 +200,7 @@ class CMSGuard {
             }
         }
 
+        Database::setSetting('cms_last_scan_at', (string) time());
         Logger::info('CMSGuard: scan complete, found ' . count($found) . ' installs');
         return $found;
     }
@@ -140,6 +250,12 @@ class CMSGuard {
         $outd    = Database::fetchOne("SELECT COUNT(*) as c FROM cms_installs WHERE outdated=1")['c'];
         $issues  = Database::fetchOne("SELECT COUNT(*) as c FROM cms_installs WHERE status='issues'")['c'];
 
+        // "0 installs" and "no scan has ever run" look identical in the UI, and
+        // the second is what a fresh install always shows. Report the last scan
+        // time so the panel can say which it is instead of implying the server
+        // has no CMS on it.
+        $last = Database::setting('cms_last_scan_at', '0');
+
         return [
             'total_installs'       => (int) $total,
             'wordpress'            => (int) $wp,
@@ -147,6 +263,8 @@ class CMSGuard {
             'drupal'               => (int) $drupal,
             'outdated'             => (int) $outd,
             'installs_with_issues' => (int) $issues,
+            'last_scan_at'         => (int) $last,
+            'ever_scanned'         => ((int) $last) > 0,
         ];
     }
 
