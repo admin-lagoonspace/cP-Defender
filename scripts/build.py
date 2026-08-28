@@ -63,23 +63,29 @@ def main():
     version = io.open(os.path.join(REPO, "VERSION"), encoding="utf-8").read().strip()
     print("Building Sentinel Gate v%s\n" % version)
 
-    # ── Gate first. Never package unverified code. ────────────────────────────
-    rc = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "preflight.py")]).returncode
-    if rc != 0:
-        print("\nBuild aborted.")
-        return rc
-
     # ── Cache-bust stamp on frontend assets ───────────────────────────────────
     idx = os.path.join(REPO, "frontend", "index.html")
     if os.path.exists(idx):
         s = io.open(idx, encoding="utf-8").read()
         s = re.sub(r'(css/app\.css|js/api\.js|js/app\.js)(\?v=[^"]*)?',
                    r'\1?v=' + version, s)
+
+        # The sidebar version label, which is what the user actually looks at.
+        # It was only ever updated by hand as part of each release, so it drifted
+        # the moment a release was cut any other way. The build owns it now.
+        s = re.sub(r'v\d+\.\d+\.\d+ · (cPanel Plugin|Standalone)',
+                   'v' + version + r' · \1', s)
         # read fully, then write: opening 'w' in the same expression as the read
         # truncates the file before the read runs, which is how config.php was
         # emptied. Never combine the two.
         with io.open(idx, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(s)
+
+    # ── Gate first. Never package unverified code. ────────────────────────────
+    rc = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "preflight.py")]).returncode
+    if rc != 0:
+        print("\nBuild aborted.")
+        return rc
 
     # ── Package ───────────────────────────────────────────────────────────────
     out_dir = os.path.join(REPO, "dist")

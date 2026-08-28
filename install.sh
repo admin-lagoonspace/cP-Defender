@@ -217,6 +217,21 @@ else
   info "Mode: ${BOLD}${INSTALL_MODE}${NC}"
 fi
 
+# ── Migrate an older mode.php ─────────────────────────────────────────────────
+# Installs made before 3.21.2 recorded SG_VERSION here. Because config.php loads
+# this file and updates never rewrite it, that frozen value was reported as the
+# running version -- an install first set up on 3.18.2 still called itself
+# 3.18.2 after every update, and the update checker compared against it.
+#
+# Only the SG_VERSION line is removed. Everything else, above all
+# SG_LICENSE_SECRET, is left exactly as the operator set it.
+_MODE_PHP_EXISTING="${INSTALL_DIR}/backend/config/mode.php"
+if [[ -f "$_MODE_PHP_EXISTING" ]] && grep -q "SG_VERSION" "$_MODE_PHP_EXISTING"; then
+  cp -a "$_MODE_PHP_EXISTING" "${_MODE_PHP_EXISTING}.bak" 2>/dev/null || true
+  sed -i "/define('SG_VERSION'/d" "$_MODE_PHP_EXISTING"
+  ok "Removed the frozen SG_VERSION from mode.php (backup: mode.php.bak)"
+fi
+
 # ═══ INSTALL-ONLY SECTIONS (skipped in --register-only mode) ═══════════════════
 if ! $REGISTER_ONLY; then
 
@@ -308,7 +323,10 @@ cat > "${INSTALL_DIR}/backend/config/mode.php" << MODEPHP
 // config.php (as the CLI entry points do) or after it.
 if (!defined('INSTALL_MODE')) { define('INSTALL_MODE', '${INSTALL_MODE}'); }
 if (!defined('SG_ROOT'))      { define('SG_ROOT',      '${INSTALL_DIR}'); }
-if (!defined('SG_VERSION'))   { define('SG_VERSION',   '${SG_VERSION}'); }
+// SG_VERSION is deliberately NOT written here. It describes the code, not this
+// installation, and this file is not rewritten by updates -- so a version
+// recorded here would freeze at whatever was installed first and be reported
+// for ever afterwards. config.php owns it.
 // Licensing. SG_LICENSE_SECRET must match the salt configured in the WHMCS
 // licensing addon — it is what makes a cached local key unforgeable. Supply it
 // at install time with SG_LICENSE_SECRET=... ; the placeholder is deliberately

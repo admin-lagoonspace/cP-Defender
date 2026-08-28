@@ -4,23 +4,30 @@
  * Adjust paths after installation via install.sh
  */
 
-// ── Install Mode ──────────────────────────────────────────────────────────────
-// mode.php is written by install.sh and records the install mode, the install
-// directory and the licensing settings. It is loaded FIRST and its values win,
-// because it describes this particular installation.
+// ── Version ───────────────────────────────────────────────────────────────────
+// Defined BEFORE mode.php, and deliberately so.
 //
-// It used to be loaded after the defines below, so an older mode.php that set
-// SG_ROOT and SG_VERSION unconditionally logged two "Constant already defined"
-// warnings on every request. Ordering it first and guarding the defines makes
-// this file correct against any vintage of mode.php — which matters because
-// `install.sh --register-only`, the path taken by update.sh, does not rewrite
-// mode.php.
+// SG_VERSION describes the CODE, not the installation. mode.php is written once
+// at install time and `install.sh --register-only` -- the path update.sh takes
+// -- does not rewrite it, so any version recorded there is frozen at whatever
+// was installed first. When mode.php was loaded first and allowed to win, an
+// install originally set up on 3.18.2 reported 3.18.2 for ever, however many
+// updates were applied: the sidebar showed it, and the update checker compared
+// against it.
+//
+// Defining it here first makes a stale mode.php a no-op for this constant while
+// still letting mode.php own everything that genuinely is per-installation.
+define('SG_VERSION', '3.21.2');
+
+// ── Install Mode ──────────────────────────────────────────────────────────────
+// mode.php records what IS per-installation: the mode, the install directory
+// and the licensing settings. Loaded before the defaults below so those values
+// win, which is correct for everything it legitimately owns.
 if (file_exists(__DIR__ . '/mode.php')) {
     require_once __DIR__ . '/mode.php';
 }
 
 if (!defined('INSTALL_MODE')) { define('INSTALL_MODE', 'cpanel'); }
-if (!defined('SG_VERSION'))   { define('SG_VERSION',  '3.21.1'); }
 if (!defined('SG_ROOT'))      { define('SG_ROOT',     dirname(__DIR__, 2)); }
 if (!defined('SG_DB'))        { define('SG_DB',       SG_ROOT . '/database/sentinel.db'); }
 if (!defined('SG_LOGS'))      { define('SG_LOGS',     SG_ROOT . '/logs'); }
