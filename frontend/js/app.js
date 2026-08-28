@@ -1133,15 +1133,63 @@ async function loadMonitor() {
   loadServiceLogs();
 }
 
+let _monitorBusy = false;
+
 async function toggleMonitor() {
-  const fn  = monitorRunning ? API.monitorStop : API.monitorStart;
+  // systemctl start/stop takes seconds, and the daemon needs a moment more to
+  // write its PID file. The button used to fire and return immediately, so it
+  // felt dead, a second click could race the first, and the state it flipped to
+  // was assumed rather than confirmed -- which is why it looked unreliable.
+  if (_monitorBusy) return;
+  _monitorBusy = true;
+
+  const starting = !monitorRunning;
+  const buttons  = ['rt-toggle-btn', 'monitor-page-toggle']
+    .map(id => document.getElementById(id)).filter(Boolean);
+  const original = buttons.map(b => b.textContent);
+  buttons.forEach(b => { b.disabled = true; b.textContent = starting ? 'Starting…' : 'Stopping…'; });
+
+  const fn  = starting ? API.monitorStart : API.monitorStop;
   const res = Demo.active ? { success: true } : await fn();
+
+  const restore = () => {
+    buttons.forEach((b, i) => { b.disabled = false; b.textContent = original[i]; });
+    _monitorBusy = false;
+  };
+
   if (res?.success) {
-    monitorRunning = !monitorRunning;
-    toast(monitorRunning ? 'Monitor started' : 'Monitor stopped', 'success');
+    // Confirm with the server rather than assuming. systemd reports the unit
+    // started before the daemon has finished coming up, so the first poll can
+    // legitimately disagree with what we just asked for.
+    let confirmed = false;
+    for (let attempt = 0; attempt < 6 && !confirmed; attempt++) {
+      await new Promise(r => setTimeout(r, 700));
+      const st = await API.monitorStatus();
+      if (st?.success && st.data && st.data.running === starting) {
+        confirmed = true;
+        monitorRunning = starting;
+      }
+    }
+
+    restore();
     loadMonitor();
     loadMonitorStats();
-  } else {
+
+    if (confirmed) {
+      toast(starting ? 'Monitor started' : 'Monitor stopped', 'success');
+    } else {
+      // The command was accepted and the state did not follow. Saying so beats
+      // a success toast over a monitor that is not running.
+      toast(starting
+        ? 'Start was accepted but the monitor is not running yet — check Details'
+        : 'Stop was accepted but the monitor is still running — check Details',
+        'error', 8000);
+    }
+    return;
+  }
+
+  restore();
+  {
     // "Action failed" tells the operator nothing. The API explains itself --
     // the daemon script missing, systemd refusing, the unit not installed --
     // and that explanation is what makes the difference actionable.

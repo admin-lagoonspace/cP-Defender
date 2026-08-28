@@ -9,7 +9,17 @@ const Charts = {
    * Sparkline — tiny inline line chart for stat cards
    */
   sparkline(svgEl, data, color) {
-    if (!svgEl || !data?.length) return;
+    if (!svgEl) return;
+    if (!data?.length) {
+      // An SVG cannot hold a message, so clear it and let the caller's empty
+      // state show instead of leaving a stale or blank chart.
+      svgEl.innerHTML = '';
+      const holder = svgEl.parentElement;
+      if (holder && holder.dataset.emptyMessage) {
+        this.empty(holder, holder.dataset.emptyMessage);
+      }
+      return;
+    }
     const W = svgEl.clientWidth || 160;
     const H = 28;
     const mx = Math.max(...data);
@@ -39,7 +49,17 @@ const Charts = {
    * Multi-line timeline chart
    */
   timeline(svgEl, data, datasets) {
-    if (!svgEl || !data?.length) return;
+    if (!svgEl) return;
+    if (!data?.length) {
+      // An SVG cannot hold a message, so clear it and let the caller's empty
+      // state show instead of leaving a stale or blank chart.
+      svgEl.innerHTML = '';
+      const holder = svgEl.parentElement;
+      if (holder && holder.dataset.emptyMessage) {
+        this.empty(holder, holder.dataset.emptyMessage);
+      }
+      return;
+    }
     const W   = svgEl.clientWidth  || 900;
     const H   = 180;
     const PAD = { top: 10, right: 10, bottom: 30, left: 40 };
@@ -100,10 +120,28 @@ const Charts = {
   },
 
   /**
+   * Say "nothing here" rather than leaving whatever was in the container.
+   *
+   * Every chart used to `return` on empty data, which leaves the static
+   * "Loading…" placeholder in place for ever. A server with zero threats -- the
+   * good outcome -- therefore displayed a panel that looked stuck loading, and
+   * was reported as broken.
+   */
+  empty(container, message) {
+    if (!container) return;
+    container.innerHTML =
+      '<div style="padding:22px 4px;text-align:center;color:var(--txt3);font-size:.8rem">'
+      + message + '</div>';
+  },
+
+  /**
    * Horizontal bar chart for threat breakdown
    */
   threatBars(container, data) {
-    if (!container || !data?.length) return;
+    if (!container) return;
+    if (!data?.length) {
+      return this.empty(container, 'No threats detected.');
+    }
     const total = data.reduce((s, d) => s + d.count, 0) || 1;
     const colors = {
       webshell:    '#ef4444',

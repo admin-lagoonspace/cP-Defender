@@ -96,3 +96,34 @@ t_contains($app, "'Not saved — '", 'a failed save is reported in place');
 // The confirmation must reflect what the server stored: values out of range are
 // clamped, so echoing the typed number back would be a small lie.
 t_contains($app, 'API.getSettings()', 'the saved values are read back from the server');
+
+// ── A clean server must not look like a stuck panel ──────────────────────────
+// Reported: "Threat Breakdown — Loading..." forever, on a server that had just
+// scanned 600 files and found nothing. Every chart did `return` on empty data,
+// which leaves the static "Loading…" placeholder in place. The GOOD outcome --
+// no threats -- rendered as a broken panel.
+$charts = file_get_contents($repo . '/frontend/js/charts.js');
+t_contains($charts, 'empty(container, message)', 'charts have a shared empty state');
+t_contains($charts, "'No threats detected.'", 'an empty breakdown says so');
+t_ok(strpos($charts, 'if (!container || !data?.length) return;') === false,
+    'threatBars no longer bails silently on empty data');
+t_ok(strpos($charts, 'if (!svgEl || !data?.length) return;') === false,
+    'the SVG charts no longer bail silently on empty data');
+
+// ── Start/stop must be responsive and confirmed ──────────────────────────────
+// Reported as "laggy and isn't guaranteed that it will work". systemctl takes
+// seconds and the daemon needs longer still to write its PID file, so the
+// button returned immediately, a second click could race the first, and the
+// state it flipped to was assumed rather than observed.
+$app = file_get_contents($repo . '/frontend/js/app.js');
+t_contains($app, '_monitorBusy', 'a second click cannot race the first');
+t_contains($app, "'Starting…'", 'the button reports that it is working');
+t_contains($app, 'API.monitorStatus()', 'the result is confirmed against the server');
+t_ok(strpos($app, 'monitorRunning = !monitorRunning;') === false,
+    'the state is no longer flipped optimistically');
+t_contains($app, 'is not running yet',
+    'an accepted command that did not take effect is reported honestly');
+
+// The button must be re-enabled on every path, or one failure disables it for
+// the rest of the session.
+t_contains($app, 'const restore =', 'there is a single restore path for the buttons');
