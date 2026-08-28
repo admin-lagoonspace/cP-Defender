@@ -121,3 +121,40 @@ foreach (['running', 'stale', 'engine', 'files_checked', 'detections_24h'] as $k
 }
 t_eq($running->getStatus()['running'], $dash['running'],
     'the card and the page cannot disagree about running');
+
+// ── Resource profile is visible and persists ─────────────────────────────────
+// Real-time monitoring was reported as putting excessive load on a live server.
+// The limits are settings now, so they must survive a round trip and be visible
+// in status — an administrator calming a server down needs to see what took
+// effect, not what they hoped would.
+Database::setSetting('rt_profile', 'light');
+Database::setSetting('rt_effective_profile', 'light');
+Database::setSetting('rt_effective_files_per_sec', '5');
+Database::setSetting('rt_watch_count', '4200');
+Database::setSetting('rt_watch_capped', '1');
+
+$st2 = $running->getStatus();
+t_eq('light', $st2['profile'],            'the configured profile is reported');
+t_eq('light', $st2['effective_profile'],  'the profile the daemon applied is reported');
+t_eq(5,       $st2['effective_rate'],     'the effective file rate is reported');
+t_eq(4200,    $st2['watch_count'],        'the inotify watch count is reported');
+t_eq(true,    $st2['watch_capped'],       'hitting the watch ceiling is reported');
+
+// The UI must offer the control, or the setting is unreachable.
+$html = file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+t_contains($html, 'set-rt-profile', 'Settings exposes a resource profile control');
+foreach (['light', 'balanced', 'thorough', 'custom'] as $prof) {
+    t_contains($html, 'data-profile="' . $prof . '"', "the {$prof} profile is offered");
+}
+
+$appjs = file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+t_contains($appjs, 'rt_max_files_per_sec', 'the file rate is saved with the settings form');
+t_contains($appjs, 'rt_exclude_dirs',      'directory exclusions are saved');
+
+// settings/set only persists keys matching ^[a-z_]+$ — every key the form sends
+// must actually be storable, or it is silently dropped.
+foreach (['rt_profile', 'rt_max_files_per_sec', 'rt_max_file_size_mb', 'rt_nice',
+          'rt_max_watches', 'rt_debounce_seconds', 'rt_exclude_dirs'] as $key) {
+    t_ok(preg_match('/^[a-z_]+$/', $key) === 1,
+        "setting key {$key} is accepted by settings/set");
+}

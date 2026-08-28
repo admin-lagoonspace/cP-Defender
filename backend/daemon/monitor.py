@@ -100,6 +100,166 @@ def get_poll_interval(conn):
     except (ValueError, TypeError):
         return 300
 
+# -- Resource profiles -----------------------------------------------------------
+# Real-time monitoring was reported as putting excessive load on a live server.
+# The throttle that existed only slowed the gap BETWEEN file scans; it did
+# nothing about the three things that actually cost:
+#
+#   1. Polling mode walks every watched path and stats every file, every
+#      interval, holding a path->mtime dict for the whole tree. On a shared host
+#      with /home that is the dominant cost by a wide margin.
+#   2. inotify adds one watch per directory with no ceiling. Tens of thousands
+#      of watches is both kernel memory and a long startup walk, and exceeding
+#      max_user_watches failed silently, leaving partial coverage nobody knew
+#      about.
+#   3. Every event reads the whole file and runs the pattern set over it, with
+#      no ceiling on events per second and no coalescing of repeats.
+#
+# So the limits are explicit, named, and settable. A profile sets them all at
+# once; 'custom' leaves whatever the user chose.
+
+PROFILES = {
+    # name        nice  files/s  max MB  poll s  watches  debounce s
+    'light':     (19,     5,       4,     900,     5000,   10),
+    'balanced':  (10,    25,      16,     300,    20000,    5),
+    'thorough':  ( 5,   100,      50,     120,   100000,    2),
+}
+DEFAULT_PROFILE = 'balanced'
+
+DEFAULT_EXCLUDES = {'node_modules', '.git', '__pycache__', '.svn', 'cache',
+                    '.cache', 'vendor', 'backup', 'backups', '.trash'}
+
+
+def load_profile(conn):
+    """Effective resource limits, re-read from settings on every reload tick."""
+    name = (db_get(conn, 'rt_profile', DEFAULT_PROFILE) or DEFAULT_PROFILE).strip().lower()
+    base = PROFILES.get(name, PROFILES[DEFAULT_PROFILE])
+    nice_v, fps, mb, poll, watches, debounce = base
+
+    def num(key, fallback, lo, hi):
+        try:
+            return max(lo, min(hi, int(db_get(conn, key, str(fallback)) or fallback)))
+        except (ValueError, TypeError):
+            return fallback
+
+    if name == 'custom':
+        nice_v   = num('rt_nice',              10,  0, 19)
+        fps      = num('rt_max_files_per_sec', 25,  1, 1000)
+        mb       = num('rt_max_file_size_mb',  16,  1, 512)
+        poll     = num('rt_poll_interval',    300, 10, 86400)
+        watches  = num('rt_max_watches',    20000, 100, 500000)
+        debounce = num('rt_debounce_seconds',   5,  0, 3600)
+
+    extra = db_get(conn, 'rt_exclude_dirs', '') or ''
+    excludes = set(DEFAULT_EXCLUDES)
+    excludes.update(d.strip() for d in extra.split(',') if d.strip())
+
+    return {
+        'profile': name if name in PROFILES or name == 'custom' else DEFAULT_PROFILE,
+        'nice': nice_v,
+        'files_per_sec': fps,
+        'max_file_size': mb * 1024 * 1024,
+        'poll_interval': poll,
+        'max_watches': watches,
+        'debounce': debounce,
+        'excludes': excludes,
+    }
+
+
+class RateLimiter:
+    """Token bucket over files examined per second.
+
+    A fixed sleep between scans cannot express "no more than N files a second":
+    it makes every scan slower whether or not anything is happening, and it
+    still lets a burst of ten thousand events through back to back. This caps
+    the rate and costs nothing while idle.
+    """
+
+    def __init__(self, per_sec):
+        self.rate = max(1, int(per_sec))
+        self.allowance = float(self.rate)
+        self.last = time.time()
+
+    def update(self, per_sec):
+        per_sec = max(1, int(per_sec))
+        if per_sec != self.rate:
+            self.rate = per_sec
+            self.allowance = min(self.allowance, float(per_sec))
+
+    def take(self):
+        """Block just long enough to stay under the limit."""
+        now = time.time()
+        self.allowance += (now - self.last) * self.rate
+        self.last = now
+        if self.allowance > self.rate:
+            self.allowance = float(self.rate)
+        if self.allowance < 1.0:
+            time.sleep((1.0 - self.allowance) / self.rate)
+            self.allowance = 0.0
+            self.last = time.time()
+        else:
+            self.allowance -= 1.0
+
+
+class Debouncer:
+    """Suppress repeat events for the same path within a window.
+
+    An editor writing a file, a deploy, or a log rotation produces several
+    CREATE/MODIFY events for one path in quick succession. Scanning it each time
+    is pure waste: the content is read and pattern-matched again for no new
+    information.
+    """
+
+    def __init__(self, seconds):
+        self.window = max(0, int(seconds))
+        self.seen = {}
+
+    def update(self, seconds):
+        self.window = max(0, int(seconds))
+
+    def should_skip(self, path):
+        if self.window <= 0:
+            return False
+        now = time.time()
+        last = self.seen.get(path)
+        if last is not None and (now - last) < self.window:
+            return True
+        self.seen[path] = now
+        if len(self.seen) > 20000:      # bounded: this must not become a leak
+            cutoff = now - self.window
+            self.seen = {k: v for k, v in self.seen.items() if v > cutoff}
+        return False
+
+
+def apply_io_priority():
+    """Best-effort idle I/O priority.
+
+    Real-time monitoring is background work: it should yield to the web server
+    and the database rather than compete with them. nice() only covers CPU, and
+    the cost here is mostly disk.
+    """
+    try:
+        os.system('ionice -c3 -p %d >/dev/null 2>&1' % os.getpid())
+    except Exception as e:
+        log.debug('ionice failed: %s', e)
+
+
+def apply_cpu_priority_nice(target):
+    """Set an absolute nice value (best effort).
+
+    os.nice() is RELATIVE and a process cannot lower its own niceness without
+    privilege, so re-applying on reload can only ever raise it. Called on every
+    profile change so lowering the load takes effect immediately; raising it
+    again needs a restart, which is the safe direction to fail in.
+    """
+    try:
+        current = os.nice(0)
+        if target > current:
+            os.nice(target - current)
+    except Exception as e:
+        log.debug('nice failed: %s', e)
+
+
 def apply_cpu_priority(cpu_pct):
     """Lower process priority according to the CPU limit (best-effort)."""
     target = cpu_to_nice(cpu_pct)
@@ -151,10 +311,13 @@ SEV = {'c99_shell':'critical','rev_shell':'critical','fsock_bd':'critical',
 PHP_EXTS = {'.php','.php3','.php4','.php5','.php7','.phtml','.phps'}
 MAX_SZ   = 52_428_800
 
-def scan(path):
+def scan(path, max_size=None):
     try:
         sz = os.path.getsize(path)
-        if sz == 0 or sz > MAX_SZ: return None
+        limit = MAX_SZ if max_size is None else max_size
+        # Reading a 40MB file to regex it costs far more than the detection is
+        # worth; the size ceiling is a user-visible resource control now.
+        if sz == 0 or sz > limit: return None
         data = open(path,'rb').read()
         for n, p in PATTERNS:
             if p.search(data): return 'SG.RT.' + n
@@ -163,10 +326,16 @@ def scan(path):
 
 _chk = 0; _thr = 0
 
-def handle(conn, path):
+def handle(conn, path, limits=None, limiter=None, debouncer=None):
     global _chk, _thr
+
+    if debouncer is not None and debouncer.should_skip(path):
+        return
+    if limiter is not None:
+        limiter.take()
+
     _chk += 1
-    t = scan(path)
+    t = scan(path, limits['max_file_size'] if limits else None)
     if not t: return
     _thr += 1
     sev = SEV.get(t.replace('SG.RT.',''),'medium')
@@ -244,59 +413,152 @@ def watch_paths(conn):
 
 SKIP = {'node_modules','.git','__pycache__','.svn'}
 
-def run_inotify(conn, paths):
+def run_inotify(conn, paths, limits):
     import inotify_simple
     fl = inotify_simple.flags.CREATE | inotify_simple.flags.MODIFY | inotify_simple.flags.MOVED_TO
     ino = inotify_simple.INotify()
     wds = {}
+    capped = False
+
     for base in paths:
         for root, dirs, _ in os.walk(base, followlinks=False):
-            dirs[:] = [d for d in dirs if d not in SKIP and not d.startswith('.')]
+            dirs[:] = [d for d in dirs
+                       if d not in limits['excludes'] and not d.startswith('.')]
+            if len(wds) >= limits['max_watches']:
+                capped = True
+                break
             try:
                 wd = ino.add_watch(root, fl)
                 wds[wd] = root
-            except (PermissionError, FileNotFoundError): pass
-    log.info('inotify: %d dirs', len(wds))
+            except (PermissionError, FileNotFoundError):
+                pass
+            except OSError as e:
+                # ENOSPC means the kernel's max_user_watches is exhausted. This
+                # used to be swallowed with everything else, leaving the monitor
+                # silently watching a fraction of the tree while reporting
+                # itself healthy.
+                log.error('inotify watch limit reached (%s). Watching %d dirs only. '
+                          'Raise fs.inotify.max_user_watches or lower rt_max_watches.',
+                          e, len(wds))
+                capped = True
+                break
+        if capped:
+            break
+
+    log.info('inotify: %d dirs (cap %d)%s', len(wds), limits['max_watches'],
+             ' - CAPPED' if capped else '')
+    db_set(conn, 'rt_watch_count', str(len(wds)))
+    db_set(conn, 'rt_watch_capped', '1' if capped else '0')
+
+    limiter   = RateLimiter(limits['files_per_sec'])
+    debouncer = Debouncer(limits['debounce'])
+
     tick = 0
+    last_reload = time.time()
+
     while _running:
         try: evts = ino.read(timeout=2000)
         except Exception as e:
             if _running: log.warning('inotify err: %s', e)
             break
+
+        # Settings must take effect without a restart: an administrator whose
+        # server is under load should not have to restart the monitor to calm
+        # it down.
+        if time.time() - last_reload >= 60:
+            fresh = load_profile(conn)
+            if fresh != limits:
+                limits = fresh
+                limiter.update(limits['files_per_sec'])
+                debouncer.update(limits['debounce'])
+                apply_cpu_priority_nice(limits['nice'])
+                log.info('resource profile reloaded: %s', limits['profile'])
+            last_reload = time.time()
+
         for ev in evts:
             if not ev.name or Path(ev.name).suffix.lower() not in PHP_EXTS: continue
             dp = wds.get(ev.wd,'')
             if dp:
-                handle(conn, os.path.join(dp, ev.name))
-                if _SCAN_SLEEP: time.sleep(_SCAN_SLEEP)  # CPU throttle
+                handle(conn, os.path.join(dp, ev.name), limits, limiter, debouncer)
             tick += 1
             if tick >= 50: flush(conn); tick = 0
     ino.close()
 
-def run_polling(conn, paths, interval):
-    log.info('polling: %s every %ds', paths, interval)
-    def snap():
-        s = {}
+def run_polling(conn, paths, limits):
+    """Fallback when inotify is unavailable.
+
+    This is where the load came from. The previous implementation walked every
+    watched path and stat()ed every file on each pass, holding a path->mtime
+    dict for the entire tree and a second copy while diffing. Against /home on a
+    shared host that is millions of stat calls per interval, permanently.
+
+    Three changes: only files we would ever scan are tracked (a PHP monitor has
+    no use for the mtime of a JPEG), the tracked set is bounded and says so when
+    it fills, and the walk yields between directories so it cannot monopolise a
+    core.
+    """
+    interval = limits['poll_interval']
+    log.info('polling: %s every %ds (tracking PHP files only)', paths, interval)
+
+    max_tracked = 200000
+
+    def snap(lim):
+        out = {}
+        truncated = False
         for b in paths:
             for r, ds, fs in os.walk(b, followlinks=False):
-                ds[:] = [d for d in ds if d not in SKIP and not d.startswith('.')]
+                ds[:] = [d for d in ds
+                         if d not in lim['excludes'] and not d.startswith('.')]
                 for f in fs:
+                    # Filter BEFORE stat(): the extension check is a string
+                    # comparison, the stat is a syscall. The old order paid the
+                    # syscall for every file on the server.
+                    if Path(f).suffix.lower() not in PHP_EXTS:
+                        continue
+                    if len(out) >= max_tracked:
+                        truncated = True
+                        break
                     fp = os.path.join(r, f)
-                    try: s[fp] = os.path.getmtime(fp)
+                    try: out[fp] = os.path.getmtime(fp)
                     except OSError: pass
-        return s
-    prev = snap(); last_fl = time.time()
+                if truncated:
+                    break
+                # Yield to the rest of the system between directories.
+                time.sleep(0)
+            if truncated:
+                break
+        if truncated:
+            log.warning('polling: tracking capped at %d files. Narrow scan_paths '
+                        'or install inotify_simple for event-driven monitoring.',
+                        max_tracked)
+        return out
+
+    prev = snap(limits)
+    last_fl = time.time()
+    limiter   = RateLimiter(limits['files_per_sec'])
+    debouncer = Debouncer(limits['debounce'])
+
     while _running:
         slept = 0
         while slept < interval and _running:
-            time.sleep(min(5, interval-slept)); slept += 5
+            time.sleep(min(5, interval - slept)); slept += 5
         if not _running: break
-        curr = snap()
+
+        fresh = load_profile(conn)
+        if fresh != limits:
+            limits = fresh
+            interval = limits['poll_interval']
+            limiter.update(limits['files_per_sec'])
+            debouncer.update(limits['debounce'])
+            apply_cpu_priority_nice(limits['nice'])
+            log.info('resource profile reloaded: %s', limits['profile'])
+
+        curr = snap(limits)
         for fp, mt in curr.items():
-            if Path(fp).suffix.lower() not in PHP_EXTS: continue
-            if fp not in prev or prev[fp] < mt: handle(conn, fp)
+            if fp not in prev or prev[fp] < mt:
+                handle(conn, fp, limits, limiter, debouncer)
         prev = curr
-        if time.time()-last_fl >= 30: flush(conn); last_fl = time.time()
+        if time.time() - last_fl >= 30: flush(conn); last_fl = time.time()
 
 def main():
     global _SCAN_SLEEP
@@ -314,9 +576,21 @@ def main():
             return
 
         db_set(conn,'rt_monitor_status','running')
-        cpu = get_cpu_limit(conn)
-        apply_cpu_priority(cpu)
-        _SCAN_SLEEP = cpu_to_scan_sleep(cpu)
+
+        limits = load_profile(conn)
+        apply_cpu_priority_nice(limits['nice'])
+        apply_io_priority()
+        log.info('profile=%s nice=%d files/s=%d max_file=%dMB poll=%ds watches=%d debounce=%ds',
+                 limits['profile'], limits['nice'], limits['files_per_sec'],
+                 limits['max_file_size'] // (1024*1024), limits['poll_interval'],
+                 limits['max_watches'], limits['debounce'])
+
+        # Publish what is actually in effect so the UI shows the real limits
+        # rather than what someone believes they configured.
+        db_set(conn,'rt_effective_profile', limits['profile'])
+        db_set(conn,'rt_effective_files_per_sec', str(limits['files_per_sec']))
+        db_set(conn,'rt_effective_poll_interval', str(limits['poll_interval']))
+
         paths = watch_paths(conn)
         if not paths:
             paths = [p for p in ['/home','/var/www'] if os.path.isdir(p)] or ['/']
@@ -325,12 +599,11 @@ def main():
             import inotify_simple
             db_set(conn,'rt_engine','inotify')
             log.info('Engine: inotify_simple')
-            run_inotify(conn, paths)
+            run_inotify(conn, paths, limits)
         except ImportError:
-            iv = get_poll_interval(conn)
             db_set(conn,'rt_engine','polling')
-            log.info('Engine: polling interval=%ds', iv)
-            run_polling(conn, paths, iv)
+            log.info('Engine: polling interval=%ds', limits['poll_interval'])
+            run_polling(conn, paths, limits)
     except Exception as e:
         log.error('Fatal: %s', e, exc_info=True)
     finally:

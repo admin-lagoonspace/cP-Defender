@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.20.0">
+<link rel="stylesheet" href="css/app.css?v=3.21.0">
 </head>
 <body>
 <div id="app">
@@ -289,7 +289,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.20.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.21.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -1039,6 +1039,71 @@
         <div class="card mb-4">
           <div class="card-header"><div class="card-title">Performance &amp; CPU Usage</div></div>
           <div class="card-body">
+            <!-- Real-time monitor resource profile.
+                 The CPU slider below only ever affected process priority and the
+                 pause between file scans. It could not stop the monitor walking
+                 every file under /home on a schedule, which is what actually
+                 loaded the server. These limits control that directly. -->
+            <div class="form-group">
+              <label class="form-label">Real-Time Monitor Resource Profile</label>
+              <div id="rt-profile-opts" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:8px">
+                <label class="rt-profile-opt" data-profile="light" onclick="selectRtProfile('light')"
+                  style="display:flex;flex-direction:column;align-items:center;padding:12px 8px;border:2px solid var(--border);border-radius:10px;cursor:pointer">
+                  <span style="font-size:.95rem;font-weight:700;color:var(--primary)">Light</span>
+                  <span style="font-size:.68rem;color:var(--txt3);margin-top:3px;text-align:center">5 files/sec<br>Lowest impact</span>
+                </label>
+                <label class="rt-profile-opt" data-profile="balanced" onclick="selectRtProfile('balanced')"
+                  style="display:flex;flex-direction:column;align-items:center;padding:12px 8px;border:2px solid var(--border);border-radius:10px;cursor:pointer">
+                  <span style="font-size:.95rem;font-weight:700;color:var(--primary)">Balanced</span>
+                  <span style="font-size:.68rem;color:var(--txt3);margin-top:3px;text-align:center">25 files/sec<br>Recommended</span>
+                </label>
+                <label class="rt-profile-opt" data-profile="thorough" onclick="selectRtProfile('thorough')"
+                  style="display:flex;flex-direction:column;align-items:center;padding:12px 8px;border:2px solid var(--border);border-radius:10px;cursor:pointer">
+                  <span style="font-size:.95rem;font-weight:700;color:var(--primary)">Thorough</span>
+                  <span style="font-size:.68rem;color:var(--txt3);margin-top:3px;text-align:center">100 files/sec<br>Busy servers</span>
+                </label>
+                <label class="rt-profile-opt" data-profile="custom" onclick="selectRtProfile('custom')"
+                  style="display:flex;flex-direction:column;align-items:center;padding:12px 8px;border:2px solid var(--border);border-radius:10px;cursor:pointer">
+                  <span style="font-size:.95rem;font-weight:700;color:var(--primary)">Custom</span>
+                  <span style="font-size:.68rem;color:var(--txt3);margin-top:3px;text-align:center">Set each<br>limit yourself</span>
+                </label>
+              </div>
+              <input type="hidden" id="set-rt-profile" value="balanced">
+            </div>
+
+            <div id="rt-custom-fields" class="hidden" style="margin-top:14px;padding:14px;background:var(--bg1);border-radius:8px">
+              <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
+                <div class="form-group" style="margin:0">
+                  <label class="form-label" style="font-size:.75rem">Files examined per second</label>
+                  <input type="number" id="set-rt-fps" class="form-input" min="1" max="1000" value="25">
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label" style="font-size:.75rem">Maximum file size (MB)</label>
+                  <input type="number" id="set-rt-maxmb" class="form-input" min="1" max="512" value="16">
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label" style="font-size:.75rem">Process priority (nice, 0-19)</label>
+                  <input type="number" id="set-rt-nice" class="form-input" min="0" max="19" value="10">
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label" style="font-size:.75rem">Maximum inotify watches</label>
+                  <input type="number" id="set-rt-watches" class="form-input" min="100" max="500000" value="20000">
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label" style="font-size:.75rem">Repeat-event window (seconds)</label>
+                  <input type="number" id="set-rt-debounce" class="form-input" min="0" max="3600" value="5">
+                </div>
+                <div class="form-group" style="margin:0">
+                  <label class="form-label" style="font-size:.75rem">Skip directories (comma separated)</label>
+                  <input type="text" id="set-rt-excludes" class="form-input" placeholder="backups, tmp">
+                </div>
+              </div>
+              <p style="font-size:.72rem;color:var(--txt3);margin-top:10px;line-height:1.6">
+                Values are clamped to safe ranges. A rate of 0 would mean an
+                unthrottled monitor, so the minimum is 1.
+              </p>
+            </div>
+
             <div class="form-group">
               <label class="form-label" style="display:flex;justify-content:space-between;align-items:center">
                 <span>CPU Limit for Scanning &amp; Real-Time Monitor</span>
@@ -1780,9 +1845,9 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.20.0"></script>
+<script src="js/api.js?v=3.21.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.20.0"></script>
+<script src="js/app.js?v=3.21.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {

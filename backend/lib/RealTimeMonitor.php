@@ -117,6 +117,14 @@ class RealTimeMonitor {
             'last_activity_age' => $age,
             'stale'             => $stale,
             'log_file'          => $this->logFile,
+            // What the daemon reports as ACTUALLY in effect, which is not
+            // necessarily what the settings say: it re-reads them on a cycle,
+            // and a value out of range is clamped rather than obeyed.
+            'profile'           => Database::setting('rt_profile', 'balanced'),
+            'effective_profile' => Database::setting('rt_effective_profile'),
+            'effective_rate'    => (int) (Database::setting('rt_effective_files_per_sec', '0') ?? 0),
+            'watch_count'       => (int) (Database::setting('rt_watch_count', '0') ?? 0),
+            'watch_capped'      => Database::setting('rt_watch_capped', '0') === '1',
             'service_installed' => file_exists($this->serviceFile),
             'service_enabled'   => $this->isServiceEnabled(),
             'service_active'    => $this->isServiceActive(),

@@ -17,7 +17,13 @@
 $repo = dirname(__DIR__);
 $filter = $argv[1] ?? '';
 
-$files = glob($repo . '/tests/test_*.php');
+$files = array_merge(
+    glob($repo . '/tests/test_*.php'),
+    // The real-time monitor is Python. Its resource limits are the part most
+    // likely to be got wrong quietly, so they are tested in the same run rather
+    // than in a separate suite nobody remembers to invoke.
+    glob($repo . '/tests/test_*.py')
+);
 sort($files);
 if ($filter !== '') {
     $files = array_values(array_filter($files, fn($f) => stripos(basename($f), $filter) !== false));
@@ -37,7 +43,32 @@ foreach ($files as $file) {
     // with a fatal emits no FAIL lines, and an earlier version of this runner
     // reported "71 assertions passed" while two files had crashed outright.
     // A harness that cannot fail is not a harness.
-    $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($file) . ' 2>&1';
+    if (substr($file, -3) === '.py') {
+        $python = null;
+        foreach ([$repo . '/python/python.exe', $repo . '/python/python',
+                  'python3', 'python'] as $cand) {
+            if (strpos($cand, '/') !== false || strpos($cand, DIRECTORY_SEPARATOR) !== false) {
+                if (is_file($cand)) { $python = $cand; break; }
+            } else {
+                $probe = [];
+                $rc = 0;
+                @exec(escapeshellarg($cand) . ' --version 2>&1', $probe, $rc);
+                if ($rc === 0) { $python = $cand; break; }
+            }
+        }
+        if ($python === null) {
+            // Silently skipping would report a green run for tests that never
+            // executed, which is the failure mode this project keeps hitting.
+            $total++; $failed++;
+            $failures[] = substr($name, 5) . ': no Python interpreter to run it';
+            echo "  {$RED}SKIP{$NC} no Python interpreter available
+";
+            continue;
+        }
+        $cmd = escapeshellarg($python) . ' ' . escapeshellarg($file) . ' 2>&1';
+    } else {
+        $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($file) . ' 2>&1';
+    }
     $lines = [];
     $exit = 0;
     exec($cmd, $lines, $exit);

@@ -954,6 +954,15 @@ async function loadSettings() {
   set('set-iprep-schedule',d.iprep_schedule || 'daily');
   set('set-scan-paths',    d.scan_paths);
 
+  // Real-time monitor resource profile
+  selectRtProfile(d.rt_profile || 'balanced');
+  set('set-rt-fps',      d.rt_max_files_per_sec || '25');
+  set('set-rt-maxmb',    d.rt_max_file_size_mb  || '16');
+  set('set-rt-nice',     d.rt_nice              || '10');
+  set('set-rt-watches',  d.rt_max_watches       || '20000');
+  set('set-rt-debounce', d.rt_debounce_seconds  || '5');
+  set('set-rt-excludes', d.rt_exclude_dirs      || '');
+
   // Last-run readouts
   const ts = v => (v && +v) ? new Date(+v * 1000).toLocaleString() : 'never';
   const txt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
@@ -994,6 +1003,14 @@ async function saveSettings() {
     sig_update_day:      g('set-sig-day')?.value,
     iprep_schedule:      g('set-iprep-schedule')?.value,
     scan_paths:          g('set-scan-paths')?.value,
+
+    rt_profile:            g('set-rt-profile')?.value || 'balanced',
+    rt_max_files_per_sec:  g('set-rt-fps')?.value      || '25',
+    rt_max_file_size_mb:   g('set-rt-maxmb')?.value    || '16',
+    rt_nice:               g('set-rt-nice')?.value     || '10',
+    rt_max_watches:        g('set-rt-watches')?.value  || '20000',
+    rt_debounce_seconds:   g('set-rt-debounce')?.value || '5',
+    rt_exclude_dirs:       g('set-rt-excludes')?.value || '',
     auto_quarantine:    g('set-auto-quar')?.checked ? '1' : '0',
     email_alerts:       g('set-email-alerts')?.checked ? '1' : '0',
     alert_email:        g('set-alert-email')?.value,
@@ -2552,4 +2569,26 @@ function showTrialBanner(daysLeft) {
   const d = document.getElementById('trial-days');
   if (d) d.textContent = daysLeft === 1 ? '1 day' : daysLeft + ' days';
   el.classList.remove('hidden');
+}
+
+
+/**
+ * Choose a real-time monitor resource profile.
+ *
+ * The custom fields are only shown for 'custom': presenting six numeric inputs
+ * to someone who picked "Light" invites them to change one and wonder why the
+ * profile no longer matches what it says.
+ */
+function selectRtProfile(name) {
+  const hidden = document.getElementById('set-rt-profile');
+  if (hidden) hidden.value = name;
+
+  document.querySelectorAll('.rt-profile-opt').forEach(el => {
+    const on = el.getAttribute('data-profile') === name;
+    el.style.borderColor = on ? 'var(--primary)' : 'var(--border)';
+    el.style.background  = on ? 'rgba(124,92,255,.08)' : 'transparent';
+  });
+
+  const custom = document.getElementById('rt-custom-fields');
+  if (custom) custom.classList.toggle('hidden', name !== 'custom');
 }
