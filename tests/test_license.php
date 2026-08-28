@@ -244,3 +244,23 @@ t_ok(array_key_exists('secret_configured', $probe),
 
 $cli = t_code(dirname(__DIR__) . '/backend/cli/sentinel.php');
 t_contains($cli, "case 'probe'", 'the CLI exposes probe');
+
+// ── Testing a candidate must not change anything ─────────────────────────────
+// Finding the right secret otherwise means writing each guess into mode.php and
+// re-running activation: editing live configuration to answer a question, and
+// leaving the wrong value behind when the guess is wrong.
+License::setSecret('known-good-secret-value');
+$before = file_get_contents(License::modePhpPath());
+
+$try = License::trySecret('some-other-candidate');   // no network in tests
+t_ok(is_array($try), 'trySecret() returns a result');
+
+$after = file_get_contents(License::modePhpPath());
+t_eq($before, $after, 'trySecret() does not modify mode.php');
+t_contains($after, 'known-good-secret-value', 'the stored secret is untouched');
+
+t_eq(false, License::trySecret('')['success'] ?? false, 'an empty candidate is refused');
+
+$cli = t_code(dirname(__DIR__) . '/backend/cli/sentinel.php');
+t_contains($cli, "case 'try-secret'", 'the CLI exposes try-secret');
+t_contains($cli, 'License::trySecret', 'the CLI calls trySecret()');

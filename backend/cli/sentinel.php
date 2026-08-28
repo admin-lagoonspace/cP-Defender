@@ -194,6 +194,16 @@ try {
             out(License::identity());
             break;
 
+        case 'try-secret': {
+            need_root();
+            $cand = $rest[1] ?? '';
+            if ($cand === '') fail('usage: sentinel license try-secret <candidate>');
+            $r = License::trySecret($cand);
+            out($r);
+            if (empty($r['matches'])) exit(4);
+            break;
+        }
+
         case 'probe': {
             need_root();
             out(License::probe());
@@ -245,6 +255,7 @@ Usage: sentinel <command> [args] [--json]
   license identity             Show the domain/IP this server reports
   license secret <value>       Set the WHMCS licensing addon secret
   license probe                Show exactly what the licence server returns
+  license try-secret <value>   Test a candidate secret WITHOUT storing it
 
 Add --json to any command for machine-readable output.
 TXT;

@@ -548,6 +548,52 @@ class License
     }
 
     /**
+     * Does this candidate secret match what the licence server signs with?
+     *
+     * Tests WITHOUT storing it. Finding the right value otherwise means writing
+     * each guess into mode.php and re-running activation, which edits live
+     * configuration to answer a question -- and leaves the wrong value in place
+     * when the guess is wrong.
+     */
+    public static function trySecret(string $candidate): array
+    {
+        $candidate = trim($candidate);
+        if ($candidate === '') {
+            return ['success' => false, 'error' => 'No candidate supplied.'];
+        }
+
+        $key        = (string)Database::setting('license_key', '');
+        $checkToken = time() . self::rand(12);
+        $body = self::post(rtrim(self::whmcsUrl(), '/') . '/modules/servers/licensing/verify.php', [
+            'licensekey'  => $key,
+            'domain'      => self::hostname(),
+            'ip'          => self::serverIp(),
+            'dir'         => defined('SG_ROOT') ? SG_ROOT : __DIR__,
+            'version'     => defined('SG_VERSION') ? SG_VERSION : 'unknown',
+            'check_token' => $checkToken,
+        ]);
+        if ($body === null) {
+            return ['success' => false, 'error' => 'Could not reach the licence server.'];
+        }
+
+        $parsed = self::parseXml($body);
+        if (!$parsed || empty($parsed['md5hash'])) {
+            return ['success' => false,
+                    'error' => 'The server returned no md5hash, so no secret can be tested.'];
+        }
+
+        $matches = hash_equals(md5($candidate . $checkToken), (string)$parsed['md5hash']);
+        return [
+            'success'  => true,
+            'matches'  => $matches,
+            'licence'  => $parsed['status'] ?? 'unknown',
+            'message'  => $matches
+                ? 'This IS the correct secret. Store it with: sentinel license secret <value>'
+                : 'This is not the secret the licence server signs with. Nothing was changed.',
+        ];
+    }
+
+    /**
      * Ask the licence server directly and return everything about the exchange.
      *
      * Diagnosing a licensing failure otherwise means reconstructing the POST by
