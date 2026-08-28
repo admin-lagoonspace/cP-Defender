@@ -90,10 +90,13 @@ $res = License::activate('SG-0c9dfa27e78dd2ca8a');
 t_eq('Unconfigured', $res['status'],
     'activating without a secret reports Unconfigured, not Invalid');
 t_eq(false, $res['valid'], 'an unconfigured install is not valid');
-t_contains($res['message'], 'SG_LICENSE_SECRET',
-    'the message names the setting that must be fixed');
-t_contains($res['message'], 'mode.php',
-    'the message names the file to edit');
+// The message must name the REMEDY. It used to name the setting and the file to
+// hand-edit; it now names the command, which is safer -- mode.php is required by
+// config.php, so a stray quote there is a fatal on every request.
+t_contains($res['message'], 'sentinel license secret',
+    'the message names the command that fixes it');
+t_contains($res['message'], 'WHMCS',
+    'the message says where the value comes from');
 t_contains($res['message'], 'not the problem',
     'the message says explicitly that the key is not at fault');
 
@@ -179,3 +182,21 @@ t_ok(strpos(json_encode($out), 'never-print-me') === false,
 $cli = t_code(dirname(__DIR__) . '/backend/cli/sentinel.php');
 t_contains($cli, "case 'secret'", 'the CLI has a license secret subcommand');
 t_contains($cli, 'License::setSecret', 'the CLI calls setSecret()');
+
+// ── One condition, one message, on every path ────────────────────────────────
+// The guard was originally in activate() only. status() therefore still
+// contacted the licence server and reported "the response was signed with a
+// different secret" -- describing an unset secret as a mismatch, which sends
+// the operator to compare two values when one of them does not exist.
+$st2 = License::status();
+t_eq('Unconfigured', $st2['status'],
+    'status() reports Unconfigured when the secret is unset');
+t_ok(strpos($st2['message'], 'different secret') === false,
+    'status() does not describe an unset secret as a mismatch');
+t_contains($st2['message'], 'sentinel license secret',
+    'status() names the command that fixes it');
+
+$act = License::activate('SG-anything');
+t_eq('Unconfigured', $act['status'], 'activate() agrees');
+t_eq($st2['message'], $act['message'],
+    'activate() and status() give the SAME explanation, not two');

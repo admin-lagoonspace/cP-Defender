@@ -249,19 +249,12 @@ class License
             return self::result('Invalid', false, false, false, 'No license key supplied.');
         }
 
-        // Check this BEFORE contacting the licence server. Without the shared
-        // secret the response can never verify, so the request is guaranteed to
-        // fail -- and it fails with "License response failed verification",
-        // which reads as "your key is bad" when in fact this server is not
-        // configured. Reporting a misconfiguration as an invalid licence sends
-        // the customer to look in exactly the wrong place.
+        // evaluate() raises this condition with the same wording for every
+        // caller. Storing the key first would be pointless: nothing can verify a
+        // response without the shared secret, so the answer is "Invalid"
+        // whatever the key says.
         if (!self::secretConfigured()) {
-            return self::result('Unconfigured', false, false, false,
-                'This server\'s licensing secret is not set, so no response from the '
-                . 'licence server can be verified. Set SG_LICENSE_SECRET in '
-                . 'backend/config/mode.php to the secret configured in the WHMCS '
-                . 'licensing addon, then activate again. The licence key is not the '
-                . 'problem.');
+            return self::status();
         }
         Database::setSetting('license_key', $key);
         Database::setSetting('license_localkey', '');   // force a remote check
@@ -284,6 +277,24 @@ class License
 
     private static function evaluate(): array
     {
+        // Checked here, not only in activate(), because EVERY licence operation
+        // is pointless without the shared secret: no reply can be verified, so
+        // the answer is "Invalid" regardless of the key.
+        //
+        // The guard was originally in activate() alone, which left status()
+        // still contacting the licence server and then reporting "signed with a
+        // different secret" -- a second, more confusing explanation of the same
+        // condition on a server whose secret was simply never set. One problem
+        // described two ways is worse than either description.
+        if (!self::secretConfigured()) {
+            return self::result('Unconfigured', false, false, false,
+                'This server has no licensing secret, so no reply from the licence '
+                . 'server can be verified and every key will be refused. Set it with:  '
+                . 'sentinel license secret <your-whmcs-addon-secret>  '
+                . '- the value from Addons > License Manager > Settings in WHMCS. '
+                . 'The licence key is not the problem.');
+        }
+
         $key = (string)Database::setting('license_key', '');
         if ($key === '') {
             if (self::trialActive()) {

@@ -1,7 +1,7 @@
 {
-  "version": "3.21.3",
-  "url": "https://defender.lws-s1.com/sentinel-gate/code/dist/sentinel-gate-3.21.3.zip",
-  "mirror": "https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/dist/sentinel-gate-3.21.3.zip",
-  "sha256": "354c509c292aad570f6cb560a5b7e5ce6050bae0d0bfd0beae14d46615b58bb2",
-  "notes": "https://defender.lws-s1.com/sentinel-gate/code/v3.21.3/CHANGELOG.md"
+  "version": "3.21.4",
+  "url": "https://defender.lws-s1.com/sentinel-gate/code/dist/sentinel-gate-3.21.4.zip",
+  "mirror": "https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/dist/sentinel-gate-3.21.4.zip",
+  "sha256": "3a27a0bcaf0393416c20f2d362fd95dfd521d02c1fb9f86ceea8dc5af0535770",
+  "notes": "https://defender.lws-s1.com/sentinel-gate/code/v3.21.4/CHANGELOG.md"
 }
