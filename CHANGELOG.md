@@ -11,6 +11,19 @@ Bumping Y for a fix inflates the version and hides what actually changed.
 `scripts/check-version-bump.sh` enforces this and `publish.sh` will refuse a
 release where the bump and the commits disagree.
 
+## [3.24.1] - 2026-08-28
+
+### Added
+- **A Save button in the Real-Time Monitor section.** The limits were committed
+  only by the page-level "Save Changes" at the top of Settings, so editing a
+  value here meant leaving the section to commit it, with no confirmation that
+  these particular values had landed.
+
+  It reports the outcome in place, and reads the stored values back from the
+  server afterwards rather than echoing what was typed - a value outside the
+  accepted range is clamped, so showing the typed number would misreport what is
+  actually in force.
+
 ## [3.24.0] - 2026-08-28
 
 ### Fixed

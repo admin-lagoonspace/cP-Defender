@@ -2640,3 +2640,66 @@ function rtLimitEdited() {
     }
   }
 }
+
+
+/**
+ * Save only the real-time monitor settings.
+ *
+ * These were previously committed by the page-level "Save Changes" button at the
+ * top of Settings, which means editing a limit here and then leaving the section
+ * to commit it -- with no confirmation that these particular values were the
+ * ones that landed. Asked for more than once, and I fixed the wrong thing first.
+ *
+ * Reads back what the server stored rather than trusting the POST, so the
+ * confirmation reflects the clamped values actually in force.
+ */
+async function saveMonitorSettings() {
+  const btn    = document.getElementById('rt-save-btn');
+  const status = document.getElementById('rt-save-status');
+  const g      = (id) => document.getElementById(id);
+
+  const payload = {
+    rt_profile:            g('set-rt-profile')?.value  || 'balanced',
+    rt_max_files_per_sec:  g('set-rt-fps')?.value      || '25',
+    rt_max_file_size_mb:   g('set-rt-maxmb')?.value    || '16',
+    rt_nice:               g('set-rt-nice')?.value     || '10',
+    rt_max_watches:        g('set-rt-watches')?.value  || '20000',
+    rt_debounce_seconds:   g('set-rt-debounce')?.value || '5',
+    rt_exclude_dirs:       g('set-rt-excludes')?.value || '',
+    cpu_limit_percent:     g('set-cpu-limit')?.value   || '50',
+    rt_poll_interval:
+      document.querySelector('input[name="rt_poll_interval"]:checked')?.value || '300',
+  };
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (status) { status.textContent = ''; status.style.color = 'var(--txt3)'; }
+
+  const res = Demo.active ? { success: true } : await API.saveSettings(payload);
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Save Monitor Settings'; }
+
+  if (!res?.success) {
+    const why = (res && (res.detail || res.error)) || 'the server did not say why';
+    if (status) { status.textContent = 'Not saved — ' + why; status.style.color = 'var(--red)'; }
+    toast('Monitor settings not saved: ' + why, 'error', 7000);
+    return;
+  }
+
+  // Read back what was actually stored. A value outside the accepted range is
+  // clamped by the daemon, so echoing the typed number would be a small lie.
+  const check = Demo.active ? null : await API.getSettings();
+  if (check?.success) {
+    const d = check.data || {};
+    if (g('set-rt-fps'))      g('set-rt-fps').value      = d.rt_max_files_per_sec || payload.rt_max_files_per_sec;
+    if (g('set-rt-maxmb'))    g('set-rt-maxmb').value    = d.rt_max_file_size_mb  || payload.rt_max_file_size_mb;
+    if (g('set-rt-nice'))     g('set-rt-nice').value     = d.rt_nice              || payload.rt_nice;
+    if (g('set-rt-watches'))  g('set-rt-watches').value  = d.rt_max_watches       || payload.rt_max_watches;
+    if (g('set-rt-debounce')) g('set-rt-debounce').value = d.rt_debounce_seconds  || payload.rt_debounce_seconds;
+  }
+
+  if (status) {
+    status.textContent = 'Saved. The monitor picks this up within a minute — no restart needed.';
+    status.style.color = 'var(--green)';
+  }
+  toast('Monitor settings saved', 'success');
+}

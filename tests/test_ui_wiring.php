@@ -69,3 +69,30 @@ $out = [];
 $code = 0;
 @exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($repo . '/scripts/check-ui-handlers.php') . ' 2>&1', $out, $code);
 t_eq(0, $code, 'every onclick/onchange resolves to a defined function');
+
+// ── The monitor section saves itself ─────────────────────────────────────────
+// Asked for more than once. The limits were previously committed only by the
+// page-level "Save Changes" at the top of Settings, so editing a value here
+// meant leaving the section to commit it, with no confirmation that these
+// particular values had landed.
+$html = file_get_contents($repo . '/frontend/index.html');
+t_contains($html, 'id="rt-save-btn"', 'the monitor section has its own save button');
+t_contains($html, 'saveMonitorSettings()', 'the button is wired to a handler');
+t_contains($html, 'id="rt-save-status"', 'there is somewhere to report the outcome');
+
+$app = file_get_contents($repo . '/frontend/js/app.js');
+t_contains($app, 'function saveMonitorSettings', 'saveMonitorSettings() exists');
+
+// It must send every limit, or a field silently does nothing.
+foreach (['rt_profile', 'rt_max_files_per_sec', 'rt_max_file_size_mb', 'rt_nice',
+          'rt_max_watches', 'rt_debounce_seconds', 'rt_exclude_dirs',
+          'cpu_limit_percent', 'rt_poll_interval'] as $key) {
+    t_contains($app, $key . ':', "saveMonitorSettings() sends {$key}");
+}
+
+// Failure must be visible in the section, not just swallowed.
+t_contains($app, "'Not saved — '", 'a failed save is reported in place');
+
+// The confirmation must reflect what the server stored: values out of range are
+// clamped, so echoing the typed number back would be a small lie.
+t_contains($app, 'API.getSettings()', 'the saved values are read back from the server');
