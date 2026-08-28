@@ -1951,9 +1951,12 @@ async function loadLicense() {
         '<strong>This server is not configured for licensing.</strong><br>'
       + 'SG_LICENSE_SECRET is still the placeholder, so no response from the '
       + 'licence server can be verified and every key will be rejected. '
-      + 'Set it in <code>' + esc('/usr/local/sentinel-gate/backend/config/mode.php')
-      + '</code> to the secret configured in the WHMCS licensing addon, then '
-      + 'activate again.';
+      + 'Set it from the server with:<br>'
+      + '<code style="display:inline-block;margin:6px 0;padding:4px 8px;'
+      + 'background:rgba(0,0,0,.25);border-radius:5px">'
+      + 'sentinel license secret &lt;your-whmcs-addon-secret&gt;</code><br>'
+      + 'The value is the secret configured in the WHMCS licensing addon. '
+      + 'Then activate again.';
     } else {
       warn.classList.add('hidden');
     }

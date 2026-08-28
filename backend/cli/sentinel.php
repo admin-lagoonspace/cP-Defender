@@ -194,8 +194,23 @@ try {
             out(License::identity());
             break;
 
+        case 'secret': {
+            need_root();
+            $val = $rest[1] ?? '';
+            if ($val === '') {
+                fail('usage: sentinel license secret <whmcs-addon-secret>');
+            }
+            $r = License::setSecret($val);
+            // Deliberately does not echo the value back: it is the salt that
+            // makes a cached local key unforgeable, and shell history is quite
+            // enough exposure already.
+            out($r);
+            if (empty($r['success'])) exit(4);
+            break;
+        }
+
         default:
-            fail('usage: sentinel license [status|activate <key>|refresh|identity]');
+            fail('usage: sentinel license [status|activate <key>|refresh|identity|secret <value>]');
         }
         break;
     }
@@ -222,6 +237,7 @@ Usage: sentinel <command> [args] [--json]
   license activate <key>       Store and verify a license key
   license refresh              Force a re-check against the server
   license identity             Show the domain/IP this server reports
+  license secret <value>       Set the WHMCS licensing addon secret
 
 Add --json to any command for machine-readable output.
 TXT;

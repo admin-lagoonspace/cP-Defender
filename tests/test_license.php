@@ -129,3 +129,53 @@ t_contains($app, 'secret_configured === false',
 $install = file_get_contents(dirname(__DIR__) . '/install.sh');
 t_contains($install, 'SG_LICENSE_SECRET',
     'install.sh writes SG_LICENSE_SECRET into mode.php');
+
+// ── Setting the secret without hand-editing PHP ──────────────────────────────
+// The fix above tells the operator to edit mode.php over SSH. That file is
+// required by config.php, so a stray quote is a fatal on EVERY request -- a
+// worse outcome than the licensing problem being solved. `sentinel license
+// secret <value>` edits the one line, verifies the result parses before putting
+// it in place, and keeps a backup.
+
+$mode = SG_ROOT . '/backend/config/mode.php';
+@mkdir(dirname($mode), 0777, true);
+file_put_contents($mode, "<?php\n"
+  . "if (!defined('INSTALL_MODE')) { define('INSTALL_MODE', 'cpanel'); }\n"
+  . "define('SG_WHMCS_URL','https://clientarea.example.net');\n"
+  . "define('SG_LICENSE_SECRET','CHANGEME_SET_IN_mode_php');\n");
+
+$r = License::setSecret('s3cret-from-whmcs');
+t_eq(true, $r['success'] ?? false, 'setSecret() writes the secret');
+
+$after = (string) file_get_contents($mode);
+t_contains($after, "'s3cret-from-whmcs'", 'the new secret is in mode.php');
+t_ok(strpos($after, 'CHANGEME_SET_IN_mode_php') === false, 'the placeholder is replaced');
+t_contains($after, 'SG_WHMCS_URL', 'unrelated settings survive');
+t_contains($after, 'INSTALL_MODE', 'the install mode survives');
+t_ok(is_file($mode . '.bak'), 'a backup is kept');
+
+$lint = []; $code = 0;
+@exec(escapeshellarg(PHP_BINARY) . ' -l ' . escapeshellarg($mode) . ' 2>&1', $lint, $code);
+t_eq(0, $code, 'the resulting mode.php parses');
+
+t_eq(false, License::setSecret('')['success'] ?? false, 'an empty secret is refused');
+t_eq(false, License::setSecret('CHANGEME_SET_IN_mode_php')['success'] ?? false,
+    'the placeholder value is refused as a secret');
+
+// A secret is an arbitrary string. Quotes and backslashes must not corrupt the
+// file — var_export handles the escaping, and the parse check is the backstop.
+t_eq(true, License::setSecret("has'quote\"and\slash")['success'] ?? false,
+    'a secret containing quotes and backslashes is accepted');
+$lint2 = []; $code2 = 0;
+@exec(escapeshellarg(PHP_BINARY) . ' -l ' . escapeshellarg($mode) . ' 2>&1', $lint2, $code2);
+t_eq(0, $code2, 'mode.php still parses after a quoted secret');
+
+// The value must never be echoed back: shell history is exposure enough.
+$out = License::setSecret('never-print-me');
+t_ok(strpos(json_encode($out), 'never-print-me') === false,
+    'setSecret() does not return the secret in its response');
+
+// The CLI must expose it, or the operator is back to editing PHP by hand.
+$cli = t_code(dirname(__DIR__) . '/backend/cli/sentinel.php');
+t_contains($cli, "case 'secret'", 'the CLI has a license secret subcommand');
+t_contains($cli, 'License::setSecret', 'the CLI calls setSecret()');

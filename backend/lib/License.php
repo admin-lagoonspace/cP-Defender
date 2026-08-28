@@ -536,6 +536,83 @@ class License
             : self::SECRET;
     }
 
+    /** Where the per-installation settings live. */
+    public static function modePhpPath(): string
+    {
+        return (defined('SG_ROOT') ? SG_ROOT : dirname(__DIR__, 2))
+             . '/backend/config/mode.php';
+    }
+
+    /**
+     * Write the licensing secret into mode.php.
+     *
+     * Hand-editing PHP over SSH to fix a licensing problem invites a typo that
+     * takes the whole plugin down: mode.php is required by config.php, so a
+     * stray quote is a fatal on every request rather than a licensing error.
+     * This edits only the one line, keeps a backup, and refuses to leave the
+     * file unparseable.
+     *
+     * The value is never logged or echoed back. It is the salt that makes a
+     * cached local key unforgeable; anyone holding it can mint their own
+     * "Active" licence.
+     */
+    public static function setSecret(string $value): array
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return ['success' => false, 'error' => 'No secret supplied.'];
+        }
+        if ($value === self::SECRET) {
+            return ['success' => false,
+                    'error'   => 'That is the placeholder value, not a real secret.'];
+        }
+
+        $path = self::modePhpPath();
+        if (!is_file($path)) {
+            return ['success' => false, 'error' => 'mode.php not found at ' . $path];
+        }
+        if (!is_writable($path)) {
+            return ['success' => false, 'error' => 'mode.php is not writable: ' . $path];
+        }
+
+        $src = (string) file_get_contents($path);
+        $line = "define('SG_LICENSE_SECRET'," . var_export($value, true) . ");";
+
+        if (preg_match("/^.*define\\(\\s*'SG_LICENSE_SECRET'.*$/m", $src)) {
+            $out = preg_replace("/^.*define\\(\\s*'SG_LICENSE_SECRET'.*$/m", $line, $src, 1);
+        } else {
+            $out = rtrim($src) . "\n" . $line . "\n";
+        }
+
+        // Prove it still parses BEFORE putting it in place. A mode.php that does
+        // not compile takes down every request, which is far worse than the
+        // licensing problem being fixed.
+        $tmp = $path . '.new';
+        if (@file_put_contents($tmp, $out) === false) {
+            return ['success' => false, 'error' => 'Could not write ' . $tmp];
+        }
+        $check = [];
+        $code  = 0;
+        @exec(escapeshellarg(PHP_BINARY) . ' -l ' . escapeshellarg($tmp) . ' 2>&1', $check, $code);
+        if ($code !== 0) {
+            @unlink($tmp);
+            return ['success' => false,
+                    'error'   => 'Refusing to write a mode.php that does not parse: '
+                               . implode(' ', $check)];
+        }
+
+        @copy($path, $path . '.bak');
+        if (!@rename($tmp, $path)) {
+            @unlink($tmp);
+            return ['success' => false, 'error' => 'Could not replace ' . $path];
+        }
+        @chmod($path, 0640);
+
+        return ['success' => true,
+                'message' => 'Licensing secret written to ' . $path
+                           . ' (backup: mode.php.bak). Activate the licence now.'];
+    }
+
     /**
      * False when still running on the placeholder salt.
      *
