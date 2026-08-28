@@ -194,6 +194,12 @@ try {
             out(License::identity());
             break;
 
+        case 'diagnose-hash': {
+            need_root();
+            out(License::diagnoseHash());
+            break;
+        }
+
         case 'try-secret': {
             need_root();
             $cand = $rest[1] ?? '';
@@ -256,6 +262,7 @@ Usage: sentinel <command> [args] [--json]
   license secret <value>       Set the WHMCS licensing addon secret
   license probe                Show exactly what the licence server returns
   license try-secret <value>   Test a candidate secret WITHOUT storing it
+  license diagnose-hash        Identify how the licence server signs replies
 
 Add --json to any command for machine-readable output.
 TXT;

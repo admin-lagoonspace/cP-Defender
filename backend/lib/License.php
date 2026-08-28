@@ -548,6 +548,82 @@ class License
     }
 
     /**
+     * Work out HOW the licence server signs its replies.
+     *
+     * The WHMCS Licensing Addon (v3.1) stores no secret in its configuration --
+     * confirmed by querying tbladdonmodules on a live install, which holds only
+     * version, access, clientverifytool, maxreissues and logprune. So the
+     * assumption that a shared secret must be configured somewhere was simply
+     * wrong, and no amount of looking for one would have found it.
+     *
+     * Rather than guess again, this tests the candidate formulas against a real
+     * response and reports which one reproduces the md5hash. Whatever matches is
+     * what the addon actually does.
+     *
+     * @return array
+     */
+    public static function diagnoseHash(): array
+    {
+        $key        = (string)Database::setting('license_key', '');
+        $checkToken = time() . self::rand(12);
+        $domain     = self::hostname();
+        $ip         = self::serverIp();
+        $dir        = defined('SG_ROOT') ? SG_ROOT : __DIR__;
+
+        $body = self::post(rtrim(self::whmcsUrl(), '/') . '/modules/servers/licensing/verify.php', [
+            'licensekey'  => $key,
+            'domain'      => $domain,
+            'ip'          => $ip,
+            'dir'         => $dir,
+            'version'     => defined('SG_VERSION') ? SG_VERSION : 'unknown',
+            'check_token' => $checkToken,
+        ]);
+        if ($body === null) {
+            return ['success' => false, 'error' => 'Could not reach the licence server.'];
+        }
+
+        $parsed = self::parseXml($body);
+        $hash   = (string)($parsed['md5hash'] ?? '');
+        if ($hash === '') {
+            return ['success' => false,
+                    'error' => 'No md5hash in the response; nothing to diagnose.'];
+        }
+
+        $secret = self::secret();
+        $candidates = [
+            'md5(token)'                  => md5($checkToken),
+            'md5(secret + token)'         => md5($secret . $checkToken),
+            'md5(token + secret)'         => md5($checkToken . $secret),
+            'md5(licensekey + token)'     => md5($key . $checkToken),
+            'md5(token + licensekey)'     => md5($checkToken . $key),
+            'md5(licensekey)'             => md5($key),
+            'md5(domain + token)'         => md5($domain . $checkToken),
+            'md5(token + domain)'         => md5($checkToken . $domain),
+            'md5(ip + token)'             => md5($ip . $checkToken),
+            'md5(licensekey + domain + token)' => md5($key . $domain . $checkToken),
+        ];
+
+        $matched = null;
+        foreach ($candidates as $name => $value) {
+            if (hash_equals($value, $hash)) { $matched = $name; break; }
+        }
+
+        return [
+            'success'      => true,
+            'check_token'  => $checkToken,
+            'server_hash'  => $hash,
+            'licence'      => $parsed['status'] ?? 'unknown',
+            'matched'      => $matched ?? 'NONE of the tested formulas',
+            'tested'       => array_keys($candidates),
+            'diagnosis'    => $matched !== null
+                ? 'The addon signs with ' . $matched . '. The client must use the same.'
+                : 'None of the tested formulas reproduces the hash. Paste this output '
+                  . '(check_token and server_hash) so the formula can be identified; '
+                  . 'they are single-use and safe to share.',
+        ];
+    }
+
+    /**
      * Does this candidate secret match what the licence server signs with?
      *
      * Tests WITHOUT storing it. Finding the right value otherwise means writing
