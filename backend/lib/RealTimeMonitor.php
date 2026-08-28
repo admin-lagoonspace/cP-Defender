@@ -62,14 +62,61 @@ class RealTimeMonitor {
         return $this->isServiceActive();
     }
 
-    /** systemd's view: the unit is loaded AND running right now. */
+    /**
+     * Is the unit running right now, AND staying up?
+     *
+     * `is-active` alone is not enough. A daemon that crashes on its first line
+     * and is relaunched by Restart=on-failure cycles through active/activating
+     * for as long as systemd keeps trying, so `is-active` answers "active"
+     * about a process that has never worked. That is precisely what happened:
+     * the daemon died on a Python 3.8 argument under 3.6, systemd restarted it
+     * in a loop, and the dashboard reported "Monitor started".
+     *
+     * SubState separates them: `running` is up, `auto-restart` is being
+     * resurrected.
+     */
     public function isServiceActive(): bool {
-        if (!file_exists($this->serviceFile)) { return false; }
-        [$out, ] = $this->run('systemctl is-active sentinel-gate-monitor 2>/dev/null');
-        return trim($out[0] ?? '') === 'active';
+        $d = $this->serviceDetail();
+        return $d['active'] === 'active' && $d['sub'] === 'running';
+    }
+
+    /**
+     * ActiveState, SubState and the restart count.
+     *
+     * @return array{active:string,sub:string,restarts:int}
+     */
+    public function serviceDetail(): array {
+        if (!file_exists($this->serviceFile)) {
+            return ['active' => 'not-installed', 'sub' => '', 'restarts' => 0];
+        }
+        [$out, ] = $this->run(
+            'systemctl show sentinel-gate-monitor -p ActiveState -p SubState -p NRestarts 2>/dev/null');
+
+        $vals = [];
+        foreach ($out as $line) {
+            $parts = explode('=', trim($line), 2);
+            if (count($parts) === 2) { $vals[$parts[0]] = $parts[1]; }
+        }
+        return [
+            'active'   => $vals['ActiveState'] ?? 'unknown',
+            'sub'      => $vals['SubState'] ?? '',
+            'restarts' => (int)($vals['NRestarts'] ?? 0),
+        ];
+    }
+
+    /** The last lines the daemon logged — what a failed start must report. */
+    public function recentLog(int $lines = 12): string {
+        if (is_readable($this->logFile)) {
+            [$out, ] = $this->run('tail -n ' . (int)$lines . ' ' . escapeshellarg($this->logFile));
+            if ($out) { return trim(implode("\n", $out)); }
+        }
+        [$out, ] = $this->run(
+            'journalctl -u sentinel-gate-monitor -n ' . (int)$lines . ' --no-pager 2>/dev/null');
+        return trim(implode("\n", $out));
     }
 
     public function getStatus(): array {
+        $detail       = $this->serviceDetail();
         $running      = $this->isRunning();
         // Running may be true on systemd's word alone, with no PID file present
         // — reading it unconditionally warned on every request in that case.
@@ -125,6 +172,9 @@ class RealTimeMonitor {
             'effective_rate'    => (int) (Database::setting('rt_effective_files_per_sec', '0') ?? 0),
             'watch_count'       => (int) (Database::setting('rt_watch_count', '0') ?? 0),
             'watch_capped'      => Database::setting('rt_watch_capped', '0') === '1',
+            // A crash loop is the state that looked like success. Report it.
+            'restarts'          => $detail['restarts'],
+            'crash_looping'     => $detail['sub'] === 'auto-restart',
             'service_installed' => file_exists($this->serviceFile),
             'service_enabled'   => $this->isServiceEnabled(),
             'service_active'    => $this->isServiceActive(),
@@ -144,12 +194,44 @@ class RealTimeMonitor {
 
         // Prefer systemd whenever the unit file is present
         if (file_exists($this->serviceFile)) {
-            exec('systemctl start sentinel-gate-monitor 2>&1', $out, $code);
+            [$out, $code] = $this->run('systemctl start sentinel-gate-monitor 2>&1');
+
             if ($code === 0) {
-                Database::setSetting('rt_monitor_status', 'running');
-                Logger::info("Real-time monitor started via systemd");
-                return ['success' => true, 'method' => 'systemd'];
+                // Exit 0 means the process was LAUNCHED, not that it survived.
+                // A daemon that dies immediately gets relaunched by
+                // Restart=on-failure, and returning success here is how
+                // "Monitor started" came to be shown over something that had
+                // already crashed. Wait, then confirm it is still up.
+                $detail = ['active' => '', 'sub' => '', 'restarts' => 0];
+                for ($i = 0; $i < 8; $i++) {
+                    usleep(400000);
+                    $detail = $this->serviceDetail();
+                    if ($detail['active'] === 'active' && $detail['sub'] === 'running') {
+                        Database::setSetting('rt_monitor_status', 'running');
+                        Logger::info('Real-time monitor started via systemd');
+                        return ['success' => true, 'method' => 'systemd'];
+                    }
+                    if ($detail['sub'] === 'auto-restart' || $detail['active'] === 'failed') {
+                        break;   // crashing; waiting longer will not help
+                    }
+                }
+
+                $log = $this->recentLog();
+                Logger::error('Monitor did not stay running: '
+                              . $detail['active'] . '/' . $detail['sub']);
+                return [
+                    'success' => false,
+                    'error'   => 'The service started but did not stay running ('
+                               . $detail['active'] . '/' . $detail['sub']
+                               . ($detail['restarts'] > 0
+                                  ? ', ' . $detail['restarts'] . ' restarts' : '')
+                               . '). Last log lines: ' . ($log !== '' ? $log : 'none'),
+                    'detail'  => $detail,
+                ];
             }
+
+            return ['success' => false,
+                    'error'   => 'systemctl start failed: ' . trim(implode(' ', $out))];
         }
 
         // Fallback: direct background launch

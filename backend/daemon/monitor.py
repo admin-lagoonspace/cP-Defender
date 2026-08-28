@@ -16,11 +16,22 @@ SG_ROOT  = os.environ.get('SG_ROOT', str(Path(__file__).resolve().parent.parent.
 SG_DB    = os.path.join(SG_ROOT, 'database', 'sentinel.db')
 PID_FILE = '/var/run/sentinel-gate-monitor.pid'
 
+# force= requires Python 3.8. RHEL-family servers -- which is what cPanel runs
+# on -- ship 3.6, where this raises ValueError before the daemon does anything
+# at all. systemd still reported the unit as started, because the process did
+# launch, so the dashboard said "Monitor started" over a daemon that had already
+# died and was being restarted in a loop.
+#
+# The equivalent without force=: drop any handlers configured by an import, then
+# configure normally.
+for _h in list(logging.root.handlers):
+    logging.root.removeHandler(_h)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [sg-monitor] %(levelname)s %(message)s',
     datefmt='%Y-%m-%dT%H:%M:%S',
-    stream=sys.stdout, force=True,
+    stream=sys.stdout,
 )
 log = logging.getLogger('sg')
 

@@ -174,6 +174,22 @@ def main():
         else:
             ok("every UI handler resolves to a defined function")
 
+    # 2c-py. the daemon must run on the oldest Python we support
+    # cPanel runs on RHEL-family hosts shipping Python 3.6. The suite runs on
+    # the developer's Python, which is far newer, so it proved nothing about the
+    # customer's interpreter -- and a 3.8-only keyword shipped and crashed the
+    # daemon on every start.
+    r = subprocess.run([sys.executable,
+                        os.path.join(REPO, "scripts", "check-python-compat.py"), "3.6"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        for line in (r.stdout + r.stderr).strip().splitlines():
+            if line.strip():
+                fail(line.strip())
+        problems += 1
+    else:
+        ok("daemon and cron scripts run on Python 3.6")
+
     # 2d. every read-only route actually executes
     if php:
         r = subprocess.run([php, os.path.join(REPO, "scripts", "smoke.php")],

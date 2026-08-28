@@ -30,14 +30,40 @@ $paths = ['pid' => $pidFile, 'service' => $serviceFile,
           'log' => $sandbox . '/logs/monitor.log',
           'daemon' => $sandbox . '/monitor.py'];
 
-/** A fake systemctl. */
-function fake_exec(array $answers): callable
+/**
+ * A fake systemctl.
+ *
+ * Answers `systemctl show -p ActiveState -p SubState -p NRestarts`, which is
+ * what the code asks now. `is-active` alone could not distinguish a running
+ * daemon from one being restarted in a loop -- and a crash loop reporting
+ * "active" is exactly how "Monitor started" was displayed over a daemon that
+ * had already died.
+ *
+ * @param string $state    ActiveState (active, inactive, failed)
+ * @param string $sub      SubState    (running, auto-restart, dead)
+ */
+function fake_systemd(string $state, string $sub, int $restarts = 0, string $enabled = 'enabled'): callable
 {
-    return function (string $cmd) use ($answers): array {
-        foreach ($answers as $needle => $reply) {
-            if (strpos($cmd, $needle) !== false) {
-                return [[$reply], $reply === '' ? 1 : 0];
-            }
+    return function (string $cmd) use ($state, $sub, $restarts, $enabled): array {
+        if (strpos($cmd, 'systemctl show') !== false) {
+            return [[
+                'ActiveState=' . $state,
+                'SubState=' . $sub,
+                'NRestarts=' . $restarts,
+            ], 0];
+        }
+        if (strpos($cmd, 'is-enabled') !== false) {
+            return [[$enabled], 0];
+        }
+        if (strpos($cmd, 'tail') !== false || strpos($cmd, 'journalctl') !== false) {
+            return [['(no log)'], 0];
+        }
+        // `systemctl start` exits 0 as soon as the process is LAUNCHED, whether
+        // or not it survives. That is the whole reason start() has to confirm
+        // afterwards, so the fake must reproduce it.
+        if (strpos($cmd, 'systemctl start') !== false
+            || strpos($cmd, 'systemctl stop') !== false) {
+            return [[], 0];
         }
         return [[], 1];
     };
@@ -47,10 +73,7 @@ function fake_exec(array $answers): callable
 file_put_contents($serviceFile, "[Unit]\n");
 @unlink($pidFile);
 
-$enabledButDead = new RealTimeMonitor($paths, fake_exec([
-    'is-enabled' => 'enabled',
-    'is-active'  => 'inactive',
-]));
+$enabledButDead = new RealTimeMonitor($paths, fake_systemd('inactive', 'dead'));
 
 $st = $enabledButDead->getStatus();
 t_eq(true,  $st['service_enabled'], 'an enabled unit reports service_enabled');
@@ -64,10 +87,7 @@ t_ok($st['service_enabled'] !== $st['service_active'],
 // ── Systemd is consulted when the PID file is missing ────────────────────────
 // The daemon writes its own PID file into tmpfs. Losing it must not make a
 // running monitor look stopped.
-$activeNoPid = new RealTimeMonitor($paths, fake_exec([
-    'is-enabled' => 'enabled',
-    'is-active'  => 'active',
-]));
+$activeNoPid = new RealTimeMonitor($paths, fake_systemd('active', 'running'));
 t_eq(true, $activeNoPid->isRunning(),
     'a running unit is detected even with no PID file');
 t_eq(true, $activeNoPid->getStatus()['running'],
@@ -77,16 +97,13 @@ t_eq(true, $activeNoPid->getStatus()['running'],
 // PID 999999 will not exist; with systemd also reporting inactive, the answer
 // must be "not running".
 file_put_contents($pidFile, "999999\n");
-$stalePid = new RealTimeMonitor($paths, fake_exec([
-    'is-enabled' => 'enabled',
-    'is-active'  => 'inactive',
-]));
+$stalePid = new RealTimeMonitor($paths, fake_systemd('inactive', 'dead'));
 t_eq(false, $stalePid->isRunning(), 'a stale PID file does not report as running');
 @unlink($pidFile);
 
 // ── No unit installed at all ─────────────────────────────────────────────────
 @unlink($serviceFile);
-$notInstalled = new RealTimeMonitor($paths, fake_exec(['is-active' => 'active']));
+$notInstalled = new RealTimeMonitor($paths, fake_systemd('active', 'running'));
 t_eq(false, $notInstalled->getStatus()['service_installed'],
     'a missing unit file is reported as not installed');
 t_eq(false, $notInstalled->isServiceActive(),
@@ -94,9 +111,7 @@ t_eq(false, $notInstalled->isServiceActive(),
 
 // ── Staleness: running but doing nothing ─────────────────────────────────────
 file_put_contents($serviceFile, "[Unit]\n");
-$running = new RealTimeMonitor($paths, fake_exec([
-    'is-enabled' => 'enabled', 'is-active' => 'active',
-]));
+$running = new RealTimeMonitor($paths, fake_systemd('active', 'running'));
 
 Database::setSetting('rt_last_activity', (string) (time() - 10));
 $fresh = $running->getStatus();
@@ -157,4 +172,63 @@ foreach (['rt_profile', 'rt_max_files_per_sec', 'rt_max_file_size_mb', 'rt_nice'
           'rt_max_watches', 'rt_debounce_seconds', 'rt_exclude_dirs'] as $key) {
     t_ok(preg_match('/^[a-z_]+$/', $key) === 1,
         "setting key {$key} is accepted by settings/set");
+}
+
+// ── A crash loop is not "running" ────────────────────────────────────────────
+// The daemon died on its first line (logging.basicConfig(force=) needs Python
+// 3.8; the server has 3.6). systemd relaunched it on a loop, `systemctl start`
+// returned 0 because the process HAD launched, and `is-active` answered
+// "active" throughout -- so the dashboard reported "Monitor started" over
+// something that had never worked.
+$looping = new RealTimeMonitor($paths, fake_systemd('activating', 'auto-restart', 7));
+t_eq(false, $looping->isServiceActive(), 'a unit in auto-restart is not "active"');
+t_eq(false, $looping->isRunning(),       'a crash-looping daemon is not running');
+
+$st3 = $looping->getStatus();
+t_eq(true, $st3['crash_looping'], 'a crash loop is reported as such');
+t_eq(7,    $st3['restarts'],      'the restart count is reported');
+
+// A failed start must explain itself rather than returning success.
+// start() checks for the daemon script first -- correctly -- so both it and the
+// unit file have to exist for the systemd branch to be reached at all.
+file_put_contents($paths['daemon'], "#!/usr/bin/env python3
+print('x')
+");
+file_put_contents($serviceFile, "[Unit]
+");
+
+$failStart = new RealTimeMonitor($paths, fake_systemd('activating', 'auto-restart', 3));
+$r = $failStart->start();
+t_eq(false, $r['success'] ?? true, 'start() reports failure when the daemon does not stay up');
+t_contains((string)($r['error'] ?? ''), 'did not stay running',
+    'the failure says the service did not stay running');
+t_contains((string)($r['error'] ?? ''), 'restarts',
+    'the failure includes the restart count');
+t_contains((string)($r['error'] ?? ''), 'Last log lines',
+    'the failure includes what the daemon logged');
+
+// The healthy path still succeeds.
+$okStart = new RealTimeMonitor($paths, fake_systemd('active', 'running'));
+$r2 = $okStart->start();
+t_eq(true, $r2['success'] ?? false, 'start() succeeds when the daemon stays up');
+
+// ── The daemon must run on the Python the servers actually have ──────────────
+// cPanel runs on RHEL-family hosts, which ship Python 3.6. The test suite runs
+// on the developer's Python, which is far newer -- so it proved nothing about
+// the customer's interpreter until this check existed.
+$compat = [];
+$rc = 0;
+@exec(escapeshellarg(PHP_BINARY) . ' -r "echo 1;" >/dev/null 2>&1', $compat, $rc);
+$py = null;
+foreach ([dirname(__DIR__) . '/python/python.exe', 'python3', 'python'] as $cand) {
+    if (strpos($cand, '/') !== false ? is_file($cand) : true) { $py = $cand; break; }
+}
+if ($py) {
+    $out = [];
+    $code = 0;
+    @exec(escapeshellarg($py) . ' ' . escapeshellarg(dirname(__DIR__) . '/scripts/check-python-compat.py')
+          . ' 3.6 2>&1', $out, $code);
+    t_eq(0, $code, 'the daemon is compatible with Python 3.6: ' . implode(' ', array_slice($out, 1, 2)));
+} else {
+    t_ok(false, 'no Python available to run the compatibility check');
 }
