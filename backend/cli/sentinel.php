@@ -194,6 +194,12 @@ try {
             out(License::identity());
             break;
 
+        case 'probe': {
+            need_root();
+            out(License::probe());
+            break;
+        }
+
         case 'secret': {
             need_root();
             $val = $rest[1] ?? '';
@@ -210,7 +216,7 @@ try {
         }
 
         default:
-            fail('usage: sentinel license [status|activate <key>|refresh|identity|secret <value>]');
+            fail('usage: sentinel license [status|activate <key>|refresh|identity|secret <value>|probe]');
         }
         break;
     }
@@ -238,6 +244,7 @@ Usage: sentinel <command> [args] [--json]
   license refresh              Force a re-check against the server
   license identity             Show the domain/IP this server reports
   license secret <value>       Set the WHMCS licensing addon secret
+  license probe                Show exactly what the licence server returns
 
 Add --json to any command for machine-readable output.
 TXT;

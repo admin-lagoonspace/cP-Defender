@@ -226,3 +226,21 @@ t_contains($short['error'], 'too short', 'the refusal explains why');
 // A real-looking secret still works.
 $good = License::setSecret(bin2hex(random_bytes(16)));
 t_eq(true, $good['success'] ?? false, 'a genuine random secret is accepted');
+
+// ── probe() must never leak the secret ───────────────────────────────────────
+// It exists to be pasted into a support conversation, so the one thing it must
+// not contain is the value that makes local keys unforgeable.
+License::setSecret('probe-secret-value-not-for-print');
+$probe = License::probe();          // no network here: post() returns null
+$json  = json_encode($probe);
+t_ok(strpos($json, 'probe-secret-value-not-for-print') === false,
+    'probe() does not print the licensing secret');
+t_ok(array_key_exists('reachable', $probe), 'probe() reports reachability');
+t_ok(array_key_exists('diagnosis', $probe), 'probe() states a diagnosis');
+t_contains($probe['url'], '/modules/servers/licensing/verify.php',
+    'probe() targets the addon endpoint the real check uses');
+t_ok(array_key_exists('secret_configured', $probe),
+    'probe() reports whether a secret is set');
+
+$cli = t_code(dirname(__DIR__) . '/backend/cli/sentinel.php');
+t_contains($cli, "case 'probe'", 'the CLI exposes probe');

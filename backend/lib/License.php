@@ -547,6 +547,83 @@ class License
             : self::SECRET;
     }
 
+    /**
+     * Ask the licence server directly and return everything about the exchange.
+     *
+     * Diagnosing a licensing failure otherwise means reconstructing the POST by
+     * hand with curl and guessing at the field names. This sends exactly what
+     * the real check sends and shows exactly what came back, which is the only
+     * way to tell apart the cases that all surface as "Invalid":
+     *
+     *   - the addon is not installed (no XML, or an HTML error page)
+     *   - the key is unknown to WHMCS (status Invalid, md5hash present)
+     *   - the key is fine but our secret is wrong (md5hash mismatch)
+     *
+     * The secret is never included in the output.
+     */
+    public static function probe(): array
+    {
+        $key        = (string)Database::setting('license_key', '');
+        $checkToken = time() . self::rand(12);
+        $url        = rtrim(self::whmcsUrl(), '/') . '/modules/servers/licensing/verify.php';
+
+        $body = self::post($url, [
+            'licensekey'  => $key,
+            'domain'      => self::hostname(),
+            'ip'          => self::serverIp(),
+            'dir'         => defined('SG_ROOT') ? SG_ROOT : __DIR__,
+            'version'     => defined('SG_VERSION') ? SG_VERSION : 'unknown',
+            'check_token' => $checkToken,
+        ]);
+
+        $out = [
+            'url'              => $url,
+            'key_sent'         => $key === '' ? '(none stored)' : $key,
+            'domain_sent'      => self::hostname(),
+            'ip_sent'          => self::serverIp(),
+            'secret_configured'=> self::secretConfigured(),
+            'reachable'        => $body !== null,
+        ];
+
+        if ($body === null) {
+            $out['diagnosis'] = 'The licence server could not be reached at all. Check '
+                              . 'outbound HTTPS and that the URL above is correct.';
+            return $out;
+        }
+
+        $out['raw_response'] = substr($body, 0, 2000);
+        $parsed = self::parseXml($body);
+        $out['parsed'] = $parsed ?: [];
+
+        if (!$parsed || empty($parsed['status'])) {
+            $out['diagnosis'] = 'The server replied, but not with a licensing response. '
+                              . 'That usually means the WHMCS Licensing Addon is not '
+                              . 'installed at this URL, or the URL points somewhere else.';
+            return $out;
+        }
+
+        $out['server_status'] = $parsed['status'];
+
+        if (empty($parsed['md5hash'])) {
+            $out['diagnosis'] = 'The addon replied with status "' . $parsed['status']
+                              . '" and no md5hash, so the response cannot be verified '
+                              . 'and the secret is not the issue.';
+            return $out;
+        }
+
+        $matches = hash_equals(md5(self::secret() . $checkToken), (string)$parsed['md5hash']);
+        $out['hash_matches'] = $matches;
+        $out['diagnosis'] = $matches
+            ? 'The secret is correct. The licence itself is "' . $parsed['status'] . '" -- '
+              . 'anything other than Active is a decision made in WHMCS about this key, '
+              . 'domain or IP.'
+            : 'The addon signed its reply with a different secret than this server holds. '
+              . 'The value must come FROM the WHMCS Licensing Addon configuration; it '
+              . 'cannot be generated here, and it is not the licence key. The licence '
+              . 'itself reads as "' . $parsed['status'] . '".';
+        return $out;
+    }
+
     /** Where the per-installation settings live. */
     public static function modePhpPath(): string
     {

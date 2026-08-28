@@ -11,6 +11,19 @@ Bumping Y for a fix inflates the version and hides what actually changed.
 `scripts/check-version-bump.sh` enforces this and `publish.sh` will refuse a
 release where the bump and the commits disagree.
 
+## [3.22.0] - 2026-08-28
+
+### Added
+- **`sentinel license probe`** - sends exactly what the real licence check sends
+  and shows exactly what comes back, including the raw response.
+
+  Several genuinely different failures all surface as "Invalid", and no message
+  can distinguish them from the client side alone: the addon not being installed
+  at the configured URL, the key being unknown to WHMCS, and the shared secret
+  not matching. probe() reports which one it is, and prints the licence status
+  the server actually returned. The secret is never included in the output, so
+  the result can be pasted into a support conversation as-is.
+
 ## [3.21.5] - 2026-08-28
 
 ### Fixed
