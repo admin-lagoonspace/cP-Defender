@@ -578,6 +578,33 @@ class License
                     'error'   => 'That is the placeholder value, not a real secret.'];
         }
 
+        // Reject the stand-ins that appear in the documentation and in the error
+        // messages this tool itself prints. They are written to be pasted, and
+        // one was: the result is an installation that reports "configured" while
+        // holding a value the licence server has never heard of, which is a
+        // more confusing state than having set nothing at all.
+        $placeholders = [
+            'your-whmcs-addon-secret', 'whmcs-addon-secret', 'your-secret',
+            'yoursecret', 'changeme', 'secret', 'xxxxx', '<value>',
+        ];
+        if (in_array(strtolower($value), $placeholders, true)) {
+            return ['success' => false,
+                    'error'   => 'That is the example text from the instructions, not your '
+                               . 'secret. The real value is configured in WHMCS under '
+                               . 'Addons > License Manager, and must match there exactly. '
+                               . 'If none is set there yet, generate one with '
+                               . '"openssl rand -hex 32", save it in WHMCS, then pass the '
+                               . 'same string here.'];
+        }
+
+        // Anything this short is far more likely to be a mistake than a salt.
+        if (strlen($value) < 8) {
+            return ['success' => false,
+                    'error'   => 'That secret is too short to be a licensing salt '
+                               . '(' . strlen($value) . ' characters). Check you have '
+                               . 'copied the whole value from WHMCS.'];
+        }
+
         $path = self::modePhpPath();
         if (!is_file($path)) {
             return ['success' => false, 'error' => 'mode.php not found at ' . $path];

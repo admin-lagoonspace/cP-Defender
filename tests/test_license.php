@@ -200,3 +200,29 @@ $act = License::activate('SG-anything');
 t_eq('Unconfigured', $act['status'], 'activate() agrees');
 t_eq($st2['message'], $act['message'],
     'activate() and status() give the SAME explanation, not two');
+
+// ── The example text must not be accepted as a secret ────────────────────────
+// It happened: the instructions said `sentinel license secret
+// 'YOUR-WHMCS-ADDON-SECRET'` and that literal string was pasted. The result is
+// worse than setting nothing -- the install reports "configured" while holding
+// a value the licence server has never heard of, so the diagnosis shifts from
+// "no secret" to "secret mismatch" and the operator starts comparing two values
+// when only one was ever real.
+foreach (['YOUR-WHMCS-ADDON-SECRET', 'your-whmcs-addon-secret', 'changeme',
+          'secret', '<value>'] as $placeholder) {
+    $r = License::setSecret($placeholder);
+    t_eq(false, $r['success'] ?? false, "the placeholder '{$placeholder}' is refused");
+}
+
+$hint = License::setSecret('YOUR-WHMCS-ADDON-SECRET');
+t_contains($hint['error'], 'WHMCS', 'the refusal says where the real value lives');
+t_contains($hint['error'], 'openssl rand', 'the refusal says how to generate one');
+
+// Too short to be a salt is almost certainly a paste error.
+$short = License::setSecret('abc');
+t_eq(false, $short['success'] ?? false, 'a very short secret is refused');
+t_contains($short['error'], 'too short', 'the refusal explains why');
+
+// A real-looking secret still works.
+$good = License::setSecret(bin2hex(random_bytes(16)));
+t_eq(true, $good['success'] ?? false, 'a genuine random secret is accepted');
