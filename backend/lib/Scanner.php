@@ -147,14 +147,57 @@ class Scanner {
      */
     public static function phpBinary(): string
     {
-        if (defined('PHP_BINARY') && PHP_BINARY !== '' && is_executable(PHP_BINARY)) {
-            return PHP_BINARY;
+        // PHP_BINARY is whatever is executing right now -- and under cpsrvd that
+        // is php-cgi, which REFUSES to run a script handed to it on the command
+        // line ("Security Alert! The PHP CGI cannot be accessed directly")
+        // unless REDIRECT_STATUS is set. So the background scan was launched
+        // with an interpreter that exited immediately, the job row stayed at
+        // zero, and the scan appeared to do nothing at all.
+        //
+        // Fixing the bare `php` in 3.20.0 replaced "might not be on PATH" with
+        // "is definitely the wrong SAPI". A CLI binary is what a worker needs.
+        $candidates = [];
+
+        if (defined('PHP_BINARY') && PHP_BINARY !== '') {
+            $base = basename(PHP_BINARY);
+            if (strpos($base, 'cgi') === false && strpos($base, 'fpm') === false) {
+                $candidates[] = PHP_BINARY;              // already a CLI binary
+            } else {
+                // The CLI build usually sits beside the CGI one.
+                $candidates[] = preg_replace('/-?(cgi|fpm)$/', '', PHP_BINARY);
+                $candidates[] = dirname(PHP_BINARY) . '/php';
+            }
         }
-        foreach (['/usr/local/cpanel/3rdparty/bin/php', '/opt/cpanel/ea-php82/root/usr/bin/php',
-                  '/usr/bin/php', '/usr/local/bin/php'] as $cand) {
-            if (is_executable($cand)) { return $cand; }
+
+        $candidates = array_merge($candidates, [
+            '/usr/local/cpanel/3rdparty/bin/php',
+            '/opt/cpanel/ea-php83/root/usr/bin/php',
+            '/opt/cpanel/ea-php82/root/usr/bin/php',
+            '/opt/cpanel/ea-php81/root/usr/bin/php',
+            '/usr/bin/php',
+            '/usr/local/bin/php',
+        ]);
+
+        foreach ($candidates as $cand) {
+            if ($cand !== '' && is_executable($cand) && self::isCliBinary($cand)) {
+                return $cand;
+            }
         }
         return 'php';
+    }
+
+    /**
+     * Does this binary run scripts as CLI?
+     *
+     * Asked rather than assumed from the filename: /usr/bin/php is a CGI build
+     * on some cPanel servers, and a worker launched with it dies on the first
+     * line with no output anyone reads.
+     */
+    private static function isCliBinary(string $bin): bool
+    {
+        $out = [];
+        @exec(escapeshellarg($bin) . ' -r "echo PHP_SAPI;" 2>/dev/null', $out);
+        return trim($out[0] ?? '') === 'cli';
     }
 
     /** True when a signature database exists — clamscan is unusable without one. */

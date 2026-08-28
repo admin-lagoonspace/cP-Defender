@@ -162,6 +162,18 @@ def main():
         else:
             ok("every cross-class static call resolves to a public method")
 
+    # 2c-ui. every onclick/onchange resolves to a defined function
+    if php:
+        r = subprocess.run([php, os.path.join(REPO, "scripts", "check-ui-handlers.php")],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            for line in (r.stdout + r.stderr).strip().splitlines():
+                if line.strip():
+                    fail(line.strip())
+            problems += 1
+        else:
+            ok("every UI handler resolves to a defined function")
+
     # 2d. every read-only route actually executes
     if php:
         r = subprocess.run([php, os.path.join(REPO, "scripts", "smoke.php")],

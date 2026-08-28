@@ -119,6 +119,17 @@ const API = (() => {
         Auth.logout();
       }
 
+      // A server-side failure must be visible. Callers overwhelmingly do
+      // `if (!res?.success) return;`, which renders nothing and logs nothing, so
+      // a failing endpoint is indistinguishable from a button that is not wired
+      // up -- reported as "the refresh button does not work for any of these
+      // modules". 401 and 402 are handled below and are not faults.
+      if (r.status >= 400 && r.status !== 401 && r.status !== 402) {
+        const why = (json && (json.detail || json.error)) || ('HTTP ' + r.status);
+        console.error('API', path, r.status, why);
+        if (typeof toast === 'function') { toast(path + ': ' + why, 'error', 6000); }
+      }
+
       // 402 = the license gate rejected this call. Surface it once, centrally,
       // so every page gets the same treatment instead of each rendering its own
       // "Server error". The session stays valid — this is not an auth failure,

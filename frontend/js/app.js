@@ -1134,7 +1134,12 @@ async function toggleMonitor() {
     loadMonitor();
     loadMonitorStats();
   } else {
-    toast('Action failed', 'error');
+    // "Action failed" tells the operator nothing. The API explains itself --
+    // the daemon script missing, systemd refusing, the unit not installed --
+    // and that explanation is what makes the difference actionable.
+    const why = (res && (res.error || res.message)) || 'no reason given by the server';
+    toast('Monitor: ' + why, 'error', 7000);
+    console.error('toggleMonitor failed:', res);
   }
 }
 
@@ -2596,6 +2601,42 @@ function selectRtProfile(name) {
     el.style.background  = on ? 'rgba(124,92,255,.08)' : 'transparent';
   });
 
+  // The limit fields stay visible for every profile: they show what the chosen
+  // profile actually does, and hiding them behind a "Custom" click made the
+  // section read as preset-only. Editing any of them switches to Custom
+  // automatically, so a typed value is never silently discarded because the
+  // profile was left on a preset.
   const custom = document.getElementById('rt-custom-fields');
-  if (custom) custom.classList.toggle('hidden', name !== 'custom');
+  if (custom) {
+    custom.classList.remove('hidden');
+    custom.style.opacity = (name === 'custom') ? '1' : '.72';
+  }
+
+  const preset = {
+    light:    { fps: 5,   mb: 4,  nice: 19, watches: 5000,   debounce: 10 },
+    balanced: { fps: 25,  mb: 16, nice: 10, watches: 20000,  debounce: 5  },
+    thorough: { fps: 100, mb: 50, nice: 5,  watches: 100000, debounce: 2  },
+  }[name];
+
+  if (preset) {
+    // Show the numbers the preset stands for, so the two halves of this card
+    // can never disagree about what is in force.
+    const put = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
+    put('set-rt-fps', preset.fps);
+    put('set-rt-maxmb', preset.mb);
+    put('set-rt-nice', preset.nice);
+    put('set-rt-watches', preset.watches);
+    put('set-rt-debounce', preset.debounce);
+  }
+}
+
+/** Any edit to a limit means the operator wants Custom. */
+function rtLimitEdited() {
+  const hidden = document.getElementById('set-rt-profile');
+  if (hidden && hidden.value !== 'custom') {
+    selectRtProfile('custom');
+    if (typeof toast === 'function') {
+      toast('Switched to Custom — your values will be saved', 'info');
+    }
+  }
 }
