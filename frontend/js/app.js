@@ -1940,27 +1940,12 @@ async function loadLicense() {
   badge.textContent = lic.status + (lic.degraded ? ' (degraded)' : '');
   if (summary) summary.textContent = lic.message || '';
 
-  // An unconfigured licensing secret makes activation impossible: the response
-  // from WHMCS can never verify. Say so up front rather than letting someone
-  // paste a correct key and be told it is invalid.
+  // The "no secret configured" warning was removed in 3.23.0. The WHMCS
+  // Licensing Addon v3.1 signs with an empty secret, so an unset
+  // SG_LICENSE_SECRET is the normal state, not a fault -- warning about it
+  // would fire on every correctly configured server.
   const warn = document.getElementById('license-config-warning');
-  if (warn) {
-    if (lic.secret_configured === false) {
-      warn.classList.remove('hidden');
-      warn.innerHTML =
-        '<strong>This server is not configured for licensing.</strong><br>'
-      + 'SG_LICENSE_SECRET is still the placeholder, so no response from the '
-      + 'licence server can be verified and every key will be rejected. '
-      + 'Set it from the server with:<br>'
-      + '<code style="display:inline-block;margin:6px 0;padding:4px 8px;'
-      + 'background:rgba(0,0,0,.25);border-radius:5px">'
-      + 'sentinel license secret &lt;your-whmcs-addon-secret&gt;</code><br>'
-      + 'The value is the secret configured in the WHMCS licensing addon. '
-      + 'Then activate again.';
-    } else {
-      warn.classList.add('hidden');
-    }
-  }
+  if (warn) { warn.classList.add('hidden'); }
 
   if (meta) {
     meta.classList.remove('hidden');

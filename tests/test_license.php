@@ -69,69 +69,40 @@ t_ok(method_exists('License', 'secretConfigured'),
 t_eq(false, License::secretConfigured(),
     'the shipped placeholder secret is reported as NOT configured');
 
-// ── An unconfigured licensing secret must not look like a bad key ────────────
-// Reported: "I am entering a valid license and it's throwing me an error of
-// invalid license". The message was "License response failed verification."
-//
-// The verification is md5(secret . check_token), matching the official WHMCS
-// licensing addon. With SG_LICENSE_SECRET still on its placeholder, that can
-// never match whatever WHMCS signed with -- so a correct key is rejected and
-// the customer is told to look at the key. secretConfigured() existed from the
-// start and nothing called it.
-
+// ── An unset verification secret is NORMAL ──────────────────────────────────
+// Determined from the wire against a live server: the WHMCS Licensing Addon
+// v3.1 signs with md5(check_token) -- an empty secret -- and stores no secret in
+// its configuration at all. Releases 3.21.1 through 3.22.1 treated that normal
+// state as a misconfiguration, refused to activate, and sent the operator
+// looking through WHMCS for a value that does not exist.
 t_ok(method_exists('License', 'secretConfigured'), 'secretConfigured() exists');
-
-// The bootstrap does not define SG_LICENSE_SECRET, so this install is running
-// on the placeholder -- exactly the customer's situation.
 t_eq(false, License::secretConfigured(),
-    'a placeholder secret is reported as not configured');
+    'no explicit verification secret is the default');
 
-$res = License::activate('SG-0c9dfa27e78dd2ca8a');
-t_eq('Unconfigured', $res['status'],
-    'activating without a secret reports Unconfigured, not Invalid');
-t_eq(false, $res['valid'], 'an unconfigured install is not valid');
-// The message must name the REMEDY. It used to name the setting and the file to
-// hand-edit; it now names the command, which is safer -- mode.php is required by
-// config.php, so a stray quote there is a fatal on every request.
-t_contains($res['message'], 'sentinel license secret',
-    'the message names the command that fixes it');
-t_contains($res['message'], 'WHMCS',
-    'the message says where the value comes from');
-t_contains($res['message'], 'not the problem',
-    'the message says explicitly that the key is not at fault');
+$st0 = License::status();
+t_ok($st0['status'] !== 'Unconfigured',
+    'an unset verification secret is not reported as a misconfiguration');
 
-// It must not have contacted the licence server, and must not have burnt the
-// trial by recording that a key was entered.
-t_ok(strpos(strtolower($res['message']), 'failed verification') === false,
-    'the misleading "failed verification" wording is gone from this path');
-
-// Every result carries the configuration state so the UI can warn early.
-$st = License::status();
-t_ok(array_key_exists('secret_configured', $st),
-    'status() reports whether the secret is configured');
-t_eq(false, $st['secret_configured'], 'status() agrees the secret is unset');
-
-// ── The verification maths must match the WHMCS addon ────────────────────────
-// The official client computes md5($secret . $check_token). If this ever drifts,
-// every activation fails on a correctly configured server -- a far worse
-// outcome than the bug being fixed here, so it is pinned.
+// ── The two secrets must be different things ────────────────────────────────
+// They were the same value, which was wrong in both directions. The local key
+// only needs a salt that is stable and secret ON THIS MACHINE; deriving it from
+// a value shared with the licence server gained nothing, and once that shared
+// value turned out to be empty, anyone knowing the scheme could mint an
+// "Active" local key for any server.
 $src = t_code(dirname(__DIR__) . '/backend/lib/License.php');
-t_contains($src, "md5(self::secret() . \$checkToken)",
-    'the response hash is md5(secret . check_token), as WHMCS computes it');
-t_contains($src, 'hash_equals(', 'the comparison is constant-time');
+t_contains($src, 'verificationSecret', 'response verification has its own secret');
+t_contains($src, 'localSalt',          'the local key has its own salt');
+t_ok(strpos($src, 'md5(self::verificationSecret() . $checkToken)') !== false,
+    'the response hash uses the verification secret');
+t_ok(strpos($src, 'self::localSalt())') !== false,
+    'the local key is signed with the local salt');
+t_ok(strpos($src, 'md5($d . self::verificationSecret())') === false,
+    'the local key is NOT signed with the shared verification secret');
 
-// ── The UI warns before a key is wasted ──────────────────────────────────────
-$html = file_get_contents(dirname(__DIR__) . '/frontend/index.html');
-t_contains($html, 'license-config-warning',
-    'the licence panel has somewhere to show a configuration warning');
-$app = file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
-t_contains($app, 'secret_configured === false',
-    'the UI checks the configuration state');
-
-// ── The installer must be able to set it ─────────────────────────────────────
-$install = file_get_contents(dirname(__DIR__) . '/install.sh');
-t_contains($install, 'SG_LICENSE_SECRET',
-    'install.sh writes SG_LICENSE_SECRET into mode.php');
+// The local salt must be generated, persisted and non-trivial.
+$salt2 = License::localSalt();           // generated on first use
+t_ok(strlen($salt2) >= 32, 'a local salt is generated and stored (' . strlen($salt2) . ' chars)');
+t_ok($salt2 !== 'CHANGEME_SET_IN_mode_php', 'the local salt is not the old placeholder');
 
 // ── Setting the secret without hand-editing PHP ──────────────────────────────
 // The fix above tells the operator to edit mode.php over SSH. That file is
@@ -183,23 +154,9 @@ $cli = t_code(dirname(__DIR__) . '/backend/cli/sentinel.php');
 t_contains($cli, "case 'secret'", 'the CLI has a license secret subcommand');
 t_contains($cli, 'License::setSecret', 'the CLI calls setSecret()');
 
-// ── One condition, one message, on every path ────────────────────────────────
-// The guard was originally in activate() only. status() therefore still
-// contacted the licence server and reported "the response was signed with a
-// different secret" -- describing an unset secret as a mismatch, which sends
-// the operator to compare two values when one of them does not exist.
-$st2 = License::status();
-t_eq('Unconfigured', $st2['status'],
-    'status() reports Unconfigured when the secret is unset');
-t_ok(strpos($st2['message'], 'different secret') === false,
-    'status() does not describe an unset secret as a mismatch');
-t_contains($st2['message'], 'sentinel license secret',
-    'status() names the command that fixes it');
-
-$act = License::activate('SG-anything');
-t_eq('Unconfigured', $act['status'], 'activate() agrees');
-t_eq($st2['message'], $act['message'],
-    'activate() and status() give the SAME explanation, not two');
+// (Removed in 3.23.0: the assertions here pinned the "Unconfigured" gate, which
+// was itself based on the false premise that a shared secret must exist. The
+// wire says otherwise -- see the block at the top of this file.)
 
 // ── The example text must not be accepted as a secret ────────────────────────
 // It happened: the instructions said `sentinel license secret

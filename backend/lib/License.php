@@ -249,13 +249,6 @@ class License
             return self::result('Invalid', false, false, false, 'No license key supplied.');
         }
 
-        // evaluate() raises this condition with the same wording for every
-        // caller. Storing the key first would be pointless: nothing can verify a
-        // response without the shared secret, so the answer is "Invalid"
-        // whatever the key says.
-        if (!self::secretConfigured()) {
-            return self::status();
-        }
         Database::setSetting('license_key', $key);
         Database::setSetting('license_localkey', '');   // force a remote check
         // Entering a key ends the trial permanently, so an expired licence
@@ -277,24 +270,6 @@ class License
 
     private static function evaluate(): array
     {
-        // Checked here, not only in activate(), because EVERY licence operation
-        // is pointless without the shared secret: no reply can be verified, so
-        // the answer is "Invalid" regardless of the key.
-        //
-        // The guard was originally in activate() alone, which left status()
-        // still contacting the licence server and then reporting "signed with a
-        // different secret" -- a second, more confusing explanation of the same
-        // condition on a server whose secret was simply never set. One problem
-        // described two ways is worse than either description.
-        if (!self::secretConfigured()) {
-            return self::result('Unconfigured', false, false, false,
-                'This server has no licensing secret, so no reply from the licence '
-                . 'server can be verified and every key will be refused. Set it with:  '
-                . 'sentinel license secret <your-whmcs-addon-secret>  '
-                . '- the value from Addons > License Manager > Settings in WHMCS. '
-                . 'The licence key is not the problem.');
-        }
-
         $key = (string)Database::setting('license_key', '');
         if ($key === '') {
             if (self::trialActive()) {
@@ -372,7 +347,7 @@ class License
         // Guard against a replayed/spoofed response: WHMCS echoes an md5 of the
         // token we just generated, salted with our secret.
         if (!empty($results['md5hash'])) {
-            $expected = md5(self::secret() . $checkToken);
+            $expected = md5(self::verificationSecret() . $checkToken);
             if (!hash_equals($expected, (string)$results['md5hash'])) {
                 self::log('remote check: md5hash mismatch — response not trusted');
                 // The licence server answered, and the answer was signed with a
@@ -381,10 +356,10 @@ class License
                 // saying "failed verification" sent people to re-check the key
                 // they had just correctly pasted.
                 return self::result('Invalid', false, false, false,
-                    'The licence server replied, but the response was signed with a '
-                    . 'different secret than this server is configured with. Check that '
-                    . 'SG_LICENSE_SECRET in backend/config/mode.php matches the secret '
-                    . 'in the WHMCS licensing addon.');
+                    'The licence server replied, but its signature did not verify. Run '
+                    . '"sentinel license diagnose-hash" to see how the server signs its '
+                    . 'replies. If SG_LICENSE_SECRET is set in mode.php and the licence '
+                    . 'server has no secret configured, clearing it is the fix.');
             }
         }
 
@@ -422,9 +397,9 @@ class License
         $results['ip']     = self::serverIp();
 
         $d = base64_encode(serialize($results));
-        $d = md5($results['checkdate'] . self::secret()) . $d;
+        $d = md5($results['checkdate'] . self::localSalt()) . $d;
         $d = strrev($d);
-        $d = $d . md5($d . self::secret());
+        $d = $d . md5($d . self::localSalt());
         return wordwrap($d, 80, "
 ", true);
     }
@@ -446,7 +421,7 @@ class License
         // Outer layer: trailing md5 over everything before it
         $data = substr($localkey, 0, -32);
         $hash = substr($localkey, -32);
-        if (!hash_equals(md5($data . self::secret()), $hash)) { return null; }
+        if (!hash_equals(md5($data . self::localSalt()), $hash)) { return null; }
 
         // Un-reverse, then the FIRST 32 chars are md5(checkdate + secret)
         $data      = strrev($data);
@@ -461,7 +436,7 @@ class License
 
         // checkdate lives inside the payload, so the inner hash can only be
         // verified after unserialising.
-        if (!hash_equals(md5((string)$results['checkdate'] . self::secret()), $innerHash)) {
+        if (!hash_equals(md5((string)$results['checkdate'] . self::localSalt()), $innerHash)) {
             return null;
         }
 
@@ -540,11 +515,56 @@ class License
     }
 
     /** The per-installation salt, from mode.php when present. */
-    private static function secret(): string
+    /**
+     * The secret WHMCS signs its replies with.
+     *
+     * Determined from the wire against a live install: the Licensing Addon v3.1
+     * signs with md5(check_token) -- an EMPTY secret. Its configuration stores
+     * no secret at all (tbladdonmodules holds only version, access,
+     * clientverifytool, maxreissues and logprune), so there is nothing to copy
+     * across and never was.
+     *
+     * An explicit SG_LICENSE_SECRET is still honoured, because a future addon
+     * version or a different licence server may introduce one. Unset is the
+     * normal, correct state rather than a misconfiguration.
+     */
+    private static function verificationSecret(): string
     {
-        return defined('SG_LICENSE_SECRET') && SG_LICENSE_SECRET !== ''
-            ? SG_LICENSE_SECRET
-            : self::SECRET;
+        if (defined('SG_LICENSE_SECRET')
+            && SG_LICENSE_SECRET !== ''
+            && SG_LICENSE_SECRET !== self::SECRET) {
+            return SG_LICENSE_SECRET;
+        }
+        return '';
+    }
+
+    /**
+     * Salt for the local key WE cache, which is a different job entirely.
+     *
+     * These two were the same value, and that was wrong in both directions. The
+     * local key exists so the licence server is not contacted on every page
+     * load; its salt only has to be stable and secret ON THIS MACHINE. Deriving
+     * it from a value shared with the licence server gained nothing -- and once
+     * that shared value turned out to be empty, anyone who knew the scheme could
+     * mint an "Active" local key for any server.
+     *
+     * Generated per installation, stored in the database, never transmitted.
+     */
+    // Public because it is stored in the settings table regardless, so the
+    // accessor conceals nothing -- and a salt nothing can observe is a salt
+    // nothing can prove exists.
+    public static function localSalt(): string
+    {
+        $salt = (string)Database::setting('license_local_salt', '');
+        if ($salt === '') {
+            try {
+                $salt = bin2hex(random_bytes(32));
+            } catch (\Throwable $e) {
+                $salt = hash('sha256', uniqid('', true) . self::hostname() . microtime(true));
+            }
+            Database::setSetting('license_local_salt', $salt);
+        }
+        return $salt;
     }
 
     /**
@@ -589,7 +609,7 @@ class License
                     'error' => 'No md5hash in the response; nothing to diagnose.'];
         }
 
-        $secret = self::secret();
+        $secret = self::verificationSecret();
         $candidates = [
             'md5(token)'                  => md5($checkToken),
             'md5(secret + token)'         => md5($secret . $checkToken),
@@ -733,7 +753,7 @@ class License
             return $out;
         }
 
-        $matches = hash_equals(md5(self::secret() . $checkToken), (string)$parsed['md5hash']);
+        $matches = hash_equals(md5(self::verificationSecret() . $checkToken), (string)$parsed['md5hash']);
         $out['hash_matches'] = $matches;
         $out['diagnosis'] = $matches
             ? 'The secret is correct. The licence itself is "' . $parsed['status'] . '" -- '
@@ -858,7 +878,7 @@ class License
      */
     public static function secretConfigured(): bool
     {
-        return self::secret() !== self::SECRET && self::secret() !== '';
+        return self::verificationSecret() !== '';
     }
 
     private static function hostname(): string
