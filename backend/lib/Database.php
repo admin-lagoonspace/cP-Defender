@@ -167,7 +167,13 @@ class Database {
                 ('scan_paths',              '/home'),
                 ('email_alerts',            '1'),
                 ('alert_email',             ''),
-                ('auto_quarantine',         '1'),
+                -- Off by default. Quarantine MOVES the file into
+                -- /usr/local/sentinel-gate/quarantine, which is on the root
+                -- partition, so an enthusiastic scan can fill / on a server
+                -- whose customer data lives on a separate volume. Detection
+                -- still records the threat; acting on it is a decision the
+                -- operator opts into.
+                ('auto_quarantine',         '0'),
                 ('firewall_enabled',        '1'),
                 ('waf_enabled',             '1'),
                 ('bot_shield_enabled',      '1'),

@@ -925,7 +925,7 @@ async function loadSettings() {
 
   const res = Demo.active
     ? { success: true, data: {
-        scan_schedule: 'daily', scan_paths: '/home', auto_quarantine: '1',
+        scan_schedule: 'daily', scan_paths: '/home', auto_quarantine: '0',
         email_alerts: '1', alert_email: '', php_disable_funcs: 'exec,passthru,shell_exec,system',
         rate_limit_ssh: '5', rate_limit_http: '100',
         firewall_enabled: '1', waf_enabled: '1', bot_shield_enabled: '1', ip_rep_enabled: '1',
@@ -972,6 +972,14 @@ async function loadSettings() {
 
   syncScheduleFields();
   chk('set-auto-quar',     d.auto_quarantine);
+
+  // The scanner page used to state "auto-quarantine enabled" as static text,
+  // which was wrong the moment the setting was off -- and it now ships off.
+  const quarState = document.getElementById('scanner-quar-state');
+  if (quarState) {
+    quarState.textContent = d.auto_quarantine === '1'
+      ? 'auto-quarantine on' : 'auto-quarantine off';
+  }
   chk('set-email-alerts',  d.email_alerts);
   set('set-alert-email',   d.alert_email);
   set('set-php-disable',   d.php_disable_funcs);
