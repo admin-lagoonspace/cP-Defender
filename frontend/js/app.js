@@ -1940,6 +1940,25 @@ async function loadLicense() {
   badge.textContent = lic.status + (lic.degraded ? ' (degraded)' : '');
   if (summary) summary.textContent = lic.message || '';
 
+  // An unconfigured licensing secret makes activation impossible: the response
+  // from WHMCS can never verify. Say so up front rather than letting someone
+  // paste a correct key and be told it is invalid.
+  const warn = document.getElementById('license-config-warning');
+  if (warn) {
+    if (lic.secret_configured === false) {
+      warn.classList.remove('hidden');
+      warn.innerHTML =
+        '<strong>This server is not configured for licensing.</strong><br>'
+      + 'SG_LICENSE_SECRET is still the placeholder, so no response from the '
+      + 'licence server can be verified and every key will be rejected. '
+      + 'Set it in <code>' + esc('/usr/local/sentinel-gate/backend/config/mode.php')
+      + '</code> to the secret configured in the WHMCS licensing addon, then '
+      + 'activate again.';
+    } else {
+      warn.classList.add('hidden');
+    }
+  }
+
   if (meta) {
     meta.classList.remove('hidden');
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v || '—'; };

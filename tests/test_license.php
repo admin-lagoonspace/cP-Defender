@@ -68,3 +68,64 @@ t_ok(method_exists('License', 'secretConfigured'),
     'License exposes whether the licensing secret is configured');
 t_eq(false, License::secretConfigured(),
     'the shipped placeholder secret is reported as NOT configured');
+
+// ── An unconfigured licensing secret must not look like a bad key ────────────
+// Reported: "I am entering a valid license and it's throwing me an error of
+// invalid license". The message was "License response failed verification."
+//
+// The verification is md5(secret . check_token), matching the official WHMCS
+// licensing addon. With SG_LICENSE_SECRET still on its placeholder, that can
+// never match whatever WHMCS signed with -- so a correct key is rejected and
+// the customer is told to look at the key. secretConfigured() existed from the
+// start and nothing called it.
+
+t_ok(method_exists('License', 'secretConfigured'), 'secretConfigured() exists');
+
+// The bootstrap does not define SG_LICENSE_SECRET, so this install is running
+// on the placeholder -- exactly the customer's situation.
+t_eq(false, License::secretConfigured(),
+    'a placeholder secret is reported as not configured');
+
+$res = License::activate('SG-0c9dfa27e78dd2ca8a');
+t_eq('Unconfigured', $res['status'],
+    'activating without a secret reports Unconfigured, not Invalid');
+t_eq(false, $res['valid'], 'an unconfigured install is not valid');
+t_contains($res['message'], 'SG_LICENSE_SECRET',
+    'the message names the setting that must be fixed');
+t_contains($res['message'], 'mode.php',
+    'the message names the file to edit');
+t_contains($res['message'], 'not the problem',
+    'the message says explicitly that the key is not at fault');
+
+// It must not have contacted the licence server, and must not have burnt the
+// trial by recording that a key was entered.
+t_ok(strpos(strtolower($res['message']), 'failed verification') === false,
+    'the misleading "failed verification" wording is gone from this path');
+
+// Every result carries the configuration state so the UI can warn early.
+$st = License::status();
+t_ok(array_key_exists('secret_configured', $st),
+    'status() reports whether the secret is configured');
+t_eq(false, $st['secret_configured'], 'status() agrees the secret is unset');
+
+// ── The verification maths must match the WHMCS addon ────────────────────────
+// The official client computes md5($secret . $check_token). If this ever drifts,
+// every activation fails on a correctly configured server -- a far worse
+// outcome than the bug being fixed here, so it is pinned.
+$src = t_code(dirname(__DIR__) . '/backend/lib/License.php');
+t_contains($src, "md5(self::secret() . \$checkToken)",
+    'the response hash is md5(secret . check_token), as WHMCS computes it');
+t_contains($src, 'hash_equals(', 'the comparison is constant-time');
+
+// ── The UI warns before a key is wasted ──────────────────────────────────────
+$html = file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+t_contains($html, 'license-config-warning',
+    'the licence panel has somewhere to show a configuration warning');
+$app = file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+t_contains($app, 'secret_configured === false',
+    'the UI checks the configuration state');
+
+// ── The installer must be able to set it ─────────────────────────────────────
+$install = file_get_contents(dirname(__DIR__) . '/install.sh');
+t_contains($install, 'SG_LICENSE_SECRET',
+    'install.sh writes SG_LICENSE_SECRET into mode.php');

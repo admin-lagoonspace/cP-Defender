@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.21.0">
+<link rel="stylesheet" href="css/app.css?v=3.21.1">
 </head>
 <body>
 <div id="app">
@@ -289,7 +289,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.21.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.21.1 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -900,7 +900,11 @@
             <button class="btn btn-ghost btn-sm" onclick="refreshLicense()">Re-check now</button>
           </div>
 
-          <div id="license-error" class="hidden" style="margin-top:12px;font-size:.78rem;color:var(--red2);
+          <div id="license-config-warning" class="hidden"
+     style="margin:10px 0;padding:11px 14px;border-radius:8px;font-size:.8rem;line-height:1.6;
+            background:rgba(242,201,76,.10);color:var(--amber2);
+            border:1px solid rgba(242,201,76,.25)"></div>
+<div id="license-error" class="hidden" style="margin-top:12px;font-size:.78rem;color:var(--red2);
                background:var(--red-dim);border:1px solid rgba(229,49,112,.2);border-radius:8px;padding:9px 12px"></div>
 
           <div style="margin-top:14px;font-size:.73rem;color:var(--txt3);line-height:1.6">
@@ -1845,9 +1849,9 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.21.0"></script>
+<script src="js/api.js?v=3.21.1"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.21.0"></script>
+<script src="js/app.js?v=3.21.1"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {

@@ -248,6 +248,21 @@ class License
         if ($key === '') {
             return self::result('Invalid', false, false, false, 'No license key supplied.');
         }
+
+        // Check this BEFORE contacting the licence server. Without the shared
+        // secret the response can never verify, so the request is guaranteed to
+        // fail -- and it fails with "License response failed verification",
+        // which reads as "your key is bad" when in fact this server is not
+        // configured. Reporting a misconfiguration as an invalid licence sends
+        // the customer to look in exactly the wrong place.
+        if (!self::secretConfigured()) {
+            return self::result('Unconfigured', false, false, false,
+                'This server\'s licensing secret is not set, so no response from the '
+                . 'licence server can be verified. Set SG_LICENSE_SECRET in '
+                . 'backend/config/mode.php to the secret configured in the WHMCS '
+                . 'licensing addon, then activate again. The licence key is not the '
+                . 'problem.');
+        }
         Database::setSetting('license_key', $key);
         Database::setSetting('license_localkey', '');   // force a remote check
         // Entering a key ends the trial permanently, so an expired licence
@@ -349,8 +364,16 @@ class License
             $expected = md5(self::secret() . $checkToken);
             if (!hash_equals($expected, (string)$results['md5hash'])) {
                 self::log('remote check: md5hash mismatch — response not trusted');
+                // The licence server answered, and the answer was signed with a
+                // different secret to ours. That is a configuration mismatch
+                // between this server and the WHMCS addon, not a bad key -- and
+                // saying "failed verification" sent people to re-check the key
+                // they had just correctly pasted.
                 return self::result('Invalid', false, false, false,
-                    'License response failed verification.');
+                    'The licence server replied, but the response was signed with a '
+                    . 'different secret than this server is configured with. Check that '
+                    . 'SG_LICENSE_SECRET in backend/config/mode.php matches the secret '
+                    . 'in the WHMCS licensing addon.');
             }
         }
 
@@ -490,6 +513,11 @@ class License
             // IP/domain" rejection is almost always explained by these values.
             'domain'     => self::hostname(),
             'ip'         => self::serverIp(),
+            // Carried on EVERY result, not just failures: an unconfigured
+            // server should say so before a key is entered, rather than after
+            // the customer has pasted a correct key and been told it is invalid.
+            'secret_configured' => self::secretConfigured(),
+            'whmcs_url'         => self::whmcsUrl(),
         ];
     }
 
@@ -508,10 +536,15 @@ class License
             : self::SECRET;
     }
 
-    /** False when still running on the placeholder salt. */
+    /**
+     * False when still running on the placeholder salt.
+     *
+     * This existed from the start and nothing called it, so an installation
+     * with no secret behaved exactly like one with a wrong licence key.
+     */
     public static function secretConfigured(): bool
     {
-        return self::secret() !== 'CHANGEME_SET_IN_mode_php';
+        return self::secret() !== self::SECRET && self::secret() !== '';
     }
 
     private static function hostname(): string
