@@ -221,3 +221,14 @@ t_eq(false, License::trySecret('')['success'] ?? false, 'an empty candidate is r
 $cli = t_code(dirname(__DIR__) . '/backend/cli/sentinel.php');
 t_contains($cli, "case 'try-secret'", 'the CLI exposes try-secret');
 t_contains($cli, 'License::trySecret', 'the CLI calls trySecret()');
+
+// ── Expiry display ───────────────────────────────────────────────────────────
+// A live "Free Account" licence returns nextduedate 0000-00-00, which is not a
+// date. The old code also fell back to registeredname when nextduedate was
+// absent, so a licence with no due date showed the CUSTOMER'S NAME where the
+// expiry belongs.
+$src = t_code(dirname(__DIR__) . '/backend/lib/License.php');
+t_ok(strpos($src, "\$r['nextduedate'] ?? \$r['registeredname']") === false,
+    'expiry never falls back to the registered name');
+t_contains($src, "'0000-00-00'", 'a zero date is recognised');
+t_contains($src, "'No expiry'", 'a licence with no renewal date says so');

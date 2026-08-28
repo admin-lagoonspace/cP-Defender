@@ -455,7 +455,14 @@ class License
     private static function fromResults(array $r, bool $degraded, string $note = ''): array
     {
         $status  = (string)($r['status'] ?? 'Unknown');
-        $expires = (string)($r['nextduedate'] ?? $r['registeredname'] ?? '');
+        // Falling back to registeredname meant a licence with no due date
+        // displayed the CUSTOMER'S NAME where the expiry date belongs. And a
+        // "Free Account" with no renewal returns 0000-00-00, which is not a
+        // date and should not be shown as one.
+        $expires = (string)($r['nextduedate'] ?? '');
+        if ($expires === '0000-00-00' || $expires === '') {
+            $expires = 'No expiry';
+        }
 
         switch ($status) {
             case 'Active':
