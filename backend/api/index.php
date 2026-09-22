@@ -409,7 +409,11 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
             ? (function() use ($scanner, $id) {
                 $threat = Database::fetchOne('SELECT file_path FROM threats WHERE id=?', [(int)$id]);
                 if (!$threat) return ['success' => false, 'error' => 'Threat not found', 'code' => 404];
-                return ['success' => $scanner->quarantine($threat['file_path'], (int)$id)];
+                // The result array carries the reason on failure. Wrapping it in
+                // ['success' => ...] as before discarded that, which is how
+                // "there seems to be some issue accessing files" became the
+                // only thing the user ever saw.
+                return $scanner->quarantine($threat['file_path'], (int)$id);
             })()
             : ['success' => false, 'error' => 'Invalid request', 'code' => 400],
 
@@ -418,8 +422,31 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
             : ['success' => false, 'error' => 'Invalid request', 'code' => 400],
 
         'delete' => $method === 'DELETE' && $id
-            ? ['success' => $scanner->deleteThreat((int)$id)]
+            ? $scanner->deleteThreat((int)$id)
             : ['success' => false, 'error' => 'DELETE required', 'code' => 405],
+
+        // Inspect an infected file without running it. Read as data and
+        // rendered escaped by the client; nothing includes or evaluates it.
+        'view' => (function() use ($scanner, $id, $q) {
+            $tid = (int)($id ?? $q['id'] ?? 0);
+            if ($tid <= 0) {
+                return ['success' => false, 'error' => 'No threat id given', 'code' => 400];
+            }
+            return $scanner->viewThreat($tid);
+        })(),
+
+        // One action over many selected threats. Each is attempted separately so
+        // a single unremovable file does not abort the rest.
+        'bulk' => $method === 'POST'
+            ? (function() use ($scanner, $body) {
+                $ids    = $body['ids'] ?? [];
+                $action = (string)($body['action'] ?? '');
+                if (!is_array($ids) || !$ids) {
+                    return ['success' => false, 'error' => 'No threats selected', 'code' => 400];
+                }
+                return $scanner->bulkAction($ids, $action);
+            })()
+            : ['success' => false, 'error' => 'POST required', 'code' => 405],
 
         'update-sigs' => $method === 'POST'
             ? $scanner->updateSignatures()

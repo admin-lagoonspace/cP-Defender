@@ -482,32 +482,56 @@ async function loadThreats() {
   document.getElementById('threat-count-badge').textContent = threats.length;
 
   if (!threats.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--txt3);padding:28px">No threats found. Run a scan to check your server.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--txt3);padding:28px">No threats found. Run a scan to check your server.</td></tr>';
+    const masterEmpty = document.getElementById('threat-check-all');
+    if (masterEmpty) { masterEmpty.checked = false; masterEmpty.indeterminate = false; }
+    updateBulkBar();
     return;
   }
 
-  tbody.innerHTML = threats.map(t => `
+  // Every value below is escaped. A file path is attacker-controlled -- naming
+  // a file is exactly the kind of thing malware does -- and interpolating it
+  // raw into innerHTML made the threats table an XSS sink in the dashboard of
+  // a security product. The View button reads such a file deliberately, which
+  // makes getting this right more important, not less.
+  tbody.innerHTML = threats.map(t => {
+    const path  = String(t.file_path || '');
+    const short = path.split('/').slice(-2).join('/');
+    const id    = parseInt(t.id, 10) || 0;
+
+    return `
     <tr>
-      <td>${sevBadge(t.severity)}</td>
-      <td class="mono primary" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.file_path}">
-        ${t.file_path.split('/').slice(-2).join('/')}
+      <td style="width:34px">
+        <input type="checkbox" class="threat-check" data-id="${id}"
+               onchange="updateBulkBar()" aria-label="Select ${esc(short)}">
       </td>
-      <td class="mono" style="color:var(--blue);font-size:.75rem">${t.cpanel_user || '—'}</td>
-      <td class="mono" style="color:var(--red)">${t.threat_name}</td>
-      <td><span class="badge badge-amber">${t.threat_type}</span></td>
+      <td>${sevBadge(t.severity)}</td>
+      <td class="mono primary" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(path)}">
+        ${esc(short)}
+      </td>
+      <td class="mono" style="color:var(--blue);font-size:.75rem">${esc(t.cpanel_user || '—')}</td>
+      <td class="mono" style="color:var(--red)">${esc(t.threat_name || '')}</td>
+      <td><span class="badge badge-amber">${esc(t.threat_type || '')}</span></td>
       <td class="dim">${fmtBytes(t.size || 0)}</td>
       <td class="dim">${reltime(t.detected_at)}</td>
       <td>${threatStatusBadge(t.status)}</td>
-      <td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-xs" onclick="viewThreatFile(${id})"
+                title="View contents (does not run the file)">👁</button>
         ${t.status === 'active' ? `
-          <button class="btn btn-ghost btn-xs" onclick="quarantineThreat(${t.id})" title="Quarantine">🔒</button>
-          <button class="btn btn-danger btn-xs" onclick="deleteThreat(${t.id})" title="Delete file">🗑</button>
+          <button class="btn btn-ghost btn-xs" onclick="quarantineThreat(${id})" title="Quarantine">🔒</button>
+          <button class="btn btn-danger btn-xs" onclick="deleteThreat(${id})" title="Delete file">🗑</button>
         ` : ''}
         ${t.status === 'quarantined' ? `
-          <button class="btn btn-ghost btn-xs" onclick="restoreThreat(${t.id})" title="Restore">↺</button>
+          <button class="btn btn-ghost btn-xs" onclick="restoreThreat(${id})" title="Restore">↺</button>
         ` : ''}
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
+
+  const master = document.getElementById('threat-check-all');
+  if (master) { master.checked = false; master.indeterminate = false; }
+  updateBulkBar();
 }
 
 function threatStatusBadge(status) {
@@ -517,13 +541,17 @@ function threatStatusBadge(status) {
     deleted:     '<span class="badge badge-gray">Deleted</span>',
     restored:    '<span class="badge badge-blue">Restored</span>',
   };
-  return map[status] || `<span class="badge badge-gray">${status}</span>`;
+  return map[status] || `<span class="badge badge-gray">${esc(status || '')}</span>`;
 }
 
 async function quarantineThreat(id) {
   const res = Demo.active ? { success: true } : await API.quarantineThreat(id);
-  if (res?.success) { toast('File quarantined', 'success'); loadThreats(); }
-  else toast('Quarantine failed', 'error');
+  if (res?.success) { toast('File quarantined', 'success'); loadThreats(); return; }
+  // "Quarantine failed" with no reason is what made this look like a mystery.
+  // The API now explains itself -- cross-device move, unwritable directory, an
+  // immutable file -- so show that.
+  toast('Quarantine failed: ' + ((res && (res.error || res.detail)) || 'no reason given'),
+        'error', 10000);
 }
 
 async function restoreThreat(id) {
@@ -2758,4 +2786,196 @@ async function saveMonitorSettings() {
     status.style.color = 'var(--green)';
   }
   toast('Monitor settings saved', 'success');
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   Refresh, bulk actions and the file viewer
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Run a loader with visible feedback.
+ *
+ * Every Refresh button called a real function that really did refetch -- which
+ * is why the handler check passed and I reported it fixed. But nothing on
+ * screen changed: on an idle server the numbers are identical, so a working
+ * refresh and a dead button look exactly the same. Reported twice as "refresh
+ * does not work", and both times it was the feedback that was missing, not the
+ * fetch.
+ */
+async function doRefresh(btn, fn) {
+  if (!btn || btn.disabled) { return; }
+
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '\u21BB Refreshing\u2026';
+
+  const started = Date.now();
+  let failed = false;
+  try {
+    await fn();
+  } catch (e) {
+    failed = true;
+    console.error('refresh failed:', e);
+    toast('Refresh failed: ' + (e && e.message ? e.message : e), 'error', 6000);
+  }
+
+  // A refresh that returns instantly still has to be seen to have happened.
+  const elapsed = Date.now() - started;
+  if (elapsed < 350) { await new Promise(r => setTimeout(r, 350 - elapsed)); }
+
+  btn.disabled = false;
+  btn.innerHTML = original;
+
+  if (!failed) {
+    const t = new Date().toLocaleTimeString();
+    btn.title = 'Last refreshed ' + t;
+    const stamp = document.getElementById('refresh-stamp');
+    if (stamp) { stamp.textContent = 'Updated ' + t; }
+    toast('Updated ' + t, 'success', 2000);
+  }
+}
+
+// ── Threat selection ─────────────────────────────────────────────────────────
+
+/** Ids currently ticked in the threats table. */
+function selectedThreatIds() {
+  return Array.from(document.querySelectorAll('.threat-check:checked'))
+    .map(el => parseInt(el.getAttribute('data-id'), 10))
+    .filter(n => !isNaN(n) && n > 0);
+}
+
+function toggleAllThreats(masterEl) {
+  const on = !!(masterEl && masterEl.checked);
+  document.querySelectorAll('.threat-check').forEach(el => { el.checked = on; });
+  updateBulkBar();
+}
+
+/** Keep the bulk bar and the master checkbox in step with the rows. */
+function updateBulkBar() {
+  const ids   = selectedThreatIds();
+  const bar   = document.getElementById('threat-bulk-bar');
+  const count = document.getElementById('threat-bulk-count');
+  const all   = document.querySelectorAll('.threat-check');
+  const master = document.getElementById('threat-check-all');
+
+  if (count) {
+    count.textContent = ids.length + ' selected';
+  }
+  if (bar) {
+    bar.classList.toggle('hidden', ids.length === 0);
+  }
+  if (master) {
+    master.checked = all.length > 0 && ids.length === all.length;
+    // Partial selection is neither ticked nor empty, and saying so avoids the
+    // master box claiming everything is selected when only some rows are.
+    master.indeterminate = ids.length > 0 && ids.length < all.length;
+  }
+}
+
+/**
+ * Quarantine or delete every selected threat.
+ *
+ * Confirmed first, because both are destructive and delete is irreversible.
+ * Per-file results are reported rather than one pass/fail for the batch: with
+ * fifty files selected, "some failed" is not something anyone can act on.
+ */
+async function bulkThreatAction(action) {
+  const ids = selectedThreatIds();
+  if (!ids.length) { toast('Nothing selected', 'info'); return; }
+
+  const verb = action === 'delete' ? 'Delete' : 'Quarantine';
+  const warn = action === 'delete'
+    ? '\n\nThis permanently removes the files. It cannot be undone.'
+    : '\n\nFiles are moved into quarantine and can be restored.';
+  if (!confirm(verb + ' ' + ids.length + ' selected file(s)?' + warn)) { return; }
+
+  const btns = Array.from(document.querySelectorAll('.threat-bulk-btn'));
+  btns.forEach(b => { b.disabled = true; });
+
+  const res = Demo.active
+    ? { success: true, ok: ids.length, failed: 0, results: [] }
+    : await API.bulkThreats(ids, action);
+
+  btns.forEach(b => { b.disabled = false; });
+
+  if (!res) {
+    toast('No response from the server', 'error', 6000);
+    return;
+  }
+
+  const ok     = res.ok || 0;
+  const failed = res.failed || 0;
+
+  if (failed === 0) {
+    toast(verb + 'd ' + ok + ' file(s)', 'success');
+  } else {
+    // Name the first few failures with their reasons. A count alone tells the
+    // operator nothing about what to do next.
+    const reasons = (res.results || [])
+      .filter(r => !r.success)
+      .slice(0, 3)
+      .map(r => '#' + r.id + ': ' + (r.error || 'unknown reason'));
+    toast(ok + ' succeeded, ' + failed + ' failed — ' + reasons.join(' | '),
+          'error', 12000);
+    console.error('bulk ' + action + ' failures:', res.results);
+  }
+
+  const master = document.getElementById('threat-check-all');
+  if (master) { master.checked = false; master.indeterminate = false; }
+  updateBulkBar();
+  loadThreats();
+}
+
+// ── Safe file viewer ─────────────────────────────────────────────────────────
+
+/**
+ * Show what is inside an infected file, without running it.
+ *
+ * The content is read on the server with file_get_contents -- never included or
+ * evaluated -- and inserted here with textContent, not innerHTML. A payload
+ * full of markup or script is therefore displayed as characters and cannot act
+ * inside the dashboard.
+ */
+async function viewThreatFile(id) {
+  const overlay = document.getElementById('file-view-overlay');
+  const body    = document.getElementById('file-view-content');
+  const meta    = document.getElementById('file-view-meta');
+  const title   = document.getElementById('file-view-title');
+  if (!overlay || !body) { return; }
+
+  overlay.classList.remove('hidden');
+  body.textContent = 'Loading\u2026';
+  if (meta)  { meta.textContent = ''; }
+  if (title) { title.textContent = 'File contents'; }
+
+  const res = Demo.active
+    ? { success: true, path: '/home/demo/shell.php', size: 42, binary: false,
+        sha256: 'demo', content: '<?php // demo only', truncated: false }
+    : await API.viewThreat(id);
+
+  if (!res || !res.success) {
+    body.textContent = (res && (res.error || res.detail)) || 'Could not read the file.';
+    return;
+  }
+
+  if (title) { title.textContent = res.path || 'File contents'; }
+
+  if (meta) {
+    const parts = [fmtNum(res.size || 0) + ' bytes'];
+    if (res.sha256)    { parts.push('sha256 ' + String(res.sha256).slice(0, 16) + '\u2026'); }
+    if (res.truncated) { parts.push('showing the first 256 KB'); }
+    if (res.binary)    { parts.push('binary file'); }
+    meta.textContent = parts.join(' \u00b7 ');
+  }
+
+  // textContent, deliberately. This is hostile input being shown to an admin.
+  body.textContent = res.binary
+    ? 'This is a binary file. Its contents are not shown as text; the SHA-256 above identifies it.'
+    : (res.content || '(empty file)');
+}
+
+function closeFileView() {
+  const overlay = document.getElementById('file-view-overlay');
+  if (overlay) { overlay.classList.add('hidden'); }
 }

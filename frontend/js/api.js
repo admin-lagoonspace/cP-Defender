@@ -181,6 +181,8 @@ const API = (() => {
     restoreThreat:    (id)          => req('POST',   `scanner/restore/${id}`, {}),
     deleteThreat:     (id)          => req('DELETE', `scanner/delete/${id}`),
     updateSigs:       ()            => req('POST',   'scanner/update-sigs', {}),
+    viewThreat:       (id)          => req('GET',    `scanner/view/${id}`),
+    bulkThreats:      (ids, action) => req('POST',   'scanner/bulk', { ids, action }),
 
     // Firewall
     fwStats:      ()           => req('GET',  'firewall/stats'),

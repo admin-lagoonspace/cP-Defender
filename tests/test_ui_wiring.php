@@ -127,3 +127,68 @@ t_contains($app, 'is not running yet',
 // The button must be re-enabled on every path, or one failure disables it for
 // the rest of the session.
 t_contains($app, 'const restore =', 'there is a single restore path for the buttons');
+
+// ── Refresh must be observable ───────────────────────────────────────────────
+// Reported twice as "refresh does not work". Both times the handler resolved
+// and really did refetch -- which is why the handler check passed and I said it
+// was fixed. Nothing on screen changed: on an idle server the numbers are
+// identical, so a working refresh and a dead button are indistinguishable.
+$html = file_get_contents($repo . '/frontend/index.html');
+$app  = file_get_contents($repo . '/frontend/js/app.js');
+
+t_contains($app, 'async function doRefresh', 'there is a refresh wrapper that gives feedback');
+t_contains($app, 'Refreshing', 'the button says it is working');
+t_contains($app, 'refresh-stamp', 'a timestamp records when data last arrived');
+
+// Every Refresh button must go through it, or some stay silent.
+$bare = preg_match_all('/onclick="(refreshDashboard|loadWafEngine|loadTopAttackers'
+      . '|loadStorageStats|loadMonitor|loadBotShield|loadCMSGuard|loadRootkit'
+      . '|loadIntegrity|loadPHPHardening)\(\)"/', $html);
+t_eq(0, $bare, 'no Refresh button still calls its loader directly');
+t_ok(substr_count($html, 'doRefresh(this,') >= 10,
+    'all ten Refresh buttons report progress (' . substr_count($html, 'doRefresh(this,') . ')');
+
+// ── The threats table must escape what it renders ────────────────────────────
+// A file path is attacker-controlled: naming a file is exactly what malware
+// does. Interpolating it raw into innerHTML made the threats table an XSS sink
+// in the dashboard of a security product.
+t_ok(strpos($app, 'title="${t.file_path}"') === false,
+    'the file path is no longer interpolated raw into the row');
+t_contains($app, 'esc(path)',        'the full path is escaped');
+t_contains($app, 'esc(t.threat_name', 'the threat name is escaped');
+t_contains($app, 'esc(status', 'the status badge escapes an unknown status');
+
+// ── Select-all and bulk actions ──────────────────────────────────────────────
+t_contains($html, 'id="threat-check-all"', 'the table has a select-all checkbox');
+t_contains($html, 'toggleAllThreats(this)', 'select-all is wired');
+t_contains($app,  'function toggleAllThreats', 'toggleAllThreats() exists');
+t_contains($app,  'function selectedThreatIds', 'the selection can be read');
+t_contains($app,  'indeterminate', 'a partial selection is shown as partial, not as all');
+
+t_contains($html, 'id="threat-bulk-bar"', 'there is a bulk action bar');
+t_contains($html, "bulkThreatAction('quarantine')", 'bulk quarantine is offered');
+t_contains($html, "bulkThreatAction('delete')", 'bulk delete is offered');
+t_contains($app,  'async function bulkThreatAction', 'bulkThreatAction() exists');
+t_contains($app,  'cannot be undone', 'bulk delete warns that it is irreversible');
+t_contains($app,  'confirm(', 'a destructive bulk action is confirmed first');
+
+// Per-file reasons, not one pass/fail for the batch.
+t_contains($app, 'res.results', 'the bulk result is read per file');
+t_contains($app, 'succeeded, ', 'a partial failure reports both counts');
+
+// ── The safe viewer ──────────────────────────────────────────────────────────
+t_contains($html, 'id="file-view-overlay"', 'there is a file viewer dialog');
+t_contains($html, 'never executed', 'the dialog states that the file is not run');
+t_contains($app,  'async function viewThreatFile', 'viewThreatFile() exists');
+t_contains($app,  'viewThreatFile(${id})', 'every row offers a View button');
+
+// The single most important property: hostile content is inserted as TEXT.
+t_contains($app, 'body.textContent = res.binary', 'file content is set with textContent');
+$viewStart = strpos($app, 'async function viewThreatFile');
+$viewBody  = substr($app, $viewStart, 2400);
+t_ok(strpos($viewBody, 'innerHTML') === false,
+    'the viewer never assigns file content to innerHTML');
+
+$api = file_get_contents($repo . '/frontend/js/api.js');
+t_contains($api, 'viewThreat:',  'the API client can fetch a file');
+t_contains($api, 'bulkThreats:', 'the API client can submit a bulk action');

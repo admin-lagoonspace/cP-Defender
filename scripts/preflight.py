@@ -174,6 +174,22 @@ def main():
         else:
             ok("every UI handler resolves to a defined function")
 
+    # 2c-js. the front-end must at least be bracket-balanced
+    # There is no Node here, so for this whole project the only JS validation
+    # was a regex brace counter that mis-handled template literals -- it
+    # reported a different imbalance for correct code and could not tell a real
+    # error from its own confusion. Every front-end change shipped unparsed.
+    r = subprocess.run([sys.executable,
+                        os.path.join(REPO, "scripts", "check-js-syntax.py")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        for line in (r.stdout + r.stderr).strip().splitlines():
+            if line.strip():
+                fail(line.strip())
+        problems += 1
+    else:
+        ok("front-end JavaScript is bracket-balanced")
+
     # 2c-py. the daemon must run on the oldest Python we support
     # cPanel runs on RHEL-family hosts shipping Python 3.6. The suite runs on
     # the developer's Python, which is far newer, so it proved nothing about the

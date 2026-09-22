@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.25.2">
+<link rel="stylesheet" href="css/app.css?v=3.26.0">
 </head>
 <body>
 <div id="app">
@@ -289,7 +289,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.25.2 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.26.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -347,7 +347,7 @@
             <span class="update-dot"></span>
             <span>Update to <span id="update-btn-version">—</span></span>
           </button>
-          <button class="btn btn-ghost btn-sm" onclick="refreshDashboard()">↺ Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, refreshDashboard)">↺ Refresh</button>
           <button class="btn btn-primary btn-sm" onclick="openPage('scanner');startScan()">▶ Run Scan</button>
         </div>
       </div>
@@ -483,6 +483,20 @@
         <div class="card-body" style="padding:0">
           <div style="overflow-x:auto">
             <table class="sg-table" id="dash-events-table">
+              <!-- Shown only while something is selected: a bar of destructive
+                   buttons sitting permanently above a table invites an accident. -->
+              <div id="threat-bulk-bar" class="hidden"
+                   style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:10px;
+                          background:rgba(124,92,255,.08);border:1px solid rgba(124,92,255,.25);
+                          border-radius:8px">
+                <span id="threat-bulk-count" style="font-size:.8rem;font-weight:600">0 selected</span>
+                <button class="btn btn-ghost btn-sm threat-bulk-btn"
+                        onclick="bulkThreatAction('quarantine')">🔒 Quarantine selected</button>
+                <button class="btn btn-danger btn-sm threat-bulk-btn"
+                        onclick="bulkThreatAction('delete')">🗑 Delete selected</button>
+                <span style="font-size:.72rem;color:var(--txt3)">Delete cannot be undone.</span>
+              </div>
+
               <thead>
                 <tr>
                   <th>Severity</th><th>Type</th><th>Source</th>
@@ -551,13 +565,21 @@
               <option value="deleted">Deleted</option>
             </select>
             <span class="badge badge-red" id="threat-count-badge">0</span>
+            <span id="refresh-stamp" style="font-size:.7rem;color:var(--txt3);margin-left:10px"></span>
           </div>
         </div>
         <div class="card-body" style="padding:0">
           <div style="overflow-x:auto">
             <table class="sg-table">
               <thead>
-                <tr><th>Severity</th><th>File</th><th>Account</th><th>Threat Name</th><th>Type</th><th>Size</th><th>Detected</th><th>Status</th><th>Actions</th></tr>
+                <tr>
+                  <th style="width:34px">
+                    <input type="checkbox" id="threat-check-all" onchange="toggleAllThreats(this)"
+                           title="Select all" aria-label="Select all threats">
+                  </th>
+                  <th>Severity</th><th>File</th><th>Account</th><th>Threat Name</th>
+                  <th>Type</th><th>Size</th><th>Detected</th><th>Status</th><th>Actions</th>
+                </tr>
               </thead>
               <tbody id="threats-body">
                 <tr><td colspan="8" style="text-align:center;color:var(--txt3);padding:28px">No threats detected. Run a scan to check your server.</td></tr>
@@ -688,7 +710,7 @@
               <option value="on">Blocking (enforce rules)</option>
               <option value="off">Off</option>
             </select>
-            <button class="btn btn-ghost btn-sm" onclick="loadWafEngine()">↺ Refresh</button>
+            <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadWafEngine)">↺ Refresh</button>
           </div>
 
           <div id="waf-install-log" class="hidden"
@@ -815,7 +837,7 @@
       <div class="card">
         <div class="card-header">
           <div class="card-title">Top Attacking IPs (24h)</div>
-          <button class="btn btn-ghost btn-sm" onclick="loadTopAttackers()">↺ Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadTopAttackers)">↺ Refresh</button>
         </div>
         <div class="card-body" style="padding:0">
           <table class="sg-table">
@@ -1243,7 +1265,7 @@
           <div style="font-size:.78rem;color:var(--txt2);margin-top:2px">Control where data lives and how long it is kept. Changes apply immediately.</div>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost btn-sm" onclick="loadStorageStats()">&#x21BA; Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadStorageStats)">&#x21BA; Refresh</button>
           <button class="btn btn-danger btn-sm" onclick="runStoragePrune()" id="prune-btn">Run Cleanup Now</button>
         </div>
       </div>
@@ -1338,7 +1360,7 @@
           <div class="page-sub">inotify-based continuous scanning &middot; zero-latency threat detection</div>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost btn-sm" onclick="loadMonitor()">&#x21BA; Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadMonitor)">&#x21BA; Refresh</button>
           <button class="btn btn-primary btn-sm" id="monitor-page-toggle" onclick="toggleMonitor()">Start Monitor</button>
         </div>
       </div>
@@ -1485,7 +1507,7 @@
           <div class="page-sub">Detect and block malicious bots, scrapers, and exploit scanners</div>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost btn-sm" onclick="loadBotShield()">↺ Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadBotShield)">↺ Refresh</button>
           <button class="btn btn-primary btn-sm" onclick="runBotScan()">⚡ Analyze Logs</button>
         </div>
       </div>
@@ -1562,7 +1584,7 @@
           <div class="page-sub">Discover and audit WordPress, Joomla, and Drupal installations</div>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost btn-sm" onclick="loadCMSGuard()">↺ Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadCMSGuard)">↺ Refresh</button>
           <button class="btn btn-primary btn-sm" id="cms-scan-btn" onclick="runCMSScan()">🔍 Scan Server</button>
         </div>
       </div>
@@ -1614,7 +1636,7 @@
           <div class="page-sub">Scan for rootkits, backdoors, and compromised system binaries</div>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost btn-sm" onclick="loadRootkit()">↺ Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadRootkit)">↺ Refresh</button>
           <button class="btn btn-ghost btn-sm" onclick="runBuiltinRootkitScan()"
                   title="Native scan — works with no third-party tools installed">⚡ Built-in Scan</button>
           <button class="btn btn-primary btn-sm" id="rootkit-scan-btn" onclick="runRootkitScan()">🔍 Start Scan</button>
@@ -1700,7 +1722,7 @@
           <div class="page-sub">Detect unauthorized changes to critical files</div>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost btn-sm" onclick="loadIntegrity()">↺ Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadIntegrity)">↺ Refresh</button>
           <button class="btn btn-primary btn-sm" onclick="runIntegrityCheck()">▶ Run Check</button>
         </div>
       </div>
@@ -1782,7 +1804,7 @@
           <div class="page-sub">Audit and harden PHP configuration across the server</div>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost btn-sm" onclick="loadPHPHardening()">↺ Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadPHPHardening)">↺ Refresh</button>
           <button class="btn btn-primary btn-sm" onclick="applyAllRecommendations()">⚡ Apply All Safe</button>
         </div>
       </div>
@@ -1864,9 +1886,9 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.25.2"></script>
+<script src="js/api.js?v=3.26.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.25.2"></script>
+<script src="js/app.js?v=3.26.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -1943,5 +1965,37 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 });
 </script>
+<!-- ── Safe file viewer ─────────────────────────────────────────────────────
+     Shows what is inside an infected file WITHOUT running it. The server reads
+     the bytes with file_get_contents and never includes or evaluates them; this
+     dialog inserts them with textContent, so a payload made of markup is shown
+     as characters rather than parsed. -->
+<div id="file-view-overlay" class="hidden"
+     style="position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9000;
+            display:flex;align-items:center;justify-content:center;padding:28px"
+     onclick="if (event.target === this) closeFileView()">
+  <div style="background:var(--bg1);border:1px solid var(--border);border-radius:12px;
+              width:min(1000px,100%);max-height:86vh;display:flex;flex-direction:column;
+              overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;
+                padding:14px 18px;border-bottom:1px solid var(--border)">
+      <div style="min-width:0">
+        <div id="file-view-title" class="mono"
+             style="font-size:.82rem;font-weight:700;overflow:hidden;text-overflow:ellipsis;
+                    white-space:nowrap">File contents</div>
+        <div id="file-view-meta" style="font-size:.7rem;color:var(--txt3);margin-top:3px"></div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="closeFileView()">Close</button>
+    </div>
+    <div style="padding:10px 18px 0;font-size:.72rem;color:var(--amber2)">
+      Read-only. This file is displayed as text and is never executed.
+    </div>
+    <pre id="file-view-content" class="mono"
+         style="margin:10px 18px 18px;padding:14px;background:var(--bg0);border-radius:8px;
+                overflow:auto;flex:1;font-size:.74rem;line-height:1.55;white-space:pre-wrap;
+                word-break:break-all"></pre>
+  </div>
+</div>
+
 </body>
 </html>

@@ -507,23 +507,118 @@ class Scanner {
         return $files;
     }
 
-    public function quarantine(string $filePath, int $threatId): bool {
-        $qDir = Database::storagePath('quarantine') . '/' . date('Y-m-d');
-        if (!is_dir($qDir)) mkdir($qDir, 0700, true);
-
-        $dest = $qDir . '/' . basename($filePath) . '_' . $threatId . '.quarantine';
-        if (rename($filePath, $dest)) {
-            // Leave a placeholder so the webmaster knows
-            file_put_contents($filePath . '.sentinel_removed',
-                "File quarantined by Sentinel Gate at " . date('Y-m-d H:i:s') .
-                "\nThreat ID: $threatId\nOriginal: $filePath\n");
-            Database::query(
-                "UPDATE threats SET status='quarantined', action_taken='quarantine', resolved_at=? WHERE id=?",
-                [time(), $threatId]
-            );
-            return true;
+    /**
+     * Move an infected file into quarantine.
+     *
+     * Returns a RESULT, not a bool. The route used to send ['success' => false]
+     * with nothing else, so every failure reached the user as "there seems to be
+     * some issue accessing files" with nothing to act on.
+     *
+     * The failure itself was rename(): it cannot cross a filesystem boundary. On
+     * a hosting server /home is very often a separate volume from /usr/local, so
+     * quarantine failed with EXDEV on precisely the files it exists to handle.
+     * copy+unlink does work across devices, and is tried only after rename has
+     * had its chance, because rename is atomic and cheaper.
+     *
+     * @return array{success:bool,error?:string,dest?:string}
+     */
+    public function quarantine(string $filePath, int $threatId): array {
+        if (!file_exists($filePath)) {
+            return ['success' => false,
+                    'error' => 'The file is no longer on disk: ' . $filePath];
         }
-        return false;
+
+        $qDir = Database::storagePath('quarantine') . '/' . date('Y-m-d');
+        if (!is_dir($qDir) && !@mkdir($qDir, 0700, true) && !is_dir($qDir)) {
+            return ['success' => false,
+                    'error' => 'Could not create the quarantine directory ' . $qDir
+                             . ' (' . self::lastError() . ')'];
+        }
+        if (!is_writable($qDir)) {
+            return ['success' => false,
+                    'error' => 'The quarantine directory is not writable: ' . $qDir];
+        }
+
+        $dest  = $qDir . '/' . basename($filePath) . '_' . $threatId . '.quarantine';
+        $bytes = (int) filesize($filePath);
+
+        $moved = @rename($filePath, $dest);
+
+        if (!$moved) {
+            // EXDEV, or a directory we may write to but not unlink from. Copy
+            // first and remove the original only once the copy is verified:
+            // losing a customer file while trying to protect it is a far worse
+            // outcome than leaving the malware in place.
+            if (!@copy($filePath, $dest)) {
+                return ['success' => false,
+                        'error' => 'Could not copy the file into quarantine ('
+                                 . self::lastError() . '). '
+                                 . self::permissionHint($filePath)];
+            }
+            if ((int) filesize($dest) !== $bytes) {
+                @unlink($dest);
+                return ['success' => false,
+                        'error' => 'The quarantine copy was incomplete; the original '
+                                 . 'was left untouched.'];
+            }
+            if (!@unlink($filePath)) {
+                @unlink($dest);
+                return ['success' => false,
+                        'error' => 'Copied into quarantine but could not remove the '
+                                 . 'original (' . self::lastError() . '), so the copy '
+                                 . 'was discarded rather than leave the file in two '
+                                 . 'places. ' . self::permissionHint($filePath)];
+            }
+            $moved = true;
+        }
+
+        @chmod($dest, 0600);
+
+        // A placeholder so whoever owns the site knows where the file went.
+        @file_put_contents($filePath . '.sentinel_removed',
+            "File quarantined by Sentinel Gate at " . date('Y-m-d H:i:s') .
+            "\nThreat ID: $threatId\nOriginal: $filePath\nQuarantined to: $dest\n");
+
+        Database::query(
+            "UPDATE threats SET status='quarantined', action_taken='quarantine', resolved_at=? WHERE id=?",
+            [time(), $threatId]
+        );
+        Logger::info("Quarantined threat {$threatId}: {$filePath} -> {$dest}");
+        return ['success' => true, 'dest' => $dest];
+    }
+
+    /** The last PHP error message, so a filesystem failure can be reported. */
+    private static function lastError(): string {
+        $e   = error_get_last();
+        $msg = (string) ($e['message'] ?? '');
+        // Strip the "function(args): " prefix PHP prepends; it adds nothing here.
+        $msg = (string) preg_replace('/^[a-z_]+\\([^)]*\\):\\s*/i', '', $msg);
+        return $msg !== '' ? $msg : 'no further detail from the filesystem';
+    }
+
+    /**
+     * Why a file might refuse to move, in terms someone can act on.
+     *
+     * The immutable attribute is the one that looks like a permissions problem
+     * and is not: root itself cannot unlink such a file, and attackers set it
+     * deliberately to make a payload hard to remove.
+     */
+    private static function permissionHint(string $path): string {
+        $bits = [];
+        $dir  = dirname($path);
+        if (!is_writable($dir)) {
+            $bits[] = 'the containing directory ' . $dir . ' is not writable';
+        }
+        $out = [];
+        @exec('lsattr -d ' . escapeshellarg($path) . ' 2>/dev/null', $out);
+        if (!empty($out[0])) {
+            $flags = explode(' ', trim($out[0]))[0];
+            if (strpos($flags, 'i') !== false) {
+                $bits[] = 'the file is marked immutable (chattr +i) — clear it with: '
+                        . 'chattr -i ' . escapeshellarg($path);
+            }
+        }
+        return $bits ? 'Likely cause: ' . implode('; ', $bits) . '.' : '';
     }
 
     public function restoreFromQuarantine(int $threatId): bool {
@@ -544,16 +639,150 @@ class Scanner {
         return false;
     }
 
-    public function deleteThreat(int $threatId): bool {
+    /**
+     * Delete an infected file.
+     *
+     * The row used to be marked 'deleted' whether or not unlink() succeeded, so
+     * the dashboard could report malware removed while it sat untouched on disk.
+     * For a security product that is the worst kind of wrong answer, and the @
+     * in front of unlink meant nobody ever saw why it had failed.
+     *
+     * @return array{success:bool,error?:string,note?:string}
+     */
+    public function deleteThreat(int $threatId): array {
         $threat = Database::fetchOne("SELECT * FROM threats WHERE id = ?", [$threatId]);
-        if (!$threat) return false;
+        if (!$threat) {
+            return ['success' => false, 'error' => 'Threat ' . $threatId . ' not found.'];
+        }
 
-        $deleted = @unlink($threat['file_path']);
+        $path = (string) $threat['file_path'];
+
+        if (!file_exists($path)) {
+            // Genuinely handled, so record it — but say so rather than implying
+            // this call is what removed it.
+            Database::query(
+                "UPDATE threats SET status='deleted', action_taken='delete', resolved_at=? WHERE id=?",
+                [time(), $threatId]
+            );
+            return ['success' => true, 'note' => 'The file was already gone.'];
+        }
+
+        if (!@unlink($path)) {
+            $err = self::lastError();
+            Logger::error("Delete failed for threat {$threatId} ({$path}): {$err}");
+            return ['success' => false,
+                    'error' => 'Could not delete ' . $path . ' (' . $err . '). '
+                             . self::permissionHint($path)];
+        }
+
         Database::query(
             "UPDATE threats SET status='deleted', action_taken='delete', resolved_at=? WHERE id=?",
             [time(), $threatId]
         );
-        return $deleted;
+        Logger::info("Deleted threat {$threatId}: {$path}");
+        return ['success' => true];
+    }
+
+    /**
+     * Read an infected file for INSPECTION ONLY.
+     *
+     * Nothing here executes, includes or evaluates the file: it is read with
+     * file_get_contents and returned as data. The caller renders it escaped, so
+     * a payload containing markup cannot act inside the dashboard either.
+     *
+     * @return array{success:bool,error?:string,content?:string,size?:int,
+     *               truncated?:bool,sha256?:string,path?:string,binary?:bool}
+     */
+    public function viewThreat(int $threatId, int $maxBytes = 262144): array {
+        $threat = Database::fetchOne("SELECT * FROM threats WHERE id = ?", [$threatId]);
+        if (!$threat) {
+            return ['success' => false, 'error' => 'Threat ' . $threatId . ' not found.'];
+        }
+
+        $path = (string) $threat['file_path'];
+
+        // A quarantined file lives under the quarantine directory now.
+        if (!file_exists($path) && ($threat['status'] ?? '') === 'quarantined') {
+            $stamp     = (int) ($threat['resolved_at'] ?: $threat['detected_at']);
+            $candidate = Database::storagePath('quarantine') . '/' . date('Y-m-d', $stamp)
+                       . '/' . basename($path) . '_' . $threatId . '.quarantine';
+            if (file_exists($candidate)) { $path = $candidate; }
+        }
+
+        if (!file_exists($path)) {
+            return ['success' => false, 'error' => 'The file is no longer on disk: ' . $path];
+        }
+        if (!is_readable($path)) {
+            return ['success' => false,
+                    'error' => 'The file is not readable. ' . self::permissionHint($path)];
+        }
+
+        $size = (int) filesize($path);
+        $data = (string) @file_get_contents($path, false, null, 0, $maxBytes);
+
+        if ($data === '' && $size > 0) {
+            return ['success' => false,
+                    'error' => 'Could not read the file (' . self::lastError() . ')'];
+        }
+
+        // Binary content is not worth rendering as text and can carry terminal
+        // escapes. Describe it instead of dumping it.
+        $binary = strpos(substr($data, 0, 8000), chr(0)) !== false;
+
+        return [
+            'success'   => true,
+            'path'      => $path,
+            'size'      => $size,
+            'binary'    => $binary,
+            'sha256'    => (string) (hash_file('sha256', $path) ?: ''),
+            'content'   => $binary ? '' : $data,
+            'truncated' => !$binary && $size > $maxBytes,
+        ];
+    }
+
+    /**
+     * Apply one action to many threats.
+     *
+     * Each is attempted independently: one file that cannot be removed must not
+     * stop the rest, and the caller needs to know which ones failed and why
+     * rather than a single pass/fail for the whole batch.
+     *
+     * @param int[] $ids
+     * @return array{success:bool,ok:int,failed:int,results:array}
+     */
+    public function bulkAction(array $ids, string $action): array {
+        if (!in_array($action, ['quarantine', 'delete'], true)) {
+            return ['success' => false, 'ok' => 0, 'failed' => 0, 'results' => [],
+                    'error' => 'Unknown action: ' . $action];
+        }
+
+        $results = [];
+        $ok      = 0;
+        $failed  = 0;
+
+        // Bounded: a runaway selection must not hold the request open for ever.
+        foreach (array_slice(array_unique(array_map('intval', $ids)), 0, 500) as $id) {
+            if ($id <= 0) { continue; }
+
+            if ($action === 'delete') {
+                $r = $this->deleteThreat($id);
+            } else {
+                $threat = Database::fetchOne("SELECT * FROM threats WHERE id = ?", [$id]);
+                $r = $threat
+                    ? $this->quarantine((string) $threat['file_path'], $id)
+                    : ['success' => false, 'error' => 'Threat ' . $id . ' not found.'];
+            }
+
+            if (!empty($r['success'])) { $ok++; } else { $failed++; }
+            $results[] = ['id' => $id] + $r;
+        }
+
+        return [
+            'success' => $failed === 0,
+            'ok'      => $ok,
+            'failed'  => $failed,
+            'results' => $results,
+        ];
     }
 
     public function getScanStatus(int $jobId): array {
