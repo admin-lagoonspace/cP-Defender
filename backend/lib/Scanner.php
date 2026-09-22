@@ -542,6 +542,25 @@ class Scanner {
         $dest  = $qDir . '/' . basename($filePath) . '_' . $threatId . '.quarantine';
         $bytes = (int) filesize($filePath);
 
+        // Never fill the volume we are writing to. Quarantine moving files onto
+        // the root partition filled / on a live server and took the machine
+        // down with it -- a security tool must not be the thing that causes the
+        // outage. Refusing to quarantine leaves the file in place and says so,
+        // which is recoverable; a full disk is not.
+        $free  = @disk_free_space($qDir);
+        $total = @disk_total_space($qDir);
+        if ($free !== false && $total !== false && $total > 0) {
+            $freeAfter = $free - $bytes;
+            if ($freeAfter < 0 || ($freeAfter / $total) < 0.05) {
+                return ['success' => false,
+                        'error' => 'Refusing to quarantine: the volume holding '
+                                 . $qDir . ' would drop below 5% free ('
+                                 . self::human((int) $free) . ' free, file is '
+                                 . self::human($bytes) . '). Free some space, or '
+                                 . 'point quarantine_dir at a larger volume.'];
+            }
+        }
+
         $moved = @rename($filePath, $dest);
 
         if (!$moved) {
@@ -585,6 +604,201 @@ class Scanner {
         );
         Logger::info("Quarantined threat {$threatId}: {$filePath} -> {$dest}");
         return ['success' => true, 'dest' => $dest];
+    }
+
+    /** Bytes as something a human reads without counting digits. */
+    private static function human(int $bytes): string {
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $i = 0;
+        $n = (float) $bytes;
+        while ($n >= 1024 && $i < count($units) - 1) { $n /= 1024; $i++; }
+        return round($n, $n < 10 && $i > 0 ? 1 : 0) . ' ' . $units[$i];
+    }
+
+    /**
+     * Delete quarantined files older than the retention window.
+     *
+     * Quarantine grew without limit: nothing ever removed anything, so a server
+     * that scans nightly accumulates every infected file it has ever seen until
+     * the disk is gone. Retention is a setting (days); 0 disables pruning.
+     *
+     * @return array{removed:int,bytes:int,kept:int}
+     */
+    public static function pruneQuarantine(?int $days = null): array {
+        $days = $days ?? (int) (Database::setting('quarantine_retention_days', '30') ?? 30);
+        $dir  = Database::storagePath('quarantine');
+
+        $removed = 0;
+        $freed   = 0;
+        $kept    = 0;
+
+        if ($days <= 0 || !is_dir($dir)) {
+            return ['removed' => 0, 'bytes' => 0, 'kept' => 0];
+        }
+
+        $cutoff = time() - ($days * 86400);
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        foreach ($it as $entry) {
+            if ($entry->isDir()) {
+                @rmdir($entry->getPathname());       // only succeeds when empty
+                continue;
+            }
+            if ($entry->getMTime() < $cutoff) {
+                $size = $entry->getSize();
+                if (@unlink($entry->getPathname())) {
+                    $removed++;
+                    $freed += $size;
+                }
+            } else {
+                $kept++;
+            }
+        }
+
+        if ($removed > 0) {
+            Logger::info("Quarantine pruned: {$removed} file(s), " . self::human($freed) . " freed");
+        }
+        return ['removed' => $removed, 'bytes' => $freed, 'kept' => $kept];
+    }
+
+    /**
+     * Relocate quarantine to another volume.
+     *
+     * Files are MOVED, never dropped: they are evidence, and one of them may be
+     * a customer's only copy of something. If a file cannot be moved it is left
+     * where it is and reported, rather than the whole operation being abandoned
+     * half-done with no record of what went where.
+     *
+     * @return array{success:bool,error?:string,moved?:int,failed?:int,from?:string,to?:string}
+     */
+    public static function moveQuarantine(string $dest): array
+    {
+        $dest = rtrim(trim($dest), '/');
+
+        // The point is to reject a RELATIVE path, which would resolve against
+        // whatever the working directory happens to be. A drive-letter form is
+        // accepted so this is reachable from a test on a developer machine; on
+        // the servers this runs on only the leading slash ever matches.
+        //
+        // Written out rather than as a regex: in a single-quoted PHP string the
+        // character class [\\/] collapses to [\/], where the backslash escapes
+        // the slash and the class matches only "/" -- so the drive-letter form
+        // was silently rejected. Two layers of escaping to express one
+        // character is not worth it here.
+        $absolute = $dest !== '' && (
+            $dest[0] === '/'
+            || (strlen($dest) > 2 && ctype_alpha($dest[0]) && $dest[1] === ':'
+                && ($dest[2] === '/' || $dest[2] === '\\'))
+        );
+        if (!$absolute) {
+            return ['success' => false, 'error' => 'Give an absolute path.'];
+        }
+
+        $from = Database::storagePath('quarantine');
+        if ($dest === rtrim($from, '/')) {
+            return ['success' => false, 'error' => 'Quarantine is already at ' . $dest];
+        }
+
+        if (!is_dir($dest) && !@mkdir($dest, 0700, true) && !is_dir($dest)) {
+            return ['success' => false,
+                    'error' => 'Could not create ' . $dest . ' (' . self::lastError() . ')'];
+        }
+        if (!is_writable($dest)) {
+            return ['success' => false, 'error' => $dest . ' is not writable.'];
+        }
+
+        $moved  = 0;
+        $failed = 0;
+        $errors = [];
+
+        if (is_dir($from)) {
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($from, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::SELF_FIRST
+            );
+
+            foreach ($it as $entry) {
+                $rel    = substr($entry->getPathname(), strlen($from) + 1);
+                $target = $dest . '/' . $rel;
+
+                if ($entry->isDir()) {
+                    if (!is_dir($target)) { @mkdir($target, 0700, true); }
+                    continue;
+                }
+
+                // rename first; fall back to copy for a cross-device move,
+                // which is the entire reason anyone runs this command.
+                if (@rename($entry->getPathname(), $target)) {
+                    $moved++;
+                    continue;
+                }
+                if (@copy($entry->getPathname(), $target)
+                    && (int) filesize($target) === (int) $entry->getSize()
+                    && @unlink($entry->getPathname())) {
+                    $moved++;
+                    continue;
+                }
+                @unlink($target);              // discard a partial copy
+                $failed++;
+                if (count($errors) < 5) {
+                    $errors[] = $rel . ': ' . self::lastError();
+                }
+            }
+
+            // Tidy up the now-empty tree, leaving anything that still holds a file.
+            $tidy = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($from, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::CHILD_FIRST
+            );
+            foreach ($tidy as $entry) {
+                if ($entry->isDir()) { @rmdir($entry->getPathname()); }
+            }
+        }
+
+        Database::setSetting('quarantine_dir', $dest);
+        Logger::info("Quarantine relocated: {$from} -> {$dest} ({$moved} moved, {$failed} failed)");
+
+        return [
+            'success' => $failed === 0,
+            'from'    => $from,
+            'to'      => $dest,
+            'moved'   => $moved,
+            'failed'  => $failed,
+            'errors'  => $errors,
+            'note'    => $failed > 0
+                ? 'Files that could not be moved were left where they are; nothing was deleted.'
+                : 'New quarantines will be written to ' . $dest,
+        ];
+    }
+
+    /** How much space quarantine is using, and where. */
+    public static function quarantineUsage(): array {
+        $dir   = Database::storagePath('quarantine');
+        $bytes = 0;
+        $files = 0;
+
+        if (is_dir($dir)) {
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
+            foreach ($it as $f) {
+                if ($f->isFile()) { $bytes += $f->getSize(); $files++; }
+            }
+        }
+
+        $free  = @disk_free_space($dir);
+        return [
+            'dir'         => $dir,
+            'files'       => $files,
+            'bytes'       => $bytes,
+            'human'       => self::human($bytes),
+            'free'        => $free === false ? null : (int) $free,
+            'free_human'  => $free === false ? 'unknown' : self::human((int) $free),
+            'on_root'     => strpos($dir, '/usr/local') === 0,
+            'retention_days' => (int) (Database::setting('quarantine_retention_days', '30') ?? 30),
+        ];
     }
 
     /** The last PHP error message, so a filesystem failure can be reported. */

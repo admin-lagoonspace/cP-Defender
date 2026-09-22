@@ -17,7 +17,7 @@
 //
 // Defining it here first makes a stale mode.php a no-op for this constant while
 // still letting mode.php own everything that genuinely is per-installation.
-define('SG_VERSION', '3.26.0');
+define('SG_VERSION', '3.27.0');
 
 // ── Install Mode ──────────────────────────────────────────────────────────────
 // mode.php records what IS per-installation: the mode, the install directory
@@ -62,7 +62,31 @@ define('MODSEC_LOG',     '/var/log/apache2/modsec.log');
 // ── Scan Settings ─────────────────────────────────────────────────────────────
 define('SCAN_MAX_SIZE',  52428800);   // 50MB per file
 define('SCAN_THREADS',   4);
-define('QUARANTINE_DIR', SG_ROOT . '/quarantine');
+/**
+ * Where quarantined files are kept.
+ *
+ * NOT under SG_ROOT by default. SG_ROOT is /usr/local/sentinel-gate, which
+ * lives on the root filesystem, and quarantine MOVES infected files there --
+ * so on a hosting server, where customer data is a separate and much larger
+ * volume, a busy scan fills / and takes the whole machine down. That happened.
+ *
+ * /home is where the files being quarantined already live, so it has the space
+ * for them and the move stays on one filesystem, which is also faster.
+ *
+ * Overridable with the quarantine_dir setting, which always wins; this is only
+ * the default for a fresh install.
+ */
+if (!defined('QUARANTINE_DIR')) {
+    $sgQuarantineDefault = SG_ROOT . '/quarantine';
+    foreach (['/home', '/var'] as $sgVolume) {
+        if (is_dir($sgVolume) && is_writable($sgVolume)) {
+            $sgQuarantineDefault = $sgVolume . '/.sentinel-gate/quarantine';
+            break;
+        }
+    }
+    define('QUARANTINE_DIR', $sgQuarantineDefault);
+    unset($sgVolume, $sgQuarantineDefault);
+}
 
 // ── API Auth ──────────────────────────────────────────────────────────────────
 define('JWT_SECRET',     hash('sha256', gethostname() . 'sentinel_gate_secret_2024'));

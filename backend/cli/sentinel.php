@@ -164,6 +164,35 @@ try {
         out((new Scanner())->updateSignatures());
         break;
 
+    case 'quarantine': {
+        $sub = $rest[0] ?? 'status';
+        switch ($sub) {
+        case 'status':
+            out(Scanner::quarantineUsage());
+            break;
+
+        case 'prune': {
+            need_root();
+            $days = isset($rest[1]) ? (int)$rest[1] : null;
+            $r = Scanner::pruneQuarantine($days);
+            out($r + ['freed' => $r['bytes']]);
+            break;
+        }
+
+        case 'move': {
+            need_root();
+            $dest = $rest[1] ?? '';
+            if ($dest === '') { fail('usage: sentinel quarantine move /path/on/another/volume'); }
+            out(Scanner::moveQuarantine($dest));
+            break;
+        }
+
+        default:
+            fail('usage: sentinel quarantine [status|prune [days]|move <dir>]');
+        }
+        break;
+    }
+
     case 'license': {
         $sub = $rest[0] ?? 'status';
         switch ($sub) {
@@ -255,7 +284,7 @@ Usage: sentinel <command> [args] [--json]
   firewall allow   <ip> [note] Whitelist an IP
   reputation <ip>              Look up IP reputation
   update-sigs                  Update malware signatures
-  license status               Show license state
+  quarantine status            Show where quarantine is and how big\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  license status               Show license state
   license activate <key>       Store and verify a license key
   license refresh              Force a re-check against the server
   license identity             Show the domain/IP this server reports

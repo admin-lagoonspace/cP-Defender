@@ -232,6 +232,60 @@ if [[ -f "$_MODE_PHP_EXISTING" ]] && grep -q "SG_VERSION" "$_MODE_PHP_EXISTING";
   ok "Removed the frozen SG_VERSION from mode.php (backup: mode.php.bak)"
 fi
 
+# ── Move quarantine off the root partition ────────────────────────────────────
+# Quarantine MOVES infected files into its directory. That directory used to
+# default to ${INSTALL_DIR}/quarantine, which is on / -- so on a hosting server,
+# where customer data lives on a separate and far larger volume, a busy scan
+# filled the root filesystem and took the machine down. It did, on a live server.
+#
+# Runs on --register-only too, because the installs that need moving are the
+# ones being updated. Files are MOVED, never deleted: they are evidence, and
+# some of them may be a customer's only copy of something.
+_SG_QUAR_OLD="${INSTALL_DIR}/quarantine"
+_SG_QUAR_NEW=""
+for _v in /home /var; do
+  if [[ -d "$_v" && -w "$_v" ]]; then _SG_QUAR_NEW="${_v}/.sentinel-gate/quarantine"; break; fi
+done
+
+if [[ -n "$_SG_QUAR_NEW" ]]; then
+  mkdir -p "$_SG_QUAR_NEW" 2>/dev/null || true
+  chmod 700 "$(dirname "$_SG_QUAR_NEW")" 2>/dev/null || true
+  chmod 700 "$_SG_QUAR_NEW" 2>/dev/null || true
+
+  # Same filesystem? Then there is nothing to gain by moving.
+  _SG_OLD_DEV=$(stat -c %d "$_SG_QUAR_OLD" 2>/dev/null || echo "x")
+  _SG_NEW_DEV=$(stat -c %d "$_SG_QUAR_NEW" 2>/dev/null || echo "y")
+
+  if [[ -d "$_SG_QUAR_OLD" && "$_SG_OLD_DEV" != "$_SG_NEW_DEV" ]]; then
+    _SG_QUAR_SIZE=$(du -sh "$_SG_QUAR_OLD" 2>/dev/null | cut -f1)
+    if [[ -n "$(ls -A "$_SG_QUAR_OLD" 2>/dev/null)" ]]; then
+      info "Moving quarantine (${_SG_QUAR_SIZE:-unknown}) off the root partition…"
+      if command -v rsync >/dev/null 2>&1; then
+        rsync -a --remove-source-files "$_SG_QUAR_OLD/" "$_SG_QUAR_NEW/" 2>/dev/null \
+          && find "$_SG_QUAR_OLD" -type d -empty -delete 2>/dev/null \
+          && ok "  Quarantine moved to ${_SG_QUAR_NEW}" \
+          || warn "  Could not move every quarantined file; nothing was deleted"
+      else
+        cp -a "$_SG_QUAR_OLD/." "$_SG_QUAR_NEW/" 2>/dev/null \
+          && rm -rf "${_SG_QUAR_OLD:?}"/* 2>/dev/null \
+          && ok "  Quarantine moved to ${_SG_QUAR_NEW}" \
+          || warn "  Could not move every quarantined file; nothing was deleted"
+      fi
+    fi
+  fi
+
+  # Record the location so the app writes there from now on.
+  if [[ -f "${INSTALL_DIR}/database/sentinel.db" ]] && command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "${INSTALL_DIR}/database/sentinel.db" \
+      "INSERT INTO settings(key,value,updated_at) VALUES('quarantine_dir','${_SG_QUAR_NEW}',strftime('%s','now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at;" \
+      2>/dev/null && ok "  Quarantine directory set to ${_SG_QUAR_NEW}"
+  fi
+fi
+
+# Per-scan logs accumulate one file per scan and were never pruned. On a server
+# scanning nightly that is unbounded growth on the root partition too.
+find "${LOG_DIR:-${INSTALL_DIR}/logs}" -name 'scan_*.log' -mtime +7 -delete 2>/dev/null || true
+
 # ═══ INSTALL-ONLY SECTIONS (skipped in --register-only mode) ═══════════════════
 if ! $REGISTER_ONLY; then
 

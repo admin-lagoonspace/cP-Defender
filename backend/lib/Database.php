@@ -174,6 +174,9 @@ class Database {
                 -- still records the threat; acting on it is a decision the
                 -- operator opts into.
                 ('auto_quarantine',         '0'),
+                -- Quarantine grew without limit until this existed. 0 disables
+                -- pruning, for anyone who would rather keep everything.
+                ('quarantine_retention_days', '30'),
                 ('firewall_enabled',        '1'),
                 ('waf_enabled',             '1'),
                 ('bot_shield_enabled',      '1'),

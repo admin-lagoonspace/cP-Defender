@@ -232,6 +232,31 @@ $tasks = [
             slog('  integrity check: ' . (int)($r['changed'] ?? 0) . ' change(s)');
         },
     ],
+
+    'quarclean' => [
+        // Quarantine only ever grew: nothing removed anything, so a server
+        // scanning nightly keeps every infected file it has ever seen until the
+        // disk is gone. That is what filled a live server's root partition.
+        'schedule' => setting('quarantine_clean_schedule', 'daily'),
+        'time'     => setting('quarantine_clean_time', '04:30'),
+        'day'      => (int)setting('quarantine_clean_day', '0'),
+        'run'      => function () {
+            $r = Scanner::pruneQuarantine();
+            slog('  quarantine: removed ' . (int)$r['removed'] . ' file(s), kept '
+                 . (int)$r['kept']);
+
+            // Per-scan logs are one file per scan and were never pruned either.
+            $logs = defined('SG_LOGS') ? SG_LOGS : null;
+            if ($logs && is_dir($logs)) {
+                $cut = time() - 7 * 86400;
+                $n = 0;
+                foreach (glob($logs . '/scan_*.log') ?: [] as $f) {
+                    if (@filemtime($f) < $cut && @unlink($f)) { $n++; }
+                }
+                if ($n) { slog("  removed {$n} old scan log(s)"); }
+            }
+        },
+    ],
 ];
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
