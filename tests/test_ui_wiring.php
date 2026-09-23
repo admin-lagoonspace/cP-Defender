@@ -192,3 +192,82 @@ t_ok(strpos($viewBody, 'innerHTML') === false,
 $api = file_get_contents($repo . '/frontend/js/api.js');
 t_contains($api, 'viewThreat:',  'the API client can fetch a file');
 t_contains($api, 'bulkThreats:', 'the API client can submit a bulk action');
+
+// ── The bulk bar must be on the page it was asked for ────────────────────────
+// It was inserted into the DASHBOARD's events table, because the patch anchored
+// on the first <thead> in the file. It was also a <div> placed directly inside
+// <table>, which browsers hoist out or discard. So the buttons existed in the
+// source and were absent from the malware scanner page.
+//
+// The old assertion was t_contains($html, 'id="threat-bulk-bar"') -- true of a
+// bar sitting in the wrong table, in invalid markup. Existing somewhere is not
+// the property that matters.
+// Strip HTML comments first. The comment explaining this very fix contains the
+// text "<div> directly inside <table>", and the first version of this check
+// found that literal and reported the bar as nested. Assertions about markup
+// must not read prose about markup -- the same trap as t_code() and js_code().
+$markup    = preg_replace('/<!--.*?-->/s', '', $html);
+
+$barPos    = strpos($markup, 'id="threat-bulk-bar"');
+$tablePos  = strpos($markup, 'id="threats-body"');
+$eventsPos = strpos($markup, 'id="dash-events-table"');
+
+t_ok($barPos !== false, 'the bulk bar exists');
+t_ok($barPos < $tablePos, 'it sits above the threats table');
+
+// Between the bar and the threats tbody there must be exactly one <table> open:
+// the threats table itself. More than that means it landed in another table.
+$between = substr($markup, $barPos, $tablePos - $barPos);
+t_eq(1, substr_count($between, '<table'),
+    'exactly one table opens between the bar and the threats rows');
+
+// And it must not be inside a table element at all. Walk backwards: the nearest
+// table tag before the bar has to be a closing one (or none at all).
+$beforeBar   = substr($markup, 0, $barPos);
+$lastOpen    = strrpos($beforeBar, '<table');
+$lastClose   = strrpos($beforeBar, '</table>');
+t_ok($lastOpen === false || ($lastClose !== false && $lastClose > $lastOpen),
+    'the bar is not nested inside a <table> element');
+
+// It must be nowhere near the dashboard events table.
+if ($eventsPos !== false) {
+    t_ok($barPos > $eventsPos ? substr_count(substr($markup, $eventsPos, $barPos - $eventsPos), '</table>') > 0 : true,
+        'the bar is not inside the dashboard events table');
+}
+
+// ── The buttons must be visible, not hidden until a selection exists ─────────
+// Hiding the whole bar made the feature undiscoverable: someone looking for a
+// way to delete several files sees nothing and concludes it was never built.
+t_ok(strpos($html, 'id="threat-bulk-bar" class="hidden"') === false,
+    'the bar is not hidden by default');
+t_contains($html, 'id="threat-bulk-delete"',   'the delete-selected button has an id');
+t_contains($html, 'id="threat-bulk-quarantine"', 'the quarantine-selected button has an id');
+t_contains($html, 'Delete selected',  'the delete button is labelled plainly');
+t_contains($html, 'Quarantine selected', 'the quarantine button is labelled plainly');
+
+// Disabled until something is ticked, then enabled -- rather than appearing.
+$barBlock = substr($markup, $barPos, 1200);
+t_contains($barBlock, 'disabled', 'the buttons start disabled');
+t_contains($app, "b.disabled = ids.length === 0",
+    'the buttons enable when a selection exists');
+t_ok(strpos($app, "bar.classList.toggle('hidden', ids.length === 0)") === false,
+    'the bar no longer disappears when nothing is selected');
+
+// ── The header colspan must match the real column count ──────────────────────
+// Two columns were added (checkbox, View) and the empty-state row still spanned
+// eight, so "no threats" rendered short of the table width.
+// The LAST thead before the threats tbody is the threats table's own; scanning
+// a fixed window found a different table's header and counted twelve.
+$headStart = strrpos(substr($markup, 0, $tablePos), '<thead>');
+$headEnd   = strpos($markup, '</thead>', $headStart);
+// '<th' also matches '<thead', which inflated the count by one and made the
+// assertion pass while reporting a number nobody could check against the
+// colspan below.
+$cols      = preg_match_all('/<th[\s>]/', substr($markup, $headStart, $headEnd - $headStart));
+t_eq(10, $cols, 'the threats table has exactly 10 columns');
+
+// The empty-state row must span all of them, or "no threats" renders short.
+preg_match('/colspan="(\d+)"[^>]*>No threats detected/', $markup, $span);
+t_eq((string)$cols, $span[1] ?? '', 'the empty-state row spans every column');
+t_ok(strpos($html, 'colspan="8" style="text-align:center;color:var(--txt3);padding:28px">No threats detected') === false,
+    'the empty-state row no longer spans the old column count');

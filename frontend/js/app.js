@@ -2861,10 +2861,18 @@ function updateBulkBar() {
 
   if (count) {
     count.textContent = ids.length + ' selected';
+    count.style.color = ids.length ? 'var(--primary)' : 'var(--txt2)';
   }
-  if (bar) {
-    bar.classList.toggle('hidden', ids.length === 0);
-  }
+
+  // The bar stays put and the BUTTONS enable instead. Hiding the whole thing
+  // until a selection existed made the feature undiscoverable: someone looking
+  // for a way to delete several files at once sees nothing to click, and
+  // concludes it was never built.
+  [document.getElementById('threat-bulk-quarantine'),
+   document.getElementById('threat-bulk-delete')].forEach(b => {
+    if (b) { b.disabled = ids.length === 0; }
+  });
+  if (bar) { bar.classList.remove('hidden'); }
   if (master) {
     master.checked = all.length > 0 && ids.length === all.length;
     // Partial selection is neither ticked nor empty, and saying so avoids the

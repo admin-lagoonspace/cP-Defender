@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.27.1">
+<link rel="stylesheet" href="css/app.css?v=3.27.2">
 </head>
 <body>
 <div id="app">
@@ -289,7 +289,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.27.1 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.27.2 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -483,20 +483,6 @@
         <div class="card-body" style="padding:0">
           <div style="overflow-x:auto">
             <table class="sg-table" id="dash-events-table">
-              <!-- Shown only while something is selected: a bar of destructive
-                   buttons sitting permanently above a table invites an accident. -->
-              <div id="threat-bulk-bar" class="hidden"
-                   style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:10px;
-                          background:rgba(124,92,255,.08);border:1px solid rgba(124,92,255,.25);
-                          border-radius:8px">
-                <span id="threat-bulk-count" style="font-size:.8rem;font-weight:600">0 selected</span>
-                <button class="btn btn-ghost btn-sm threat-bulk-btn"
-                        onclick="bulkThreatAction('quarantine')">🔒 Quarantine selected</button>
-                <button class="btn btn-danger btn-sm threat-bulk-btn"
-                        onclick="bulkThreatAction('delete')">🗑 Delete selected</button>
-                <span style="font-size:.72rem;color:var(--txt3)">Delete cannot be undone.</span>
-              </div>
-
               <thead>
                 <tr>
                   <th>Severity</th><th>Type</th><th>Source</th>
@@ -569,6 +555,29 @@
           </div>
         </div>
         <div class="card-body" style="padding:0">
+
+          <!-- Bulk actions for the selected threats.
+               Always visible, with the buttons disabled until something is
+               ticked. The first version hid the whole bar until a selection
+               existed, which meant the feature was invisible to anyone looking
+               for it -- and it had also been inserted into the dashboard's
+               events table by a patch that anchored on the first <thead> in the
+               file, as a <div> directly inside <table>, which browsers hoist
+               out or drop. It was therefore missing from the page it was asked
+               for. -->
+          <div id="threat-bulk-bar"
+               style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+                      padding:10px 16px;border-bottom:1px solid var(--border)">
+            <span id="threat-bulk-count" style="font-size:.8rem;font-weight:600;color:var(--txt2)">0 selected</span>
+            <button class="btn btn-ghost btn-sm threat-bulk-btn" id="threat-bulk-quarantine"
+                    onclick="bulkThreatAction('quarantine')" disabled>🔒 Quarantine selected</button>
+            <button class="btn btn-danger btn-sm threat-bulk-btn" id="threat-bulk-delete"
+                    onclick="bulkThreatAction('delete')" disabled>🗑 Delete selected</button>
+            <span style="font-size:.72rem;color:var(--txt3)">
+              Tick rows, or the box in the header to select all. Delete cannot be undone.
+            </span>
+          </div>
+
           <div style="overflow-x:auto">
             <table class="sg-table">
               <thead>
@@ -582,7 +591,7 @@
                 </tr>
               </thead>
               <tbody id="threats-body">
-                <tr><td colspan="8" style="text-align:center;color:var(--txt3);padding:28px">No threats detected. Run a scan to check your server.</td></tr>
+                <tr><td colspan="10" style="text-align:center;color:var(--txt3);padding:28px">No threats detected. Run a scan to check your server.</td></tr>
               </tbody>
             </table>
           </div>
@@ -1886,9 +1895,9 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.27.1"></script>
+<script src="js/api.js?v=3.27.2"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.27.1"></script>
+<script src="js/app.js?v=3.27.2"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
