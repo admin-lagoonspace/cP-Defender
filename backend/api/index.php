@@ -163,7 +163,7 @@ try {
         'firewall'   => routeFirewall($action, $method, $body, $query, $id, $user),
         'waf'        => routeWAF($action, $method, $body, $query, $user),
         'iprep'      => routeIPRep($action, $method, $body, $query, $user),
-        'events'     => routeEvents($action, $method, $query, $user),
+        'events'     => routeEvents($action, $method, $body, $query, $user),
         'settings'   => routeSettings($action, $method, $body, $user),
         'logs'       => routeLogs($action, $method, $query, $user),
         'monitor'    => routeMonitor($action, $method, $body, $query, $user),
@@ -584,6 +584,50 @@ function routeIPRep(string $action, string $method, array $body, array $q, ?arra
         return ['success' => true, 'data' => BlocklistRegistry::serverIps()];
     }
 
+    // GET iprep/check-server-ips — run the blocklist matrix over EVERY address
+    // this server sends from.
+    //
+    // Nothing did this. The scheduled job re-checks the addresses that have
+    // attacked the server, which is a different question, and the UI only ever
+    // pre-filled the first server IP into a manual lookup box. So the one thing
+    // an operator most needs to know from this module -- whether their own mail
+    // or web IP has landed on a blocklist -- was never checked by anything.
+    if ($action === 'check-server-ips') {
+        $ips = BlocklistRegistry::serverIps();
+        if (!$ips) {
+            return ['success' => false, 'error' => 'No public IPv4 address detected on this host', 'code' => 404];
+        }
+
+        $out = [];
+        $worst = 0;
+        foreach ($ips as $ip) {
+            // One address failing its lookups must not abandon the rest.
+            try {
+                $r = BlocklistRegistry::checkAll($ip);
+            } catch (Throwable $e) {
+                $r = ['ip' => $ip, 'error' => 'Lookup failed', 'listed' => 0, 'score' => 0, 'results' => []];
+            }
+            $worst = max($worst, (int)($r['score'] ?? 0));
+            $out[] = $r;
+        }
+
+        Database::setSetting('iprep_server_last_run', (string)time());
+        Database::setSetting('iprep_server_worst_score', (string)$worst);
+
+        $listedIps = array_values(array_filter($out, fn($r) => (int)($r['listed'] ?? 0) > 0));
+        if ($listedIps) {
+            Logger::warn('Server IP reputation: ' . count($listedIps) . ' of ' . count($out)
+                       . ' address(es) listed on a blocklist');
+        }
+
+        return ['success' => true, 'data' => [
+            'checked'     => count($out),
+            'listed'      => count($listedIps),
+            'worst_score' => $worst,
+            'ips'         => $out,
+        ]];
+    }
+
     $rep = new IPReputation();
     return match($action) {
         'check' => ['success' => true, 'data' => $rep->check($q['ip'] ?? $body['ip'] ?? '')],
@@ -595,7 +639,14 @@ function routeIPRep(string $action, string $method, array $body, array $q, ?arra
     };
 }
 
-function routeEvents(string $action, string $method, array $q, ?array $user): array {
+function routeEvents(string $action, string $method, array $body, array $q, ?array $user): array {
+    // Resolving an event is a privileged action -- it clears a security finding
+    // from the operator's queue. Every other module gates its writes this way;
+    // this one only had requireAuth from the dispatcher.
+    if (in_array($action, ['resolve', 'resolve-bulk', 'resolve-all'], true)) {
+        Auth::requireRole('admin', $user);
+    }
+
     return match($action) {
         'list', 'index' => (function() use ($q) {
             $limit    = (int)($q['limit'] ?? 50);
@@ -612,13 +663,66 @@ function routeEvents(string $action, string $method, array $q, ?array $user): ar
             return ['success' => true, 'data' => $events, 'unresolved' => (int) $unresolved];
         })(),
 
+        // The id may arrive as a query parameter or in the body; accept both,
+        // and report what actually changed rather than an unconditional
+        // success. Reporting success for an id that matched no row is how a
+        // button appears to work while doing nothing.
         'resolve' => $method === 'POST'
-            ? (function() use ($q) {
-                Database::query(
-                    "UPDATE security_events SET resolved=1 WHERE id=?",
-                    [(int)($q['id'] ?? 0)]
-                );
-                return ['success' => true];
+            ? (function() use ($q, $body) {
+                $id = (int)($body['id'] ?? $q['id'] ?? 0);
+                if ($id <= 0) {
+                    return ['success' => false, 'error' => 'An event id is required', 'code' => 400];
+                }
+                Database::query("UPDATE security_events SET resolved=1 WHERE id=?", [$id]);
+                $still = Database::fetchOne(
+                    "SELECT COUNT(*) AS c FROM security_events WHERE id=? AND resolved=0", [$id]
+                )['c'];
+                if ((int)$still !== 0) {
+                    return ['success' => false, 'error' => 'Event ' . $id . ' was not found', 'code' => 404];
+                }
+                Logger::info('Security event resolved: #' . $id);
+                return ['success' => true, 'resolved' => 1];
+            })()
+            : ['success' => false, 'code' => 405],
+
+        // POST events/resolve-bulk {ids:[...]} — clearing a page of events one
+        // click at a time was the only option.
+        'resolve-bulk' => $method === 'POST'
+            ? (function() use ($body) {
+                $ids = array_values(array_unique(array_filter(
+                    array_map('intval', (array)($body['ids'] ?? [])),
+                    fn($i) => $i > 0
+                )));
+                if (!$ids) {
+                    return ['success' => false, 'error' => 'No events selected', 'code' => 400];
+                }
+                // Chunked: SQLite has a hard limit on bound variables, and a
+                // select-all over a busy events table can exceed it.
+                $done = 0;
+                foreach (array_chunk($ids, 200) as $chunk) {
+                    $in = implode(',', array_fill(0, count($chunk), '?'));
+                    $before = (int) Database::fetchOne(
+                        "SELECT COUNT(*) AS c FROM security_events WHERE id IN ($in) AND resolved=0",
+                        $chunk
+                    )['c'];
+                    Database::query(
+                        "UPDATE security_events SET resolved=1 WHERE id IN ($in)", $chunk
+                    );
+                    $done += $before;
+                }
+                Logger::info('Security events resolved in bulk: ' . $done . ' of ' . count($ids));
+                return ['success' => true, 'resolved' => $done, 'requested' => count($ids)];
+            })()
+            : ['success' => false, 'code' => 405],
+
+        'resolve-all' => $method === 'POST'
+            ? (function() {
+                $n = (int) Database::fetchOne(
+                    "SELECT COUNT(*) AS c FROM security_events WHERE resolved=0"
+                )['c'];
+                Database::query("UPDATE security_events SET resolved=1 WHERE resolved=0");
+                Logger::info('All security events resolved: ' . $n);
+                return ['success' => true, 'resolved' => $n];
             })()
             : ['success' => false, 'code' => 405],
 
@@ -655,6 +759,18 @@ function routeLogs(string $action, string $method, array $q, ?array $user): arra
     Auth::requireRole('admin', $user);
     return match($action) {
         'recent' => ['success' => true, 'data' => Logger::getRecentLogs((int)($q['lines'] ?? 200))],
+
+        // GET logs/days — which days have a log at all
+        'days' => ['success' => true, 'data' => Logger::getLogDays((int)($q['limit'] ?? 30))],
+
+        // GET logs/query?date=&level=&search=&lines= — parsed, filtered rows
+        'query' => ['success' => true, 'data' => Logger::query(
+            (string)($q['date']   ?? ''),
+            (string)($q['level']  ?? ''),
+            (string)($q['search'] ?? ''),
+            min(2000, max(1, (int)($q['lines'] ?? 500)))
+        )],
+
         default  => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }
@@ -725,6 +841,68 @@ function routeStorage(string $action, string $method, array $body, ?array $user)
     Auth::requireRole('admin', $user);
 
     return match($action) {
+
+        // GET storage/quarantine-usage — where quarantine points right now.
+        // The settings page hard-coded /usr/local/sentinel-gate/quarantine into
+        // a label, so it kept naming the root partition long after the default
+        // moved to /home, and there was no way to see the real location without
+        // the CLI.
+        'quarantine-usage' => (function() {
+            $u = Scanner::quarantineUsage();
+            $u['writable'] = is_dir($u['dir']) && is_writable($u['dir']);
+            return ['success' => true, 'data' => $u];
+        })(),
+
+        // POST storage/quarantine-check {path} — prove the app can actually
+        // read and write there, by writing. Checking is_writable() alone is a
+        // guess: it says nothing about a read-only mount, a full volume or
+        // SELinux, all of which fail only at the moment a file is moved in --
+        // which is the moment a threat is found.
+        'quarantine-check' => $method === 'POST'
+            ? (function() use ($body) {
+                $dir = trim((string)($body['path'] ?? ''));
+                if ($dir === '' || $dir[0] !== '/') {
+                    return ['success' => false, 'data' => ['writable' => false,
+                        'reason' => 'an absolute path is required'], 'code' => 400];
+                }
+                if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
+                    return ['success' => false, 'data' => ['writable' => false,
+                        'reason' => 'directory does not exist and could not be created']];
+                }
+                $probe = rtrim($dir, '/') . '/.sg-write-test-' . getmypid();
+                if (@file_put_contents($probe, 'x') === false) {
+                    return ['success' => false, 'data' => ['writable' => false,
+                        'reason' => 'not writable by ' . (function_exists('posix_getpwuid')
+                            ? (posix_getpwuid(posix_geteuid())['name'] ?? 'this user')
+                            : 'this user')]];
+                }
+                $readBack = @file_get_contents($probe);
+                @unlink($probe);
+                if ($readBack !== 'x') {
+                    return ['success' => false, 'data' => ['writable' => false,
+                        'reason' => 'written but could not be read back']];
+                }
+
+                $free = @disk_free_space($dir);
+                return ['success' => true, 'data' => [
+                    'writable'   => true,
+                    'path'       => $dir,
+                    'free_bytes' => $free === false ? null : (int)$free,
+                    'on_root'    => strpos(realpath($dir) ?: $dir, '/usr/local') === 0,
+                ]];
+            })()
+            : ['success' => false, 'code' => 405],
+
+        // POST storage/quarantine-move {path} — relocate, moving the files.
+        // Quarantined files are evidence: they are moved, never deleted.
+        'quarantine-move' => $method === 'POST'
+            ? (function() use ($body) {
+                $r = Scanner::moveQuarantine(trim((string)($body['path'] ?? '')));
+                return ($r['success'] ?? false)
+                    ? ['success' => true, 'data' => $r]
+                    : ['success' => false, 'error' => $r['error'] ?? 'Move failed', 'data' => $r];
+            })()
+            : ['success' => false, 'code' => 405],
 
         // GET storage/stats
         'stats' => (function() {

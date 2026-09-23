@@ -162,3 +162,52 @@ if (preg_match('/Demo\.active \? \{ success: true, data: \{([^}]*)\} \} : API\.c
 } else {
     t_ok(false, 'could not locate the cmsStats demo fixture to compare shapes');
 }
+
+// ── Risk verdict and the threshold it was judged against ─────────────────────
+// Reported: the table "is not giving a complete list of cms installations,
+// their version and which ones do we think is at risk or are outdated".
+//
+// The version and an outdated flag were there; what was missing was any way to
+// see what that flag MEANT. The threshold was a hard-coded 6.4 -- a WordPress
+// release from 2023 -- so sites well behind current were reported as fine, and
+// the operator had no number to check the verdict against.
+$rows = $guard->getInstalls();
+t_ok(count($rows) >= 1, 'installs are listed (' . count($rows) . ')');
+
+foreach ($rows as $r) {
+    t_ok(array_key_exists('target_version', $r),
+        $r['cms_type'] . ' row carries the version it was judged against');
+    t_ok(array_key_exists('risk', $r),
+        $r['cms_type'] . ' row carries a risk verdict');
+    t_ok(in_array($r['risk'], ['high', 'medium', 'low', 'ok', 'unknown'], true),
+        $r['cms_type'] . ' risk is one of the known levels (' . $r['risk'] . ')');
+}
+
+// An ancient install must not be reported as current.
+$old = array_values(array_filter($rows, fn($r) => ($r['version'] ?? '') !== 'unknown'
+                                              && version_compare($r['version'], '5.0', '<')));
+foreach ($old as $r) {
+    t_ok($r['risk'] !== 'ok',
+        'a very old ' . $r['cms_type'] . ' (' . $r['version'] . ') is not reported as current');
+}
+
+// ── The threshold is configurable ────────────────────────────────────────────
+// Hard-coded minimums in a shipped release go stale the day after it ships.
+Database::setSetting('cms_min_wordpress', '99.0');
+$strict = new CMSGuard([$root . '/home', $root . '/var/www'], $root . '/var/cpanel/userdata');
+$wpRows = array_values(array_filter($strict->getInstalls(),
+    fn($r) => $r['cms_type'] === 'wordpress' && ($r['version'] ?? '') !== 'unknown'));
+t_ok(count($wpRows) >= 1, 'there is a WordPress row to re-judge');
+foreach ($wpRows as $r) {
+    t_eq('99.0', $r['target_version'], 'the configured threshold is the one applied');
+}
+
+// A malformed override must not silently disable the check.
+Database::setSetting('cms_min_wordpress', 'not-a-version');
+$safe = new CMSGuard([$root . '/home'], $root . '/var/cpanel/userdata');
+$wp2 = array_values(array_filter($safe->getInstalls(), fn($r) => $r['cms_type'] === 'wordpress'));
+if ($wp2) {
+    t_ok($wp2[0]['target_version'] !== 'not-a-version',
+        'a malformed threshold is ignored rather than accepted');
+}
+Database::setSetting('cms_min_wordpress', '');

@@ -184,8 +184,11 @@ class Firewall {
         if (!$this->isCSFInstalled()) {
             return ['installed' => false, 'running' => false];
         }
-        exec(CSF_BIN . ' -l 2>&1 | head -5', $out, $code);
-        exec('pgrep lfd', $lfd_out, $lfd_code);
+        // `csf -l` was run here and its output thrown away -- neither $out nor
+        // its exit code was read. It dumps the entire iptables ruleset, which on
+        // a busy server is the single slowest thing the firewall page did, for
+        // no result at all. Whether lfd is running is what this actually needs.
+        exec('pgrep lfd >/dev/null 2>&1', $lfd_out, $lfd_code);
         return [
             'installed' => true,
             'running'   => $lfd_code === 0,
@@ -194,8 +197,15 @@ class Firewall {
     }
 
     private function getCSFVersion(): string {
+        // Cached for the request: the firewall page asks for stats more than
+        // once, and forking csf to read a static version string each time is
+        // pure latency.
+        static $cached = null;
+        if ($cached !== null) {
+            return $cached;
+        }
         exec(CSF_BIN . ' --version 2>&1', $out);
-        return $out[0] ?? 'unknown';
+        return $cached = ($out[0] ?? 'unknown');
     }
 
     public function reloadFirewall(): array {
@@ -217,8 +227,11 @@ class Firewall {
             "SELECT COUNT(*) as c FROM blocked_ips WHERE blocked_at >= ?", [$today]
         )['c'];
 
-        // Get iptables rule count
-        exec(IPTABLES_BIN . ' -L INPUT --line-numbers 2>/dev/null | wc -l', $iptOut);
+        // -n is not optional here. Without it iptables resolves every address in
+        // the ruleset back to a hostname, one DNS lookup at a time, and on a
+        // server with a few hundred blocks that is how a page ends up taking
+        // tens of seconds to load. Nothing below uses the hostnames.
+        exec(IPTABLES_BIN . ' -L INPUT -n --line-numbers 2>/dev/null | wc -l', $iptOut);
         $iptCount = max(0, (int)($iptOut[0] ?? 0) - 2);
 
         return [

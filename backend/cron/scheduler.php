@@ -33,6 +33,10 @@ require_once SG_ROOT . '/backend/lib/Database.php';
 require_once SG_ROOT . '/backend/lib/Logger.php';
 require_once SG_ROOT . '/backend/lib/Scanner.php';
 require_once SG_ROOT . '/backend/lib/IPReputation.php';
+// Used by the iprep task to check this server's own addresses. Calling a
+// class the scheduler never required is a fatal error at 03:00, in cron,
+// where nobody is looking.
+require_once SG_ROOT . '/backend/lib/BlocklistRegistry.php';
 require_once SG_ROOT . '/backend/lib/License.php';
 // Newly scheduled modules. Omitting these is a fatal on the first cron run,
 // which nothing would have reported until a panel stayed empty for a week.
@@ -84,7 +88,11 @@ function markRun(string $task): void { Database::setSetting("last_run_$task", (s
  */
 function isDue(string $task, string $schedule, int $now,
                string $atTime = '02:00', int $onDay = 0): bool {
-    if ($schedule === 'off') { return false; }
+    // 'disabled' is accepted as a synonym: the settings UI grew a select that
+    // used that word, and a schedule string the scheduler does not recognise
+    // falls through to `return false` below -- indistinguishable from off, but
+    // by accident rather than intent.
+    if ($schedule === 'off' || $schedule === 'disabled' || $schedule === '') { return false; }
 
     $last = lastRun($task);
     if ($last === 0) { return true; }          // never run — run now
@@ -170,6 +178,28 @@ $tasks = [
             slog("  refreshed reputation for $n address(es)");
             Database::setSetting('iprep_last_run', (string)time());
             Database::setSetting('iprep_last_count', (string)$n);
+
+            // The server's OWN addresses, which nothing checked. Attacker IPs
+            // and the server's IPs are different questions, and this is the one
+            // that costs money: a mail IP quietly landing on a blocklist is
+            // only noticed when customers report undelivered mail.
+            $listed = 0;
+            foreach (BlocklistRegistry::serverIps() as $mine) {
+                try {
+                    $r = BlocklistRegistry::checkAll($mine);
+                } catch (Throwable $e) {
+                    continue;
+                }
+                if ((int)($r['listed'] ?? 0) > 0) {
+                    $listed++;
+                    slog("  WARNING: server IP $mine is listed on "
+                       . (int)$r['listed'] . ' blocklist(s)');
+                    Logger::event('ip_reputation', 'high', $mine, 'server',
+                        'This server address is listed on ' . (int)$r['listed'] . ' blocklist(s)');
+                }
+            }
+            Database::setSetting('iprep_server_last_run', (string)time());
+            Database::setSetting('iprep_server_listed', (string)$listed);
         },
     ],
 
@@ -217,7 +247,14 @@ $tasks = [
                 slog('  rkhunter/chkrootkit unavailable — using built-in engine');
                 $r = RootkitEngine::scan();
             }
-            $n = (int)($r['findings'] ?? (is_array($r['findings'] ?? null) ? count($r['findings']) : 0));
+            $n = is_array($r['findings'] ?? null)
+                ? count($r['findings'])
+                : (int)($r['findings'] ?? 0);
+            // Recorded so the settings page can show when this last ran and
+            // what it found. Without it a scheduled scan is invisible: it
+            // either runs or does not, and the operator cannot tell which.
+            Database::setSetting('rootkit_last_run', (string)time());
+            Database::setSetting('rootkit_last_findings', (string)$n);
             slog('  rootkit scan: ' . $n . ' finding(s)');
         },
     ],

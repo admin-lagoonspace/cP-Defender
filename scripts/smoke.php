@@ -55,6 +55,15 @@ $routes = [
     ['GET', 'cmsguard/stats'],
     ['GET', 'rootkit/status'],
     ['GET', 'integrity/stats'],
+    ['GET', 'integrity/paths'],
+    ['GET', 'integrity/changes'],
+    // Added with the modules they belong to. A route that is not smoke-tested
+    // is one whose first execution happens on a customer's server.
+    ['GET', 'logs/days'],
+    ['GET', 'logs/query'],
+    ['GET', 'logs/recent'],
+    ['GET', 'storage/quarantine-usage'],
+    ['GET', 'cmsguard/installs'],
     ['GET', 'phphard/stats'],
     ['GET', 'update/status'],
     ['GET', 'update/progress'],

@@ -135,6 +135,7 @@ function openPage(name) {
     case 'cms':       loadCMSGuard();       break;
     case 'rootkit':   loadRootkit();        break;
     case 'integrity': loadIntegrity();      break;
+    case 'logs':      loadLogs();           break;
     case 'php':       loadPHPHardening();   break;
   }
 }
@@ -331,24 +332,107 @@ async function refreshDashboard() {
 function renderEventsTable(events, tbodyId) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
+
+  // The dashboard shows a trimmed version of this table with no checkbox and
+  // no Description; only the full Security Events page has them.
+  const full = tbodyId === 'events-body';
+  const cols = full ? 8 : 6;
+
   if (!events.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:20px">No events found</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${cols}" style="text-align:center;color:var(--txt3);padding:20px">No events found</td></tr>`;
+    if (full) updateEventBulkBar();
     return;
   }
+
+  // Every one of these fields comes from a request someone else made -- a
+  // request path, a user agent, an attacker-chosen target. Interpolating them
+  // raw put an attacker's markup into the page of the operator reviewing their
+  // attack, which is about the worst place for it in a security product.
   tbody.innerHTML = events.map(e => `
     <tr>
+      ${full ? `<td><input type="checkbox" class="event-check" value="${Number(e.id) || 0}"
+                     onchange="updateEventBulkBar()" ${e.resolved ? 'disabled' : ''}></td>` : ''}
       <td>${sevBadge(e.severity)}</td>
-      <td class="primary">${e.type}</td>
-      <td class="mono">${e.source_ip || '—'}</td>
-      <td class="mono">${e.target || '—'}</td>
+      <td class="primary">${esc(e.type)}</td>
+      <td class="mono">${esc(e.source_ip) || '—'}</td>
+      <td class="mono">${esc(e.target) || '—'}</td>
+      ${full ? `<td class="dim" style="max-width:320px;overflow:hidden;text-overflow:ellipsis">${esc(e.description)}</td>` : ''}
       <td class="dim">${reltime(e.timestamp)}</td>
       <td>
         ${e.resolved
           ? '<span class="badge badge-gray">Resolved</span>'
-          : `<button class="btn btn-ghost btn-xs" onclick="resolveEvent(${e.id})">Resolve</button>`
+          : `<button class="btn btn-ghost btn-xs" onclick="resolveEvent(${Number(e.id) || 0})">Resolve</button>`
         }
       </td>
     </tr>`).join('');
+
+  if (full) updateEventBulkBar();
+}
+
+// ── Bulk resolve ─────────────────────────────────────────────────────────────
+function selectedEventIds() {
+  return Array.from(document.querySelectorAll('.event-check:checked'))
+              .map(c => parseInt(c.value, 10))
+              .filter(n => n > 0);
+}
+
+function toggleAllEvents(master) {
+  // Resolved rows are disabled, so this selects every unresolved event shown.
+  document.querySelectorAll('.event-check:not(:disabled)')
+          .forEach(c => { c.checked = master.checked; });
+  updateEventBulkBar();
+}
+
+function updateEventBulkBar() {
+  const ids   = selectedEventIds();
+  const count = document.getElementById('event-bulk-count');
+  if (count) {
+    count.textContent = ids.length + ' selected';
+    count.style.color = ids.length ? 'var(--primary)' : 'var(--txt2)';
+  }
+  const btn = document.getElementById('event-bulk-resolve');
+  if (btn) btn.disabled = ids.length === 0;
+
+  const master = document.getElementById('event-check-all');
+  if (master) {
+    const all = document.querySelectorAll('.event-check:not(:disabled)').length;
+    master.checked       = all > 0 && ids.length === all;
+    master.indeterminate = ids.length > 0 && ids.length < all;
+  }
+}
+
+async function bulkResolveEvents() {
+  const ids = selectedEventIds();
+  if (!ids.length) { toast('Select one or more events first', 'error'); return; }
+
+  const btn = document.getElementById('event-bulk-resolve');
+  if (btn) { btn.disabled = true; btn.textContent = 'Resolving…'; }
+
+  const res = Demo.active ? { success: true, resolved: ids.length }
+                          : await API.post('events/resolve-bulk', { ids });
+
+  if (btn) { btn.textContent = '✓ Resolve selected'; }
+
+  if (res?.success) {
+    toast(`Resolved ${res.resolved ?? ids.length} event(s)`, 'success');
+    await loadEvents();
+    refreshDashboard();
+  } else {
+    toast(res?.error || 'Could not resolve the selected events', 'error');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function resolveAllEvents() {
+  const res = Demo.active ? { success: true, resolved: 0 }
+                          : await API.post('events/resolve-all', {});
+  if (res?.success) {
+    toast(`Resolved ${res.resolved ?? 0} event(s)`, 'success');
+    await loadEvents();
+    refreshDashboard();
+  } else {
+    toast(res?.error || 'Could not resolve events', 'error');
+  }
 }
 
 // ── Scanner ───────────────────────────────────────────────────────────────────
@@ -906,9 +990,120 @@ async function loadEvents() {
 
 async function resolveEvent(id) {
   const res = Demo.active ? { success: true } : await API.resolveEvent(id);
-  if (res?.success) { toast('Event resolved', 'success'); loadEvents(); refreshDashboard(); }
+  if (res?.success) {
+    toast('Event resolved', 'success');
+    await loadEvents();
+    refreshDashboard();
+  } else {
+    // Previously the failure branch did not exist, so a resolve that changed
+    // nothing looked identical to one that worked until the row reappeared.
+    toast(res?.error || 'Could not resolve that event', 'error');
+  }
 }
 
+
+// ── Log Analyzer ─────────────────────────────────────────────────────────────
+let _logDaysLoaded = false;
+let _logSearchTimer = null;
+
+function debouncedLogSearch() {
+  // Typing a path into the search box should not fire a request per keystroke.
+  clearTimeout(_logSearchTimer);
+  _logSearchTimer = setTimeout(loadLogs, 250);
+}
+
+async function loadLogs() {
+  const dateEl   = document.getElementById('log-date');
+  const levelEl  = document.getElementById('log-level');
+  const searchEl = document.getElementById('log-search');
+  const tbody    = document.getElementById('log-body');
+  if (!tbody) return;
+
+  // Populate the day picker once, from the days that actually have a log.
+  if (!_logDaysLoaded && dateEl) {
+    _logDaysLoaded = true;
+    const daysRes = Demo.active
+      ? { success: true, data: [{ date: new Date().toISOString().slice(0, 10), lines: 0 }] }
+      : await API.get('logs/days');
+    const days = daysRes?.data || [];
+    if (days.length) {
+      dateEl.innerHTML = days.map((d, i) =>
+        `<option value="${esc(d.date)}">${esc(d.date)} (${fmtNum(d.lines || 0)} lines)${i === 0 ? ' — latest' : ''}</option>`
+      ).join('');
+    }
+  }
+
+  const params = new URLSearchParams();
+  if (dateEl?.value)   params.set('date',   dateEl.value);
+  if (levelEl?.value)  params.set('level',  levelEl.value);
+  if (searchEl?.value) params.set('search', searchEl.value);
+  params.set('lines', '500');
+
+  const res = Demo.active
+    ? { success: true, data: { entries: [], total: 0, counts: {} } }
+    : await API.get('logs/query?' + params.toString());
+
+  const d = res?.data || {};
+  const entries = d.entries || [];
+  const counts  = d.counts  || {};
+
+  const setTxt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+  setTxt('log-stat-total', fmtNum(d.total || 0));
+  setTxt('log-stat-error', fmtNum(counts.ERROR || 0));
+  setTxt('log-stat-warn',  fmtNum(counts.WARN  || 0));
+  setTxt('log-stat-info',  fmtNum(counts.INFO  || 0));
+  setTxt('log-showing-badge', fmtNum(entries.length) + ' shown');
+
+  if (!entries.length) {
+    // Say which of the two reasons applies. "No entries" alone reads as a
+    // broken page, which is how this module was reported in the first place.
+    const filtered = (searchEl?.value || '') !== ''
+                  || ((levelEl?.value || 'ALL') !== 'ALL');
+    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;color:var(--txt3);padding:28px">${
+      (d.total || 0) > 0 && filtered
+        ? 'No entries match this filter — ' + fmtNum(d.total) + ' entries on this day.'
+        : 'Nothing logged on this day yet.'
+    }</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = entries.map(e => `
+    <tr>
+      <td class="mono dim" style="white-space:nowrap">${esc(e.time) || '—'}</td>
+      <td>${logLevelBadge(e.level)}</td>
+      <td class="mono" style="word-break:break-word;font-size:.75rem">${esc(e.message)}</td>
+    </tr>`).join('');
+}
+
+function logLevelBadge(level) {
+  const map = {
+    ERROR: 'badge badge-red',
+    WARN:  'badge badge-amber',
+    INFO:  'badge badge-green',
+    DEBUG: 'badge badge-gray',
+  };
+  // A line that did not parse still gets a row -- dropping it would hide
+  // exactly the unusual output most worth reading.
+  if (!level) return '<span class="badge badge-gray">raw</span>';
+  return `<span class="${map[level] || 'badge badge-gray'}">${esc(level)}</span>`;
+}
+
+function downloadLogs() {
+  const rows = Array.from(document.querySelectorAll('#log-body tr'))
+    .map(tr => Array.from(tr.children).map(td => td.textContent.trim()).join('  '))
+    .join('\n');
+  if (!rows.trim()) { toast('Nothing to download', 'error'); return; }
+
+  const day = document.getElementById('log-date')?.value || 'today';
+  const blob = new Blob([rows], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `sentinel-gate-${day}.log`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
 // ── Settings ──────────────────────────────────────────────────────────────────
 function updateCpuSliderLabel(val) {
   val = parseInt(val, 10);
@@ -982,6 +1177,12 @@ async function loadSettings() {
   set('set-iprep-schedule',d.iprep_schedule || 'daily');
   set('set-scan-paths',    d.scan_paths);
 
+  // Rootkit schedule — the scheduler has always read these; nothing set them.
+  set('set-rootkit-schedule', d.rootkit_schedule || 'weekly');
+  set('set-rootkit-time',     d.rootkit_time     || '05:00');
+  set('set-rootkit-day',      d.rootkit_day      || '0');
+  loadQuarantineInfo();
+
   // Real-time monitor resource profile
   selectRtProfile(d.rt_profile || 'balanced');
   set('set-rt-fps',      d.rt_max_files_per_sec || '25');
@@ -997,6 +1198,8 @@ async function loadSettings() {
   txt('sig-last-update',  ts(d.sig_last_update));
   txt('iprep-last-run',   ts(d.iprep_last_run));
   txt('iprep-last-count', d.iprep_last_count || '0');
+  txt('rootkit-last-run',      ts(d.rootkit_last_run));
+  txt('rootkit-last-findings', d.rootkit_last_findings || '0');
 
   syncScheduleFields();
   chk('set-auto-quar',     d.auto_quarantine);
@@ -1066,6 +1269,136 @@ async function saveSettings() {
   else toast('Failed to save', 'error');
 }
 
+
+// ── Scanner settings ─────────────────────────────────────────────────────────
+// A save control that belongs to the card it saves. The page-level "Save
+// Changes" lives in a different card further up the page, so changing a scan
+// schedule here left the operator with nothing to click and no way to tell
+// whether the change had taken.
+async function saveScannerSettings() {
+  const g = id => document.getElementById(id);
+  const status = g('scanner-settings-status');
+  const data = {
+    scan_schedule:       g('set-scan-schedule')?.value,
+    scan_time:           g('set-scan-time')?.value,
+    scan_day:            g('set-scan-day')?.value,
+    scan_type:           g('set-scan-type')?.value,
+    scan_paths:          g('set-scan-paths')?.value,
+    sig_update_schedule: g('set-sig-schedule')?.value,
+    sig_update_day:      g('set-sig-day')?.value,
+    iprep_schedule:      g('set-iprep-schedule')?.value,
+    auto_quarantine:     g('set-auto-quar')?.checked ? '1' : '0',
+    rootkit_schedule:    g('set-rootkit-schedule')?.value,
+    rootkit_time:        g('set-rootkit-time')?.value,
+    rootkit_day:         g('set-rootkit-day')?.value,
+  };
+
+  if (status) { status.textContent = 'Saving…'; status.style.color = 'var(--txt3)'; }
+
+  const res = Demo.active ? { success: true } : await API.saveSettings(data);
+
+  if (res?.success) {
+    // Read it back rather than trusting the button's own optimism: the
+    // complaint was that a changed schedule did not appear to update anywhere,
+    // and only a re-read can actually show that it did.
+    await loadSettings();
+    if (status) {
+      status.textContent = 'Saved · scan runs ' + describeSchedule(data);
+      status.style.color = 'var(--ok, #22c55e)';
+    }
+    toast('Scanner settings saved', 'success');
+  } else {
+    if (status) {
+      status.textContent = res?.error || 'Save failed';
+      status.style.color = 'var(--danger, #ef4444)';
+    }
+    toast(res?.error || 'Could not save scanner settings', 'error');
+  }
+}
+
+function describeSchedule(d) {
+  if (!d || d.scan_schedule === 'disabled') return 'never (disabled)';
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const at = d.scan_time || '02:00';
+  if (d.scan_schedule === 'daily')   return 'daily at ' + at;
+  if (d.scan_schedule === 'weekly')  return days[+d.scan_day || 0] + 's at ' + at;
+  if (d.scan_schedule === 'monthly') return 'monthly at ' + at;
+  return String(d.scan_schedule || '');
+}
+
+// ── Quarantine location ──────────────────────────────────────────────────────
+async function checkQuarantinePath() {
+  const dir = document.getElementById('set-quar-dir')?.value?.trim();
+  const badge = document.getElementById('quar-writable');
+  if (!dir) { toast('Enter a quarantine path first', 'error'); return; }
+  if (badge) { badge.textContent = 'checking…'; badge.className = 'badge badge-gray'; }
+
+  const res = Demo.active ? { success: true, data: { writable: true } }
+                          : await API.post('storage/quarantine-check', { path: dir });
+  const d = res?.data || {};
+  if (!badge) return;
+
+  if (res?.success && d.writable) {
+    badge.textContent = 'readable & writable';
+    badge.className   = 'badge badge-green';
+  } else {
+    // Saying "not writable" without saying why leaves the operator guessing
+    // between a missing directory, a permission problem and a full disk.
+    badge.textContent = d.reason || res?.error || 'not writable';
+    badge.className   = 'badge badge-red';
+  }
+}
+
+async function moveQuarantineDir() {
+  const dir = document.getElementById('set-quar-dir')?.value?.trim();
+  if (!dir) { toast('Enter a quarantine path first', 'error'); return; }
+  if (!confirm('Move quarantined files to:\n\n' + dir + '\n\nFiles are moved, never deleted.')) return;
+
+  const res = Demo.active ? { success: true, data: { moved: 0 } }
+                          : await API.post('storage/quarantine-move', { path: dir });
+  if (res?.success) {
+    toast('Quarantine moved (' + (res.data?.moved ?? 0) + ' file(s))', 'success');
+    loadQuarantineInfo();
+  } else {
+    toast(res?.error || res?.data?.error || 'Could not move quarantine', 'error');
+  }
+}
+
+async function loadQuarantineInfo() {
+  const res = Demo.active
+    ? { success: true, data: { dir: '/home/.sentinel-gate/quarantine', files: 0, human: '0 B', writable: true, on_root: false } }
+    : await API.get('storage/quarantine-usage');
+  const d = res?.data || {};
+
+  const input = document.getElementById('set-quar-dir');
+  if (input && !input.dataset.touched) input.value = d.dir || '';
+
+  const usage = document.getElementById('quar-usage');
+  if (usage) {
+    usage.textContent = (d.files ?? 0) + ' file(s) · ' + (d.human ?? '0 B')
+                      + (d.on_root ? ' · on the root partition' : '');
+    usage.style.color = d.on_root ? 'var(--danger, #ef4444)' : 'var(--txt3)';
+  }
+
+  const badge = document.getElementById('quar-writable');
+  if (badge) {
+    badge.textContent = d.writable ? 'readable & writable' : 'not writable';
+    badge.className   = d.writable ? 'badge badge-green' : 'badge badge-red';
+  }
+}
+
+async function runRootkitNow() {
+  toast('Rootkit scan started…', 'info');
+  const res = Demo.active ? { success: true, data: { summary: { critical: 0, high: 0 } } }
+                          : await API.post('rootkit/scan-builtin', {});
+  if (res?.success) {
+    const sum = res.data?.summary || {};
+    toast('Rootkit scan finished — ' + (sum.critical || 0) + ' critical, ' + (sum.high || 0) + ' high', 'success');
+    loadSettings();
+  } else {
+    toast(res?.error || 'Rootkit scan failed', 'error');
+  }
+}
 
 // ── Real-Time Monitor ─────────────────────────────────────────────────────────
 let monitorRunning = false;
@@ -1681,25 +2014,64 @@ async function loadCMSGuard() {
       ? 'No CMS installations found. Scan again if you have added sites since '
         + (statsRes.data.last_scan_at ? reltime(statsRes.data.last_scan_at) : 'the last scan') + '.'
       : 'No scan has run yet — click "Scan Server" to discover CMS installations.';
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:28px">'
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--txt3);padding:28px">'
                     + esc(msg) + '</td></tr>';
     return;
   }
+  // install_path, version and cpanel_user were interpolated raw. A hosting
+  // customer chooses their own directory names, so that is markup supplied by
+  // someone else rendered into the server administrator's page.
   tbody.innerHTML = installs.map(c => {
     let issues = [];
-    try { issues = JSON.parse(c.issues || '[]'); } catch(_) {}
-    const icons = { wordpress: 'WP', joomla: 'JM', drupal: 'DR' };
-    const cmsLabel = icons[c.cms_type] || c.cms_type;
+    try {
+      const parsed = JSON.parse(c.issues || '[]');
+      // Stored either as slugs or as {type,message} objects depending on age.
+      issues = (Array.isArray(parsed) ? parsed : [])
+        .map(i => (i && typeof i === 'object') ? (i.type || '') : String(i))
+        .filter(Boolean);
+    } catch (_) {}
+
+    const icons    = { wordpress: 'WP', joomla: 'JM', drupal: 'DR' };
+    const cmsLabel = icons[c.cms_type] || c.cms_type || '?';
+    const version  = c.version || 'unknown';
+    const target   = c.target_version || '';
+
     return '<tr>' +
-      '<td><span class="badge badge-blue" style="font-size:.7rem">' + cmsLabel + '</span></td>' +
-      '<td class="mono" style="color:' + (c.outdated ? 'var(--amber)' : 'var(--green)') + '">' + c.version + (c.outdated ? ' !' : '') + '</td>' +
-      '<td class="mono" style="color:var(--blue)">' + (c.cpanel_user||'-') + '</td>' +
-      '<td class="mono" style="font-size:.72rem;max-width:180px;overflow:hidden;text-overflow:ellipsis" title="' + c.install_path + '">' + c.install_path + '</td>' +
-      '<td>' + (issues.length ? issues.map(function(i){ return '<span class="badge badge-amber" style="font-size:.62rem;margin:1px">' + i.replace(/_/g,' ') + '</span>'; }).join('') : '<span class="badge badge-green" style="font-size:.62rem">None</span>') + '</td>' +
-      '<td>' + (c.status === 'ok' ? '<span class="badge badge-green">OK</span>' : '<span class="badge badge-amber">Issues</span>') + '</td>' +
-      '<td><button class="btn btn-ghost btn-xs" onclick="recheckCMS(' + c.id + ')">Recheck</button></td>' +
+      '<td><span class="badge badge-blue" style="font-size:.7rem">' + esc(cmsLabel) + '</span></td>' +
+      '<td class="mono" style="color:' + (c.outdated ? 'var(--amber)' : 'var(--green)') + '">' +
+        esc(version) + (c.outdated ? ' ↓' : '') + '</td>' +
+      // Showing what it was judged against: "6.5 !" on its own is a verdict
+      // the operator has no way to check or disagree with.
+      '<td class="mono dim">' + (target ? esc(target) : '—') + '</td>' +
+      '<td>' + cmsRiskBadge(c.risk, c.outdated) + '</td>' +
+      '<td class="mono" style="color:var(--blue)">' + (esc(c.cpanel_user) || '—') + '</td>' +
+      '<td class="mono" style="font-size:.72rem;max-width:180px;overflow:hidden;text-overflow:ellipsis" title="' +
+        esc(c.install_path) + '">' + esc(c.install_path) + '</td>' +
+      '<td>' + (issues.length
+        ? issues.map(i => '<span class="badge badge-amber" style="font-size:.62rem;margin:1px">' +
+            esc(i.replace(/_/g, ' ')) + '</span>').join('')
+        : '<span class="badge badge-green" style="font-size:.62rem">None</span>') + '</td>' +
+      '<td>' + (c.status === 'ok'
+        ? '<span class="badge badge-green">OK</span>'
+        : '<span class="badge badge-amber">Issues</span>') + '</td>' +
+      '<td><button class="btn btn-ghost btn-xs" onclick="recheckCMS(' + (Number(c.id) || 0) + ')">Recheck</button></td>' +
       '</tr>';
   }).join('');
+}
+
+function cmsRiskBadge(risk, outdated) {
+  // Fall back to the outdated flag for rows written before risk existed,
+  // rather than rendering an empty cell that reads as "no risk".
+  const level = risk || (outdated ? 'medium' : 'ok');
+  const map = {
+    high:    ['badge badge-red',   'At risk'],
+    medium:  ['badge badge-amber', 'Outdated'],
+    low:     ['badge badge-gray',  'Minor'],
+    ok:      ['badge badge-green', 'Current'],
+    unknown: ['badge badge-gray',  'Unknown'],
+  };
+  const [cls, label] = map[level] || map.unknown;
+  return '<span class="' + cls + '">' + label + '</span>';
 }
 
 async function runCMSScan() {
@@ -1810,7 +2182,8 @@ async function loadIntegrity() {
     document.getElementById('int-stat-total').textContent    = fmtNum(d?.total_monitored || 0);
     document.getElementById('int-stat-clean').textContent    = fmtNum(d?.clean || 0);
     document.getElementById('int-stat-modified').textContent = fmtNum(d?.modified || 0);
-    document.getElementById('int-stat-issues').textContent   = fmtNum((d?.new_files||0) + (d?.missing||0));
+    document.getElementById('int-stat-issues').textContent   =
+      fmtNum((d?.new_files ?? d?.new_count ?? 0) + (d?.missing ?? d?.missing_count ?? 0));
   }
 
   const paths = pathsRes?.data || [];
@@ -1850,20 +2223,31 @@ async function loadIntegrityChanges(status) {
 async function createBaseline() {
   const path = document.getElementById('int-baseline-path')?.value?.trim() || '/home';
   toast('Creating baseline for ' + path + '...', 'info');
-  const res = Demo.active ? { success: true, data: { hashed: 12847 } } : await API.integrityBaseline(path);
-  if (res?.success) {
-    toast('Baseline created - ' + fmtNum(res.data?.hashed||0) + ' files hashed', 'success');
+  const res = Demo.active ? { success: true, data: { files: 12847 } } : await API.integrityBaseline(path);
+  const d = res?.data || {};
+  // An error is reported in data.error, not only at the top level: a path that
+  // does not exist came back as success:true with an error inside it, so a
+  // typo'd path produced a cheerful "0 files hashed".
+  if (res?.success && !d.error) {
+    toast('Baseline created — ' + fmtNum(d.files ?? d.hashed ?? 0) + ' files hashed', 'success');
     loadIntegrity();
-  } else toast(res?.error || 'Baseline failed', 'error');
+  } else toast(d.error || res?.error || 'Baseline failed', 'error');
 }
 
 async function runIntegrityCheck() {
   toast('Running integrity check...', 'info');
-  const res = Demo.active ? { success: true, data: { modified: 0, new_files: 0, missing: 0 } } : await API.integrityCheck('');
+  const res = Demo.active ? { success: true, data: { changed: 0 } } : await API.integrityCheck('');
   if (res?.success) {
     const d = res.data || {};
-    const changed = (d.modified||0) + (d.new_files||0) + (d.missing||0);
-    toast('Check complete - ' + changed + ' changes detected', changed ? 'error' : 'success');
+    // d.modified / d.missing / d.new are ARRAYS of the affected files. Adding
+    // them as if they were counts produced "[object Object]" arithmetic and a
+    // reported 0, so a check that found real tampering said everything was
+    // fine. The API now also returns scalar counts; prefer those.
+    const changed = d.changed ?? (
+      (d.modified_count || 0) + (d.new_count || 0) + (d.missing_count || 0)
+    );
+    toast('Check complete — ' + fmtNum(changed) + ' change(s) detected',
+          changed ? 'error' : 'success');
     loadIntegrity();
   } else toast(res?.error || 'Check failed', 'error');
 }
@@ -2290,6 +2674,69 @@ function esc(v) {
    Every list is shown separately rather than as one score, because delisting
    requires knowing WHICH service lists you — a single number cannot tell an
    operator where to go. */
+
+// Check every address this server sends from, not just the first one.
+async function checkAllServerIps() {
+  const tbody   = document.getElementById('srv-ips-body');
+  const summary = document.getElementById('srv-ips-summary');
+  if (!tbody) return;
+
+  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:18px">Querying blocklists for every server address… this takes a few seconds per address.</td></tr>';
+  if (summary) { summary.textContent = 'checking…'; summary.className = 'badge badge-gray'; }
+
+  const res = Demo.active
+    ? { success: true, data: { checked: 1, listed: 0, worst_score: 0,
+        ips: [{ ip: '203.0.113.10', checked: 25, listed: 0, score: 0, risk: 'clean' }] } }
+    : await API.get('iprep/check-server-ips');
+
+  if (!res?.success) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:18px">${
+      esc(res?.error || 'Could not check the server addresses')}</td></tr>`;
+    if (summary) { summary.textContent = 'check failed'; summary.className = 'badge badge-amber'; }
+    return;
+  }
+
+  const d   = res.data || {};
+  const ips = d.ips || [];
+
+  if (summary) {
+    summary.textContent = d.listed
+      ? `${d.listed} of ${d.checked} listed`
+      : `${d.checked} address(es) clean`;
+    summary.className = d.listed ? 'badge badge-red' : 'badge badge-green';
+  }
+
+  if (!ips.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:18px">No public IPv4 address detected on this host.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = ips.map(r => {
+    const listed = Number(r.listed || 0);
+    const verdict = r.error
+      ? '<span class="badge badge-amber">lookup failed</span>'
+      : listed
+        ? '<span class="badge badge-red">listed</span>'
+        : '<span class="badge badge-green">clean</span>';
+    return `
+      <tr>
+        <td class="mono primary">${esc(r.ip)}</td>
+        <td>${fmtNum(r.checked || 0)}</td>
+        <td>${listed ? fmtNum(listed) : '—'}</td>
+        <td>${fmtNum(r.score || 0)}</td>
+        <td>${verdict}</td>
+        <td><button class="btn btn-ghost btn-xs"
+                    onclick="inspectServerIp('${esc(r.ip)}')">Details</button></td>
+      </tr>`;
+  }).join('');
+}
+
+// Load one address into the per-list matrix below, so "listed" can be acted on.
+function inspectServerIp(ip) {
+  const input = document.getElementById('bl-ip');
+  if (input) { input.value = ip; }
+  runBlocklistCheck();
+}
 
 async function loadServerIpForBlocklist() {
   const input = document.getElementById('bl-ip');

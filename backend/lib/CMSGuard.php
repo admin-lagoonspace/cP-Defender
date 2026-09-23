@@ -7,10 +7,20 @@
 class CMSGuard {
 
     /** Minimum versions considered current — anything below is flagged outdated */
+    /**
+     * The lowest version considered current, per CMS.
+     *
+     * These were hard-coded, and hard-coded numbers in a released binary go
+     * stale the day after the release: WordPress 6.4 shipped in 2023, so every
+     * site on 6.5 was reported as up to date long after it was not. Whether a
+     * site is "at risk" is the entire point of this module, so the thresholds
+     * are settings with defaults, not constants -- an operator can raise them
+     * the day a release lands instead of waiting for ours.
+     */
     private array $minVersions = [
-        'wordpress' => '6.4',
-        'joomla'    => '5.0',
-        'drupal'    => '10.0',
+        'wordpress' => '6.7',
+        'joomla'    => '5.2',
+        'drupal'    => '10.3',
     ];
 
     /** Scan roots used when cPanel userdata is unavailable. */
@@ -58,6 +68,15 @@ class CMSGuard {
      * @param string|null   $cpanelUserdata override for tests
      */
     public function __construct(?array $scanRoots = null, ?string $cpanelUserdata = null) {
+        foreach (array_keys($this->minVersions) as $cms) {
+            $override = trim((string) Database::setting('cms_min_' . $cms, ''));
+            // A malformed value must not silently disable the check for that
+            // CMS -- it would read as "everything is current".
+            if ($override !== '' && preg_match('/^\d+(\.\d+)*$/', $override)) {
+                $this->minVersions[$cms] = $override;
+            }
+        }
+
         if ($scanRoots !== null)      { $this->scanRoots = $scanRoots; }
         if ($cpanelUserdata !== null) { $this->cpanelUserdata = $cpanelUserdata; }
 
@@ -205,8 +224,69 @@ class CMSGuard {
         return $found;
     }
 
+    /**
+     * Risk for one install: what the operator is actually asking when they look
+     * at this table. "Outdated: yes/no" alone does not distinguish a site one
+     * point release behind from one that is three majors behind AND exposing
+     * its admin login.
+     */
+    private function riskFor(string $cms, string $version, int $outdated, array $issues): string
+    {
+        if ($version === 'unknown') { return 'unknown'; }
+
+        $min = $this->minVersions[$cms] ?? '0';
+        $majorBehind = false;
+        if ($outdated) {
+            $a = (int) explode('.', $version)[0];
+            $b = (int) explode('.', $min)[0];
+            $majorBehind = $a < $b;
+        }
+
+        $serious = array_intersect($issues, [
+            'outdated_version', 'login_exposed', 'config_readable',
+            'install_dir_present', 'debug_enabled', 'directory_listing',
+        ]);
+
+        if ($majorBehind || count($serious) >= 2) { return 'high'; }
+        if ($outdated || $serious)                { return 'medium'; }
+        if ($issues)                              { return 'low'; }
+        return 'ok';
+    }
+
     public function getInstalls(): array {
-        return Database::fetchAll("SELECT * FROM cms_installs ORDER BY last_check DESC");
+        $rows = Database::fetchAll(
+            "SELECT * FROM cms_installs
+              ORDER BY outdated DESC, status ASC, cms_type ASC, install_path ASC"
+        );
+
+        // The table asked "which ones are at risk or outdated" and was given
+        // a version string and a yes/no flag. Neither says what the version is
+        // being compared against, so "6.5 !" is a claim the operator cannot
+        // check. Each row now carries the threshold it was judged by and a
+        // risk level derived from how far behind it is and what else is wrong.
+        foreach ($rows as &$r) {
+            $cms     = (string)($r['cms_type'] ?? '');
+            $version = (string)($r['version'] ?? 'unknown');
+
+            $issues = [];
+            if (!empty($r['issues'])) {
+                $decoded = json_decode((string)$r['issues'], true);
+                if (is_array($decoded)) {
+                    // Stored as a list of type slugs, or of {type,message} maps.
+                    $issues = array_map(
+                        fn($i) => is_array($i) ? (string)($i['type'] ?? '') : (string)$i,
+                        $decoded
+                    );
+                }
+            }
+
+            $r['target_version'] = $this->minVersions[$cms] ?? null;
+            $r['issue_count']    = count($issues);
+            $r['risk']           = $this->riskFor($cms, $version, (int)($r['outdated'] ?? 0), $issues);
+        }
+        unset($r);
+
+        return $rows;
     }
 
     public function checkInstall(int $id): array {

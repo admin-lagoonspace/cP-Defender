@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.27.5">
+<link rel="stylesheet" href="css/app.css?v=3.28.0">
 </head>
 <body>
 <div id="app">
@@ -289,7 +289,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.27.5 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.28.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -799,7 +799,34 @@
               <label class="form-label" for="bl-ip">Address to check</label>
               <input class="form-input mono" id="bl-ip" type="text" placeholder="detecting server IP…">
             </div>
-            <button class="btn btn-primary btn-sm" onclick="runBlocklistCheck()">Check all lists</button>
+            <button class="btn btn-primary btn-sm" onclick="runBlocklistCheck()">Check this address</button>
+            <button class="btn btn-ghost btn-sm" onclick="checkAllServerIps()">Check every server IP</button>
+          </div>
+
+          <!-- Every address this host sends from, each with its own verdict.
+               Only the first server IP was ever pre-filled into the box above,
+               and the scheduled job checks the addresses that ATTACK this
+               server, not the ones it sends from -- so a server IP landing on
+               a blocklist, which is the thing that quietly breaks outbound
+               mail, was checked by nothing at all. -->
+          <div id="srv-ips-wrap" style="margin-bottom:16px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+              <span style="font-size:.8rem;font-weight:600">This server's addresses</span>
+              <span id="srv-ips-summary" class="badge badge-gray">not checked</span>
+            </div>
+            <div style="overflow-x:auto">
+              <table class="sg-table">
+                <thead><tr>
+                  <th>Address</th><th>Lists checked</th><th>Listed on</th>
+                  <th>Score</th><th>Verdict</th><th></th>
+                </tr></thead>
+                <tbody id="srv-ips-body">
+                  <tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:18px">
+                    Press "Check every server IP" to test all of them against the blocklists.
+                  </td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div id="bl-progress" class="hidden" style="font-size:.8rem;color:var(--txt2);margin-bottom:12px">
@@ -861,6 +888,94 @@
       </div>
     </div>
 
+    <!-- ════ PAGE: LOG ANALYZER ═════════════════════════════════════════════ -->
+    <!-- The sidebar has carried a "Log Analyzer" entry with data-page="logs"
+         since the nav was written, but no matching #page-logs ever existed and
+         showPage() had no case for it. Clicking it hid whatever page was open
+         and showed nothing: a blank window, reported as the feature not
+         working at all. It was never built. -->
+    <div id="page-logs" class="page hidden">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Log Analyzer</h1>
+          <p class="page-subtitle">Everything Sentinel Gate has recorded, by day.</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadLogs)">↻ Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="downloadLogs()">⭳ Download day</button>
+        </div>
+      </div>
+
+      <div class="stat-grid mb-4">
+        <div class="stat-card">
+          <div class="stat-label">Entries</div>
+          <div class="stat-value" id="log-stat-total">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Errors</div>
+          <div class="stat-value" id="log-stat-error" style="color:var(--danger,#ef4444)">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Warnings</div>
+          <div class="stat-value" id="log-stat-warn" style="color:var(--warn,#f59e0b)">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Info</div>
+          <div class="stat-value" id="log-stat-info">0</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Log Entries</div>
+          <span class="badge badge-gray" id="log-showing-badge">0 shown</span>
+        </div>
+
+        <div class="card-body" style="border-bottom:1px solid var(--border)">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+            <div class="form-group" style="margin:0;min-width:160px">
+              <label class="form-label">Day</label>
+              <select class="form-input" id="log-date" onchange="loadLogs()">
+                <option value="">Today</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin:0;min-width:140px">
+              <label class="form-label">Level</label>
+              <select class="form-input" id="log-level" onchange="loadLogs()">
+                <option value="ALL">All levels</option>
+                <option value="ERROR">Errors</option>
+                <option value="WARN">Warnings</option>
+                <option value="INFO">Info</option>
+                <option value="DEBUG">Debug</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin:0;flex:1;min-width:200px">
+              <label class="form-label">Search</label>
+              <input class="form-input" id="log-search" placeholder="path, IP, message…"
+                     oninput="debouncedLogSearch()">
+            </div>
+          </div>
+        </div>
+
+        <div class="card-body" style="padding:0">
+          <div style="overflow-x:auto;max-height:60vh;overflow-y:auto">
+            <table class="sg-table">
+              <thead>
+                <tr>
+                  <th style="width:150px">Time</th>
+                  <th style="width:90px">Level</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody id="log-body">
+                <tr><td colspan="3" style="text-align:center;color:var(--txt3);padding:28px">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ════ PAGE: EVENTS ═══════════════════════════════════════════════════ -->
     <div id="page-events" class="page hidden">
       <div class="page-header">
@@ -885,12 +1000,35 @@
           <span class="badge badge-red" id="events-unresolved-badge">0 unresolved</span>
         </div>
         <div class="card-body" style="padding:0">
+
+          <!-- Bulk actions. Always visible with the buttons disabled until
+               something is ticked: hiding the bar until then made the same
+               feature undiscoverable on the scanner page. -->
+          <div id="event-bulk-bar"
+               style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+                      padding:10px 16px;border-bottom:1px solid var(--border)">
+            <span id="event-bulk-count" style="font-size:.8rem;font-weight:600;color:var(--txt2)">0 selected</span>
+            <button class="btn btn-primary btn-sm" id="event-bulk-resolve"
+                    onclick="bulkResolveEvents()" disabled>✓ Resolve selected</button>
+            <button class="btn btn-ghost btn-sm" onclick="resolveAllEvents()">Resolve all unresolved</button>
+            <span style="font-size:.72rem;color:var(--txt3)">
+              Tick rows, or the box in the header to select every unresolved event on this page.
+            </span>
+          </div>
+
           <table class="sg-table">
             <thead>
-              <tr><th>Severity</th><th>Type</th><th>Source IP</th><th>Target</th><th>Description</th><th>Time</th><th>Status</th></tr>
+              <tr>
+                <th style="width:34px">
+                  <input type="checkbox" id="event-check-all" onchange="toggleAllEvents(this)"
+                         title="Select all unresolved" aria-label="Select all unresolved events">
+                </th>
+                <th>Severity</th><th>Type</th><th>Source IP</th><th>Target</th>
+                <th>Description</th><th>Time</th><th>Status</th>
+              </tr>
             </thead>
             <tbody id="events-body">
-              <tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:20px">Loading events…</td></tr>
+              <tr><td colspan="8" style="text-align:center;color:var(--txt3);padding:20px">Loading events…</td></tr>
             </tbody>
           </table>
         </div>
@@ -1066,12 +1204,88 @@
             <div class="form-group">
               <label class="form-label">Auto-Quarantine Threats
                 <span style="display:block;font-weight:400;font-size:.72rem;color:var(--txt3);margin-top:3px">
-                  Off by default. Moves detected files into
-                  <code>/usr/local/sentinel-gate/quarantine</code> on the root
-                  partition; threats are recorded either way.
+                  Off by default. Moves detected files out of the web root;
+                  threats are recorded either way.
                 </span>
               </label>
               <label class="toggle"><input type="checkbox" id="set-auto-quar"><span class="toggle-slider"></span></label>
+            </div>
+
+            <!-- The quarantine location, shown and editable.
+                 This label used to hard-code /usr/local/sentinel-gate/quarantine
+                 as fact. That is on the root partition, and quarantine MOVES
+                 infected files there, so a big scan filled / and took a live
+                 server down. The default is now under /home, but the only way
+                 to see or change where it actually points was the CLI. -->
+            <div class="form-group">
+              <label class="form-label">Quarantine Location
+                <span style="display:block;font-weight:400;font-size:.72rem;color:var(--txt3);margin-top:3px">
+                  Keep this on the volume that holds the sites being scanned, not on
+                  <code>/</code>. Changing it <strong>moves</strong> the files that are
+                  already quarantined — they are evidence and are never deleted.
+                </span>
+              </label>
+              <input class="form-input mono" id="set-quar-dir" placeholder="/home/.sentinel-gate/quarantine">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px">
+                <span id="quar-usage" style="font-size:.72rem;color:var(--txt3)">—</span>
+                <span id="quar-writable" class="badge badge-gray">unknown</span>
+                <button class="btn btn-ghost btn-xs" onclick="checkQuarantinePath()">Test read/write</button>
+                <button class="btn btn-ghost btn-xs" onclick="moveQuarantineDir()">Move quarantine here</button>
+              </div>
+            </div>
+
+            <!-- Rootkit schedule. The scheduler has honoured rootkit_schedule
+                 since it was written; there was simply nothing in the UI that
+                 could set it, so the task ran on its weekly default and a
+                 "daily rootkit scan" was not reachable from the product. -->
+            <div class="card" style="margin-top:16px;background:rgba(255,255,255,.02)">
+              <div class="card-body">
+                <div class="card-title" style="margin-bottom:12px">Rootkit Scanner</div>
+                <div class="form-row" style="display:flex;gap:12px;flex-wrap:wrap">
+                  <div class="form-group" style="flex:1;min-width:140px">
+                    <label class="form-label">Run rootkit scan</label>
+                    <!-- Only the intervals the scheduler actually implements.
+                         A "Monthly" option here would have saved cleanly and
+                         then never fired: isDue() has no monthly case and
+                         returns false, which is exactly the kind of setting
+                         that looks like a feature and is only a piece in a
+                         settings page. -->
+                    <select class="form-input" id="set-rootkit-schedule">
+                      <option value="off">Manual Only</option>
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                    </select>
+                  </div>
+                  <div class="form-group" style="flex:1;min-width:120px">
+                    <label class="form-label">Run at</label>
+                    <input class="form-input" id="set-rootkit-time" type="time" value="05:00">
+                  </div>
+                  <div class="form-group" style="flex:1;min-width:140px">
+                    <label class="form-label">Day of week</label>
+                    <select class="form-input" id="set-rootkit-day">
+                      <option value="0">Sunday</option><option value="1">Monday</option>
+                      <option value="2">Tuesday</option><option value="3">Wednesday</option>
+                      <option value="4">Thursday</option><option value="5">Friday</option>
+                      <option value="6">Saturday</option>
+                    </select>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span style="font-size:.72rem;color:var(--txt3)">
+                    Last run: <span id="rootkit-last-run">never</span>
+                    &middot; <span id="rootkit-last-findings">0</span> finding(s)
+                  </span>
+                  <button class="btn btn-ghost btn-xs" onclick="runRootkitNow()">Run now</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Its own save control, for the same reason the monitor has one:
+                 the page-level "Save Changes" sits in a different card further
+                 up, so editing a schedule here left nothing to click. -->
+            <div style="display:flex;align-items:center;gap:10px;margin-top:16px">
+              <button class="btn btn-primary btn-sm" onclick="saveScannerSettings()">Save Scanner Settings</button>
+              <span id="scanner-settings-status" style="font-size:.75rem;color:var(--txt3)"></span>
             </div>
           </div>
         </div>
@@ -1628,9 +1842,9 @@
         </div>
         <div class="card-body" style="padding:0">
           <table class="table">
-            <thead><tr><th>CMS</th><th>Version</th><th>Account</th><th>Path</th><th>Issues</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>CMS</th><th>Version</th><th>Recommended</th><th>Risk</th><th>Account</th><th>Path</th><th>Issues</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="cms-installs-body">
-              <tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:28px">Click "Scan Server" to discover CMS installations</td></tr>
+              <tr><td colspan="9" style="text-align:center;color:var(--txt3);padding:28px">Click "Scan Server" to discover CMS installations</td></tr>
             </tbody>
           </table>
         </div>
@@ -1895,9 +2109,9 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.27.5"></script>
+<script src="js/api.js?v=3.28.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.27.5"></script>
+<script src="js/app.js?v=3.28.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {

@@ -82,10 +82,17 @@ class FileIntegrity {
         Logger::info("FileIntegrity: baseline created for $path — $added added, $updated updated");
 
         return [
+            'success'       => true,
             'path'          => $path,
             'label'         => $label,
             'files_added'   => $added,
             'files_updated' => $updated,
+            // The caller asked how many files were baselined. It used to have
+            // to infer that from files_added + files_updated, and the UI read a
+            // 'hashed' key that never existed -- so every successful baseline
+            // reported "0 files hashed" and looked like it had done nothing.
+            'files'         => $added + $updated,
+            'hashed'        => $added + $updated,
         ];
     }
 
@@ -199,11 +206,26 @@ class FileIntegrity {
             count($modified), count($missing), count($newFiles), $clean
         ));
 
+        // Both shapes, deliberately.
+        //
+        // The detail arrays are what the changes table needs. The scalar counts
+        // are what every CALLER was already assuming it would get: the UI added
+        // d.modified + d.new_files + d.missing expecting numbers and got arrays,
+        // and the scheduler logged (int)$r['changed'] against a key that did not
+        // exist -- so a scheduled check reported "0 change(s)" however much it
+        // had found. Detection was working the whole time; only the reporting
+        // was wrong, which is indistinguishable from the module being dead.
         return [
-            'modified' => $modified,
-            'missing'  => $missing,
-            'new'      => $newFiles,
-            'clean'    => $clean,
+            'success'        => true,
+            'modified'       => $modified,
+            'missing'        => $missing,
+            'new'            => $newFiles,
+            'clean'          => $clean,
+            'modified_count' => count($modified),
+            'missing_count'  => count($missing),
+            'new_count'      => count($newFiles),
+            'new_files'      => count($newFiles),
+            'changed'        => count($modified) + count($missing) + count($newFiles),
         ];
     }
 
