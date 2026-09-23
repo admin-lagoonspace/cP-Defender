@@ -56,7 +56,11 @@ def find_php(explicit=None):
 
 def php_files():
     out = []
-    for sub in ("backend", "scripts"):
+    # "cpanel" holds the page served to every hosting customer. It was not
+    # walked here, so the file with the widest audience in the product had
+    # neither the empty-file nor the parse gate applied to it -- the same
+    # blind spot that shipped a zero-byte config.php in 3.19.2.
+    for sub in ("backend", "scripts", "cpanel"):
         base = os.path.join(REPO, sub)
         for root, _dirs, files in os.walk(base):
             for f in files:

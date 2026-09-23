@@ -45,6 +45,9 @@ require_once SG_ROOT . '/backend/lib/BotShield.php';
 require_once SG_ROOT . '/backend/lib/RootkitScanner.php';
 require_once SG_ROOT . '/backend/lib/RootkitEngine.php';
 require_once SG_ROOT . '/backend/lib/FileIntegrity.php';
+// Feeds the cPanel user plugin: it can read nothing else, because the
+// database is root-only and must stay that way.
+require_once SG_ROOT . '/backend/lib/UserReport.php';
 
 $force  = null;
 $dryRun = false;
@@ -267,6 +270,25 @@ $tasks = [
             // runCheck('') walks every watched path.
             $r = (new FileIntegrity())->runCheck('');
             slog('  integrity check: ' . (int)($r['changed'] ?? 0) . ' change(s)');
+        },
+    ],
+
+    // Per-user reports for the cPanel-side plugin.
+    //
+    // Runs on its own schedule rather than being appended to each scan: the
+    // scan, CMS and integrity tasks all contribute to a report, and rebuilding
+    // it three times in one night writes into every customer's home three
+    // times for no benefit. Hourly is cheap -- it is a few queries and one
+    // small file per account -- and means a user sees a finding within the
+    // hour rather than at the next scan.
+    'userreports' => [
+        'schedule' => setting('user_reports_schedule', 'hourly'),
+        'time'     => setting('user_reports_time', '00:00'),
+        'day'      => (int)setting('user_reports_day', '0'),
+        'run'      => function () {
+            $r = UserReport::writeAll();
+            slog('  per-user reports: ' . $r['written'] . ' written, '
+               . $r['skipped'] . ' skipped');
         },
     ],
 

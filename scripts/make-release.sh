@@ -57,7 +57,7 @@ STAGE="$(mktemp -d /tmp/sg-rel.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
 PKG="${STAGE}/sentinel-gate"
 mkdir -p "$PKG"
-for item in backend frontend whm install.sh uninstall.sh update.sh test.sh VERSION; do
+for item in backend frontend whm cpanel install.sh uninstall.sh update.sh test.sh VERSION; do
   [[ -e "${REPO_DIR}/${item}" ]] && cp -r "${REPO_DIR}/${item}" "${PKG}/"
 done
 

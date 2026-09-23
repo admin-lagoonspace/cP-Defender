@@ -1280,16 +1280,24 @@ APPEOF
       # Create plugin directory and PHP redirect page
       CPANEL_PLUGIN_DIR="${CPANEL_THEME_BASE}/sentinel_gate"
       mkdir -p "${CPANEL_PLUGIN_DIR}"
-      # Use single-quoted heredoc: bash does NOT expand $variables inside
-      cat > "${CPANEL_PLUGIN_DIR}/index.php" << 'PHPEOF'
-<?php
-// Sentinel Gate — cPanel user entry point (auto-redirect to dashboard)
-$host = $_SERVER['HTTP_HOST'] ?? '';
-$host = preg_replace('/:[0-9]+$/', '', $host); // strip port number
-if (!$host) $host = gethostname();
-header('Location: https://' . $host . '/sentinel-gate/');
-exit;
-PHPEOF
+      # The user-facing page, shipped as a file rather than written inline.
+      #
+      # It used to be a redirect to https://<host>/sentinel-gate/ -- the WHM
+      # dashboard, which authenticates against WHM. A cPanel user following the
+      # menu entry therefore arrived at a login screen they could never pass,
+      # so the plugin was present and useless. The page now reads the report
+      # the privileged side writes into the user's own home and renders it in
+      # place, with no login of its own and no access to the server-wide
+      # database (which is 0700 root, and must stay that way).
+      #
+      # Keeping it in the repo as cpanel/sentinel_gate/index.php means php -l,
+      # the preflight gates and the test suite all see it; a heredoc inside an
+      # installer is invisible to every one of them.
+      if [[ -f "${SCRIPT_DIR}/cpanel/sentinel_gate/index.php" ]]; then
+        cp -f "${SCRIPT_DIR}/cpanel/sentinel_gate/index.php" "${CPANEL_PLUGIN_DIR}/index.php"
+      else
+        warn "  cPanel user page missing from the package — menu entry would be empty"
+      fi
       chmod 644 "${CPANEL_PLUGIN_DIR}/index.php"
 
       # The icon has to be BESIDE install.json, and named in it. Without it
@@ -1312,7 +1320,6 @@ PHPEOF
     "order":    100,
     "group_id": "security",
     "uri":      "/frontend/${CPANEL_THEME}/sentinel_gate/index.php",
-    "feature":  "sentinel_gate",
     "icon":     "sentinel_gate.png"
   }
 ]
@@ -1344,7 +1351,6 @@ groupdesc=Security
 grouporder=30
 name=sentinel_gate
 itemdesc=Sentinel Gate Security
-feature=sentinel_gate
 imgtype=icon
 icon=sentinel_gate.png
 url=/frontend/${CPANEL_THEME}/sentinel_gate/index.php
@@ -1382,12 +1388,33 @@ CPANELEOF
     # Feature flags control which icons appear in a cPanel user's dashboard.
     # Adding sentinel_gate=1 to the 'default' feature list means it's ON for
     # every account unless an admin or reseller explicitly disables it.
+    # NOTE ON THE FEATURE GATE
+    #
+    # install.json and the dynamicui conf no longer carry feature=sentinel_gate.
+    # cPanel hides an item whose feature is not enabled in the user's feature
+    # list, and only /var/cpanel/features/default was ever updated -- so every
+    # account on a reseller's own feature list, which is most of them on a
+    # reseller box, had the entry hidden. The request was that every cPanel user
+    # and reseller can reach this, so the item is no longer gated.
+    #
+    # The flags below are still written: they cost nothing, they are recorded in
+    # the manifest so the uninstaller removes them, and an operator who later
+    # wants per-package control can add the feature key back and have the lists
+    # already populated.
     info "  Writing feature flags…"
     # Modern location (cPanel 11.44+ / CENTOS 7+ — the authoritative path)
     mkdir -p /var/cpanel/features
+    # Every list, not just 'default'. A reseller's accounts sit on that
+    # reseller's own list, and writing only to default left them out.
+    _SG_FEAT_N=0
+    for _fl in /var/cpanel/features/*; do
+      [[ -f "$_fl" ]] || continue
+      grep -q "^sentinel_gate=" "$_fl" 2>/dev/null || echo "sentinel_gate=1" >> "$_fl"
+      _SG_FEAT_N=$((_SG_FEAT_N + 1))
+    done
     grep -q "^sentinel_gate=" /var/cpanel/features/default 2>/dev/null || \
       echo "sentinel_gate=1" >> /var/cpanel/features/default
-    ok "  Feature flag: /var/cpanel/features/default"
+    ok "  Feature flag written to ${_SG_FEAT_N} feature list(s)"
     echo "FEATURE_FLAG_MODERN=/var/cpanel/features/default" >> "${MANIFEST}"
     # Legacy location (older cPanel — kept for compatibility)
     _LEGACY_FEAT="/usr/local/cpanel/cpanel/features"
@@ -1435,7 +1462,32 @@ fi  # end: if standalone / elif cpanel
 
 # ── Apache restart (cpanel mode) ─────────────────────────────────────────────
 if [[ "$INSTALL_MODE" == "cpanel" ]]; then
-  section "Restarting Apache"
+  # ── Per-user reports ──────────────────────────────────────────────────────────
+# Generated now so the cPanel menu entry has something to show immediately.
+# Without this the first thing every user sees is "no report yet", until the
+# next scheduled scan -- which on a weekly schedule is a week of the plugin
+# looking broken.
+section "Per-user security reports"
+_SG_REPORTS="${TMP_DIR:-/tmp}/sg-reports.php"
+cat > "$_SG_REPORTS" <<REPEOF
+<?php
+define('SG_API', true);
+require_once '${INSTALL_DIR}/backend/config/config.php';
+require_once '${INSTALL_DIR}/backend/lib/Database.php';
+require_once '${INSTALL_DIR}/backend/lib/Logger.php';
+require_once '${INSTALL_DIR}/backend/lib/UserReport.php';
+\$r = UserReport::writeAll();
+echo 'Reports written: ' . \$r['written'] . ', skipped: ' . \$r['skipped'] . PHP_EOL;
+REPEOF
+if _SG_REP_OUT="$("$SG_PHP" "$_SG_REPORTS" 2>&1)"; then
+  ok "  ${_SG_REP_OUT}"
+else
+  # Not fatal: the scheduler writes these after every scan anyway.
+  warn "  Could not generate per-user reports yet — they will appear after the next scan"
+fi
+rm -f "$_SG_REPORTS"
+
+section "Restarting Apache"
   if command -v /scripts/restartsrv_httpd >/dev/null 2>&1; then
     /scripts/restartsrv_httpd 2>&1 | tail -4 | sed 's/^/  /'
     ok "Apache restarted"

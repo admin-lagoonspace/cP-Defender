@@ -193,5 +193,9 @@ t_contains($install, 'cp -rf "${INSTALL_DIR}/frontend/."',
     'the WHM UI copy is refreshed from the installed frontend');
 t_contains($update, '--register-only',
     'an update re-runs registration, which republishes that copy');
-t_contains($install, "/sentinel-gate/'",
-    'the cPanel user plugin points at the live install rather than its own copy');
+// The cPanel user page used to be a redirect to the WHM dashboard, which a
+// cPanel user cannot authenticate to. It is now a real page shipped from the
+// repo, so what matters is that the installer copies the current one on every
+// registration -- including the --register-only pass an update performs.
+t_contains($install, 'cpanel/sentinel_gate/index.php',
+    'the cPanel user page is copied from the package on every registration');

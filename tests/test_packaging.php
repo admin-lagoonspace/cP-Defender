@@ -76,6 +76,10 @@ foreach ([
     'sentinel-gate/uninstall.sh',
     'sentinel-gate/update.sh',
     'sentinel-gate/VERSION',
+    // The page every cPanel user opens. If this is missing from the archive the
+    // installer has nothing to copy, and the Security menu entry leads to a
+    // blank page for every customer on the server.
+    'sentinel-gate/cpanel/sentinel_gate/index.php',
 ] as $required) {
     t_ok(in_array($required, $names, true), "packaged: " . basename($required));
 }

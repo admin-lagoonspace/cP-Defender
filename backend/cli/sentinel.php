@@ -31,6 +31,7 @@ require_once $BASE . '/lib/Scanner.php';
 require_once $BASE . '/lib/Firewall.php';
 require_once $BASE . '/lib/IPReputation.php';
 require_once $BASE . '/lib/License.php';
+require_once $BASE . '/lib/UserReport.php';
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 $argv0 = 'sentinel';
@@ -164,6 +165,19 @@ try {
         out((new Scanner())->updateSignatures());
         break;
 
+    // Regenerate the per-user reports the cPanel plugin reads. Useful right
+    // after enabling the plugin, when waiting for the hourly task would mean
+    // every customer sees "no report yet" in the meantime.
+    case 'user-reports': {
+        $r = UserReport::writeAll();
+        echo "Per-user reports: {$r['written']} written, {$r['skipped']} skipped" . PHP_EOL;
+        if ($r['skipped'] > 0) {
+            echo "Skipped accounts have no usable home directory, or one that is" . PHP_EOL;
+            echo "a symlink or owned by another user - see the log for which." . PHP_EOL;
+        }
+        break;
+    }
+
     case 'quarantine': {
         $sub = $rest[0] ?? 'status';
         switch ($sub) {
@@ -284,6 +298,7 @@ Usage: sentinel <command> [args] [--json]
   firewall allow   <ip> [note] Whitelist an IP
   reputation <ip>              Look up IP reputation
   update-sigs                  Update malware signatures
+  user-reports                 Rebuild the per-user reports the cPanel plugin reads
   quarantine status            Show where quarantine is and how big\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  license status               Show license state
   license activate <key>       Store and verify a license key
   license refresh              Force a re-check against the server
