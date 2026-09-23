@@ -178,6 +178,19 @@ class RealTimeMonitor {
             'service_installed' => file_exists($this->serviceFile),
             'service_enabled'   => $this->isServiceEnabled(),
             'service_active'    => $this->isServiceActive(),
+
+            // Suspended while a backup runs.
+            //
+            // This is a THIRD state, and conflating it with either of the other
+            // two would be a lie: the daemon is running, so a red "stopped"
+            // badge is wrong, but it is not scanning, so a green "active" badge
+            // is worse -- it claims protection that is deliberately paused.
+            'suspended'         => Database::setting('rt_suspended', '0') === '1',
+            'suspend_reason'    => Database::setting('rt_suspend_reason', '') ?: null,
+            'suspend_since'     => (int) (Database::setting('rt_suspend_since', '0') ?? 0),
+            'last_gap_seconds'  => (int) (Database::setting('rt_last_gap_seconds', '0') ?? 0),
+            'last_gap_end'      => (int) (Database::setting('rt_last_gap_end', '0') ?? 0),
+            'pause_on_backup'   => Database::setting('rt_pause_on_backup', '1') === '1',
         ];
     }
 

@@ -165,6 +165,19 @@ class Database {
                 ('iprep_time',              '03:00'),
                 ('iprep_day',               '0'),
                 ('scan_paths',              '/home'),
+                -- Stand down while a backup or bulk transfer is running.
+                -- JetBackup walks every account and rsync streams the result
+                -- off-box; a real-time scanner competing for the same disks at
+                -- that moment is the worst time for it to be working hardest.
+                ('rt_pause_on_backup',        '1'),
+                ('rt_backup_procs',           'jetbackup,rsync'),
+                ('rt_backup_check_secs',      '20'),
+                -- rsync is usually a series of short runs; resuming between
+                -- them costs more than staying down for another minute.
+                ('rt_backup_resume_secs',     '60'),
+                -- A process merely NAMED rsync is enough to suspend scanning,
+                -- so the pause has to end on its own eventually.
+                ('rt_backup_max_suspend_secs','14400'),
                 ('email_alerts',            '1'),
                 ('alert_email',             ''),
                 -- Off by default. Quarantine MOVES the file into

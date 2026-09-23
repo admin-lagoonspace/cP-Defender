@@ -17,7 +17,7 @@
 //
 // Defining it here first makes a stale mode.php a no-op for this constant while
 // still letting mode.php own everything that genuinely is per-installation.
-define('SG_VERSION', '3.29.0');
+define('SG_VERSION', '3.30.0');
 
 // ── Install Mode ──────────────────────────────────────────────────────────────
 // mode.php records what IS per-installation: the mode, the install directory

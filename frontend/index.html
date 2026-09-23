@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.29.0">
+<link rel="stylesheet" href="css/app.css?v=3.30.0">
 </head>
 <body>
 <div id="app">
@@ -289,7 +289,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.29.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.30.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -435,6 +435,12 @@
                 <div style="font-size:.75rem;color:var(--txt2);margin-top:3px" id="rt-desc">
                   Watching <span id="rt-paths">…</span> · Engine: <span id="rt-engine">inotify</span>
                 </div>
+                <!-- Why scanning is paused, and for how long. A "Paused" badge
+                     with nothing explaining it is the kind of thing that gets
+                     reported as the monitor being broken. -->
+                <div id="rt-suspend-note"
+                     style="display:none;font-size:.72rem;color:var(--amber,#f59e0b);
+                            margin-top:5px;max-width:70ch;line-height:1.5"></div>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:20px">
@@ -1358,6 +1364,56 @@
                 unthrottled monitor, so the minimum is 1.
               </p>
 
+              <!-- Stand down during backups -->
+              <div class="card" style="margin-top:16px;background:rgba(255,255,255,.02)">
+                <div class="card-body">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                    <div>
+                      <div class="card-title" style="margin:0">Pause during backups</div>
+                      <div style="font-size:.72rem;color:var(--txt3);margin-top:4px;line-height:1.6;max-width:62ch">
+                        JetBackup walks every account on the server and rsync streams the
+                        result off-box. Scanning every file they touch means competing with
+                        the backup for the same disks at the moment the server can least
+                        afford it. With this on, the monitor stands down while they run and
+                        resumes once they have finished.
+                      </div>
+                    </div>
+                    <label class="toggle">
+                      <input type="checkbox" id="set-rt-pause-backup" onchange="rtLimitEdited()">
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+
+                  <div class="form-row" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px">
+                    <div class="form-group" style="flex:2;min-width:220px;margin:0">
+                      <label class="form-label" style="font-size:.75rem">Process names to watch for</label>
+                      <input type="text" id="set-rt-backup-procs" class="form-input"
+                             oninput="rtLimitEdited()" placeholder="jetbackup,rsync">
+                    </div>
+                    <div class="form-group" style="flex:1;min-width:150px;margin:0">
+                      <label class="form-label" style="font-size:.75rem">Wait before resuming (s)</label>
+                      <input type="number" id="set-rt-backup-resume" class="form-input"
+                             oninput="rtLimitEdited()" min="0" max="3600" value="60">
+                    </div>
+                    <div class="form-group" style="flex:1;min-width:170px;margin:0">
+                      <label class="form-label" style="font-size:.75rem">Resume anyway after (s)</label>
+                      <input type="number" id="set-rt-backup-max" class="form-input"
+                             oninput="rtLimitEdited()" min="60" max="86400" value="14400">
+                    </div>
+                  </div>
+
+                  <p style="font-size:.72rem;color:var(--txt3);margin-top:10px;line-height:1.6">
+                    Matched against the process name, so an entry of <code>rsync</code>
+                    matches any rsync on the server. That is worth knowing: anyone who can
+                    start a process named in this list can suppress real-time scanning while
+                    it runs. <strong>Resume anyway after</strong> is the limit on how long
+                    that can last — past it the monitor resumes regardless and records a
+                    security event. File changes during a pause are not scanned in real
+                    time; the next scheduled scan covers them.
+                  </p>
+                </div>
+              </div>
+
               <!-- Its own save control. Requiring the page-level "Save Changes"
                    for a setting edited here means leaving the section to commit
                    it, and no confirmation that these particular values landed. -->
@@ -2109,9 +2165,9 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.29.0"></script>
+<script src="js/api.js?v=3.30.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.29.0"></script>
+<script src="js/app.js?v=3.30.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {

@@ -1192,6 +1192,13 @@ async function loadSettings() {
   set('set-rt-debounce', d.rt_debounce_seconds  || '5');
   set('set-rt-excludes', d.rt_exclude_dirs      || '');
 
+  // Pause-during-backup
+  const pauseEl = document.getElementById('set-rt-pause-backup');
+  if (pauseEl) pauseEl.checked = (d.rt_pause_on_backup ?? '1') === '1';
+  set('set-rt-backup-procs',  d.rt_backup_procs            || 'jetbackup,rsync');
+  set('set-rt-backup-resume', d.rt_backup_resume_secs      || '60');
+  set('set-rt-backup-max',    d.rt_backup_max_suspend_secs || '14400');
+
   // Last-run readouts
   const ts = v => (v && +v) ? new Date(+v * 1000).toLocaleString() : 'never';
   const txt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
@@ -1420,6 +1427,13 @@ async function loadMonitorStats() {
   if (badge) {
     if (!d.running) {
       badge.className = 'badge badge-red';   badge.textContent = 'Stopped';
+    } else if (d.suspended) {
+      // A third state, and it must not borrow either of the other two. The
+      // daemon IS running, so "Stopped" is wrong; it is deliberately not
+      // scanning, so "Active" is worse -- that claims protection that is
+      // currently paused.
+      badge.className = 'badge badge-amber';
+      badge.textContent = 'Paused' + (d.suspend_reason ? ' — ' + d.suspend_reason : '');
     } else if (d.stale) {
       badge.className = 'badge badge-amber'; badge.textContent = 'No activity';
     } else {
@@ -1427,11 +1441,33 @@ async function loadMonitorStats() {
     }
   }
   const icon = document.getElementById('rt-icon');
-  if (icon) icon.textContent = !d.running ? '⏸' : (d.stale ? '⚠️' : '🔍');
+  if (icon) icon.textContent = !d.running ? '⏸' : (d.suspended ? '⏸' : (d.stale ? '⚠️' : '🔍'));
 
   if (card) {
     card.style.borderLeftColor = !d.running ? 'var(--red)'
-                               : (d.stale ? 'var(--amber, #f59e0b)' : 'var(--green)');
+                               : ((d.suspended || d.stale) ? 'var(--amber, #f59e0b)' : 'var(--green)');
+  }
+
+  // Say why, and for how long. A paused badge with no explanation is the kind
+  // of thing that gets reported as the monitor being broken.
+  const note = document.getElementById('rt-suspend-note');
+  if (note) {
+    if (d.suspended) {
+      const mins = d.suspend_since ? Math.max(0, Math.round((Date.now() / 1000 - d.suspend_since) / 60)) : 0;
+      note.textContent = 'Scanning is paused because ' + (d.suspend_reason || 'a backup')
+                       + ' is running' + (mins ? ' (' + mins + ' min)' : '')
+                       + '. Changes made now are not scanned in real time; the next '
+                       + 'scheduled scan covers them.';
+      note.style.display = '';
+    } else if (d.last_gap_seconds > 0 && d.last_gap_end
+               && (Date.now() / 1000 - d.last_gap_end) < 86400) {
+      note.textContent = 'Resumed after a ' + Math.round(d.last_gap_seconds / 60)
+                       + ' minute pause for a backup. Changes made during it were not '
+                       + 'scanned in real time.';
+      note.style.display = '';
+    } else {
+      note.style.display = 'none';
+    }
   }
 
   const rtPaths  = document.getElementById('rt-paths');
@@ -3200,6 +3236,14 @@ async function saveMonitorSettings() {
     cpu_limit_percent:     g('set-cpu-limit')?.value   || '50',
     rt_poll_interval:
       document.querySelector('input[name="rt_poll_interval"]:checked')?.value || '300',
+
+    // Pause-during-backup. These live in this card, so they save with it --
+    // a control whose save button is somewhere else is the complaint that
+    // produced this button in the first place.
+    rt_pause_on_backup:          g('set-rt-pause-backup')?.checked ? '1' : '0',
+    rt_backup_procs:             (g('set-rt-backup-procs')?.value || '').trim() || 'jetbackup,rsync',
+    rt_backup_resume_secs:       g('set-rt-backup-resume')?.value || '60',
+    rt_backup_max_suspend_secs:  g('set-rt-backup-max')?.value    || '14400',
   };
 
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }

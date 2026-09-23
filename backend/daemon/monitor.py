@@ -242,6 +242,235 @@ class Debouncer:
         return False
 
 
+class BackupActivityDetector:
+    """Is a backup or a bulk transfer running right now?
+
+    JetBackup walks every account on the server and rsync streams the result
+    off-box. Both touch enormous numbers of files, and a real-time scanner
+    trying to keep up with that is competing with the backup for the same
+    disks at exactly the moment the server can least afford it.
+
+    While one is running the monitor suspends: it keeps reading inotify events
+    so the kernel queue does not overflow, but throws them away instead of
+    scanning. It resumes once the processes have been gone for a settling
+    period.
+
+    TWO THINGS THIS DELIBERATELY DOES NOT PRETEND
+    ---------------------------------------------
+    1. Suspending creates a blind spot. Events during the window are discarded,
+       not queued -- queueing them would just move the same work to the moment
+       the backup finishes. The gap is recorded and raised as a security event
+       so it appears in the log rather than being silently absent.
+
+    2. "Pause while rsync runs" is a trigger anyone on the box can pull. A
+       process merely NAMED rsync is enough, so someone who can start a process
+       can suppress monitoring. That is why the suspension is capped: past
+       `rt_backup_max_suspend_secs` the monitor resumes regardless and says so.
+       The cap is what stops a permanent pause; the event log is what makes an
+       unusual one visible.
+    """
+
+    # Matched against the process name (/proc/<pid>/comm). Exact names, not
+    # substrings: 'rsync' as a substring would also match a shell script called
+    # rsync-my-photos, and more importantly would match far more than intended.
+    DEFAULT_NAMES = ('jetbackup', 'jetbackupd', 'rsync')
+
+    # Matched against the full command line, for processes whose comm is
+    # something generic like 'php' or 'perl'. JetBackup 4 and 5 both live
+    # under /usr/local/jetapps.
+    CMDLINE_HINTS = ('/jetapps/', 'jetbackup')
+
+    def __init__(self, conn):
+        self.enabled = True
+        self.names = set(self.DEFAULT_NAMES)
+        self.check_every = 20
+        self.resume_after = 60
+        self.max_suspend = 14400
+        self.suspended = False
+        self.reason = ''
+        self.since = None
+        self.clear_since = 0.0
+        self.capped_out = False
+        # None, not 0: the first poll must check immediately. Starting the
+        # daemon in the middle of a nightly backup and then scanning hard for
+        # the first check interval is precisely the load this avoids.
+        self._last_check = None
+        self._self_pids = self._own_pids()
+        self.reload(conn)
+
+    # ---- settings -------------------------------------------------------
+    def reload(self, conn):
+        self.enabled = (db_get(conn, 'rt_pause_on_backup', '1') or '1').strip() == '1'
+
+        raw = (db_get(conn, 'rt_backup_procs', '') or '').strip()
+        if raw:
+            names = set()
+            for part in raw.split(','):
+                part = part.strip().lower()
+                # A blank or '*' entry would match every process on the server
+                # and suspend the monitor permanently.
+                if part and part != '*':
+                    names.add(part)
+            self.names = names or set(self.DEFAULT_NAMES)
+        else:
+            self.names = set(self.DEFAULT_NAMES)
+
+        self.check_every  = self._num(conn, 'rt_backup_check_secs',       20,  5, 600)
+        self.resume_after = self._num(conn, 'rt_backup_resume_secs',      60,  0, 3600)
+        self.max_suspend  = self._num(conn, 'rt_backup_max_suspend_secs', 14400, 60, 86400)
+
+    @staticmethod
+    def _num(conn, key, fallback, lo, hi):
+        try:
+            return max(lo, min(hi, int(db_get(conn, key, str(fallback)) or fallback)))
+        except (ValueError, TypeError):
+            return fallback
+
+    @staticmethod
+    def _own_pids():
+        """This process and its parent, so the monitor cannot detect itself."""
+        pids = set()
+        try:
+            pids.add(os.getpid())
+            pids.add(os.getppid())
+        except Exception:
+            pass
+        return pids
+
+    # ---- detection ------------------------------------------------------
+    def find_running(self):
+        """Names of matching processes, or an empty list.
+
+        Reads /proc directly rather than shelling out to pgrep: this runs every
+        20 seconds for the life of the daemon, and forking a process to ask
+        whether the server is busy is a poor way to avoid loading the server.
+        """
+        found = []
+        try:
+            entries = os.listdir('/proc')
+        except OSError:
+            return found
+
+        for entry in entries:
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            if pid in self._self_pids:
+                continue
+
+            comm = ''
+            try:
+                with open('/proc/%d/comm' % pid, 'r') as fh:
+                    comm = fh.read().strip().lower()
+            except (IOError, OSError):
+                continue
+
+            if comm in self.names:
+                found.append(comm)
+                continue
+
+            # Only read the (larger) cmdline when the name alone was not
+            # conclusive, and only when JetBackup is among the things we care
+            # about -- there is no point paying for this on every process.
+            if 'jetbackup' in self.names:
+                try:
+                    with open('/proc/%d/cmdline' % pid, 'rb') as fh:
+                        cmd = fh.read().replace(b'\x00', b' ').decode('utf-8', 'replace').lower()
+                except (IOError, OSError):
+                    continue
+                if cmd and any(h in cmd for h in self.CMDLINE_HINTS):
+                    found.append('jetbackup')
+
+        return found
+
+    # ---- state machine --------------------------------------------------
+    def poll(self, conn, now=None):
+        """Update suspension state. Returns True while the monitor should idle."""
+        now = now if now is not None else time.time()
+
+        if not self.enabled:
+            if self.suspended:
+                self._resume(conn, now, 'the pause-during-backup setting was turned off')
+            return False
+
+        # The cap is checked before anything else: a detector that keeps seeing
+        # a matching process must still let go eventually.
+        if self.suspended and self.since is not None and (now - self.since) >= self.max_suspend:
+            if not self.capped_out:
+                self.capped_out = True
+                log.warning('still suspended after %ds (%s) - resuming anyway; '
+                            'monitoring will not stay off indefinitely',
+                            int(now - self.since), self.reason)
+                db_event(conn, 'monitor_suspend_capped',
+                         'Real-time monitoring resumed after the maximum suspension of %ds '
+                         'while "%s" was still running. A backup this long, or a process '
+                         'holding that name open, is worth checking.'
+                         % (self.max_suspend, self.reason))
+            self._resume(conn, now, 'maximum suspension reached')
+            return False
+
+        if self._last_check is not None and (now - self._last_check) < self.check_every:
+            return self.suspended
+        self._last_check = now
+
+        running = self.find_running()
+
+        if running:
+            self.clear_since = 0.0
+            if not self.suspended:
+                self._suspend(conn, now, ', '.join(sorted(set(running))))
+            return True
+
+        if not self.suspended:
+            return False
+
+        # Nothing matched. Wait out the settling period before resuming: rsync
+        # in particular is often a series of short invocations, and flapping
+        # the monitor between them costs more than staying down for another
+        # minute.
+        if self.clear_since == 0.0:
+            self.clear_since = now
+            return True
+        if (now - self.clear_since) < self.resume_after:
+            return True
+
+        self._resume(conn, now, 'finished')
+        return False
+
+    def _suspend(self, conn, now, reason):
+        self.suspended = True
+        self.capped_out = False
+        self.reason = reason
+        self.since = now
+        self.clear_since = 0.0
+        log.info('suspending real-time scanning: %s running', reason)
+        db_set(conn, 'rt_suspended', '1')
+        db_set(conn, 'rt_suspend_reason', reason)
+        db_set(conn, 'rt_suspend_since', str(int(now)))
+        db_event(conn, 'monitor_suspended',
+                 'Real-time scanning paused while %s is running. File changes during '
+                 'this window are not scanned.' % reason)
+
+    def _resume(self, conn, now, why):
+        gap = int(now - self.since) if self.since is not None else 0
+        was = self.reason or 'backup'
+        self.suspended = False
+        self.reason = ''
+        self.clear_since = 0.0
+        log.info('resuming real-time scanning after %ds (%s: %s)', gap, was, why)
+        db_set(conn, 'rt_suspended', '0')
+        db_set(conn, 'rt_suspend_reason', '')
+        db_set(conn, 'rt_last_gap_seconds', str(gap))
+        db_set(conn, 'rt_last_gap_end', str(int(now)))
+        # Stated plainly: for that many seconds this server was not being
+        # watched in real time, and the scheduled scan is what covers it.
+        db_event(conn, 'monitor_resumed',
+                 'Real-time scanning resumed after %ds paused for %s (%s). Changes made '
+                 'during the pause were not scanned in real time; the next scheduled '
+                 'scan covers them.' % (gap, was, why))
+        self.since = None
+
+
 def apply_io_priority():
     """Best-effort idle I/O priority.
 
@@ -463,6 +692,7 @@ def run_inotify(conn, paths, limits):
 
     limiter   = RateLimiter(limits['files_per_sec'])
     debouncer = Debouncer(limits['debounce'])
+    backups   = BackupActivityDetector(conn)
 
     tick = 0
     last_reload = time.time()
@@ -472,6 +702,18 @@ def run_inotify(conn, paths, limits):
         except Exception as e:
             if _running: log.warning('inotify err: %s', e)
             break
+
+        # Events are still READ while suspended, and then dropped.
+        #
+        # Not reading them would leave the kernel queue to overflow, and an
+        # overflowed queue does not resume cleanly: inotify reports IN_Q_OVERFLOW
+        # and the watches are no longer trustworthy. Draining costs almost
+        # nothing; it is scanning each file that costs, and that is what stops.
+        if backups.poll(conn):
+            if tick:
+                flush(conn)
+                tick = 0
+            continue
 
         # Settings must take effect without a restart: an administrator whose
         # server is under load should not have to restart the monitor to calm
@@ -484,6 +726,7 @@ def run_inotify(conn, paths, limits):
                 debouncer.update(limits['debounce'])
                 apply_cpu_priority_nice(limits['nice'])
                 log.info('resource profile reloaded: %s', limits['profile'])
+            backups.reload(conn)
             last_reload = time.time()
 
         for ev in evts:
@@ -548,6 +791,7 @@ def run_polling(conn, paths, limits):
     last_fl = time.time()
     limiter   = RateLimiter(limits['files_per_sec'])
     debouncer = Debouncer(limits['debounce'])
+    backups   = BackupActivityDetector(conn)
 
     while _running:
         slept = 0
@@ -563,6 +807,19 @@ def run_polling(conn, paths, limits):
             debouncer.update(limits['debounce'])
             apply_cpu_priority_nice(limits['nice'])
             log.info('resource profile reloaded: %s', limits['profile'])
+        backups.reload(conn)
+
+        # Polling is the heavier of the two modes -- a full walk of every
+        # watched path -- so running one alongside a backup is the worst case
+        # this whole feature exists to avoid.
+        #
+        # prev is deliberately NOT refreshed while suspended. Refreshing it
+        # would silently adopt every change the backup window made as the new
+        # baseline, so a file planted during the pause would never be reported.
+        # Leaving it stale means the first pass after resuming compares against
+        # the state from before the backup and picks those changes up.
+        if backups.poll(conn):
+            continue
 
         curr = snap(limits)
         for fp, mt in curr.items():
