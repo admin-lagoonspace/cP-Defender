@@ -205,6 +205,14 @@ async function runUpdate() {
 
 async function refreshDashboard() {
   checkForUpdates();   // non-blocking — uses cached result
+
+  // The Real-Time Monitor widget on this page was only ever filled in by
+  // toggleMonitor(), so on a fresh dashboard it kept whatever the markup
+  // shipped with -- a green "Active" badge -- and the module-level
+  // monitorRunning stayed false. The button reads "Stop" from the HTML while
+  // the code believes nothing is running, so the first click calls START.
+  // Reported as "I cannot turn it off": it was doing the opposite.
+  loadMonitorStats();
   const data = Demo.active
     ? Demo.mockDashStats()
     : await API.dashStats();
@@ -587,7 +595,28 @@ async function stopScan(jobId) {
   refreshDashboard();
 }
 
+// The scanner page's "auto-quarantine off" line was hard-coded in the markup
+// and only ever corrected by loadSettings(), which runs on the Settings page.
+// Open the Scanner page directly and it stated the default regardless of the
+// real setting -- so the toggle looked like it did nothing.
+async function loadScannerQuarantineState() {
+  const el = document.getElementById('scanner-quar-state');
+  if (!el) return;
+
+  const res = Demo.active ? { success: true, data: { auto_quarantine: '0' } }
+                          : await API.getSettings();
+  if (!res?.success) { el.textContent = 'auto-quarantine state unknown'; return; }
+
+  const on = (res.data?.auto_quarantine ?? '0') === '1';
+  el.textContent = on ? 'auto-quarantine on' : 'auto-quarantine off';
+  el.style.color = on ? 'var(--ok, #22c55e)' : 'var(--txt3)';
+  el.title = on
+    ? 'Detected files are moved to the quarantine directory automatically.'
+    : 'Threats are recorded but files are left in place. Turn this on in Settings.';
+}
+
 async function loadThreats() {
+  loadScannerQuarantineState();
   const filter = document.getElementById('threat-filter')?.value || '';
   const res = Demo.active
     ? Demo.mockThreats()
@@ -695,18 +724,32 @@ async function updateSignatures() {
 
 // ── Firewall ──────────────────────────────────────────────────────────────────
 async function loadFirewall() {
+  // Awaited together, these three render together -- so the slowest one decides
+  // when ANY of them appears. The stats call shells out to iptables and csf,
+  // which on a busy server is the slow one, and the rules and blocked lists
+  // are plain queries that were being held behind it for no reason.
+  const statsP   = Demo.active ? Promise.resolve({ success: true, data: { blocked_ips: 382, active_rules: 14, blocked_today: 8241 } }) : API.fwStats();
+  const rulesP   = Demo.active ? Promise.resolve(Demo.mockFWRules()) : API.fwRules();
+  const blockedP = Demo.active ? Promise.resolve({ success: true, data: [] }) : API.fwBlocked();
+
   const [stats, rules, blocked] = await Promise.all([
-    Demo.active ? { success: true, data: { blocked_ips: 382, active_rules: 14, blocked_today: 8241 } } : API.fwStats(),
-    Demo.active ? Demo.mockFWRules() : API.fwRules(),
-    Demo.active ? { success: true, data: [] } : API.fwBlocked(),
+    statsP.catch(() => null), rulesP.catch(() => null), blockedP.catch(() => null),
   ]);
 
   if (stats?.success) {
     document.getElementById('fw-stat-rules').textContent   = fmtNum(stats.data?.active_rules || 0);
     document.getElementById('fw-stat-blocked').textContent = fmtNum(stats.data?.blocked_ips  || 0);
     document.getElementById('fw-stat-today').textContent   = fmtNum(stats.data?.blocked_today || 0);
-    document.getElementById('fw-status-line').textContent  =
-      `CSF ${stats.data?.csf_status?.installed ? '✓ installed' : '✗ not found'} · iptables active`;
+    // "iptables active" was printed unconditionally -- including when the
+    // count could not be taken at all, which reads as a working firewall.
+    const csf = stats.data?.csf_status || {};
+    const ipt = stats.data?.iptables_unknown
+      ? 'iptables status unavailable (busy)'
+      : 'iptables: ' + fmtNum(stats.data?.iptables_rules || 0) + ' rule(s)';
+    document.getElementById('fw-status-line').textContent =
+      `CSF ${csf.installed ? '✓ installed' : '✗ not found'}`
+      + (csf.installed && csf.running === false ? ' (lfd not running)' : '')
+      + ' · ' + ipt;
   }
 
   // Rules table
@@ -1518,7 +1561,11 @@ async function loadMonitorStats() {
   setText('rt-detections-all', d.detections_all  || 0);
 
   const toggleBtn = document.getElementById('rt-toggle-btn');
-  if (toggleBtn) toggleBtn.textContent = d.running ? 'Stop' : 'Start';
+  if (toggleBtn) {
+    toggleBtn.textContent = d.running ? 'Stop' : 'Start';
+    toggleBtn.disabled = false;
+    toggleBtn.dataset.ready = '1';
+  }
 
   const sbRt = document.getElementById('sb-rt-threats');
   if (sbRt) {
@@ -1535,8 +1582,19 @@ async function loadMonitor() {
 
   const badge = document.getElementById('monitor-status-badge');
   if (badge) {
-    badge.className   = 'badge ' + (d.running ? 'badge-green' : 'badge-red');
-    badge.textContent = d.running ? '● Running' : '○ Stopped';
+    // Running/stopped alone is not the whole truth. A daemon that is up but
+    // scanning nothing, or deliberately paused for a backup, both rendered as
+    // a green "Running" -- claiming protection that is not happening.
+    if (!d.running) {
+      badge.className = 'badge badge-red';   badge.textContent = '○ Stopped';
+    } else if (d.suspended) {
+      badge.className = 'badge badge-amber';
+      badge.textContent = '⏸ Paused' + (d.suspend_reason ? ' — ' + d.suspend_reason : '');
+    } else if (d.stale) {
+      badge.className = 'badge badge-amber'; badge.textContent = '● Running, no activity';
+    } else {
+      badge.className = 'badge badge-green'; badge.textContent = '● Running';
+    }
   }
   const pgBtn = document.getElementById('monitor-page-toggle');
   if (pgBtn) pgBtn.textContent = d.running ? 'Stop Monitor' : 'Start Monitor';
@@ -1572,6 +1630,16 @@ async function toggleMonitor() {
   // felt dead, a second click could race the first, and the state it flipped to
   // was assumed rather than confirmed -- which is why it looked unreliable.
   if (_monitorBusy) return;
+
+  // Refuse to act on a guess. monitorRunning starts false, so a click before
+  // the first status load would start a monitor whose button says "Stop".
+  const rtBtn = document.getElementById('rt-toggle-btn');
+  if (rtBtn && rtBtn.dataset.ready !== '1' && !Demo.active) {
+    toast('Still reading the monitor status — try again in a moment', 'info');
+    loadMonitorStats();
+    return;
+  }
+
   _monitorBusy = true;
 
   const starting = !monitorRunning;

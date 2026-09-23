@@ -188,12 +188,17 @@ class Firewall {
         // its exit code was read. It dumps the entire iptables ruleset, which on
         // a busy server is the single slowest thing the firewall page did, for
         // no result at all. Whether lfd is running is what this actually needs.
-        exec('pgrep lfd >/dev/null 2>&1', $lfd_out, $lfd_code);
-        return [
-            'installed' => true,
-            'running'   => $lfd_code === 0,
-            'version'   => $this->getCSFVersion(),
-        ];
+        //
+        // Cached with the version: both are forks, and neither answer changes
+        // from one page refresh to the next.
+        return self::cached('csf_status', 60, function () {
+            $lfd = self::shBounded('pgrep lfd', 3);
+            return [
+                'installed' => true,
+                'running'   => $lfd['code'] === 0,
+                'version'   => $this->getCSFVersion(),
+            ];
+        });
     }
 
     private function getCSFVersion(): string {
@@ -204,8 +209,8 @@ class Firewall {
         if ($cached !== null) {
             return $cached;
         }
-        exec(CSF_BIN . ' --version 2>&1', $out);
-        return $cached = ($out[0] ?? 'unknown');
+        $r = self::shBounded(escapeshellarg(CSF_BIN) . ' --version', 5);
+        return $cached = ($r['out'][0] ?? 'unknown');
     }
 
     public function reloadFirewall(): array {
@@ -219,7 +224,58 @@ class Firewall {
 
     // ── Stats ─────────────────────────────────────────────────────────────────
 
+    /**
+     * Run a command that must never hang the request.
+     *
+     * `iptables -L` takes the xtables lock. On a CSF server lfd rewrites rules
+     * continuously, so that call can sit waiting for a lock somebody else
+     * holds -- and cpsrvd serialises requests, so ONE stuck call stops the
+     * whole dashboard responding, not just the firewall page. That is what
+     * "the firewall page freezes the entire screen" was.
+     *
+     * Two belts: -w gives iptables a bounded wait for the lock instead of an
+     * unbounded one, and timeout(1) bounds the whole command in case the
+     * binary ignores -w or blocks somewhere else entirely.
+     */
+    private static function shBounded(string $cmd, int $seconds = 5): array
+    {
+        $out  = [];
+        $code = 0;
+        $wrapped = 'timeout ' . $seconds . ' ' . $cmd;
+        @exec($wrapped . ' 2>/dev/null', $out, $code);
+        // 124 is timeout(1)'s "it did not finish".
+        return ['out' => $out, 'code' => $code, 'timed_out' => $code === 124];
+    }
+
+    /**
+     * A value that costs a fork to obtain, remembered for a while.
+     *
+     * The firewall page asks for stats on every visit and every refresh. None
+     * of these numbers change meaningfully within a minute, and paying several
+     * process spawns -- one of which can block on a kernel lock -- for each
+     * one is the difference between a page that loads and a page that hangs.
+     */
+    private static function cached(string $key, int $ttl, callable $produce)
+    {
+        $stamp = (int) (Database::setting('fwcache_' . $key . '_at', '0') ?? 0);
+        $raw   = Database::setting('fwcache_' . $key, '');
+
+        if ($raw !== '' && (time() - $stamp) < $ttl) {
+            $decoded = json_decode((string) $raw, true);
+            if ($decoded !== null) {
+                return $decoded;
+            }
+        }
+
+        $value = $produce();
+        Database::setSetting('fwcache_' . $key, (string) json_encode($value));
+        Database::setSetting('fwcache_' . $key . '_at', (string) time());
+        return $value;
+    }
+
     public function getStats(): array {
+        // The counts the page actually leads with are three indexed queries.
+        // They are never allowed to wait behind a shell command.
         $blocked  = Database::fetchOne("SELECT COUNT(*) as c FROM blocked_ips")['c'];
         $rules    = Database::fetchOne("SELECT COUNT(*) as c FROM firewall_rules WHERE enabled=1")['c'];
         $today    = mktime(0, 0, 0);
@@ -227,18 +283,25 @@ class Firewall {
             "SELECT COUNT(*) as c FROM blocked_ips WHERE blocked_at >= ?", [$today]
         )['c'];
 
-        // -n is not optional here. Without it iptables resolves every address in
-        // the ruleset back to a hostname, one DNS lookup at a time, and on a
-        // server with a few hundred blocks that is how a page ends up taking
-        // tens of seconds to load. Nothing below uses the hostnames.
-        exec(IPTABLES_BIN . ' -L INPUT -n --line-numbers 2>/dev/null | wc -l', $iptOut);
-        $iptCount = max(0, (int)($iptOut[0] ?? 0) - 2);
+        // -n is not optional: without it iptables resolves every address in the
+        // ruleset back to a hostname, one DNS lookup at a time. -w bounds the
+        // wait for the xtables lock, and the whole thing is cached besides.
+        $ipt = self::cached('iptables_rules', 60, function () {
+            $r = self::shBounded(IPTABLES_BIN . ' -L INPUT -n -w 2 --line-numbers | wc -l');
+            if ($r['timed_out']) {
+                return -1;   // distinguishable from "no rules"
+            }
+            return max(0, (int) ($r['out'][0] ?? 0) - 2);
+        });
 
         return [
             'blocked_ips'   => (int) $blocked,
             'active_rules'  => (int) $rules,
             'blocked_today' => (int) $todayBlk,
-            'iptables_rules'=> $iptCount,
+            'iptables_rules'=> (int) $ipt,
+            // -1 means the count could not be taken in time. Reporting 0 would
+            // read as "no firewall rules", which is a very different claim.
+            'iptables_unknown' => ((int) $ipt) < 0,
             'csf_status'    => $this->getCSFStatus(),
         ];
     }
