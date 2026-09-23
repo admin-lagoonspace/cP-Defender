@@ -353,6 +353,30 @@ if [[ "$AUTO_YES" == false ]]; then
     [[ "${REPLY,,}" =~ ^y(es)?$ ]] || { info "Aborted."; exit 0; }
 fi
 
+# ── Check there is room before touching anything ──────────────────────────────
+# An update that runs out of space halfway leaves the install in a state nobody
+# asked for. Checking first costs nothing, and the message names the two
+# directories that actually fill up.
+_SG_FREE_KB=$(df -Pk "$INSTALL_DIR" 2>/dev/null | awk 'NR==2 {print $4}')
+_SG_NEED_KB=$(( 200 * 1024 ))        # 200MB: download, unpack, backup, rsync
+
+if [[ -n "$_SG_FREE_KB" && "$_SG_FREE_KB" -lt "$_SG_NEED_KB" ]]; then
+    echo ""
+    warn "Only $(( _SG_FREE_KB / 1024 ))MB free on the volume holding ${INSTALL_DIR}."
+    warn "An update needs about 200MB to download, unpack and back up safely."
+    echo ""
+    echo "  The two directories that usually account for it:"
+    echo "    quarantine : $(du -sh "${INSTALL_DIR}/quarantine" 2>/dev/null | cut -f1 || echo 'n/a')"
+    echo "    backups    : $(du -sh "$BACKUP_ROOT" 2>/dev/null | cut -f1 || echo 'n/a')"
+    echo ""
+    echo "  To free space:"
+    echo "    sentinel quarantine prune 7"
+    echo "    ls -1dt ${BACKUP_ROOT}/*/ | tail -n +4 | xargs -r rm -rf"
+    echo "    find ${INSTALL_DIR}/logs -name 'scan_*.log' -mtime +2 -delete"
+    echo ""
+    die "Not enough free space to update safely."
+fi
+
 # ── Backup user data ──────────────────────────────────────────────────────────
 state "backup" 30 "Backing up your data"
 section "Backing up user data"
@@ -360,11 +384,16 @@ TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}_v${CURRENT_VERSION}"
 mkdir -p "$BACKUP_DIR"
 
-# Items to preserve (never overwritten by update)
+# Items to preserve.
+#
+# Only what the update can actually destroy. The update rsyncs backend/,
+# frontend/ and whm/ with --delete and touches nothing else -- so quarantine and
+# logs were never at risk, and copying them here meant every update duplicated
+# the entire quarantine onto the root partition. On a server whose quarantine
+# had grown to fill /, that made updating impossible at exactly the moment the
+# fix for it was waiting to be installed.
 PRESERVE=(
     "${INSTALL_DIR}/database"
-    "${INSTALL_DIR}/logs"
-    "${INSTALL_DIR}/quarantine"
     "${INSTALL_DIR}/backend/config/mode.php"
     "${INSTALL_DIR}/backend/signatures/custom.sig"
 )
@@ -376,6 +405,19 @@ done
 # Snapshot installed version for rollback reference
 echo "$CURRENT_VERSION" > "${BACKUP_DIR}/from_version.txt"
 ok "Backup created at: ${BACKUP_DIR}"
+
+# Keep the last few and remove the rest. Nothing pruned these, so every update
+# since installation was still sitting on the root partition -- the same
+# unbounded growth that quarantine had, in a second place.
+_SG_KEEP=${SG_KEEP_BACKUPS:-3}
+if [[ -d "$BACKUP_ROOT" ]]; then
+    _SG_OLD=$(ls -1dt "${BACKUP_ROOT}"/*/ 2>/dev/null | tail -n +$((_SG_KEEP + 1)))
+    if [[ -n "$_SG_OLD" ]]; then
+        _SG_N=$(printf '%s\n' "$_SG_OLD" | wc -l)
+        printf '%s\n' "$_SG_OLD" | xargs -r rm -rf
+        info "Pruned ${_SG_N} old backup(s), keeping the most recent ${_SG_KEEP}"
+    fi
+fi
 
 # ── Download latest release ───────────────────────────────────────────────────
 state "download" 15 "Downloading v${LATEST_VERSION}"
