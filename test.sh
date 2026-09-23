@@ -103,15 +103,33 @@ if [[ -d /usr/local/cpanel ]]; then
   [[ -f "$WHM_CGI" ]]     && pass "WHM CGI exists: $WHM_CGI"           || fail "WHM CGI MISSING: $WHM_CGI"
   [[ -x "$WHM_CGI" ]]     && pass "WHM CGI is executable"              || fail "WHM CGI not executable — run: chmod 755 $WHM_CGI"
 
-  # CGI shebang must use cPanel's Perl — #!/usr/bin/env perl fails in cpsrvd (404)
+  # The CGI is a /bin/sh dispatcher: ?r= goes to php-cgi as the API, anything
+  # else returns the dashboard. These two checks used to demand a cPanel Perl
+  # shebang and then run `perl -cw` on it -- left over from when the CGI really
+  # was Perl. They failed every install of a CGI that worked: the installer's
+  # own "API responds with JSON" check passed in the same run. A test that
+  # reports a working install as broken costs more than no test.
+  #
+  # What actually matters is that the interpreter in the shebang exists and the
+  # script parses under it, so that is what is checked.
   if [[ -f "$WHM_CGI" ]]; then
     _SHEBANG=$(head -1 "$WHM_CGI")
-    if echo "$_SHEBANG" | grep -q "cpanel"; then
-      pass "WHM CGI shebang uses cPanel Perl: ${_SHEBANG}"
+    _INTERP=$(echo "$_SHEBANG" | sed -e 's/^#!//' -e 's/[[:space:]].*$//')
+    if [[ -x "$_INTERP" ]]; then
+      pass "WHM CGI interpreter exists: ${_INTERP}"
     else
-      fail "WHM CGI shebang wrong: '${_SHEBANG}' — cpsrvd returns 404 without cPanel Perl path. Re-run install.sh"
+      fail "WHM CGI interpreter missing: '${_SHEBANG}' — cpsrvd returns 404. Re-run install.sh"
     fi
-    perl -cw "$WHM_CGI" >/dev/null 2>&1 && pass "WHM CGI Perl syntax OK" || fail "WHM CGI has Perl syntax errors"
+
+    case "$_INTERP" in
+      *perl) _SYNTAX_CMD=("$_INTERP" -cw) ;;
+      *)     _SYNTAX_CMD=("$_INTERP" -n)  ;;   # sh/bash
+    esac
+    if "${_SYNTAX_CMD[@]}" "$WHM_CGI" >/dev/null 2>&1; then
+      pass "WHM CGI syntax OK (${_INTERP})"
+    else
+      fail "WHM CGI has syntax errors under ${_INTERP}"
+    fi
   fi
 
   # AppConfig conf alongside CGI (source of truth before register_appconfig copies it)
@@ -178,7 +196,15 @@ if [[ -d /usr/local/cpanel ]]; then
   if [[ -f "$APPCONF" ]]; then
     grep -q "service=whostmgr" "$APPCONF" && pass "AppConfig: service=whostmgr" || fail "AppConfig missing service=whostmgr"
     grep -q "url=/cgi/sentinel_gate/sentinel_gate.cgi" "$APPCONF" && pass "AppConfig: url correct" || fail "AppConfig url wrong — expected /cgi/sentinel_gate/sentinel_gate.cgi. Re-run install.sh"
-    grep -q "acls=all" "$APPCONF" && pass "AppConfig: acls=all" || warn "AppConfig: acls field missing"
+    # acls=any, not acls=all: "any" is every authenticated WHM user including
+    # resellers, "all" is only those holding the 'all' ACL. The installer picks
+    # "any" deliberately; this check looked for the other one and reported the
+    # field as missing while it sat in the file.
+    if grep -q "^acls=" "$APPCONF"; then
+      pass "AppConfig: $(grep -m1 '^acls=' "$APPCONF")"
+    else
+      warn "AppConfig: acls field missing"
+    fi
   fi
 
   # ── Registration check: /var/cpanel/apps/ is the definitive source of truth ──
@@ -197,7 +223,10 @@ if [[ -d /usr/local/cpanel ]]; then
   fi
 
   # Check cpsrvd is running (it serves WHM on port 2087)
-  if pgrep -x cpsrvd >/dev/null 2>&1; then
+  # cpsrvd rewrites its process title to "cpsrvd - waiting for connections", so
+  # `pgrep -x cpsrvd`, which matches the name exactly, never finds it -- the
+  # check warned that cpsrvd was down on a server actively serving WHM.
+  if pgrep -f '[c]psrvd' >/dev/null 2>&1; then
     pass "cpsrvd is running — plugin will appear in WHM on next login"
   else
     warn "cpsrvd is not running — start it: /usr/local/cpanel/scripts/restartsrv_cpsrvd"

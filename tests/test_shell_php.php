@@ -30,17 +30,24 @@ $repo = $ctx['repo'];
 
 $scripts = ['install.sh', 'test.sh', 'uninstall.sh', 'update.sh'];
 
+// The interpreter is spelled several ways -- `php`, `/usr/bin/php`, `"$SG_PHP"`,
+// `${SG_PHP}` -- so matching on the word "php" alone stopped seeing payloads the
+// moment install.sh moved to a resolved binary, and the test reported a clean
+// bill of health for code it could not see. Matching on `-r` alone is worse: it
+// picks up `cp -r` and `grep -r`. The interpreter token is therefore required.
+$PHP_R = '/(?:php[\w.-]*|\$\{?SG_PHP\}?)"?\s+-r\s+/';
+
 foreach ($scripts as $script) {
     $path = $repo . '/' . $script;
     t_ok(is_file($path), $script . ' exists');
     $src = file_get_contents($path);
 
-    // A `php -r "` with nothing after the quote opens a multi-line payload.
-    $open = preg_match_all('/php -r "[ \t]*\r?\n/', $src);
-    t_eq(0, $open, $script . ' has no multi-line php -r payload');
+    // An opening quote with nothing after it starts a multi-line payload.
+    $open = preg_match_all(rtrim($PHP_R, '/') . '"[ \t]*\r?\n/', $src);
+    t_eq(0, $open, $script . ' has no multi-line -r payload');
 
     // The same applies to the other way of spelling it.
-    t_eq(0, preg_match_all("/php -r '[ \t]*\r?\n/", $src),
+    t_eq(0, preg_match_all(rtrim($PHP_R, '/') . "'[ \t]*\r?\n/", $src),
         $script . ' has none in single quotes either');
 }
 
@@ -51,11 +58,10 @@ foreach ($scripts as $script) {
 $checked = 0;
 foreach ($scripts as $script) {
     foreach (file($repo . '/' . $script) as $lineNo => $line) {
-        $start = strpos($line, 'php -r "');
-        if ($start === false) {
+        if (!preg_match(rtrim($PHP_R, '/') . '"/', $line, $m, PREG_OFFSET_CAPTURE)) {
             continue;
         }
-        $start += strlen('php -r "');
+        $start = $m[0][1] + strlen($m[0][0]);
 
         // Find the quote that closes the shell string, honouring backslash
         // escapes exactly as the shell does.
@@ -70,7 +76,7 @@ foreach ($scripts as $script) {
                 break;
             }
         }
-        t_ok($end > 0, $script . ':' . ($lineNo + 1) . ' php -r string is closed');
+        t_ok($end > 0, $script . ':' . ($lineNo + 1) . ' -r string is closed');
         if ($end < 0) {
             continue;
         }
@@ -93,9 +99,9 @@ foreach ($scripts as $script) {
         file_put_contents($tmp, '<?php ' . $code . "\n");
         exec(escapeshellarg(PHP_BINARY) . ' -l ' . escapeshellarg($tmp) . ' 2>&1', $out, $rc);
         @unlink($tmp);
-        t_eq(0, $rc, $script . ':' . ($lineNo + 1) . ' php -r payload parses');
+        t_eq(0, $rc, $script . ':' . ($lineNo + 1) . ' -r payload parses');
         $checked++;
     }
 }
 
-t_ok($checked >= 10, 'every php -r payload was parsed (' . $checked . ')');
+t_ok($checked >= 10, 'every -r payload was parsed (' . $checked . ')');

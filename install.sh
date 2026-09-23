@@ -10,6 +10,10 @@ set -o pipefail
 PLUGIN_NAME="sentinel-gate"
 INSTALL_DIR="/usr/local/sentinel-gate"
 CRON_FILE="/etc/cron.d/sentinel-gate"
+# Defined here, not down beside the block that populates it: that block sits
+# inside the INSTALL-ONLY span, which --register-only skips entirely, while the
+# cPanel registration section below it appends to MANIFEST in either mode.
+MANIFEST="${INSTALL_DIR}/install-manifest.env"
 LOG_DIR="${INSTALL_DIR}/logs"
 SG_PORT=31150
 
@@ -140,9 +144,33 @@ if ! $REGISTER_ONLY && ! $SKIP_DEPS; then
 fi
 
 command -v php >/dev/null 2>&1 || error "PHP not found. Install php-cli first."
-PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION;')
+
+# ── Resolve a real CLI PHP, once ──────────────────────────────────────────────
+# `php` and `/usr/bin/php` are not interchangeable on a cPanel box, and neither
+# is guaranteed to be the CLI binary:
+#
+#   * /usr/bin/php is frequently a symlink to php-cgi, which REFUSES -r --
+#     "Error in argument 1, char 2: option not found r" -- and, when it does run
+#     a script, prints CGI headers into whatever captured its output. The
+#     firewall engine was initialised this way and reported its backend as a
+#     php-cgi usage dump.
+#   * `php` on PATH is often cPanel's Perl wrapper (/var/cpanel/ea4/ea_php_cli.pm),
+#     which dies on any argument containing a newline.
+#
+# So candidates are not trusted by name: each is asked what SAPI it is, and the
+# first that answers "cli" is used for everything from here on.
+SG_PHP=""
+for _c in "$(command -v php 2>/dev/null)"           /usr/local/cpanel/3rdparty/bin/php           /opt/cpanel/ea-php83/root/usr/bin/php           /opt/cpanel/ea-php82/root/usr/bin/php           /opt/cpanel/ea-php81/root/usr/bin/php           /usr/local/bin/php /usr/bin/php; do
+  [[ -z "$_c" || ! -x "$_c" ]] && continue
+  if [[ "$("$_c" -r 'echo PHP_SAPI;' 2>/dev/null)" == "cli" ]]; then
+    SG_PHP="$_c"; break
+  fi
+done
+[[ -z "$SG_PHP" ]] && error "No CLI PHP found. Install php-cli (php-cgi alone cannot run this installer)."
+
+PHP_VER=$("$SG_PHP" -r 'echo PHP_MAJOR_VERSION;')
 [[ $PHP_VER -lt 7 ]] && error "PHP 7.4+ required (found PHP $PHP_VER)"
-ok "PHP $PHP_VER found"
+ok "PHP $PHP_VER found: ${SG_PHP}"
 
 # ── Pre-install cleanup ─────────────────────────────────────────────────────────
 # Makes reinstalls clean: stops running services, refreshes code dirs so files
@@ -398,13 +426,13 @@ mkdir -p /var/lib/sentinel-gate 2>/dev/null || true
 
 # ── Initialize database ────────────────────────────────────────────────────────
 section "Initialising database"
-php -r "define('SG_ROOT', '$INSTALL_DIR'); define('SG_DB', '$INSTALL_DIR/database/sentinel.db'); define('SG_LOGS', '$INSTALL_DIR/logs'); define('SG_TMP', '/tmp/sentinel-gate'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR', '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS', serialize([])); define('JWT_SECRET', hash('sha256', gethostname() . 'sentinel_gate_secret_2024')); define('JWT_EXPIRY', 28800); define('INSTALL_MODE', '${INSTALL_MODE}'); define('SG_PORT', ${SG_PORT}); require_once '$INSTALL_DIR/backend/lib/Database.php'; \$db = Database::get(); Database::setSetting('install_mode', '${INSTALL_MODE}'); echo 'Database initialised' . PHP_EOL;"
+"$SG_PHP" -r "define('SG_ROOT', '$INSTALL_DIR'); define('SG_DB', '$INSTALL_DIR/database/sentinel.db'); define('SG_LOGS', '$INSTALL_DIR/logs'); define('SG_TMP', '/tmp/sentinel-gate'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR', '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS', serialize([])); define('JWT_SECRET', hash('sha256', gethostname() . 'sentinel_gate_secret_2024')); define('JWT_EXPIRY', 28800); define('INSTALL_MODE', '${INSTALL_MODE}'); define('SG_PORT', ${SG_PORT}); require_once '$INSTALL_DIR/backend/lib/Database.php'; \$db = Database::get(); Database::setSetting('install_mode', '${INSTALL_MODE}'); echo 'Database initialised' . PHP_EOL;"
 ok "SQLite database ready"
 
 # ── Set standalone admin credentials ──────────────────────────────────────────
 if [[ "$INSTALL_MODE" == "standalone" ]]; then
-  PASS_HASH=$(php -r "echo password_hash('${ADMIN_PASS}', PASSWORD_BCRYPT, ['cost'=>12]);")
-  php -r "define('SG_ROOT', '$INSTALL_DIR'); define('SG_DB', '$INSTALL_DIR/database/sentinel.db'); define('SG_LOGS', '$INSTALL_DIR/logs'); define('SG_TMP', '/tmp/sentinel-gate'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR', '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS', serialize([])); define('JWT_SECRET', hash('sha256', gethostname() . 'sentinel_gate_secret_2024')); define('JWT_EXPIRY', 28800); define('INSTALL_MODE', 'standalone'); define('SG_PORT', ${SG_PORT}); require_once '$INSTALL_DIR/backend/lib/Database.php'; require_once '$INSTALL_DIR/backend/lib/Auth.php'; Auth::setLocalCredentials('${ADMIN_USER}', '${ADMIN_PASS}'); echo 'Admin credentials stored' . PHP_EOL;"
+  PASS_HASH=$("$SG_PHP" -r "echo password_hash('${ADMIN_PASS}', PASSWORD_BCRYPT, ['cost'=>12]);")
+  "$SG_PHP" -r "define('SG_ROOT', '$INSTALL_DIR'); define('SG_DB', '$INSTALL_DIR/database/sentinel.db'); define('SG_LOGS', '$INSTALL_DIR/logs'); define('SG_TMP', '/tmp/sentinel-gate'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR', '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS', serialize([])); define('JWT_SECRET', hash('sha256', gethostname() . 'sentinel_gate_secret_2024')); define('JWT_EXPIRY', 28800); define('INSTALL_MODE', 'standalone'); define('SG_PORT', ${SG_PORT}); require_once '$INSTALL_DIR/backend/lib/Database.php'; require_once '$INSTALL_DIR/backend/lib/Auth.php'; Auth::setLocalCredentials('${ADMIN_USER}', '${ADMIN_PASS}'); echo 'Admin credentials stored' . PHP_EOL;"
   ok "Admin credentials stored (bcrypt)"
 fi
 
@@ -446,7 +474,7 @@ done
 if [[ -n "${CLAMSCAN_BIN}" ]]; then
   ok "ClamAV found: ${CLAMSCAN_BIN}"
   # Record path so the scanner backend can use it directly
-  php -r "define('SG_ROOT','${INSTALL_DIR}'); define('SG_DB','${INSTALL_DIR}/database/sentinel.db'); define('SG_LOGS','${INSTALL_DIR}/logs'); define('SG_TMP','/tmp/sentinel-gate'); define('CPANEL_BASE','/usr/local/cpanel'); define('CPANEL_USER','root'); define('SCAN_MAX_SIZE',52428800); define('SIG_DIR','${INSTALL_DIR}/backend/signatures'); define('QUARANTINE_DIR','${INSTALL_DIR}/quarantine'); define('RBL_FEEDS',serialize([])); define('JWT_SECRET',hash('sha256',gethostname().'sentinel_gate_secret_2024')); define('JWT_EXPIRY',28800); define('INSTALL_MODE','${INSTALL_MODE}'); define('SG_PORT',${SG_PORT}); require_once '${INSTALL_DIR}/backend/lib/Database.php'; Database::setSetting('clamscan_path','${CLAMSCAN_BIN}'); echo 'ClamAV path stored' . PHP_EOL;" 2>/dev/null || true
+  "$SG_PHP" -r "define('SG_ROOT','${INSTALL_DIR}'); define('SG_DB','${INSTALL_DIR}/database/sentinel.db'); define('SG_LOGS','${INSTALL_DIR}/logs'); define('SG_TMP','/tmp/sentinel-gate'); define('CPANEL_BASE','/usr/local/cpanel'); define('CPANEL_USER','root'); define('SCAN_MAX_SIZE',52428800); define('SIG_DIR','${INSTALL_DIR}/backend/signatures'); define('QUARANTINE_DIR','${INSTALL_DIR}/quarantine'); define('RBL_FEEDS',serialize([])); define('JWT_SECRET',hash('sha256',gethostname().'sentinel_gate_secret_2024')); define('JWT_EXPIRY',28800); define('INSTALL_MODE','${INSTALL_MODE}'); define('SG_PORT',${SG_PORT}); require_once '${INSTALL_DIR}/backend/lib/Database.php'; Database::setSetting('clamscan_path','${CLAMSCAN_BIN}'); echo 'ClamAV path stored' . PHP_EOL;" 2>/dev/null || true
   if [[ -n "${FRESHCLAM_BIN}" ]]; then
     # On Debian/Ubuntu the clamav-freshclam DAEMON starts automatically on
     # install and holds a lock on the database directory. A manual freshclam run
@@ -471,9 +499,29 @@ if [[ -n "${CLAMSCAN_BIN}" ]]; then
     # Verify rather than assume. clamscan is unusable without a database, and
     # reporting the scanner as ready when it cannot match anything is worse than
     # saying so plainly.
+    # The search list must include wherever THIS clamscan actually looks. On
+    # cPanel, clamscan is /usr/local/cpanel/3rdparty/bin/clamscan and its
+    # database lives under .../3rdparty/share/clamav -- not in any of the
+    # distro locations. The installer therefore downloaded signatures
+    # successfully and then reported, in the next breath, that there were none.
+    # Ask the binary where it looks before falling back to a fixed list.
     _SIGDIR=""
-    for _d in /var/lib/clamav /usr/local/share/clamav /usr/share/clamav; do
-      [[ -f "$_d/main.cvd" || -f "$_d/main.cld" || -f "$_d/daily.cvd" || -f "$_d/daily.cld" ]] && { _SIGDIR="$_d"; break; }
+    _SIGDIRS=()
+    if command -v clamconf >/dev/null 2>&1; then
+      _CONF_DIR="$(clamconf 2>/dev/null | sed -n 's/^DatabaseDirectory = "\(.*\)"$//p' | head -1)"
+      [[ -n "$_CONF_DIR" ]] && _SIGDIRS+=( "$_CONF_DIR" )
+    fi
+    # .../bin/clamscan -> .../share/clamav, which covers the cPanel layout
+    if [[ -n "${CLAMSCAN_BIN:-}" ]]; then
+      _SIGDIRS+=( "$(dirname "$(dirname "$CLAMSCAN_BIN")")/share/clamav" )
+    fi
+    _SIGDIRS+=( /usr/local/cpanel/3rdparty/share/clamav                 /var/lib/clamav /usr/local/share/clamav /usr/share/clamav )
+
+    for _d in "${_SIGDIRS[@]}"; do
+      [[ -z "$_d" || ! -d "$_d" ]] && continue
+      if [[ -f "$_d/main.cvd" || -f "$_d/main.cld" || -f "$_d/daily.cvd" || -f "$_d/daily.cld" ]]; then
+        _SIGDIR="$_d"; break
+      fi
     done
     if [[ -n "$_SIGDIR" ]]; then
       ok "Signature database present: ${_SIGDIR}"
@@ -573,13 +621,36 @@ SVCEOF
   fi
 fi
 
+# ── Write install manifest (uninstaller reads this) ───────────────────────────
+# This has to come BEFORE anything that appends to it. It used to sit after the
+# cron section, so the firewall section's two `>> "${MANIFEST}"` lines ran with
+# MANIFEST unset and the installer printed
+#   install.sh: line 622: : No such file or directory
+# twice -- a redirect to an empty filename. Worse, the block below opens the
+# file with `>`, so even had they worked those keys would have been truncated
+# away, and the uninstaller would never have known about the firewall service
+# it was supposed to remove.
+if ! $REGISTER_ONLY; then
+  {
+    echo "INSTALL_MODE=${INSTALL_MODE}"
+    echo "INSTALL_VERSION=${SG_VERSION}"
+    echo "INSTALL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "INSTALL_DIR=${INSTALL_DIR}"
+    echo "CRON_FILE=${CRON_FILE}"
+    echo "SOURCE_DIR=${SCRIPT_DIR}"
+  } > "${MANIFEST}"
+  info "Manifest started: ${MANIFEST}"
+else
+  info "Register-only — re-registering plugin against existing install"
+fi
+
 # ── Built-in firewall ─────────────────────────────────────────────────────────
 # The product ships its own packet-filter manager so an operator does not have
 # to install and learn a separate firewall first. It defers to CSF or firewalld
 # when either is already in charge — overwriting a firewall the server is
 # already managing would be worse than adding nothing.
 section "Firewall engine"
-FW_INIT="$(/usr/bin/php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/config.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; \$i = FirewallEngine::backendInfo(); echo \$i['backend'];" 2>/dev/null || echo unknown)"
+FW_INIT="$("$SG_PHP" -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/config.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; \$i = FirewallEngine::backendInfo(); echo \$i['backend'];" 2>/dev/null || echo unknown)"
 info "Detected firewall backend: ${FW_INIT}"
 
 if [[ "$FW_INIT" == "none" ]]; then
@@ -593,7 +664,7 @@ if [[ "$FW_INIT" == "none" ]]; then
   command -v nft >/dev/null 2>&1     && ok "nftables installed"     || warn "Could not install nftables — the firewall UI will be read-only"
 fi
 
-/usr/bin/php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/config.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; \$r = FirewallEngine::initialise(); echo (\$r['success'] ? 'OK ' : 'FAIL ') . (\$r['message'] ?? \$r['error'] ?? '');" 2>&1 | sed 's/^/  /' || warn "Firewall init reported an error"
+"$SG_PHP" -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/config.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; \$r = FirewallEngine::initialise(); echo (\$r['success'] ? 'OK ' : 'FAIL ') . (\$r['message'] ?? \$r['error'] ?? '');" 2>&1 | sed 's/^/  /' || warn "Firewall init reported an error"
 
 # Restore rules at boot. nftables and iptables keep rules in kernel memory only,
 # so without this every block silently disappears on reboot while the database
@@ -611,7 +682,7 @@ Wants=network-pre.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/php -r "define('SG_API',true); require_once '${INSTALL_DIR}/backend/config/config.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; FirewallEngine::restore();"
+ExecStart=${SG_PHP} -r "define('SG_API',true); require_once '${INSTALL_DIR}/backend/config/config.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; FirewallEngine::restore();"
 
 [Install]
 WantedBy=multi-user.target
@@ -631,9 +702,9 @@ MAILTO=""
 # Task scheduler — decides what is due from the user's Settings. Runs every
 # 15 min; exits silently when nothing is due. Schedules are changed in the UI,
 # NOT by editing this file.
-*/15 * * * * root /usr/bin/php ${INSTALL_DIR}/backend/cron/scheduler.php >> ${LOG_DIR}/cron.log 2>&1
+*/15 * * * * root ${SG_PHP} ${INSTALL_DIR}/backend/cron/scheduler.php >> ${LOG_DIR}/cron.log 2>&1
 # Daily update check at 8am
-0 8 * * * root SG_ROOT=${INSTALL_DIR} /usr/bin/php ${INSTALL_DIR}/backend/cron/update-check.php >> ${LOG_DIR}/cron.log 2>&1
+0 8 * * * root SG_ROOT=${INSTALL_DIR} ${SG_PHP} ${INSTALL_DIR}/backend/cron/update-check.php >> ${LOG_DIR}/cron.log 2>&1
 CRONEOF
 chmod 644 "${CRON_FILE}"
 ok "Cron jobs installed to ${CRON_FILE}"
@@ -649,24 +720,6 @@ if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null)" == "E
 fi
 
 fi  # ═══ end INSTALL-ONLY SECTIONS ═══════════════════════════════════════════════
-
-# ── Write install manifest (uninstaller reads this) ───────────────────────────
-# MANIFEST is always defined (the cpanel block below appends to it). On a fresh
-# install we (re)write the base keys; in --register-only we keep the existing one.
-MANIFEST="${INSTALL_DIR}/install-manifest.env"
-if ! $REGISTER_ONLY; then
-  {
-    echo "INSTALL_MODE=${INSTALL_MODE}"
-    echo "INSTALL_VERSION=${SG_VERSION}"
-    echo "INSTALL_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "INSTALL_DIR=${INSTALL_DIR}"
-    echo "CRON_FILE=${CRON_FILE}"
-    echo "SOURCE_DIR=${SCRIPT_DIR}"
-  } > "${MANIFEST}"
-  info "Manifest started: ${MANIFEST}"
-else
-  info "Register-only — re-registering plugin against existing install"
-fi
 
 # ── Firewall & WAF integration (CSF/LFD + ModSecurity) ─────────────────────────
 # These wire Sentinel Gate into the server's existing security stack. They are
@@ -765,7 +818,7 @@ fi
 # --register-only pick it up too. Points at the installed CLI, not the source.
 section "CLI entrypoint"
 if [[ -f "${INSTALL_DIR}/backend/cli/sentinel.php" ]]; then
-  _PHP_BIN="$(command -v php 2>/dev/null || echo /usr/bin/php)"
+  _PHP_BIN="${SG_PHP}"
   cat > /usr/bin/sentinel << CLIEOF
 #!/usr/bin/env bash
 # Sentinel Gate CLI — installed by install.sh (do not edit)
@@ -823,7 +876,7 @@ if [[ "$INSTALL_MODE" == "standalone" ]]; then
     echo "WEB_SERVICE=${WEB_SVC}" >> "${MANIFEST}"
   else
     info "  systemd not available — starting PHP server in background"
-    nohup /usr/bin/php -S 0.0.0.0:${SG_PORT} \
+    nohup "$SG_PHP" -S 0.0.0.0:${SG_PORT} \
       "${INSTALL_DIR}/backend/standalone-router.php" \
       >> "${LOG_DIR}/web.log" 2>&1 &
     echo $! > "${INSTALL_DIR}/web.pid"
@@ -865,7 +918,7 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
   # Standard mod_php / other: application/x-httpd-php
   PHP_HANDLER="application/x-httpd-php"
   if [[ -d /opt/cpanel ]]; then
-    _PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION . PHP_MINOR_VERSION;' 2>/dev/null)
+    _PHP_VER=$("$SG_PHP" -r 'echo PHP_MAJOR_VERSION . PHP_MINOR_VERSION;' 2>/dev/null)
     if [[ -n "$_PHP_VER" ]]; then
       PHP_HANDLER="application/x-httpd-ea-php${_PHP_VER}"
       info "Detected EasyApache 4 PHP handler: ${PHP_HANDLER}"
@@ -1239,6 +1292,16 @@ exit;
 PHPEOF
       chmod 644 "${CPANEL_PLUGIN_DIR}/index.php"
 
+      # The icon has to be BESIDE install.json, and named in it. Without it
+      # install_plugin dies with
+      #   Cpanel::Exception::MissingParameter ... lacks the required parameter "icon"
+      # for both themes, and the plugin only ever appeared through the legacy
+      # dynamicui fallback.
+      if [[ -f "${SCRIPT_DIR}/whm/sentinel_gate.png" ]]; then
+        cp -f "${SCRIPT_DIR}/whm/sentinel_gate.png" "${CPANEL_PLUGIN_DIR}/sentinel_gate.png"
+        chmod 644 "${CPANEL_PLUGIN_DIR}/sentinel_gate.png"
+      fi
+
       # install.json for the modern install_plugin mechanism (cPanel 11.44+)
       cat > "${CPANEL_PLUGIN_DIR}/install.json" << JSONEOF
 [
@@ -1249,7 +1312,8 @@ PHPEOF
     "order":    100,
     "group_id": "security",
     "uri":      "/frontend/${CPANEL_THEME}/sentinel_gate/index.php",
-    "feature":  "sentinel_gate"
+    "feature":  "sentinel_gate",
+    "icon":     "sentinel_gate.png"
   }
 ]
 JSONEOF
@@ -1281,6 +1345,8 @@ grouporder=30
 name=sentinel_gate
 itemdesc=Sentinel Gate Security
 feature=sentinel_gate
+imgtype=icon
+icon=sentinel_gate.png
 url=/frontend/${CPANEL_THEME}/sentinel_gate/index.php
 target=_blank
 itemorder=1
