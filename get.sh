@@ -206,18 +206,23 @@ ZIP="${TMP}/sentinel-gate-${VERSION}.zip"
 # every remaining channel. Both the per-version folder and the flat dist/ path are
 # tried since releases are published to both. The checksum verified below is what
 # makes falling across channels safe.
+# dist/ FIRST: it is the canonical published path and the only one that
+# actually exists. Asking builds/ and v<version>/ ahead of it meant every
+# single install printed a wall of curl 404s before succeeding -- alarming and
+# entirely expected at the same time, which is the worst combination, and
+# indistinguishable from a real failure to anyone reading the output.
 CANDIDATES=()
 [[ -n "$URL" ]] && CANDIDATES+=("$URL")
 [[ -n "$SRC_BASE" ]] && CANDIDATES+=(
+  "${SRC_BASE}/dist/sentinel-gate-${VERSION}.zip"
   "${SRC_BASE}/builds/sentinel-gate-${VERSION}.zip"
   "${SRC_BASE}/v${VERSION}/sentinel-gate-${VERSION}.zip"
-  "${SRC_BASE}/dist/sentinel-gate-${VERSION}.zip"
 )
 for BASE in "${MIRRORS[@]}"; do
   CANDIDATES+=(
+    "${BASE}/dist/sentinel-gate-${VERSION}.zip"
     "${BASE}/builds/sentinel-gate-${VERSION}.zip"
     "${BASE}/v${VERSION}/sentinel-gate-${VERSION}.zip"
-    "${BASE}/dist/sentinel-gate-${VERSION}.zip"
   )
 done
 
