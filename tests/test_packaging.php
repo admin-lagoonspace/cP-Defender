@@ -41,6 +41,20 @@ $leaked = array_values(array_filter($names, function ($n) {
 t_eq(0, count($leaked), 'no tests/ or scripts/ in the package'
     . ($leaked ? ' — leaked: ' . implode(', ', array_slice($leaked, 0, 5)) : ''));
 
+// Build leftovers from the maintainer's machine are not the product either.
+// v3.27.3 shipped backend/daemon/__pycache__/monitor.cpython-{310,312}.pyc --
+// bytecode for interpreters no target server runs (cPanel hosts are on 3.6).
+// Python ignores a .pyc that does not match its own version, so nothing broke,
+// but someone else's build output inside a security product is not something
+// to discover from a customer.
+$leftovers = array_values(array_filter($names, function ($n) {
+    return strpos($n, '__pycache__') !== false
+        || preg_match('/\.py[co]$/', $n)
+        || substr($n, -10) === '.DS_Store';
+}));
+t_eq(0, count($leftovers), 'no build leftovers in the package'
+    . ($leftovers ? ' — leaked: ' . implode(', ', array_slice($leftovers, 0, 5)) : ''));
+
 // The bundled PHP interpreter used by the gates is 36MB of not-the-product.
 $php = array_values(array_filter($names, fn($n) => strpos($n, '/php/') !== false));
 t_eq(0, count($php), 'the bundled PHP interpreter is not packaged');

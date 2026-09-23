@@ -61,6 +61,16 @@ for item in backend frontend whm install.sh uninstall.sh update.sh test.sh VERSI
   [[ -e "${REPO_DIR}/${item}" ]] && cp -r "${REPO_DIR}/${item}" "${PKG}/"
 done
 
+# Build leftovers must not ship. v3.27.3 went out carrying
+# backend/daemon/__pycache__/monitor.cpython-{310,312}.pyc -- bytecode from the
+# maintainer's machine, for interpreters the target servers do not run (cPanel
+# hosts are on 3.6). Harmless in that Python only loads the .pyc matching its
+# own version, but it is someone else's build output inside a security product,
+# and the staging step should copy the source tree, not whatever happens to be
+# sitting in it.
+find "$PKG" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+find "$PKG" -type f \( -name '*.pyc' -o -name '*.pyo' -o -name '.DS_Store' \) -delete 2>/dev/null || true
+
 mkdir -p "$OUT_DIR"
 ZIP_NAME="sentinel-gate-${VERSION}.zip"
 ZIP_PATH="${OUT_DIR}/${ZIP_NAME}"
