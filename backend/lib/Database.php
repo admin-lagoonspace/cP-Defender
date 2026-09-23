@@ -240,6 +240,22 @@ class Database {
         if (!in_array('cpanel_user', $cols)) {
             $db->exec("ALTER TABLE threats ADD COLUMN cpanel_user TEXT");
         }
+
+        // Which process is actually doing the scanning.
+        //
+        // A scan was launched detached with `&` and its PID was never recorded,
+        // so nothing could stop it afterwards: once started, clamscan ran to
+        // completion whatever the operator did. The process GROUP is the useful
+        // thing to keep -- the worker forks clamscan for every batch, and
+        // killing only the worker leaves the clamscan it is currently waiting
+        // on running.
+        $jobCols = array_column($db->query("PRAGMA table_info(scan_jobs)")->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('worker_pid', $jobCols)) {
+            $db->exec("ALTER TABLE scan_jobs ADD COLUMN worker_pid INTEGER");
+        }
+        if (!in_array('worker_pgid', $jobCols)) {
+            $db->exec("ALTER TABLE scan_jobs ADD COLUMN worker_pgid INTEGER");
+        }
     }
 
     public static function query(string $sql, array $params = []): PDOStatement {

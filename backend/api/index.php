@@ -391,6 +391,18 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
             ? ['success' => true, 'job_id' => $scanner->startScan($body['path'] ?? '/home', $body['type'] ?? 'quick')]
             : ['success' => false, 'error' => 'POST required', 'code' => 405],
 
+        // POST scanner/stop {job_id?} — stop a running scan AND the clamscan it
+        // has spawned. There was no way to stop a scan at all: once started it
+        // ran to completion whatever the operator did, which is what "the stop
+        // button does not stop clamscan" was actually about. The monitor's
+        // Stop button stops the monitor, which never runs clamscan.
+        'stop' => $method === 'POST'
+            ? Scanner::stopScan(isset($body['job_id']) ? (int)$body['job_id'] : null)
+            : ['success' => false, 'error' => 'POST required', 'code' => 405],
+
+        // GET scanner/running — is one in progress, so the UI can offer Stop
+        'running' => ['success' => true, 'data' => Scanner::runningJob()],
+
         'status' => ['success' => true, 'data' => $scanner->getScanStatus((int)($id ?? $q['job_id'] ?? 0))],
         'stats'  => ['success' => true, 'data' => $scanner->getStats()],
 

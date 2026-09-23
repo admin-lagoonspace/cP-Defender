@@ -545,12 +545,46 @@ function simulateDemoScan() {
   }, 200);
 }
 
-function stopScan() {
+// Stop the scan on the SERVER, not just the progress bar in front of it.
+//
+// This used to clear the polling interval, hide the card and toast "Scan
+// stopped" -- and tell the server nothing at all. The scan carried on at full
+// speed with clamscan running flat out, while the UI reported that it had been
+// stopped. Reported as "the stop button is not stopping clamscan"; it was not
+// stopping anything.
+async function stopScan(jobId) {
+  const btn = document.querySelector('#scan-progress-card button');
+  if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }
+
+  const res = Demo.active
+    ? { success: true, message: 'Scan stopped.' }
+    : await API.post('scanner/stop', jobId ? { job_id: jobId } : {});
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Stop'; }
+
+  if (!res?.success) {
+    // Leave the progress card up on failure: hiding it would imply the scan
+    // had stopped, which is the behaviour being fixed.
+    toast(res?.error || 'Could not stop the scan', 'error');
+    return;
+  }
+
   clearInterval(State.scanInterval);
-  document.getElementById('scan-btn').disabled = false;
-  document.getElementById('scan-btn').textContent = '▶ Start Scan';
-  document.getElementById('scan-progress-card').style.display = 'none';
-  toast('Scan stopped', 'info');
+  const scanBtn = document.getElementById('scan-btn');
+  if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = '▶ Start Scan'; }
+  const card = document.getElementById('scan-progress-card');
+  if (card) card.style.display = 'none';
+
+  // Say what actually happened. A clamscan the kernel had not reaped yet is
+  // worth mentioning rather than glossing over with a flat "stopped".
+  let msg = res.message || 'Scan stopped.';
+  if (res.stragglers) {
+    msg += ' ' + res.stragglers + ' clamscan process(es) are still finishing.';
+  }
+  toast(msg, res.stragglers ? 'info' : 'success');
+
+  loadThreats();
+  refreshDashboard();
 }
 
 async function loadThreats() {

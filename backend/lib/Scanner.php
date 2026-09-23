@@ -356,6 +356,19 @@ class Scanner {
             $scanned += count($batch);
             $batch = [];
             self::recordProgress($jobId, $scanned, count($threats));
+
+            // Stop between batches when asked.
+            //
+            // This is the graceful half of stopping a scan: the signal sent to
+            // the process group is the forceful half. Checking here means a
+            // stop leaves the database consistent and the partial results
+            // recorded, rather than relying on a SIGKILL landing somewhere
+            // harmless.
+            if (self::isCancelled($jobId)) {
+                Logger::info("Scan job {$jobId} cancelled after {$scanned} file(s)");
+                self::recordProgress($jobId, $scanned, count($threats));
+                return $threats;
+            }
         }
 
         if ($batch) {
@@ -624,6 +637,159 @@ class Scanner {
      *
      * @return array{removed:int,bytes:int,kept:int}
      */
+    /** True once a stop has been requested for this job. */
+    public static function isCancelled(int $jobId): bool
+    {
+        $row = Database::fetchOne('SELECT status FROM scan_jobs WHERE id=?', [$jobId]);
+        return in_array($row['status'] ?? '', ['cancelling', 'cancelled'], true);
+    }
+
+    /** The scan currently running, if any. */
+    public static function runningJob(): ?array
+    {
+        return Database::fetchOne(
+            "SELECT * FROM scan_jobs WHERE status IN ('running','pending','cancelling')
+              ORDER BY id DESC LIMIT 1"
+        );
+    }
+
+    /**
+     * Stop a running scan, and the clamscan it has spawned.
+     *
+     * Reported as "the stop button is not stopping clamscan". It was not: the
+     * real-time monitor's Stop button stops the monitor daemon, which never
+     * runs clamscan -- it uses its own pattern engine. clamscan belongs to a
+     * SCAN, and there was no way to stop a scan at all. Once started it ran to
+     * completion whatever the operator did.
+     *
+     * Stopping is done twice over, because either half alone is unreliable:
+     *
+     *   1. The job is marked 'cancelling', which the batch loop checks. A scan
+     *      that reaches that check exits cleanly with its partial results
+     *      recorded.
+     *   2. The worker's process GROUP is signalled, which reaches the clamscan
+     *      it is currently blocked on. Signalling the worker alone leaves that
+     *      clamscan running -- it would finish the batch it was given, which on
+     *      a large file can take a while.
+     */
+    public static function stopScan(?int $jobId = null): array
+    {
+        $job = $jobId !== null
+            ? Database::fetchOne('SELECT * FROM scan_jobs WHERE id=?', [$jobId])
+            : self::runningJob();
+
+        if (!$job) {
+            return ['success' => false, 'error' => 'No scan is running', 'code' => 404];
+        }
+        if (in_array($job['status'], ['done', 'error', 'cancelled'], true)) {
+            return ['success' => false,
+                    'error'   => 'That scan has already finished (' . $job['status'] . ')',
+                    'code'    => 409];
+        }
+
+        $id = (int) $job['id'];
+        Database::query(
+            "UPDATE scan_jobs SET status='cancelling' WHERE id=?", [$id]
+        );
+
+        $pgid   = (int) ($job['worker_pgid'] ?? 0);
+        $pid    = (int) ($job['worker_pid'] ?? 0);
+        $signalled = false;
+
+        // Negative PID means "the whole process group" to kill(2), which is how
+        // the clamscan children are reached.
+        if ($pgid > 1) {
+            $signalled = self::signalGroup($pgid, 'TERM');
+        } elseif ($pid > 1) {
+            // Older rows have no pgid. The worker alone is better than nothing,
+            // and the batch check will still stop the loop.
+            @exec('kill -TERM ' . $pid . ' 2>/dev/null');
+            $signalled = true;
+        }
+
+        // Give it a moment to exit on its own before insisting.
+        $gone = false;
+        for ($i = 0; $i < 10; $i++) {
+            usleep(200000);
+            if (!self::processAlive($pid)) { $gone = true; break; }
+        }
+        if (!$gone && $pgid > 1) {
+            self::signalGroup($pgid, 'KILL');
+            usleep(300000);
+            $gone = !self::processAlive($pid);
+        }
+
+        Database::query(
+            "UPDATE scan_jobs SET status='cancelled', finished_at=? WHERE id=?",
+            [time(), $id]
+        );
+
+        // Any clamscan left over from this group after a KILL is worth saying
+        // out loud rather than reporting a clean stop.
+        $stragglers = self::clamscanPidsForGroup($pgid);
+
+        Logger::info("Scan job {$id} stopped by request"
+                   . ($signalled ? ' (process group ' . $pgid . ' signalled)' : '')
+                   . ($stragglers ? ' - ' . count($stragglers) . ' clamscan process(es) still present' : ''));
+
+        return [
+            'success'    => true,
+            'job_id'     => $id,
+            'signalled'  => $signalled,
+            'worker_gone'=> $gone,
+            'stragglers' => count($stragglers),
+            'message'    => $gone
+                ? 'Scan stopped.'
+                : 'Scan marked cancelled; the worker did not exit and was killed.',
+        ];
+    }
+
+    private static function signalGroup(int $pgid, string $sig): bool
+    {
+        if ($pgid <= 1) { return false; }
+        // posix_kill with a negative PID signals the group; the shell fallback
+        // exists because posix is not compiled in everywhere.
+        if (function_exists('posix_kill')) {
+            $map = ['TERM' => 15, 'KILL' => 9];
+            return @posix_kill(-$pgid, $map[$sig] ?? 15);
+        }
+        @exec('kill -' . $sig . ' -- -' . $pgid . ' 2>/dev/null', $o, $rc);
+        return $rc === 0;
+    }
+
+    private static function processAlive(int $pid): bool
+    {
+        if ($pid <= 1) { return false; }
+        if (is_dir('/proc')) { return is_dir('/proc/' . $pid); }
+        if (function_exists('posix_kill')) { return @posix_kill($pid, 0); }
+        @exec('kill -0 ' . $pid . ' 2>/dev/null', $o, $rc);
+        return $rc === 0;
+    }
+
+    /** clamscan processes still in the given process group. */
+    private static function clamscanPidsForGroup(int $pgid): array
+    {
+        $pids = [];
+        if ($pgid <= 1 || !is_dir('/proc')) { return $pids; }
+        foreach (glob('/proc/[0-9]*') ?: [] as $dir) {
+            $pid  = (int) basename($dir);
+            $comm = @file_get_contents($dir . '/comm');
+            if ($comm === false || strpos(trim($comm), 'clamscan') === false) {
+                continue;
+            }
+            $stat = @file_get_contents($dir . '/stat');
+            if ($stat === false) { continue; }
+            // Field 5 is the process group id; the command name in field 2 can
+            // contain spaces, so parse from the closing parenthesis.
+            $tail = substr($stat, strrpos($stat, ')') + 2);
+            $f    = explode(' ', $tail);
+            if (isset($f[2]) && (int) $f[2] === $pgid) {
+                $pids[] = $pid;
+            }
+        }
+        return $pids;
+    }
+
     public static function pruneQuarantine(?int $days = null): array {
         $days = $days ?? (int) (Database::setting('quarantine_retention_days', '30') ?? 30);
         $dir  = Database::storagePath('quarantine');

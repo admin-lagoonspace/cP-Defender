@@ -80,7 +80,30 @@ if (!$job) {
 }
 if ($scanPath === null) $scanPath = $job['scan_path'] ?? '/home';
 
-Logger::info("scan.php: Starting job $jobId ({$job['scan_type']}) on $scanPath");
+// Detach into a process group of our own, and record it.
+//
+// The worker forks clamscan once per batch. Killing the worker alone leaves the
+// clamscan it is currently waiting on running -- which is exactly what was
+// reported: the scan was stopped and clamscan kept going. Owning a process
+// group means one signal reaches the worker and every child it has spawned.
+//
+// posix_setsid() fails if this process is already a group leader; that is fine,
+// it simply means the group it is already in is the one to record.
+if (function_exists('posix_setsid')) {
+    @posix_setsid();
+}
+$workerPid  = getmypid();
+$workerPgid = function_exists('posix_getpgid') ? @posix_getpgid(0) : null;
+if (!$workerPgid) {
+    $workerPgid = $workerPid;
+}
+Database::query(
+    'UPDATE scan_jobs SET worker_pid=?, worker_pgid=? WHERE id=?',
+    [$workerPid, $workerPgid, $jobId]
+);
+
+Logger::info("scan.php: Starting job $jobId ({$job['scan_type']}) on $scanPath"
+           . " (pid $workerPid, pgid $workerPgid)");
 $t = microtime(true);
 
 try {
@@ -94,9 +117,16 @@ try {
     $row   = Database::fetchOne('SELECT files_scanned FROM scan_jobs WHERE id=?', [$jobId]);
     $files = (int)($row['files_scanned'] ?? 0);
 
+    // A cancelled scan stops mid-way and returns what it found so far. Writing
+    // 'done' over that would report a partial scan as a complete one -- the
+    // operator would believe the tree had been examined when most of it had
+    // not.
+    $final = Database::fetchOne('SELECT status FROM scan_jobs WHERE id=?', [$jobId]);
+    $wasCancelled = in_array($final['status'] ?? '', ['cancelling', 'cancelled'], true);
+
     Database::query(
         'UPDATE scan_jobs SET status=?,finished_at=?,threats_found=? WHERE id=?',
-        ['done', time(), count($threats), $jobId]
+        [$wasCancelled ? 'cancelled' : 'done', time(), count($threats), $jobId]
     );
     Database::setSetting('last_scan', (string)time());
 

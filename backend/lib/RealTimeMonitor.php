@@ -274,6 +274,19 @@ class RealTimeMonitor {
         // regardless of whether auto-start is enabled.
         if (file_exists($this->serviceFile)) {
             exec('systemctl stop sentinel-gate-monitor 2>&1', $out, $code);
+
+            // A unit that died stays in 'failed' after a stop -- `systemctl
+            // stop` succeeds and leaves the state exactly where it was. The
+            // dashboard then shows "failed" indefinitely with no way to clear
+            // it, and once the start-rate limit is hit systemd refuses to start
+            // the unit again until it is reset. Clearing it here is what makes
+            // the Stop button leave the service in a state Start can act on.
+            $detail = $this->serviceDetail();
+            if (($detail['active'] ?? '') === 'failed' || ($detail['sub'] ?? '') === 'failed') {
+                exec('systemctl reset-failed sentinel-gate-monitor 2>&1');
+                Logger::info('Cleared failed state on sentinel-gate-monitor');
+            }
+
             Database::setSetting('rt_monitor_status', 'stopped');
             Logger::info("Real-time monitor stopped via systemd");
             return ['success' => $code === 0, 'output' => implode("\n", $out)];
@@ -285,10 +298,27 @@ class RealTimeMonitor {
         }
         $pid = (int) trim(file_get_contents($this->pidFile));
         if ($pid > 0) {
-            exec("kill -TERM $pid 2>&1", $out, $code);
+            // The process group, not just the process. The daemon itself spawns
+            // nothing today, but a signal that reaches only the parent is the
+            // same shape of bug as a stopped scan leaving clamscan running, and
+            // costs nothing to avoid here.
+            $pgid = function_exists('posix_getpgid') ? @posix_getpgid($pid) : false;
+            if ($pgid && $pgid > 1) {
+                function_exists('posix_kill')
+                    ? @posix_kill(-$pgid, 15)
+                    : exec('kill -TERM -- -' . $pgid . ' 2>/dev/null');
+            } else {
+                exec("kill -TERM $pid 2>&1", $out, $code);
+            }
             sleep(1);
             if ($this->isRunning()) {
-                exec("kill -KILL $pid 2>&1");
+                if ($pgid && $pgid > 1) {
+                    function_exists('posix_kill')
+                        ? @posix_kill(-$pgid, 9)
+                        : exec('kill -KILL -- -' . $pgid . ' 2>/dev/null');
+                } else {
+                    exec("kill -KILL $pid 2>&1");
+                }
             }
         }
         @unlink($this->pidFile);
