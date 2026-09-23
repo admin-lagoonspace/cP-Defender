@@ -398,51 +398,13 @@ mkdir -p /var/lib/sentinel-gate 2>/dev/null || true
 
 # ── Initialize database ────────────────────────────────────────────────────────
 section "Initialising database"
-php -r "
-define('SG_ROOT', '$INSTALL_DIR');
-define('SG_DB', '$INSTALL_DIR/database/sentinel.db');
-define('SG_LOGS', '$INSTALL_DIR/logs');
-define('SG_TMP', '/tmp/sentinel-gate');
-define('CPANEL_BASE', '/usr/local/cpanel');
-define('CPANEL_USER', 'root');
-define('SCAN_MAX_SIZE', 52428800);
-define('SIG_DIR', '$INSTALL_DIR/backend/signatures');
-define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine');
-define('RBL_FEEDS', serialize([]));
-define('JWT_SECRET', hash('sha256', gethostname() . 'sentinel_gate_secret_2024'));
-define('JWT_EXPIRY', 28800);
-define('INSTALL_MODE', '${INSTALL_MODE}');
-define('SG_PORT', ${SG_PORT});
-require_once '$INSTALL_DIR/backend/lib/Database.php';
-\$db = Database::get();
-Database::setSetting('install_mode', '${INSTALL_MODE}');
-echo 'Database initialised' . PHP_EOL;
-"
+php -r "define('SG_ROOT', '$INSTALL_DIR'); define('SG_DB', '$INSTALL_DIR/database/sentinel.db'); define('SG_LOGS', '$INSTALL_DIR/logs'); define('SG_TMP', '/tmp/sentinel-gate'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR', '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS', serialize([])); define('JWT_SECRET', hash('sha256', gethostname() . 'sentinel_gate_secret_2024')); define('JWT_EXPIRY', 28800); define('INSTALL_MODE', '${INSTALL_MODE}'); define('SG_PORT', ${SG_PORT}); require_once '$INSTALL_DIR/backend/lib/Database.php'; \$db = Database::get(); Database::setSetting('install_mode', '${INSTALL_MODE}'); echo 'Database initialised' . PHP_EOL;"
 ok "SQLite database ready"
 
 # ── Set standalone admin credentials ──────────────────────────────────────────
 if [[ "$INSTALL_MODE" == "standalone" ]]; then
   PASS_HASH=$(php -r "echo password_hash('${ADMIN_PASS}', PASSWORD_BCRYPT, ['cost'=>12]);")
-  php -r "
-define('SG_ROOT', '$INSTALL_DIR');
-define('SG_DB', '$INSTALL_DIR/database/sentinel.db');
-define('SG_LOGS', '$INSTALL_DIR/logs');
-define('SG_TMP', '/tmp/sentinel-gate');
-define('CPANEL_BASE', '/usr/local/cpanel');
-define('CPANEL_USER', 'root');
-define('SCAN_MAX_SIZE', 52428800);
-define('SIG_DIR', '$INSTALL_DIR/backend/signatures');
-define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine');
-define('RBL_FEEDS', serialize([]));
-define('JWT_SECRET', hash('sha256', gethostname() . 'sentinel_gate_secret_2024'));
-define('JWT_EXPIRY', 28800);
-define('INSTALL_MODE', 'standalone');
-define('SG_PORT', ${SG_PORT});
-require_once '$INSTALL_DIR/backend/lib/Database.php';
-require_once '$INSTALL_DIR/backend/lib/Auth.php';
-Auth::setLocalCredentials('${ADMIN_USER}', '${ADMIN_PASS}');
-echo 'Admin credentials stored' . PHP_EOL;
-"
+  php -r "define('SG_ROOT', '$INSTALL_DIR'); define('SG_DB', '$INSTALL_DIR/database/sentinel.db'); define('SG_LOGS', '$INSTALL_DIR/logs'); define('SG_TMP', '/tmp/sentinel-gate'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR', '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS', serialize([])); define('JWT_SECRET', hash('sha256', gethostname() . 'sentinel_gate_secret_2024')); define('JWT_EXPIRY', 28800); define('INSTALL_MODE', 'standalone'); define('SG_PORT', ${SG_PORT}); require_once '$INSTALL_DIR/backend/lib/Database.php'; require_once '$INSTALL_DIR/backend/lib/Auth.php'; Auth::setLocalCredentials('${ADMIN_USER}', '${ADMIN_PASS}'); echo 'Admin credentials stored' . PHP_EOL;"
   ok "Admin credentials stored (bcrypt)"
 fi
 
@@ -484,25 +446,7 @@ done
 if [[ -n "${CLAMSCAN_BIN}" ]]; then
   ok "ClamAV found: ${CLAMSCAN_BIN}"
   # Record path so the scanner backend can use it directly
-  php -r "
-define('SG_ROOT','${INSTALL_DIR}');
-define('SG_DB','${INSTALL_DIR}/database/sentinel.db');
-define('SG_LOGS','${INSTALL_DIR}/logs');
-define('SG_TMP','/tmp/sentinel-gate');
-define('CPANEL_BASE','/usr/local/cpanel');
-define('CPANEL_USER','root');
-define('SCAN_MAX_SIZE',52428800);
-define('SIG_DIR','${INSTALL_DIR}/backend/signatures');
-define('QUARANTINE_DIR','${INSTALL_DIR}/quarantine');
-define('RBL_FEEDS',serialize([]));
-define('JWT_SECRET',hash('sha256',gethostname().'sentinel_gate_secret_2024'));
-define('JWT_EXPIRY',28800);
-define('INSTALL_MODE','${INSTALL_MODE}');
-define('SG_PORT',${SG_PORT});
-require_once '${INSTALL_DIR}/backend/lib/Database.php';
-Database::setSetting('clamscan_path','${CLAMSCAN_BIN}');
-echo 'ClamAV path stored' . PHP_EOL;
-" 2>/dev/null || true
+  php -r "define('SG_ROOT','${INSTALL_DIR}'); define('SG_DB','${INSTALL_DIR}/database/sentinel.db'); define('SG_LOGS','${INSTALL_DIR}/logs'); define('SG_TMP','/tmp/sentinel-gate'); define('CPANEL_BASE','/usr/local/cpanel'); define('CPANEL_USER','root'); define('SCAN_MAX_SIZE',52428800); define('SIG_DIR','${INSTALL_DIR}/backend/signatures'); define('QUARANTINE_DIR','${INSTALL_DIR}/quarantine'); define('RBL_FEEDS',serialize([])); define('JWT_SECRET',hash('sha256',gethostname().'sentinel_gate_secret_2024')); define('JWT_EXPIRY',28800); define('INSTALL_MODE','${INSTALL_MODE}'); define('SG_PORT',${SG_PORT}); require_once '${INSTALL_DIR}/backend/lib/Database.php'; Database::setSetting('clamscan_path','${CLAMSCAN_BIN}'); echo 'ClamAV path stored' . PHP_EOL;" 2>/dev/null || true
   if [[ -n "${FRESHCLAM_BIN}" ]]; then
     # On Debian/Ubuntu the clamav-freshclam DAEMON starts automatically on
     # install and holds a lock on the database directory. A manual freshclam run
@@ -635,14 +579,7 @@ fi
 # when either is already in charge — overwriting a firewall the server is
 # already managing would be worse than adding nothing.
 section "Firewall engine"
-FW_INIT="$(/usr/bin/php -r "
-define('SG_API', true);
-require_once '${INSTALL_DIR}/backend/config/config.php';
-require_once '${INSTALL_DIR}/backend/lib/Database.php';
-require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php';
-\$i = FirewallEngine::backendInfo();
-echo \$i['backend'];
-" 2>/dev/null || echo unknown)"
+FW_INIT="$(/usr/bin/php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/config.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; \$i = FirewallEngine::backendInfo(); echo \$i['backend'];" 2>/dev/null || echo unknown)"
 info "Detected firewall backend: ${FW_INIT}"
 
 if [[ "$FW_INIT" == "none" ]]; then
@@ -656,14 +593,7 @@ if [[ "$FW_INIT" == "none" ]]; then
   command -v nft >/dev/null 2>&1     && ok "nftables installed"     || warn "Could not install nftables — the firewall UI will be read-only"
 fi
 
-/usr/bin/php -r "
-define('SG_API', true);
-require_once '${INSTALL_DIR}/backend/config/config.php';
-require_once '${INSTALL_DIR}/backend/lib/Database.php';
-require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php';
-\$r = FirewallEngine::initialise();
-echo (\$r['success'] ? 'OK ' : 'FAIL ') . (\$r['message'] ?? \$r['error'] ?? '');
-" 2>&1 | sed 's/^/  /' || warn "Firewall init reported an error"
+/usr/bin/php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/config.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; \$r = FirewallEngine::initialise(); echo (\$r['success'] ? 'OK ' : 'FAIL ') . (\$r['message'] ?? \$r['error'] ?? '');" 2>&1 | sed 's/^/  /' || warn "Firewall init reported an error"
 
 # Restore rules at boot. nftables and iptables keep rules in kernel memory only,
 # so without this every block silently disappears on reboot while the database

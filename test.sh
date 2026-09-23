@@ -60,69 +60,20 @@ section "Database Schema"
 
 DB="${INSTALL_DIR}/database/sentinel.db"
 if [[ -f "$DB" ]]; then
-  TABLES=$(php -r "
-    \$pdo = new PDO('sqlite:$DB');
-    \$rows = \$pdo->query(\"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\")->fetchAll(PDO::FETCH_COLUMN);
-    echo implode(',', \$rows);
-  " 2>/dev/null)
+  TABLES=$(php -r "\$pdo = new PDO('sqlite:$DB'); \$rows = \$pdo->query(\"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\")->fetchAll(PDO::FETCH_COLUMN); echo implode(',', \$rows);" 2>/dev/null)
 
   for TBL in scan_jobs threats firewall_rules waf_events security_events settings cron_log; do
     echo "$TABLES" | grep -q "$TBL" && pass "Table: $TBL" || fail "Table missing: $TBL"
   done
 
-  INST_MODE_DB=$(php -r "
-    \$pdo = new PDO('sqlite:$DB');
-    \$r = \$pdo->query(\"SELECT value FROM settings WHERE key='install_mode'\")->fetch(PDO::FETCH_COLUMN);
-    echo \$r ?: 'not set';
-  " 2>/dev/null)
+  INST_MODE_DB=$(php -r "\$pdo = new PDO('sqlite:$DB'); \$r = \$pdo->query(\"SELECT value FROM settings WHERE key='install_mode'\")->fetch(PDO::FETCH_COLUMN); echo \$r ?: 'not set';" 2>/dev/null)
   [[ "${INST_MODE_DB}" == "${INSTALL_MODE}" ]] && pass "DB install_mode = ${INST_MODE_DB}" || warn "DB install_mode='${INST_MODE_DB}' (expected '${INSTALL_MODE}')"
 fi
 
 # ── 5. API login test (direct PHP — bypasses Apache) ─────────────────────────
 section "API Login (direct PHP)"
 
-LOGIN_RESULT=$(php -r "
-define('SG_API', true);
-\$_SERVER['REQUEST_URI']    = '/sentinel-gate/backend/api/auth/login';
-\$_SERVER['REQUEST_METHOD'] = 'POST';
-\$_SERVER['REMOTE_ADDR']    = '127.0.0.1';
-
-// Fake php://input with demo credentials
-\$GLOBALS['_TEST_INPUT'] = '{\"username\":\"demo\",\"password\":\"demo\"}';
-
-ob_start();
-// Bootstrap config with all required constants
-define('SG_ROOT',     '$INSTALL_DIR');
-define('SG_DB',       '$INSTALL_DIR/database/sentinel.db');
-define('SG_LOGS',     '$INSTALL_DIR/logs');
-define('SG_TMP',      '/tmp/sentinel-gate');
-define('CPANEL_BASE', '/usr/local/cpanel');
-define('CPANEL_USER', 'root');
-define('SCAN_MAX_SIZE', 52428800);
-define('SIG_DIR',     '$INSTALL_DIR/backend/signatures');
-define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine');
-define('RBL_FEEDS',   serialize([]));
-define('JWT_SECRET',  hash('sha256', gethostname() . 'sentinel_gate_secret_2024'));
-define('JWT_EXPIRY',  28800);
-define('INSTALL_MODE', '$INSTALL_MODE');
-define('SG_PORT',     31150);
-define('SG_VERSION',  file_get_contents('$INSTALL_DIR/VERSION'));
-
-require_once '$INSTALL_DIR/backend/lib/Database.php';
-require_once '$INSTALL_DIR/backend/lib/Auth.php';
-
-\$body = ['username' => 'demo', 'password' => 'demo'];
-\$u = 'demo'; \$p = 'demo';
-\$ok = false; \$role = 'admin';
-if ('$INSTALL_MODE' === 'standalone') {
-  if (\$u === 'demo' && \$p === 'demo') { \$ok = true; }
-  else { \$ok = Auth::validateLocal(\$u, \$p); }
-} else {
-  if (\$u === 'demo' && \$p === 'demo') { \$ok = true; }
-}
-\$tok = \$ok ? Auth::generateToken(\$u, \$role) : null;
-echo \$ok ? 'LOGIN_OK:' . substr(\$tok, 0, 20) : 'LOGIN_FAIL';
-" 2>/dev/null)
+LOGIN_RESULT=$(php -r "define('SG_API', true); \$_SERVER['REQUEST_URI']    = '/sentinel-gate/backend/api/auth/login'; \$_SERVER['REQUEST_METHOD'] = 'POST'; \$_SERVER['REMOTE_ADDR']    = '127.0.0.1'; /* Fake php://input with demo credentials */ \$GLOBALS['_TEST_INPUT'] = '{\"username\":\"demo\",\"password\":\"demo\"}'; ob_start(); /* Bootstrap config with all required constants */ define('SG_ROOT',     '$INSTALL_DIR'); define('SG_DB',       '$INSTALL_DIR/database/sentinel.db'); define('SG_LOGS',     '$INSTALL_DIR/logs'); define('SG_TMP',      '/tmp/sentinel-gate'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR',     '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS',   serialize([])); define('JWT_SECRET',  hash('sha256', gethostname() . 'sentinel_gate_secret_2024')); define('JWT_EXPIRY',  28800); define('INSTALL_MODE', '$INSTALL_MODE'); define('SG_PORT',     31150); define('SG_VERSION',  file_get_contents('$INSTALL_DIR/VERSION')); require_once '$INSTALL_DIR/backend/lib/Database.php'; require_once '$INSTALL_DIR/backend/lib/Auth.php'; \$body = ['username' => 'demo', 'password' => 'demo']; \$u = 'demo'; \$p = 'demo'; \$ok = false; \$role = 'admin'; if ('$INSTALL_MODE' === 'standalone') { if (\$u === 'demo' && \$p === 'demo') { \$ok = true; } else { \$ok = Auth::validateLocal(\$u, \$p); } } else { if (\$u === 'demo' && \$p === 'demo') { \$ok = true; } } \$tok = \$ok ? Auth::generateToken(\$u, \$role) : null; echo \$ok ? 'LOGIN_OK:' . substr(\$tok, 0, 20) : 'LOGIN_FAIL';" 2>/dev/null)
 
 echo "$LOGIN_RESULT" | grep -q "LOGIN_OK" && pass "demo/demo login works — JWT issued" || fail "demo/demo login FAILED: $LOGIN_RESULT"
 

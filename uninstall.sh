@@ -140,13 +140,7 @@ done
 # firewalld or the operator are never touched.
 section "Removing firewall rules"
 if [[ -f "${INSTALL_DIR}/backend/lib/FirewallEngine.php" ]] && command -v php >/dev/null 2>&1; then
-    php -r "
-define('SG_API', true);
-require_once '${INSTALL_DIR}/backend/config/mode.php';
-require_once '${INSTALL_DIR}/backend/lib/Database.php';
-require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php';
-FirewallEngine::teardown();
-" 2>/dev/null && ok "Sentinel Gate firewall rules removed" || warn "Could not remove firewall rules"
+    php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; FirewallEngine::teardown();" 2>/dev/null && ok "Sentinel Gate firewall rules removed" || warn "Could not remove firewall rules"
 else
     # Fall back to removing the namespace directly if the code is already gone
     nft delete table inet sentinel_gate 2>/dev/null && ok "nftables table removed" || true

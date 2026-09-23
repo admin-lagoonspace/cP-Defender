@@ -447,15 +447,26 @@ fi
 # 3rd attempt: conventional dist path on every known channel (covers a manifest
 # whose url/mirror are stale but the zip is published under the standard name)
 if [[ "$DOWNLOADED" == false ]] && [[ "$LATEST_VERSION" != *"-manual"* ]]; then
+    # dist/ first: it is the canonical published path and the one that actually
+    # exists. Trying builds/ and v<ver>/ ahead of it produced a wall of 404s on
+    # every update -- alarming, and entirely expected, which is the worst
+    # combination. A channel that fails its first path is skipped rather than
+    # asked three times: a dead host does not become alive for the next URL.
     for _B in "${CHANNELS[@]}"; do
-        for _P in "builds/sentinel-gate-${LATEST_VERSION}.zip" \
-                  "v${LATEST_VERSION}/sentinel-gate-${LATEST_VERSION}.zip" \
-                  "dist/sentinel-gate-${LATEST_VERSION}.zip"; do
+        _SG_CHANNEL_DEAD=false
+        for _P in "dist/sentinel-gate-${LATEST_VERSION}.zip" \
+                  "builds/sentinel-gate-${LATEST_VERSION}.zip" \
+                  "v${LATEST_VERSION}/sentinel-gate-${LATEST_VERSION}.zip"; do
             ALT_URL="${_B}/${_P}"
             [[ "$ALT_URL" == "$DOWNLOAD_URL" || "$ALT_URL" == "${MIRROR_URL:-}" ]] && continue
-            if _download "$ALT_URL" "$RELEASE_ZIP" "${_P%%/*} zip (fallback)"; then
+            if _download "$ALT_URL" "$RELEASE_ZIP" "${_P%%/*} zip"; then
                 DOWNLOADED=true; break 2
             fi
+            if [[ "$_SG_CHANNEL_DEAD" == false ]]; then
+                _SG_CHANNEL_DEAD=true
+                continue
+            fi
+            break          # two failures on one host: move to the next channel
         done
     done
     $DOWNLOADED || warn "Fallback dist downloads also failed."
@@ -579,13 +590,52 @@ done
 # ── Run DB migrations ─────────────────────────────────────────────────────────
 state "migrate" 85 "Running database migrations"
 section "Running database migrations"
-# Trigger a PHP call that initialises Database (runs all migrations/ALTER guards)
-php -r "
+
+# Run from a FILE, not a multi-line `php -r`.
+#
+# On cPanel, `php` is a Perl wrapper (/var/cpanel/ea4/ea_php_cli.pm). Handed a
+# -r argument containing newlines it tries to stat it as a filename and fails
+# with "Unsuccessful stat on filename containing newline", exiting non-zero
+# before any PHP runs. With `set -euo pipefail` that aborted the update and
+# rolled back a perfectly good one. A script file has no such problem.
+_SG_MIGRATE="${TMP_DIR}/migrate.php"
+cat > "$_SG_MIGRATE" <<MIGEOF
+<?php
 define('SG_API', true);
-require_once '${INSTALL_DIR}/backend/config/mode.php';
+// config.php, not mode.php: mode.php records the install paths but not SG_DB,
+// SG_LOGS or the rest, and config.php includes it anyway.
+require_once '${INSTALL_DIR}/backend/config/config.php';
 require_once '${INSTALL_DIR}/backend/lib/Database.php';
+Database::get();
 echo 'Database migrations applied.' . PHP_EOL;
-" 2>&1 | while IFS= read -r line; do info "$line"; done
+MIGEOF
+
+# And a real CLI interpreter, for the same reason: on cPanel the `php` on PATH
+# may be that wrapper, or a CGI build.
+_SG_PHP=""
+for _c in /usr/local/cpanel/3rdparty/bin/php \
+          /opt/cpanel/ea-php83/root/usr/bin/php \
+          /opt/cpanel/ea-php82/root/usr/bin/php \
+          /opt/cpanel/ea-php81/root/usr/bin/php \
+          /usr/bin/php /usr/local/bin/php php; do
+    if command -v "$_c" >/dev/null 2>&1 && [[ "$("$_c" -r 'echo PHP_SAPI;' 2>/dev/null)" == "cli" ]]; then
+        _SG_PHP="$_c"; break
+    fi
+done
+
+if [[ -z "$_SG_PHP" ]]; then
+    warn "No CLI PHP found — migrations will run on the next dashboard request."
+else
+    # Deliberately NOT fatal. Database::get() runs the migrations on first use
+    # anyway, so a hiccup here is advisory: discarding a successful code update
+    # over it is far worse than letting the next request apply them.
+    if _SG_MIG_OUT="$("$_SG_PHP" "$_SG_MIGRATE" 2>&1)"; then
+        while IFS= read -r line; do [[ -n "$line" ]] && info "$line"; done <<< "$_SG_MIG_OUT"
+    else
+        warn "Migrations did not complete here; they will run on the next request."
+        while IFS= read -r line; do [[ -n "$line" ]] && warn "  $line"; done <<< "$_SG_MIG_OUT"
+    fi
+fi
 
 # ── Re-run plugin registration ────────────────────────────────────────────────
 # Code changes between versions sometimes touch how the plugin registers with
@@ -648,14 +698,7 @@ fi
 
 # ── Update version in DB so dashboard shows correct version immediately ───────
 section "Finalising"
-php -r "
-define('SG_API', true);
-require_once '${INSTALL_DIR}/backend/config/mode.php';
-require_once '${INSTALL_DIR}/backend/lib/Database.php';
-Database::setSetting('update_available', '0');
-Database::setSetting('update_latest_ver', '${LATEST_VERSION}');
-echo 'Update state cleared.' . PHP_EOL;
-" 2>/dev/null || true
+php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; Database::setSetting('update_available', '0'); Database::setSetting('update_latest_ver', '${LATEST_VERSION}'); echo 'Update state cleared.' . PHP_EOL;" 2>/dev/null || true
 
 NEW_VERSION="$(cat "${INSTALL_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]')"
 echo ""
