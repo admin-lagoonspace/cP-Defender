@@ -65,7 +65,40 @@ mkdir -p "$OUT_DIR"
 ZIP_NAME="sentinel-gate-${VERSION}.zip"
 ZIP_PATH="${OUT_DIR}/${ZIP_NAME}"
 rm -f "$ZIP_PATH"
-( cd "$STAGE" && zip -rq "$ZIP_PATH" sentinel-gate )
+# `zip` where it exists, Python where it does not. The maintainer builds on
+# Windows, where Git Bash ships no zip binary and the release simply stopped at
+# "zip: command not found" -- the same class of problem as the php gate below,
+# a pipeline step that assumes a Unix toolchain it does not have. The Python
+# branch sets the mode bits explicitly, because zipfile defaults to 0600 and
+# the shell scripts inside must stay executable.
+if command -v zip >/dev/null 2>&1; then
+  ( cd "$STAGE" && zip -rq "$ZIP_PATH" sentinel-gate )
+else
+  SG_PY=""
+  for c in "${REPO_DIR}/python/python.exe" "${REPO_DIR}/python/python" python3 python; do
+    command -v "$c" >/dev/null 2>&1 && { SG_PY="$c"; break; }
+  done
+  [[ -z "$SG_PY" ]] && { echo "Neither zip nor python available to build the archive" >&2; exit 1; }
+  info "zip not found — building the archive with ${SG_PY}"
+  "$SG_PY" - "$STAGE" "$ZIP_PATH" <<'PYZIP'
+import os, sys, zipfile
+
+stage, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
+    for root, dirs, files in os.walk(os.path.join(stage, 'sentinel-gate')):
+        dirs.sort()
+        for name in sorted(files):
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, stage).replace(os.sep, '/')
+            zi = zipfile.ZipInfo(rel, date_time=(1980, 1, 1, 0, 0, 0))
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            # 0755 for scripts, 0644 for everything else
+            mode = 0o755 if rel.endswith('.sh') or rel.endswith('.py') else 0o644
+            zi.external_attr = mode << 16
+            with open(full, 'rb') as fh:
+                z.writestr(zi, fh.read())
+PYZIP
+fi
 ok "Built ${ZIP_PATH} ($(wc -c < "$ZIP_PATH") bytes)"
 
 # ── Checksum ──────────────────────────────────────────────────────────────────
