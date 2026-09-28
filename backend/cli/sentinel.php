@@ -180,6 +180,20 @@ try {
 
     // Clean up after workers that died: stale 'running' rows, and the
     // clamscan processes they left behind.
+    // Stop everything that is scanning right now. This is the one to reach
+    // for when scans have stacked up and the server is struggling.
+    case 'scan-stop-all': {
+        $r = Scanner::stopAllScans();
+        echo $r['message'] . PHP_EOL;
+        if ($r['stopped']) { echo 'Stopped jobs: ' . implode(', ', $r['stopped']) . PHP_EOL; }
+        if ($r['failed'])  { echo 'Could not stop: ' . implode(', ', $r['failed']) . PHP_EOL; }
+        $still = Scanner::liveScans();
+        echo $still
+            ? count($still) . ' scan(s) still recorded as running' . PHP_EOL
+            : 'No scans are running.' . PHP_EOL;
+        break;
+    }
+
     case 'scan-reap': {
         $jobs = Scanner::reapStaleJobs();
         $pids = Scanner::reapOrphanClamscans();
@@ -315,6 +329,7 @@ Usage: sentinel <command> [args] [--json]
   update-sigs                  Update malware signatures
   user-reports                 Rebuild the per-user reports the cPanel plugin reads
   scan-reap                    Clear dead scan jobs and orphaned clamscan processes
+  scan-stop-all                Stop every running scan and kill its clamscan processes
   quarantine status            Show where quarantine is and how big\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  license status               Show license state
   license activate <key>       Store and verify a license key
   license refresh              Force a re-check against the server

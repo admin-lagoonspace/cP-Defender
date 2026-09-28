@@ -93,14 +93,21 @@ if ($scanPath === null) $scanPath = $job['scan_path'] ?? '/home';
 // apiece -- so N scans cost N copies of the same data and N processes
 // competing for the same disks.
 if (!is_dir(SG_TMP)) { @mkdir(SG_TMP, 0750, true); }
-$lockPath = SG_TMP . '/scan.lock';
-$lockFh   = @fopen($lockPath, 'c');
-if ($lockFh === false) {
-    Logger::error('scan.php: cannot open ' . $lockPath . ' - refusing to run unguarded');
-    exit(1);
+
+// One lock file per permitted slot. Taking the first free one caps the number
+// of workers at scan_max_concurrent no matter who started them -- the guard in
+// startScan(), a cron entry, or somebody running this by hand.
+$maxSlots = Scanner::maxConcurrent();
+$lockFh   = null;
+for ($slot = 0; $slot < $maxSlots; $slot++) {
+    $fh = @fopen(SG_TMP . '/scan.lock.' . $slot, 'c');
+    if ($fh === false) { continue; }
+    if (@flock($fh, LOCK_EX | LOCK_NB)) { $lockFh = $fh; break; }
+    @fclose($fh);
 }
-if (!@flock($lockFh, LOCK_EX | LOCK_NB)) {
-    Logger::warn('scan.php: another scan holds the lock - exiting without starting one');
+if ($lockFh === null) {
+    Logger::warn('scan.php: all ' . $maxSlots . ' scan slot(s) are busy'
+               . ' - exiting without starting another');
     // Not an error: declining to pile a second scan onto the server is the
     // correct outcome, and a cron that reports failure for it would page
     // somebody every night.

@@ -1462,7 +1462,38 @@ fi  # end: if standalone / elif cpanel
 
 # ── Apache restart (cpanel mode) ─────────────────────────────────────────────
 if [[ "$INSTALL_MODE" == "cpanel" ]]; then
-  # ── Per-user reports ──────────────────────────────────────────────────────────
+  # ── Stop anything still scanning ──────────────────────────────────────────────
+# An upgrade replaces the code underneath any worker that is mid-scan. Those
+# workers are detached, so nothing else stops them: they keep running the old
+# code against a database this installer may have just migrated, and they keep
+# their clamscan processes -- which is how a server ends up with several at
+# once in the first place. Stop them before the new scheduler can start more.
+section "Stopping running scans"
+_SG_STOPALL="${TMP_DIR:-/tmp}/sg-stopall.php"
+cat > "$_SG_STOPALL" <<STOPEOF
+<?php
+define('SG_API', true);
+require_once '${INSTALL_DIR}/backend/config/config.php';
+require_once '${INSTALL_DIR}/backend/lib/Database.php';
+require_once '${INSTALL_DIR}/backend/lib/Logger.php';
+require_once '${INSTALL_DIR}/backend/lib/Scanner.php';
+\$r = Scanner::stopAllScans();
+echo \$r['message'] . PHP_EOL;
+STOPEOF
+if _SG_STOP_OUT="$("$SG_PHP" "$_SG_STOPALL" 2>&1)"; then
+  ok "  ${_SG_STOP_OUT}"
+else
+  # A fresh install has no database yet; nothing to stop is the normal case.
+  info "  No running scans to stop"
+fi
+rm -f "$_SG_STOPALL"
+
+# Stale slot locks from workers that were killed rather than exiting. The
+# kernel releases a lock when its process dies, so these files are only ever
+# empty husks -- but leaving them is untidy and confuses manual inspection.
+rm -f /tmp/sentinel-gate/scan.lock.* 2>/dev/null || true
+
+# ── Per-user reports ──────────────────────────────────────────────────────────
 # Generated now so the cPanel menu entry has something to show immediately.
 # Without this the first thing every user sees is "no report yet", until the
 # next scheduled scan -- which on a weekly schedule is a week of the plugin

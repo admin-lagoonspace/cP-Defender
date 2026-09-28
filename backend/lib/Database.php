@@ -187,6 +187,14 @@ class Database {
                 -- still records the threat; acting on it is a decision the
                 -- operator opts into.
                 ('auto_quarantine',         '0'),
+                -- At most this many scans at once. Each clamscan loads the
+                -- whole ClamAV signature database into its own memory (650MB
+                -- to 1.3GB observed), so this multiplies memory and disk
+                -- contention rather than dividing the work. Capped at 4.
+                ('scan_max_concurrent',     '2'),
+                -- A single clamscan invocation that exceeds this is abandoned;
+                -- one was found holding 13 minutes of CPU on one file.
+                ('scan_batch_timeout',      '600'),
                 -- Quarantine grew without limit until this existed. 0 disables
                 -- pruning, for anyone who would rather keep everything.
                 ('quarantine_retention_days', '30'),

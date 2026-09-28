@@ -35,20 +35,58 @@ $active = Scanner::activeScan();
 t_ok($active !== null, 'a running scan is reported as active');
 t_eq($live, (int) $active['id'], 'and it is the right job');
 
+// -- The cap, which is two by default ---------------------------------------
+Database::setSetting('scan_max_concurrent', '2');
+t_eq(2, Scanner::maxConcurrent(), 'two scans are permitted at once by default');
+t_eq(1, count(Scanner::liveScans()), 'one is running so far');
+
+// A cap of two means the SECOND start is allowed, not refused.
+$second = Database::insert('scan_jobs', [
+    'scan_type' => 'quick', 'status' => 'running',
+    'started_at' => time(), 'scan_path' => '/tmp',
+]);
+t_eq(2, count(Scanner::liveScans()), 'a second concurrent scan is allowed');
+
 $threw = false;
 try {
     (new Scanner())->startScan('/home', 'full');
 } catch (Throwable $e) {
     $threw = true;
-    t_contains($e->getMessage(), 'already running',
-        'starting a second scan is refused with a reason');
+    t_contains($e->getMessage(), 'maximum',
+        'the third start is refused against the cap, with the limit named');
 }
-t_ok($threw, 'a second scan cannot be started while one is running');
+t_ok($threw, 'a third scan cannot start while two are running');
 
 $count = Database::fetchOne(
     "SELECT COUNT(*) c FROM scan_jobs WHERE status IN ('running','pending')"
 )['c'];
-t_eq(1, (int) $count, 'the refused start created no extra job row');
+t_eq(2, (int) $count, 'the refused start created no extra job row');
+
+// The cap must never be raised into pathological territory: each clamscan
+// holds its own copy of the signature database.
+Database::setSetting('scan_max_concurrent', '99');
+t_eq(4, Scanner::maxConcurrent(), 'the cap is clamped to 4 however it is set');
+Database::setSetting('scan_max_concurrent', '0');
+t_eq(1, Scanner::maxConcurrent(), 'and never drops below 1, which would stop scanning');
+Database::setSetting('scan_max_concurrent', '2');
+
+// -- Stopping everything at once --------------------------------------------
+// stopScan() takes one job. Six stacked scans would mean finding six ids.
+$r = Scanner::stopAllScans();
+t_ok($r['success'], 'every running scan can be stopped in one call');
+t_eq(2, count($r['stopped']), 'both running scans were stopped');
+t_eq(0, count(Scanner::liveScans()), 'nothing is left running afterwards');
+foreach ([$live, $second] as $id) {
+    t_eq('cancelled',
+        Database::fetchOne('SELECT status FROM scan_jobs WHERE id=?', [$id])['status'],
+        "job $id is recorded as cancelled, not done");
+}
+
+// Re-create a live job for the reaping checks that follow.
+$live = Database::insert('scan_jobs', [
+    'scan_type' => 'full', 'status' => 'running', 'started_at' => time(),
+    'scan_path' => '/home', 'worker_pgid' => 0,
+]);
 
 // -- A dead worker must not block scanning for ever --------------------------
 // Without reaping, one killed worker would leave a 'running' row that refuses
@@ -88,7 +126,10 @@ Scanner::reapStaleJobs();
 // through it.
 $worker = t_code($repo . '/backend/cron/scan.php');
 t_contains($worker, 'LOCK_EX | LOCK_NB', 'the worker takes an exclusive non-blocking lock');
-t_contains($worker, 'scan.lock', 'on a lock file');
+t_contains($worker, 'scan.lock.', 'on one lock file per permitted slot');
+t_contains($worker, 'Scanner::maxConcurrent()',
+    'and there are exactly as many slots as the cap allows');
+t_contains($worker, 'for ($slot = 0; $slot < $maxSlots', 'taking the first free slot');
 t_contains($worker, '__sg_scan_lock',
     'and keeps the handle alive, since closing it would release the lock');
 $lockPos = strpos($worker, 'flock(');
@@ -134,7 +175,7 @@ t_ok(strpos($reap, 'pgrep') === false && strpos($reap, 'killall') === false,
 $api = t_code($repo . '/backend/api/index.php');
 t_contains($api, "'code' => 409",
     'a second scan is refused with 409, not reported as a server error');
-t_contains($api, 'Scanner::activeScan()', 'the route checks for a running scan');
+t_contains($api, 'Scanner::liveScans()', 'the route counts running scans against the cap');
 t_contains($api, "'reap' =>", 'and there is a way to clean up after dead workers');
 
 // -- The pgid recorded must be one we own -----------------------------------
@@ -146,3 +187,31 @@ t_contains($worker, '(int) $pgid === (int) $workerPid',
     'the process group is recorded only when this process leads it');
 t_ok(strpos($worker, 'if (!$workerPgid) {') === false,
     'the fallback that adopted the launching process group is gone');
+
+
+// -- An upgrade must stop what is already scanning --------------------------
+// This is the part that matters on a server that already has several running.
+// The workers are detached, so nothing else stops them: they would keep
+// running the OLD code against a database the installer has just migrated,
+// still holding their clamscan processes.
+$install = file_get_contents($repo . '/install.sh');
+t_contains($install, 'Scanner::stopAllScans()',
+    'the installer stops running scans during an upgrade');
+$stopPos  = strpos($install, 'Scanner::stopAllScans()');
+$cronPos  = strpos($install, 'Installing cron');
+t_ok($stopPos !== false,
+    'and does so as its own step rather than leaving them to the new scheduler');
+t_contains($install, 'rm -f /tmp/sentinel-gate/scan.lock.',
+    'stale slot locks are cleared too');
+
+// -- The cap is reachable and visible ---------------------------------------
+$db = t_code($repo . '/backend/lib/Database.php');
+t_contains($db, "'scan_max_concurrent',     '2'", 'the cap ships defaulted to 2');
+t_contains($db, "'scan_batch_timeout',      '600'", 'and the per-batch timeout is seeded');
+
+$api = t_code($repo . '/backend/api/index.php');
+t_contains($api, "'stop-all' =>", 'stopping everything is exposed over the API');
+t_contains($api, 'Scanner::maxConcurrent()', 'and the cap is reported to the UI');
+
+$cli = t_code($repo . '/backend/cli/sentinel.php');
+t_contains($cli, "case 'scan-stop-all'", 'and from the command line');

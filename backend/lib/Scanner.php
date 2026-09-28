@@ -127,6 +127,30 @@ class Scanner {
     }
 
     /**
+     * How many scans may run at once.
+     *
+     * Clamped to 4. Higher is not a throughput setting: each clamscan loads
+     * the entire ClamAV signature database into its own memory -- observed at
+     * 650MB to 1.3GB per process -- so raising this multiplies memory and disk
+     * contention rather than dividing the work.
+     */
+    public static function maxConcurrent(): int
+    {
+        $n = (int) (Database::setting('scan_max_concurrent', '2') ?? 2);
+        return max(1, min(4, $n));
+    }
+
+    /** Every scan genuinely in progress. Stale rows are cleared first. */
+    public static function liveScans(): array
+    {
+        self::reapStaleJobs();
+        return Database::fetchAll(
+            "SELECT * FROM scan_jobs WHERE status IN ('running','pending','cancelling')
+              ORDER BY id ASC"
+        );
+    }
+
+    /**
      * The scan genuinely in progress, if any. Stale rows are cleared first, so
      * this never reports a scan that died days ago.
      */
@@ -138,6 +162,41 @@ class Scanner {
               ORDER BY id DESC LIMIT 1"
         );
         return $row ?: null;
+    }
+
+    /**
+     * Stop every running scan and clean up after it.
+     *
+     * stopScan() takes one job. When several have stacked up -- which is how
+     * six clamscan processes came to be running at once -- stopping them one
+     * at a time means finding six job ids first. This is the cleanup path:
+     * used by the installer, the CLI, and the dashboard.
+     */
+    public static function stopAllScans(): array
+    {
+        $stopped = [];
+        $failed  = [];
+        foreach (self::liveScans() as $job) {
+            $r = self::stopScan((int) $job['id']);
+            if (!empty($r['success'])) { $stopped[] = (int) $job['id']; }
+            else { $failed[] = (int) $job['id']; }
+        }
+
+        // Anything the stopped workers left behind.
+        $killed = self::reapOrphanClamscans();
+
+        if ($stopped || $killed) {
+            Logger::info('Stopped ' . count($stopped) . ' scan(s), killed '
+                       . count($killed) . ' leftover clamscan process(es)');
+        }
+        return [
+            'success' => empty($failed),
+            'stopped' => $stopped,
+            'failed'  => $failed,
+            'killed'  => count($killed),
+            'message' => 'Stopped ' . count($stopped) . ' scan(s); killed '
+                       . count($killed) . ' leftover clamscan process(es)',
+        ];
     }
 
     /**
@@ -198,12 +257,14 @@ class Scanner {
      * is strictly worse than one scan that finishes sooner.
      */
     public function startScan(string $path = '/home', string $type = 'quick'): int {
-        $active = self::activeScan();
-        if ($active !== null) {
+        $live = self::liveScans();
+        $max  = self::maxConcurrent();
+        if (count($live) >= $max) {
+            $ids = implode(', ', array_map(fn($j) => $j['id'], $live));
             throw new RuntimeException(
-                'A scan is already running (job ' . $active['id'] . ', started '
-                . date('Y-m-d H:i:s', (int) $active['started_at'])
-                . '). Stop it before starting another.'
+                'Already running ' . count($live) . ' of a maximum ' . $max
+                . ' scan(s) (job ' . $ids . '). Stop one before starting another,'
+                . ' or raise scan_max_concurrent.'
             );
         }
 

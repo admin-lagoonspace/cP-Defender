@@ -392,16 +392,26 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
         // exception handler's "Internal server error".
         'start'  => $method === 'POST'
             ? (function () use ($scanner, $body) {
-                $active = Scanner::activeScan();
-                if ($active !== null) {
+                $live = Scanner::liveScans();
+                $max  = Scanner::maxConcurrent();
+                if (count($live) >= $max) {
                     return ['success' => false, 'code' => 409,
-                            'error' => 'A scan is already running (job ' . $active['id'] . ')',
-                            'job_id' => (int) $active['id']];
+                            'error' => 'Already running ' . count($live) . ' of a maximum '
+                                     . $max . ' scan(s)',
+                            'running' => count($live), 'max' => $max,
+                            'job_id' => (int) $live[count($live) - 1]['id']];
                 }
                 return ['success' => true,
                         'job_id' => $scanner->startScan($body['path'] ?? '/home',
                                                         $body['type'] ?? 'quick')];
               })()
+            : ['success' => false, 'error' => 'POST required', 'code' => 405],
+
+        // POST scanner/stop-all — stop every running scan and clean up after
+        // it. stopScan() takes one job; when several have stacked up, stopping
+        // them individually means finding every job id first.
+        'stop-all' => $method === 'POST'
+            ? Scanner::stopAllScans()
             : ['success' => false, 'error' => 'POST required', 'code' => 405],
 
         // POST scanner/reap — clear jobs whose worker died and kill clamscan
@@ -426,8 +436,9 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
             ? Scanner::stopScan(isset($body['job_id']) ? (int)$body['job_id'] : null)
             : ['success' => false, 'error' => 'POST required', 'code' => 405],
 
-        // GET scanner/running — is one in progress, so the UI can offer Stop
-        'running' => ['success' => true, 'data' => Scanner::runningJob()],
+        // GET scanner/running — what is in progress, so the UI can offer Stop
+        'running' => ['success' => true, 'data' => Scanner::runningJob(),
+                      'live' => Scanner::liveScans(), 'max' => Scanner::maxConcurrent()],
 
         'status' => ['success' => true, 'data' => $scanner->getScanStatus((int)($id ?? $q['job_id'] ?? 0))],
         'stats'  => ['success' => true, 'data' => $scanner->getStats()],
