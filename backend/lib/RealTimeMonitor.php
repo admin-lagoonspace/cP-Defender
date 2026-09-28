@@ -196,6 +196,117 @@ class RealTimeMonitor {
 
     // ── Start / Stop ─────────────────────────────────────────────────────────
 
+    /**
+     * Backup or bulk-transfer processes running right now.
+     *
+     * The daemon has its own detector in Python, used to suspend scanning from
+     * inside its loop. This is the same question asked from outside, by
+     * something deciding whether the daemon should be running at all -- a
+     * suspended daemon and a stopped one are different states and only the
+     * daemon can answer for the first.
+     *
+     * Reads /proc rather than forking pgrep: this runs from cron every 15
+     * minutes for the life of the server.
+     *
+     * @return string[] names of the matching processes
+     */
+    public static function backupProcesses(): array
+    {
+        $found = [];
+        if (!is_dir('/proc')) { return $found; }
+
+        $raw = (string) (Database::setting('rt_backup_procs', 'jetbackup,rsync') ?? '');
+        $names = [];
+        foreach (explode(',', $raw) as $n) {
+            $n = strtolower(trim($n));
+            // A blank or wildcard entry would match everything and make the
+            // server look permanently busy, so monitoring would never resume.
+            if ($n !== '' && $n !== '*') { $names[$n] = true; }
+        }
+        if (!$names) { $names = ['jetbackup' => true, 'rsync' => true]; }
+
+        $self = getmypid();
+        foreach (glob('/proc/[0-9]*') ?: [] as $dir) {
+            $pid = (int) basename($dir);
+            if ($pid <= 1 || $pid === $self) { continue; }
+
+            $comm = @file_get_contents($dir . '/comm');
+            if ($comm === false) { continue; }
+            $comm = strtolower(trim($comm));
+
+            if (isset($names[$comm])) { $found[] = $comm; continue; }
+
+            // JetBackup runs under generic interpreter names, so the command
+            // line is what identifies it. Both 4 and 5 live under /usr/local/jetapps.
+            if (isset($names['jetbackup'])) {
+                $cmd = @file_get_contents($dir . '/cmdline');
+                if ($cmd === false || $cmd === '') { continue; }
+                $cmd = strtolower(str_replace("\0", ' ', $cmd));
+                if (strpos($cmd, '/jetapps/') !== false || strpos($cmd, 'jetbackup') !== false) {
+                    $found[] = 'jetbackup';
+                }
+            }
+        }
+        return array_values(array_unique($found));
+    }
+
+    /**
+     * Bring monitoring back up once the backups are done.
+     *
+     * Run from the scheduler, which cron fires every 15 minutes. Without it,
+     * a monitor that went down during a backup window stays down until someone
+     * notices and presses Start -- which is exactly the manual step this
+     * removes.
+     *
+     * It will not fight a deliberate decision. Stopping the monitor while no
+     * backup is running records that a person wanted it off, and this leaves
+     * it off. Stopping it DURING a backup does not: that reads as "off for the
+     * backup", which is the case this exists to undo.
+     */
+    public function autoResume(): array
+    {
+        if ((Database::setting('rt_autostart_after_backup', '1') ?? '1') !== '1') {
+            return ['acted' => false, 'reason' => 'auto-resume is disabled'];
+        }
+
+        $backups = self::backupProcesses();
+        if ($backups) {
+            // Remember the window so a stop during it is understood as
+            // temporary, and clear any earlier manual intent for the same
+            // reason.
+            Database::setSetting('rt_backup_seen_at', (string) time());
+            Database::setSetting('rt_manual_stop', '0');
+            return ['acted' => false, 'reason' => 'backup running: ' . implode(', ', $backups),
+                    'backups' => $backups];
+        }
+
+        if ($this->isRunning()) {
+            return ['acted' => false, 'reason' => 'already running'];
+        }
+
+        if ((Database::setting('rt_manual_stop', '0') ?? '0') === '1') {
+            return ['acted' => false, 'reason' => 'stopped deliberately; leaving it off'];
+        }
+
+        $res = $this->start();
+        if (!empty($res['success'])) {
+            Database::setSetting('rt_monitor_status', 'running');
+            Logger::info('Real-time monitor started automatically: no backup processes running');
+            Database::insert('security_events', [
+                'type'        => 'monitor_autostarted',
+                'severity'    => 'low',
+                'description' => 'Real-time monitoring was started automatically once the '
+                               . 'backup window ended.',
+            ]);
+            return ['acted' => true, 'reason' => 'started'];
+        }
+
+        Logger::error('Auto-resume could not start the monitor: '
+                    . ($res['error'] ?? 'unknown'));
+        return ['acted' => false, 'reason' => 'start failed: ' . ($res['error'] ?? 'unknown'),
+                'error' => $res['error'] ?? null];
+    }
+
     public function start(): array {
         if ($this->isRunning()) {
             return ['success' => true, 'message' => 'Monitor already running'];
@@ -207,7 +318,27 @@ class RealTimeMonitor {
 
         // Prefer systemd whenever the unit file is present
         if (file_exists($this->serviceFile)) {
+            // A unit in 'failed' will not start, and once systemd's start rate
+            // limit has been reached it refuses outright with "start request
+            // repeated too quickly" -- which is a monitor that cannot be
+            // turned on from the dashboard at all, however many times Start is
+            // pressed. reset-failed is what clears both. It was added to
+            // stop() in 3.30.1 and should always have been here too.
+            $pre = $this->serviceDetail();
+            if (($pre['active'] ?? '') === 'failed' || ($pre['sub'] ?? '') === 'failed') {
+                exec('systemctl reset-failed sentinel-gate-monitor 2>&1');
+                Logger::info('Cleared failed state before starting the monitor');
+            }
+
             [$out, $code] = $this->run('systemctl start sentinel-gate-monitor 2>&1');
+
+            // The rate limiter can also refuse a unit that is not currently
+            // 'failed'. The message is the only signal, so it is what we act on.
+            if ($code !== 0 && stripos(implode(' ', (array) $out), 'repeated too quickly') !== false) {
+                exec('systemctl reset-failed sentinel-gate-monitor 2>&1');
+                Logger::info('Start was rate limited; reset and retrying');
+                [$out, $code] = $this->run('systemctl start sentinel-gate-monitor 2>&1');
+            }
 
             if ($code === 0) {
                 // Exit 0 means the process was LAUNCHED, not that it survived.
@@ -221,6 +352,8 @@ class RealTimeMonitor {
                     $detail = $this->serviceDetail();
                     if ($detail['active'] === 'active' && $detail['sub'] === 'running') {
                         Database::setSetting('rt_monitor_status', 'running');
+                        // Running again, so there is no stop to respect.
+                        Database::setSetting('rt_manual_stop', '0');
                         Logger::info('Real-time monitor started via systemd');
                         return ['success' => true, 'method' => 'systemd'];
                     }
@@ -269,7 +402,25 @@ class RealTimeMonitor {
         ];
     }
 
+    /**
+     * Record why the monitor is being stopped.
+     *
+     * A stop with no backup running is a decision, and auto-resume must not
+     * overrule it. A stop during a backup window is housekeeping, and is
+     * exactly what auto-resume exists to undo.
+     */
+    private function recordStopIntent(): void
+    {
+        $backups = self::backupProcesses();
+        Database::setSetting('rt_manual_stop', $backups ? '0' : '1');
+        if ($backups) {
+            Database::setSetting('rt_backup_seen_at', (string) time());
+        }
+    }
+
     public function stop(): array {
+        $this->recordStopIntent();
+
         // Prefer systemd whenever the unit file is present (installed),
         // regardless of whether auto-start is enabled.
         if (file_exists($this->serviceFile)) {

@@ -1275,6 +1275,8 @@ async function loadSettings() {
   set('set-rt-backup-procs',  d.rt_backup_procs            || 'jetbackup,rsync');
   set('set-rt-backup-resume', d.rt_backup_resume_secs      || '60');
   set('set-rt-backup-max',    d.rt_backup_max_suspend_secs || '14400');
+  const autoEl = document.getElementById('set-rt-autostart');
+  if (autoEl) autoEl.checked = (d.rt_autostart_after_backup ?? '1') === '1';
 
   // Last-run readouts
   const ts = v => (v && +v) ? new Date(+v * 1000).toLocaleString() : 'never';
@@ -3346,6 +3348,7 @@ async function saveMonitorSettings() {
     rt_backup_procs:             (g('set-rt-backup-procs')?.value || '').trim() || 'jetbackup,rsync',
     rt_backup_resume_secs:       g('set-rt-backup-resume')?.value || '60',
     rt_backup_max_suspend_secs:  g('set-rt-backup-max')?.value    || '14400',
+    rt_autostart_after_backup:   g('set-rt-autostart')?.checked ? '1' : '0',
   };
 
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }

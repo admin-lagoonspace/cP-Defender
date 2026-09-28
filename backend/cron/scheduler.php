@@ -48,6 +48,9 @@ require_once SG_ROOT . '/backend/lib/FileIntegrity.php';
 // Feeds the cPanel user plugin: it can read nothing else, because the
 // database is root-only and must stay that way.
 require_once SG_ROOT . '/backend/lib/UserReport.php';
+// The rtguard task starts the monitor once backups finish; without this
+// require the task fatals in cron and nothing ever resumes.
+require_once SG_ROOT . '/backend/lib/RealTimeMonitor.php';
 
 $force  = null;
 $dryRun = false;
@@ -103,6 +106,12 @@ function isDue(string $task, string $schedule, int $now,
     $elapsed = $now - $last;
 
     switch ($schedule) {
+        // Every scheduler tick, which cron fires at */15. For work that is
+        // cheap and wants to react promptly rather than on the hour -- the
+        // 60-second floor only guards against a double-fire.
+        case 'every':
+            return $elapsed >= 60;
+
         case 'hourly':
             return $elapsed >= 3600 - 300;      // 5 min slack for tick jitter
 
@@ -303,6 +312,25 @@ $tasks = [
             $r = UserReport::writeAll();
             slog('  per-user reports: ' . $r['written'] . ' written, '
                . $r['skipped'] . ' skipped');
+        },
+    ],
+
+    // Bring real-time monitoring back once the backups are done.
+    //
+    // The daemon suspends its own scanning while a backup runs, but a daemon
+    // that is STOPPED cannot do that for itself -- and a monitor that went
+    // down during a backup window otherwise stays down until somebody notices
+    // and presses Start. This probes for JetBackup and rsync directly and
+    // starts the monitor once they have gone.
+    'rtguard' => [
+        'schedule' => setting('rt_autostart_schedule', 'every'),
+        'time'     => '00:00',
+        'day'      => 0,
+        'run'      => function () {
+            $m = new RealTimeMonitor();
+            $r = $m->autoResume();
+            slog('  real-time guard: ' . ($r['reason'] ?? '?')
+               . (!empty($r['acted']) ? ' (monitor started)' : ''));
         },
     ],
 

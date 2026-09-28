@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.30.6">
+<link rel="stylesheet" href="css/app.css?v=3.31.0">
 </head>
 <body>
 <div id="app">
@@ -289,7 +289,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.30.6 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.31.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -1406,6 +1406,23 @@
                     </div>
                   </div>
 
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line,#2d333a)">
+                    <div>
+                      <div style="font-weight:600;font-size:.8rem">Start monitoring again when the backup finishes</div>
+                      <div style="font-size:.72rem;color:var(--txt3);margin-top:4px;line-height:1.6;max-width:62ch">
+                        Checked every 15 minutes. The daemon pauses its own scanning during
+                        a backup, but a daemon that has been <em>stopped</em> cannot restart
+                        itself — without this it stays down until someone presses Start.
+                        Stopping the monitor while no backup is running is treated as a
+                        deliberate decision and is left alone.
+                      </div>
+                    </div>
+                    <label class="toggle">
+                      <input type="checkbox" id="set-rt-autostart" onchange="rtLimitEdited()">
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+
                   <p style="font-size:.72rem;color:var(--txt3);margin-top:10px;line-height:1.6">
                     Matched against the process name, so an entry of <code>rsync</code>
                     matches any rsync on the server. That is worth knowing: anyone who can
@@ -2169,9 +2186,9 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.30.6"></script>
+<script src="js/api.js?v=3.31.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.30.6"></script>
+<script src="js/app.js?v=3.31.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {

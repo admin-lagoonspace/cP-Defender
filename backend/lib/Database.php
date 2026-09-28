@@ -170,6 +170,17 @@ class Database {
                 -- off-box; a real-time scanner competing for the same disks at
                 -- that moment is the worst time for it to be working hardest.
                 ('rt_pause_on_backup',        '1'),
+                -- Bring monitoring back up once the backups have finished.
+                -- The daemon suspends its own scanning during a backup, but a
+                -- daemon that is stopped cannot restart itself -- and a
+                -- monitor that went down in a backup window otherwise stays
+                -- down until somebody notices.
+                ('rt_autostart_after_backup', '1'),
+                -- 'every' means every scheduler tick, which cron fires at */15.
+                ('rt_autostart_schedule',     'every'),
+                -- Set when a person stops the monitor with no backup running,
+                -- so auto-resume does not overrule a deliberate decision.
+                ('rt_manual_stop',            '0'),
                 ('rt_backup_procs',           'jetbackup,rsync'),
                 ('rt_backup_check_secs',      '20'),
                 -- rsync is usually a series of short runs; resuming between
