@@ -187,10 +187,19 @@ try {
         echo $r['message'] . PHP_EOL;
         if ($r['stopped']) { echo 'Stopped jobs: ' . implode(', ', $r['stopped']) . PHP_EOL; }
         if ($r['failed'])  { echo 'Could not stop: ' . implode(', ', $r['failed']) . PHP_EOL; }
-        $still = Scanner::liveScans();
-        echo $still
-            ? count($still) . ' scan(s) still recorded as running' . PHP_EOL
-            : 'No scans are running.' . PHP_EOL;
+
+        // Workers no row accounted for. Worth naming: they are the ones that
+        // made clamscan look like it respawned no matter how often it was
+        // killed, because the worker was never the thing being killed.
+        if (!empty($r['runaways'])) {
+            echo $r['runaways'] . ' untracked worker(s) were killed' . PHP_EOL;
+        }
+
+        // Say what is actually left executing, not what the table thinks.
+        $left = Scanner::scanWorkerPids();
+        echo $left
+            ? 'STILL RUNNING: ' . count($left) . ' scan worker(s): ' . implode(', ', $left) . PHP_EOL
+            : 'No scan workers are running.' . PHP_EOL;
         break;
     }
 
@@ -200,10 +209,12 @@ try {
         echo "Stale jobs cleared: {$jobs}" . PHP_EOL;
         echo 'Orphaned clamscan processes killed: ' . count($pids)
            . ($pids ? ' (' . implode(', ', $pids) . ')' : '') . PHP_EOL;
-        $active = Scanner::activeScan();
-        echo $active
-            ? "A scan is still running: job {$active['id']} (pid {$active['worker_pid']})" . PHP_EOL
-            : 'No scan is running.' . PHP_EOL;
+        // Reported from /proc, not from the table: a worker whose row was
+        // wrongly marked interrupted is exactly the case worth surfacing.
+        $procs = Scanner::scanWorkerPids();
+        echo $procs
+            ? 'Scan workers currently executing: ' . implode(', ', $procs) . PHP_EOL
+            : 'No scan workers are running.' . PHP_EOL;
         break;
     }
 

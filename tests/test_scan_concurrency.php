@@ -254,3 +254,77 @@ t_eq('2', Database::setting('scan_max_concurrent'),
     'a later deliberate change is not overruled by the next upgrade');
 
 Database::setSetting('scan_max_concurrent', '1');
+
+
+// -- Killing clamscan does not stop a scan -----------------------------------
+// Reported: "even if i kill them individually they are spawned immediately".
+// That is the worker behaving correctly -- it forks one clamscan per batch, so
+// killing a clamscan ends that batch and the next one starts. The worker is
+// the thing that has to be killed, and it has to die FIRST.
+$sc = t_code($repo . '/backend/lib/Scanner.php');
+
+// Ordering is asserted on code, not on the comments that label the steps:
+// t_code() strips comments precisely so that assertions cannot pass on text
+// that has been commented out.
+$kill = substr($sc, strpos($sc, 'public static function killRunawayScans'), 2400);
+$notePos   = strpos($kill, 'clamscanChildrenOf($workers)');
+$killWPos  = strpos($kill, 'foreach ($workers as $pid)');
+$killCPos  = strpos($kill, 'foreach ($children as $pid)');
+t_ok($notePos !== false && $killWPos !== false && $killCPos !== false,
+    'the runaway killer notes children, kills workers and kills children');
+t_ok($notePos < $killWPos,
+    'children are noted BEFORE the worker dies, while the parent link exists');
+t_ok($killWPos < $killCPos,
+    'the worker is killed before its clamscan, so nothing can respawn one');
+
+// cPanel runs its own clamscan for mail. Only children of OUR workers may be
+// touched.
+t_contains($kill, 'clamscanChildrenOf',
+    'only clamscan processes parented by our workers are killed');
+t_ok(strpos($kill, 'pkill') === false && strpos($kill, 'killall') === false,
+    'nothing kills clamscan by name');
+
+// -- A worker is found by what is executing, not by the database -------------
+// Workers started before the worker_pid column existed have no pid recorded,
+// so after an upgrade a scan can be running that no row can identify.
+t_contains($sc, 'function scanWorkerPids', 'workers are discoverable from /proc');
+t_contains($sc, "backend/cron/scan.php", 'by the script they are running');
+t_contains($sc, '--job-id=', 'and can be matched to a specific job');
+
+$reap = substr($sc, strpos($sc, 'public static function reapStaleJobs'), 1800);
+t_contains($reap, 'self::scanWorkerPids((int) $job',
+    'a job with no recorded pid is checked against the running processes');
+t_contains($reap, 'adopted the running worker',
+    'and the live worker is adopted rather than the job being declared dead');
+$adoptPos = strpos($reap, 'scanWorkerPids');
+$markPos  = strpos($reap, "status='interrupted'");
+t_ok($adoptPos !== false && $markPos !== false && $adoptPos < $markPos,
+    'adoption is attempted before anything is marked interrupted');
+
+// -- Any status but running/pending must stop the worker ---------------------
+// This is the gap the runaway hid in: reapStaleJobs marks a job 'interrupted',
+// the worker did not treat that as a stop, and the row no longer showed as
+// running -- so it scanned on, invisibly, replacing every clamscan killed.
+$job = Database::insert('scan_jobs', [
+    'scan_type' => 'quick', 'status' => 'running',
+    'started_at' => time(), 'scan_path' => '/home',
+]);
+t_eq(false, Scanner::isCancelled($job), 'a running job is not cancelled');
+
+Database::query("UPDATE scan_jobs SET status='pending' WHERE id=?", [$job]);
+t_eq(false, Scanner::isCancelled($job), 'nor is a pending one');
+
+foreach (['interrupted', 'cancelled', 'cancelling', 'done', 'error', 'skipped'] as $st) {
+    Database::query('UPDATE scan_jobs SET status=? WHERE id=?', [$st, $job]);
+    t_eq(true, Scanner::isCancelled($job), "status '$st' stops the worker");
+}
+
+// A row that has been deleted entirely must stop it too, rather than being
+// read as "not cancelled" and scanning for ever.
+Database::query('DELETE FROM scan_jobs WHERE id=?', [$job]);
+t_eq(true, Scanner::isCancelled($job), 'a job whose row is gone stops the worker');
+
+// -- Stopping everything must reach untracked workers ------------------------
+$stopAll = substr($sc, strpos($sc, 'public static function stopAllScans'), 1600);
+t_contains($stopAll, 'self::killRunawayScans()',
+    'stopping everything also kills workers no row accounts for');

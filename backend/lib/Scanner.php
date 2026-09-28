@@ -87,6 +87,130 @@ class Scanner {
      */
     private const WORKER_GRACE = 120;
 
+    /**
+     * Scan worker processes that are genuinely running, found in /proc.
+     *
+     * The database is not the authority on what is executing. Workers started
+     * before 3.30.1 never recorded a pid, because the column did not exist
+     * then -- so after an upgrade there can be a worker happily scanning that
+     * no row can identify. /proc is the only honest answer to "what is running
+     * right now".
+     *
+     * @param int|null $jobId restrict to the worker for one job
+     * @return int[] pids
+     */
+    public static function scanWorkerPids(?int $jobId = null): array
+    {
+        $pids = [];
+        if (!is_dir('/proc')) { return $pids; }
+
+        $needle = 'backend/cron/scan.php';
+        $self   = getmypid();
+
+        foreach (glob('/proc/[0-9]*') ?: [] as $dir) {
+            $pid = (int) basename($dir);
+            if ($pid <= 1 || $pid === $self) { continue; }
+
+            $raw = @file_get_contents($dir . '/cmdline');
+            if ($raw === false || $raw === '') { continue; }
+            $cmd = str_replace("\0", ' ', $raw);
+
+            if (strpos($cmd, $needle) === false) { continue; }
+            if ($jobId !== null && strpos($cmd, '--job-id=' . $jobId) === false) { continue; }
+            $pids[] = $pid;
+        }
+        return $pids;
+    }
+
+    /** Direct children of the given pids that are clamscan. */
+    private static function clamscanChildrenOf(array $parentPids): array
+    {
+        $kids = [];
+        if (!$parentPids || !is_dir('/proc')) { return $kids; }
+        $parents = array_flip($parentPids);
+
+        foreach (glob('/proc/[0-9]*') ?: [] as $dir) {
+            $pid  = (int) basename($dir);
+            $comm = @file_get_contents($dir . '/comm');
+            if ($comm === false || strpos(trim($comm), 'clamscan') === false) { continue; }
+
+            $stat = @file_get_contents($dir . '/stat');
+            if ($stat === false) { continue; }
+            // Field 4 is ppid; the command in field 2 may contain spaces, so
+            // parse from the closing parenthesis.
+            $tail = substr($stat, strrpos($stat, ')') + 2);
+            $f    = explode(' ', $tail);
+            if (isset($f[1]) && isset($parents[(int) $f[1]])) {
+                $kids[] = $pid;
+            }
+        }
+        return $kids;
+    }
+
+    /**
+     * Kill scan workers that are running regardless of what the database says,
+     * and the clamscan processes they have spawned.
+     *
+     * Reported as "even if i kill them individually they are spawned
+     * immediately". That is the worker doing its job: it forks one clamscan
+     * per batch, so killing a clamscan simply ends that batch and the worker
+     * starts the next one. The worker is what has to go.
+     *
+     * Order matters, and is the whole of this method:
+     *   1. Note each worker's clamscan children FIRST -- once the worker dies
+     *      they are reparented to init and the link is lost.
+     *   2. Kill the workers, so nothing can spawn a replacement.
+     *   3. Kill the children noted in step 1.
+     *
+     * Doing it the other way round is what makes clamscan look immortal.
+     */
+    public static function killRunawayScans(): array
+    {
+        $workers = self::scanWorkerPids();
+        if (!$workers) {
+            return ['workers' => [], 'clamscans' => []];
+        }
+
+        // Step 1 -- before anything dies.
+        $children = self::clamscanChildrenOf($workers);
+
+        // Step 2 -- the workers.
+        foreach ($workers as $pid) {
+            function_exists('posix_kill') ? @posix_kill($pid, 15)
+                                          : @exec('kill -TERM ' . $pid . ' 2>/dev/null');
+        }
+        usleep(500000);
+        foreach ($workers as $pid) {
+            if (self::processAlive($pid)) {
+                function_exists('posix_kill') ? @posix_kill($pid, 9)
+                                              : @exec('kill -KILL ' . $pid . ' 2>/dev/null');
+            }
+        }
+
+        // Step 3 -- the clamscans they left behind. Only the ones noted above:
+        // cPanel runs its own clamscan for mail and it must not be touched.
+        $killed = [];
+        foreach ($children as $pid) {
+            if (!self::processAlive($pid)) { continue; }
+            function_exists('posix_kill') ? @posix_kill($pid, 15)
+                                          : @exec('kill -TERM ' . $pid . ' 2>/dev/null');
+            $killed[] = $pid;
+        }
+        usleep(300000);
+        foreach ($killed as $pid) {
+            if (self::processAlive($pid)) {
+                function_exists('posix_kill') ? @posix_kill($pid, 9)
+                                              : @exec('kill -KILL ' . $pid . ' 2>/dev/null');
+            }
+        }
+
+        Logger::warn('Killed ' . count($workers) . ' runaway scan worker(s) and '
+                   . count($killed) . ' clamscan process(es): workers '
+                   . implode(', ', $workers));
+
+        return ['workers' => $workers, 'clamscans' => $killed];
+    }
+
     /** Is the worker recorded on this job still alive? */
     public static function jobWorkerAlive(array $job): bool
     {
@@ -116,6 +240,27 @@ class Scanner {
         $n = 0;
         foreach ($rows as $job) {
             if (self::jobWorkerAlive($job)) { continue; }
+
+            // Before declaring it dead, look for the process itself.
+            //
+            // A job whose worker predates the worker_pid column has no pid to
+            // check, and marking it interrupted while it is still running is
+            // how a scan becomes invisible: the row stops showing as running,
+            // so nothing can find it, while the worker carries on forking a
+            // clamscan per batch. Adopt the process instead.
+            $found = self::scanWorkerPids((int) $job['id']);
+            if ($found) {
+                $pid  = $found[0];
+                $pgid = self::pgidOf($pid);
+                Database::query(
+                    'UPDATE scan_jobs SET worker_pid=?, worker_pgid=? WHERE id=?',
+                    [$pid, $pgid, (int) $job['id']]
+                );
+                Logger::info('Scan job ' . $job['id'] . ' had no recorded pid; '
+                           . 'adopted the running worker ' . $pid);
+                continue;
+            }
+
             Database::query(
                 "UPDATE scan_jobs SET status='interrupted', finished_at=? WHERE id=?",
                 [time(), (int) $job['id']]
@@ -187,17 +332,25 @@ class Scanner {
         // Anything the stopped workers left behind.
         $killed = self::reapOrphanClamscans();
 
+        // And anything still executing that no row accounts for. Without this,
+        // a worker the database has lost track of keeps scanning and keeps
+        // replacing every clamscan that is killed.
+        $runaway = self::killRunawayScans();
+
         if ($stopped || $killed) {
             Logger::info('Stopped ' . count($stopped) . ' scan(s), killed '
                        . count($killed) . ' leftover clamscan process(es)');
         }
+        $totalClam = count($killed) + count($runaway['clamscans']);
         return [
-            'success' => empty($failed),
-            'stopped' => $stopped,
-            'failed'  => $failed,
-            'killed'  => count($killed),
-            'message' => 'Stopped ' . count($stopped) . ' scan(s); killed '
-                       . count($killed) . ' leftover clamscan process(es)',
+            'success'  => empty($failed),
+            'stopped'  => $stopped,
+            'failed'   => $failed,
+            'killed'   => $totalClam,
+            'runaways' => count($runaway['workers']),
+            'message'  => 'Stopped ' . count($stopped) . ' scan(s), killed '
+                        . count($runaway['workers']) . ' untracked worker(s) and '
+                        . $totalClam . ' clamscan process(es)',
         ];
     }
 
@@ -853,7 +1006,17 @@ class Scanner {
     public static function isCancelled(int $jobId): bool
     {
         $row = Database::fetchOne('SELECT status FROM scan_jobs WHERE id=?', [$jobId]);
-        return in_array($row['status'] ?? '', ['cancelling', 'cancelled'], true);
+        $status = $row['status'] ?? '';
+
+        // Anything that is not still in progress means stop.
+        //
+        // This used to accept only 'cancelling' and 'cancelled', which left a
+        // gap wide enough to hide a runaway in: reapStaleJobs() marks a job
+        // 'interrupted', the worker did not recognise that as a stop, and so
+        // it carried on scanning and forking a clamscan per batch -- while the
+        // row it belonged to no longer showed as running, so nothing could
+        // find it. A deleted row means stop too.
+        return $status === '' || !in_array($status, ['running', 'pending'], true);
     }
 
     /** The scan currently running, if any. */
@@ -967,6 +1130,16 @@ class Scanner {
         }
         @exec('kill -' . $sig . ' -- -' . $pgid . ' 2>/dev/null', $o, $rc);
         return $rc === 0;
+    }
+
+    /** The process group of a pid, or 0. */
+    private static function pgidOf(int $pid): int
+    {
+        $stat = @file_get_contents('/proc/' . $pid . '/stat');
+        if ($stat === false) { return 0; }
+        $tail = substr($stat, strrpos($stat, ')') + 2);
+        $f    = explode(' ', $tail);
+        return isset($f[2]) ? (int) $f[2] : 0;
     }
 
     private static function processAlive(int $pid): bool
