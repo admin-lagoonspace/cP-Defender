@@ -273,12 +273,33 @@ class BackupActivityDetector:
     # Matched against the process name (/proc/<pid>/comm). Exact names, not
     # substrings: 'rsync' as a substring would also match a shell script called
     # rsync-my-photos, and more importantly would match far more than intended.
-    DEFAULT_NAMES = ('jetbackup', 'jetbackupd', 'rsync')
+    # Names that mean WORK IS HAPPENING, not that software is installed.
+    #
+    # 'jetbackupd' used to be in this list and '/jetapps/' used to be a
+    # command-line hint. Both were wrong in the same way: JetBackup runs a
+    # permanent daemon, and every JetBackup process lives under /usr/local/
+    # jetapps whether or not a backup is running. On any server with JetBackup
+    # installed the monitor therefore suspended itself immediately and never
+    # resumed -- real-time scanning was permanently off on exactly the servers
+    # this feature was written for, while the dashboard said "Paused --
+    # jetbackup" over an idle daemon sitting at 0% CPU.
+    #
+    # The test for anything added here is not "is it part of the backup
+    # software" but "does its existence mean a backup is currently running".
+    # 'jetbackup' stays: a process by that exact name is a JOB. 'jetbackupd'
+    # is the daemon and lives in DEFAULT_EXCLUDES below. Keeping the name here
+    # also keeps the command-line job detection alive, since that is gated on
+    # JetBackup being something we care about at all.
+    DEFAULT_NAMES = ('jetbackup', 'rsync')
 
-    # Matched against the full command line, for processes whose comm is
-    # something generic like 'php' or 'perl'. JetBackup 4 and 5 both live
-    # under /usr/local/jetapps.
-    CMDLINE_HINTS = ('/jetapps/', 'jetbackup')
+    # Always-on processes that must never count as a running backup, whatever
+    # else matches them. Applied to both the name and the command line.
+    DEFAULT_EXCLUDES = ('jetbackupd', 'jetbackup5d', 'jetbackupmysqld')
+
+    # Command-line fragments that indicate a backup TASK. An install path is
+    # not one of these; a queue worker or a running job is.
+    CMDLINE_HINTS = ('jetbackup5/core/queue', 'jetbackup/core/queue',
+                     'jb5 backup', 'jetbackup backup')
 
     def __init__(self, conn):
         self.enabled = True
@@ -288,6 +309,8 @@ class BackupActivityDetector:
         self.max_suspend = 14400
         self.suspended = False
         self.reason = ''
+        self.evidence = ''
+        self.excludes = set(self.DEFAULT_EXCLUDES)
         self.since = None
         self.clear_since = 0.0
         self.capped_out = False
@@ -314,6 +337,13 @@ class BackupActivityDetector:
             self.names = names or set(self.DEFAULT_NAMES)
         else:
             self.names = set(self.DEFAULT_NAMES)
+
+        raw_ex = (db_get(conn, 'rt_backup_exclude', '') or '').strip()
+        if raw_ex:
+            self.excludes = set(
+                x.strip().lower() for x in raw_ex.split(',') if x.strip())
+        else:
+            self.excludes = set(self.DEFAULT_EXCLUDES)
 
         self.check_every  = self._num(conn, 'rt_backup_check_secs',       20,  5, 600)
         self.resume_after = self._num(conn, 'rt_backup_resume_secs',      60,  0, 3600)
@@ -346,6 +376,7 @@ class BackupActivityDetector:
         whether the server is busy is a poor way to avoid loading the server.
         """
         found = []
+        self.evidence = ''
         try:
             entries = os.listdir('/proc')
         except OSError:
@@ -365,8 +396,14 @@ class BackupActivityDetector:
             except (IOError, OSError):
                 continue
 
+            # An always-on daemon is never evidence of a running backup.
+            if comm in self.excludes:
+                continue
+
             if comm in self.names:
                 found.append(comm)
+                if not self.evidence:
+                    self.evidence = 'pid %d (%s)' % (pid, comm)
                 continue
 
             # Only read the (larger) cmdline when the name alone was not
@@ -378,8 +415,14 @@ class BackupActivityDetector:
                         cmd = fh.read().replace(b'\x00', b' ').decode('utf-8', 'replace').lower()
                 except (IOError, OSError):
                     continue
-                if cmd and any(h in cmd for h in self.CMDLINE_HINTS):
+                if not cmd:
+                    continue
+                if any(x in cmd for x in self.excludes):
+                    continue
+                if any(h in cmd for h in self.CMDLINE_HINTS):
                     found.append('jetbackup')
+                    if not self.evidence:
+                        self.evidence = 'pid %d (%s)' % (pid, cmd[:120])
 
         return found
 
@@ -447,6 +490,10 @@ class BackupActivityDetector:
         db_set(conn, 'rt_suspended', '1')
         db_set(conn, 'rt_suspend_reason', reason)
         db_set(conn, 'rt_suspend_since', str(int(now)))
+        # What actually matched. "Paused -- jetbackup" with nothing behind it
+        # is impossible to argue with when the operator can see no backup
+        # running; the pid and command line make it checkable.
+        db_set(conn, 'rt_suspend_evidence', self.evidence or reason)
         db_event(conn, 'monitor_suspended',
                  'Real-time scanning paused while %s is running. File changes during '
                  'this window are not scanned.' % reason)
@@ -460,6 +507,7 @@ class BackupActivityDetector:
         log.info('resuming real-time scanning after %ds (%s: %s)', gap, was, why)
         db_set(conn, 'rt_suspended', '0')
         db_set(conn, 'rt_suspend_reason', '')
+        db_set(conn, 'rt_suspend_evidence', '')
         db_set(conn, 'rt_last_gap_seconds', str(gap))
         db_set(conn, 'rt_last_gap_end', str(int(now)))
         # Stated plainly: for that many seconds this server was not being
@@ -835,6 +883,23 @@ def main():
     conn = None
     try:
         conn = db_connect()
+
+        # Clear any suspension left over from a previous life.
+        #
+        # The suspend flags live in the database and only this daemon writes
+        # them. A daemon that is killed or restarted while suspended never
+        # reaches its resume path, so the flags stay set for ever -- and the
+        # new daemon starts with suspended=False in memory, so it never clears
+        # them either. The dashboard then shows "Paused" indefinitely over a
+        # monitor that is scanning perfectly well.
+        #
+        # A daemon that has just started is not suspended, by definition. The
+        # first detector poll re-establishes the truth within seconds.
+        if db_get(conn, 'rt_suspended', '0') == '1':
+            log.info('clearing stale suspension flag left by a previous run')
+            db_set(conn, 'rt_suspended', '0')
+            db_set(conn, 'rt_suspend_reason', '')
+            db_set(conn, 'rt_suspend_evidence', '')
 
         allowed, why = license_ok(conn)
         if not allowed:

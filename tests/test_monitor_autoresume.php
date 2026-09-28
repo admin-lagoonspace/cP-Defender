@@ -40,8 +40,11 @@ t_ok($resetPos !== false && $startPos !== false && $resetPos < $startPos,
 $probe = substr($rtm, strpos($rtm, 'public static function backupProcesses'), 2200);
 t_contains($probe, "/proc", 'backup processes are found in /proc');
 t_contains($probe, 'rt_backup_procs', 'using the configured process list');
-t_contains($probe, '/jetapps/',
-    'with a command-line match for JetBackup, which runs under generic names');
+// This asserted '/jetapps/' when it was written, which was the defect: every
+// JetBackup process lives under that path, including the daemon that runs
+// whether or not a backup is happening. The match must name a task.
+t_contains($probe, 'JETBACKUP_JOB_HINTS',
+    'a JetBackup job is matched by its task, not by the install path');
 t_ok(strpos($probe, 'pgrep') === false,
     'without forking pgrep every 15 minutes for the life of the server');
 t_contains($probe, "!== '*'",
@@ -120,3 +123,54 @@ $js   = file_get_contents($repo . '/frontend/js/app.js');
 t_contains($html, 'id="set-rt-autostart"', 'the toggle exists');
 t_contains($js, 'rt_autostart_after_backup:', 'and is saved with the monitor settings');
 t_contains($js, "getElementById('set-rt-autostart')", 'and loaded into the form');
+
+
+// -- An installed backup suite is not a running backup -----------------------
+// The dashboard reported "Paused -- jetbackup" on a server with no backup
+// running. JetBackup's daemon runs continuously, and both this probe and the
+// Python detector matched it -- so monitoring was suspended permanently on
+// every server with JetBackup installed, and auto-resume could never fire
+// either, because the probe always saw a "backup".
+t_contains($rtm, 'ALWAYS_ON_BACKUP_DAEMONS', 'always-on backup daemons are named');
+t_contains($rtm, 'jetbackupd', 'including jetbackupd');
+t_contains($rtm, 'jetbackup5d', 'and the JetBackup 5 daemon');
+
+$probe2 = substr($rtm, strpos($rtm, 'public static function backupProcesses'), 2600);
+t_ok(strpos($probe2, "'/jetapps/'") === false,
+    'the bare install path is no longer treated as a running backup');
+t_contains($probe2, 'JETBACKUP_JOB_HINTS',
+    'a JetBackup match now requires a task, not an installation');
+t_contains($probe2, 'isset($excl[$comm])', 'excluded daemons are skipped by name');
+t_contains($probe2, 'rt_backup_exclude', 'and the exclusion list is configurable');
+
+$db2 = t_code($repo . '/backend/lib/Database.php');
+t_contains($db2, 'rt_backup_exclude', 'the exclusion list is seeded');
+t_contains($db2, 'jetbackupd,jetbackup5d', 'with the always-on daemons in it');
+
+// -- A suspension nothing corroborates must not be reported ------------------
+// The flags live in the database and only the daemon writes them. A daemon
+// killed while suspended never runs its resume path, so they persist for ever.
+t_contains($rtm, 'function suspensionIsCurrent',
+    'a stored suspension is checked before being believed');
+$cur = substr($rtm, strpos($rtm, 'function suspensionIsCurrent'), 800);
+t_contains($cur, 'if (!$daemonRunning) { return false; }',
+    'nothing is suspended when the daemon is not running at all');
+t_contains($cur, 'rt_backup_max_suspend_secs',
+    'and a flag older than the maximum suspension is treated as stale');
+
+// -- The pause must be checkable ---------------------------------------------
+t_contains($rtm, 'rt_suspend_evidence',
+    'the process that triggered the pause is reported');
+$js2 = file_get_contents($repo . '/frontend/js/app.js');
+t_contains($js2, 'd.suspend_evidence', 'and shown in the UI');
+
+// -- The page has to refresh itself ------------------------------------------
+// It loaded once when opened and then showed that snapshot until someone
+// pressed Refresh -- so a state that changes on its own, which is the entire
+// point of pausing and auto-resuming, was routinely wrong on screen.
+t_contains($js2, 'function startMonitorPolling', 'the monitor page polls while it is open');
+$poll = substr($js2, strpos($js2, 'function startMonitorPolling'), 900);
+t_contains($poll, 'clearInterval', 'and stops polling when it is not');
+t_contains($poll, '_monitorBusy', 'never mid-way through a start or stop');
+t_contains($poll, 'document.hidden', 'and not in a background tab');
+t_contains($js2, 'startMonitorPolling(name)', 'polling follows the visible page');

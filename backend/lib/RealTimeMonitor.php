@@ -115,6 +115,25 @@ class RealTimeMonitor {
         return trim(implode("\n", $out));
     }
 
+    /**
+     * Is the stored suspension still meaningful?
+     *
+     * False when the daemon is not running (nothing is suspended if nothing is
+     * scanning) or when the flag has outlived the configured maximum
+     * suspension, which means whoever set it never got to clear it.
+     */
+    private static function suspensionIsCurrent(bool $daemonRunning): bool
+    {
+        if (!$daemonRunning) { return false; }
+        if (Database::setting('rt_suspended', '0') !== '1') { return false; }
+
+        $since = (int) (Database::setting('rt_suspend_since', '0') ?? 0);
+        if ($since <= 0) { return false; }
+
+        $max = (int) (Database::setting('rt_backup_max_suspend_secs', '14400') ?? 14400);
+        return (time() - $since) < max(60, $max);
+    }
+
     public function getStatus(): array {
         $detail       = $this->serviceDetail();
         $running      = $this->isRunning();
@@ -185,8 +204,25 @@ class RealTimeMonitor {
             // two would be a lie: the daemon is running, so a red "stopped"
             // badge is wrong, but it is not scanning, so a green "active" badge
             // is worse -- it claims protection that is deliberately paused.
-            'suspended'         => Database::setting('rt_suspended', '0') === '1',
-            'suspend_reason'    => Database::setting('rt_suspend_reason', '') ?: null,
+            // A suspension is only believable while the daemon that set it is
+            // alive and the flag is recent.
+            //
+            // These flags live in the database and only the daemon writes
+            // them. A daemon killed while suspended never runs its resume
+            // path, so the flags persist -- and the dashboard showed "Paused
+            // -- jetbackup" indefinitely over a monitor that was scanning
+            // normally. The daemon now clears them at startup; this is the
+            // second line of defence for the window before it does, and for a
+            // daemon that is not running at all.
+            'suspended'         => self::suspensionIsCurrent($running),
+            'suspend_reason'    => self::suspensionIsCurrent($running)
+                                    ? (Database::setting('rt_suspend_reason', '') ?: null)
+                                    : null,
+            // What actually matched, so "Paused -- jetbackup" can be checked
+            // rather than argued with.
+            'suspend_evidence'  => self::suspensionIsCurrent($running)
+                                    ? (Database::setting('rt_suspend_evidence', '') ?: null)
+                                    : null,
             'suspend_since'     => (int) (Database::setting('rt_suspend_since', '0') ?? 0),
             'last_gap_seconds'  => (int) (Database::setting('rt_last_gap_seconds', '0') ?? 0),
             'last_gap_end'      => (int) (Database::setting('rt_last_gap_end', '0') ?? 0),
@@ -210,6 +246,16 @@ class RealTimeMonitor {
      *
      * @return string[] names of the matching processes
      */
+    /**
+     * Processes whose presence means the backup software is INSTALLED, never
+     * that a backup is running. They must never trigger a suspension.
+     */
+    public const ALWAYS_ON_BACKUP_DAEMONS = ['jetbackupd', 'jetbackup5d', 'jetbackupmysqld'];
+
+    /** Command-line fragments that indicate an actual JetBackup task. */
+    public const JETBACKUP_JOB_HINTS = ['jetbackup5/core/queue', 'jetbackup/core/queue',
+                                        'jb5 backup', 'jetbackup backup'];
+
     public static function backupProcesses(): array
     {
         $found = [];
@@ -225,6 +271,16 @@ class RealTimeMonitor {
         }
         if (!$names) { $names = ['jetbackup' => true, 'rsync' => true]; }
 
+        $rawEx = (string) (Database::setting('rt_backup_exclude', '') ?? '');
+        $excl  = [];
+        foreach (explode(',', $rawEx) as $x) {
+            $x = strtolower(trim($x));
+            if ($x !== '') { $excl[$x] = true; }
+        }
+        if (!$excl) {
+            foreach (self::ALWAYS_ON_BACKUP_DAEMONS as $x) { $excl[$x] = true; }
+        }
+
         $self = getmypid();
         foreach (glob('/proc/[0-9]*') ?: [] as $dir) {
             $pid = (int) basename($dir);
@@ -234,16 +290,27 @@ class RealTimeMonitor {
             if ($comm === false) { continue; }
             $comm = strtolower(trim($comm));
 
+            // An always-on daemon means the software is installed, not that a
+            // backup is running. jetbackupd runs continuously; matching it
+            // suspended monitoring permanently on every server with JetBackup.
+            if (isset($excl[$comm])) { continue; }
+
             if (isset($names[$comm])) { $found[] = $comm; continue; }
 
-            // JetBackup runs under generic interpreter names, so the command
-            // line is what identifies it. Both 4 and 5 live under /usr/local/jetapps.
+            // JetBackup runs jobs under generic interpreter names, so the
+            // command line is what identifies one. The fragments looked for
+            // indicate a TASK -- an install path does not, which is what
+            // '/jetapps/' used to match here and in the daemon.
             if (isset($names['jetbackup'])) {
                 $cmd = @file_get_contents($dir . '/cmdline');
                 if ($cmd === false || $cmd === '') { continue; }
                 $cmd = strtolower(str_replace("\0", ' ', $cmd));
-                if (strpos($cmd, '/jetapps/') !== false || strpos($cmd, 'jetbackup') !== false) {
-                    $found[] = 'jetbackup';
+
+                foreach (array_keys($excl) as $x) {
+                    if ($x !== '' && strpos($cmd, $x) !== false) { continue 2; }
+                }
+                foreach (self::JETBACKUP_JOB_HINTS as $h) {
+                    if (strpos($cmd, $h) !== false) { $found[] = 'jetbackup'; break; }
                 }
             }
         }

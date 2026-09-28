@@ -107,6 +107,28 @@ function toast(msg, type = 'info') {
 }
 
 // ── Page Navigation ───────────────────────────────────────────────────────────
+// The monitor page had no refresh of its own: it loaded once when opened and
+// then showed whatever was true at that moment until someone pressed Refresh.
+// A paused/running state that changes on its own -- which is the whole point of
+// the backup pause and the auto-resume -- was therefore routinely wrong on
+// screen. Poll while the page is actually visible, and stop when it is not.
+let _monitorPoll = null;
+
+function startMonitorPolling(name) {
+  if (_monitorPoll) { clearInterval(_monitorPoll); _monitorPoll = null; }
+  if (name !== 'monitor' && name !== 'dashboard') { return; }
+
+  _monitorPoll = setInterval(() => {
+    // Not while a start/stop is mid-flight: refreshing then would render the
+    // state the button is in the middle of changing.
+    if (_monitorBusy) { return; }
+    if (document.hidden) { return; }   // background tab: no point polling
+    if (State.currentPage === 'monitor')        { loadMonitor(); }
+    else if (State.currentPage === 'dashboard') { loadMonitorStats(); }
+    else { clearInterval(_monitorPoll); _monitorPoll = null; }
+  }, 15000);
+}
+
 function openPage(name) {
   // Hide all pages
   document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
@@ -121,6 +143,7 @@ function openPage(name) {
   });
 
   State.currentPage = name;
+  startMonitorPolling(name);
 
   // Trigger page-specific data load
   switch (name) {
@@ -1535,6 +1558,7 @@ async function loadMonitorStats() {
       const mins = d.suspend_since ? Math.max(0, Math.round((Date.now() / 1000 - d.suspend_since) / 60)) : 0;
       note.textContent = 'Scanning is paused because ' + (d.suspend_reason || 'a backup')
                        + ' is running' + (mins ? ' (' + mins + ' min)' : '')
+                       + (d.suspend_evidence ? ' — matched ' + d.suspend_evidence : '')
                        + '. Changes made now are not scanned in real time; the next '
                        + 'scheduled scan covers them.';
       note.style.display = '';

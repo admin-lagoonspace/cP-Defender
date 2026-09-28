@@ -182,6 +182,11 @@ class Database {
                 -- so auto-resume does not overrule a deliberate decision.
                 ('rt_manual_stop',            '0'),
                 ('rt_backup_procs',           'jetbackup,rsync'),
+                -- Never treated as a running backup, however they match.
+                -- JetBackup's daemon runs continuously whether or not a backup
+                -- is happening; matching it suspended real-time monitoring
+                -- permanently on every server with JetBackup installed.
+                ('rt_backup_exclude',         'jetbackupd,jetbackup5d,jetbackupmysqld'),
                 ('rt_backup_check_secs',      '20'),
                 -- rsync is usually a series of short runs; resuming between
                 -- them costs more than staying down for another minute.

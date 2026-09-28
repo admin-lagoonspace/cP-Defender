@@ -20,6 +20,7 @@ import sys
 import sqlite3
 import tempfile
 import importlib.util
+import io
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -198,6 +199,63 @@ ok(d.max_suspend <= 86400, 'the cap cannot be set beyond a day')
 # -- The detector must never match the monitor itself -----------------------
 real = mon.BackupActivityDetector(make_conn())
 ok(os.getpid() in real._self_pids, 'the daemon excludes its own PID from detection')
+
+
+# -- An installed backup suite is not a running backup ----------------------
+# Reported from a live server: the dashboard said "Paused -- jetbackup" while
+# no backup was running anywhere. JetBackup runs a permanent daemon, and
+# jetbackupd was in the default match list while '/jetapps/' -- the install
+# path shared by every JetBackup process -- was a command-line hint. So on any
+# server with JetBackup installed the monitor suspended itself immediately and
+# never resumed: real-time scanning was permanently off on exactly the servers
+# this feature was written for.
+d = Fake(make_conn())
+ok('jetbackupd' not in d.names,
+   'the always-running JetBackup daemon is not treated as a running backup')
+ok('jetbackupd' in d.excludes, 'it is excluded explicitly')
+ok('jetbackup5d' in d.excludes, 'and so is the JetBackup 5 daemon')
+ok('rsync' in d.names, 'rsync, which only runs while transferring, still counts')
+
+hints = ' '.join(mon.BackupActivityDetector.CMDLINE_HINTS)
+ok('/jetapps/' not in hints,
+   'the bare install path is no longer a command-line hint')
+ok('queue' in hints or 'backup' in hints,
+   'the hints name a task rather than an installation')
+
+# The exclusion list is configurable, and replacing it must not silently
+# re-admit the daemon unless the operator says so.
+conn = make_conn({'rt_backup_exclude': 'jetbackupd'})
+d = Fake(conn)
+eq(set(['jetbackupd']), d.excludes, 'the exclusion list can be set explicitly')
+
+# -- A suspension records what matched --------------------------------------
+# "Paused -- jetbackup" with nothing behind it cannot be checked by an operator
+# who can see no backup running.
+conn = make_conn({'rt_backup_check_secs': 0})
+d = Fake(conn)
+d.running = ['rsync']
+d.evidence = 'pid 1234 (rsync)'
+d.poll(conn, now=10000)
+eq('pid 1234 (rsync)', setting(conn, 'rt_suspend_evidence'),
+   'the matching process is recorded so the pause can be verified')
+
+# Two polls: the first starts the settling period, the second completes it.
+d.running = []
+d.poll(conn, now=10000 + 100)
+d.poll(conn, now=10000 + 5000)
+eq('', setting(conn, 'rt_suspend_evidence'), 'and cleared on resume')
+
+# -- A restarted daemon must not inherit a stale suspension -----------------
+# The flags live in the database and only the daemon writes them. One killed
+# while suspended never runs its resume path, and the replacement starts with
+# suspended=False in memory -- so nothing ever clears them and the dashboard
+# shows "Paused" for ever over a monitor that is scanning normally.
+daemon_src = io.open(DAEMON, encoding='utf-8').read()
+ok('clearing stale suspension flag' in daemon_src,
+   'the daemon clears a leftover suspension when it starts')
+start_i = daemon_src.index('def main()')
+ok(daemon_src.index('clearing stale suspension flag') > start_i,
+   'and does so in main(), before any scanning begins')
 
 print('')
 print('%d passed, %d failed' % (_passed, _failed))
