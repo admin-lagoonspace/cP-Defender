@@ -127,16 +127,18 @@ class Scanner {
     }
 
     /**
-     * How many scans may run at once.
+     * How many scans may run at once. One, unless an operator changes it.
      *
-     * Clamped to 4. Higher is not a throughput setting: each clamscan loads
-     * the entire ClamAV signature database into its own memory -- observed at
-     * 650MB to 1.3GB per process -- so raising this multiplies memory and disk
-     * contention rather than dividing the work.
+     * Clamped to 4, and raising it is not a throughput control. Each clamscan
+     * loads the entire ClamAV signature database into its own memory --
+     * observed at 650MB to 1.3GB per process -- so a second concurrent scan
+     * buys a second copy of that database and two processes contending for the
+     * same disks. It does not halve the time; it is how a server ends up with
+     * six of them and no CPU left.
      */
     public static function maxConcurrent(): int
     {
-        $n = (int) (Database::setting('scan_max_concurrent', '2') ?? 2);
+        $n = (int) (Database::setting('scan_max_concurrent', '1') ?? 1);
         return max(1, min(4, $n));
     }
 

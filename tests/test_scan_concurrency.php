@@ -35,40 +35,41 @@ $active = Scanner::activeScan();
 t_ok($active !== null, 'a running scan is reported as active');
 t_eq($live, (int) $active['id'], 'and it is the right job');
 
-// -- The cap, which is two by default ---------------------------------------
-Database::setSetting('scan_max_concurrent', '2');
-t_eq(2, Scanner::maxConcurrent(), 'two scans are permitted at once by default');
-t_eq(1, count(Scanner::liveScans()), 'one is running so far');
+// -- One scanner process, which is the whole point --------------------------
+t_eq(1, Scanner::maxConcurrent(), 'exactly one scan is permitted at a time');
+t_eq(1, count(Scanner::liveScans()), 'one is running');
 
-// A cap of two means the SECOND start is allowed, not refused.
-$second = Database::insert('scan_jobs', [
-    'scan_type' => 'quick', 'status' => 'running',
-    'started_at' => time(), 'scan_path' => '/tmp',
-]);
-t_eq(2, count(Scanner::liveScans()), 'a second concurrent scan is allowed');
-
+// With a cap of one, the SECOND start is refused.
 $threw = false;
 try {
     (new Scanner())->startScan('/home', 'full');
 } catch (Throwable $e) {
     $threw = true;
     t_contains($e->getMessage(), 'maximum',
-        'the third start is refused against the cap, with the limit named');
+        'the second start is refused against the cap, with the limit named');
 }
-t_ok($threw, 'a third scan cannot start while two are running');
+t_ok($threw, 'a second scan cannot start while one is running');
 
 $count = Database::fetchOne(
     "SELECT COUNT(*) c FROM scan_jobs WHERE status IN ('running','pending')"
 )['c'];
-t_eq(2, (int) $count, 'the refused start created no extra job row');
+t_eq(1, (int) $count, 'the refused start created no extra job row');
 
-// The cap must never be raised into pathological territory: each clamscan
-// holds its own copy of the signature database.
+// The cap is still a setting, and still bounded at both ends.
 Database::setSetting('scan_max_concurrent', '99');
 t_eq(4, Scanner::maxConcurrent(), 'the cap is clamped to 4 however it is set');
 Database::setSetting('scan_max_concurrent', '0');
 t_eq(1, Scanner::maxConcurrent(), 'and never drops below 1, which would stop scanning');
+
+// Raised deliberately, a second scan becomes possible -- the limit is a
+// setting, not a hard-coded 1, so this has to keep working.
 Database::setSetting('scan_max_concurrent', '2');
+$second = Database::insert('scan_jobs', [
+    'scan_type' => 'quick', 'status' => 'running',
+    'started_at' => time(), 'scan_path' => '/tmp',
+]);
+t_eq(2, count(Scanner::liveScans()), 'raising the cap permits a second scan');
+Database::setSetting('scan_max_concurrent', '1');
 
 // -- Stopping everything at once --------------------------------------------
 // stopScan() takes one job. Six stacked scans would mean finding six ids.
@@ -206,7 +207,17 @@ t_contains($install, 'rm -f /tmp/sentinel-gate/scan.lock.',
 
 // -- The cap is reachable and visible ---------------------------------------
 $db = t_code($repo . '/backend/lib/Database.php');
-t_contains($db, "'scan_max_concurrent',     '2'", 'the cap ships defaulted to 2');
+t_contains($db, "'scan_max_concurrent',     '1'", 'the cap ships defaulted to 1');
+
+// 3.30.4 shipped this as 2 and the seed is INSERT OR IGNORE, which cannot
+// change a row that already exists -- so an upgrade would silently keep 2
+// without an explicit migration.
+t_contains($db, 'sg_mig_scan_concurrency_1',
+    'an existing install is migrated off the old default of 2');
+t_contains($db, "UPDATE settings SET value='1' WHERE key='scan_max_concurrent'",
+    'by resetting the stored value, not just the seed');
+t_contains($db, "SELECT value FROM settings WHERE key='sg_mig_scan_concurrency_1'",
+    'and the migration is marked so it runs once, not on every upgrade');
 t_contains($db, "'scan_batch_timeout',      '600'", 'and the per-batch timeout is seeded');
 
 $api = t_code($repo . '/backend/api/index.php');
@@ -215,3 +226,31 @@ t_contains($api, 'Scanner::maxConcurrent()', 'and the cap is reported to the UI'
 
 $cli = t_code($repo . '/backend/cli/sentinel.php');
 t_contains($cli, "case 'scan-stop-all'", 'and from the command line');
+
+
+// -- The migration, exercised rather than merely read ------------------------
+// Database::migrate() is private and runs on connect, and the connection is
+// cached -- so reflection is how the shipped code path gets tested instead of
+// a reimplementation of it that could drift.
+$mig = new ReflectionMethod('Database', 'migrate');
+$mig->setAccessible(true);
+
+// An install that came from 3.30.4: the value is 2 and the marker is absent.
+Database::setSetting('scan_max_concurrent', '2');
+Database::query("DELETE FROM settings WHERE key='sg_mig_scan_concurrency_1'");
+t_eq('2', Database::setting('scan_max_concurrent'), 'starting from the old default of 2');
+
+$mig->invoke(null, Database::get());
+t_eq('1', Database::setting('scan_max_concurrent'),
+    'upgrading resets an existing install to one scanner process');
+t_eq('1', Database::setting('sg_mig_scan_concurrency_1'),
+    'and records that the migration has run');
+
+// An operator who deliberately raises it afterwards must keep their choice --
+// every subsequent upgrade calls migrate() again.
+Database::setSetting('scan_max_concurrent', '2');
+$mig->invoke(null, Database::get());
+t_eq('2', Database::setting('scan_max_concurrent'),
+    'a later deliberate change is not overruled by the next upgrade');
+
+Database::setSetting('scan_max_concurrent', '1');

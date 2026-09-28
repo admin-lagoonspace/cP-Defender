@@ -187,11 +187,13 @@ class Database {
                 -- still records the threat; acting on it is a decision the
                 -- operator opts into.
                 ('auto_quarantine',         '0'),
-                -- At most this many scans at once. Each clamscan loads the
-                -- whole ClamAV signature database into its own memory (650MB
-                -- to 1.3GB observed), so this multiplies memory and disk
-                -- contention rather than dividing the work. Capped at 4.
-                ('scan_max_concurrent',     '2'),
+                -- At most this many scans at once, and one is the intended
+                -- number. Each clamscan loads the whole ClamAV signature
+                -- database into its own memory (650MB to 1.3GB observed), so
+                -- a second scan buys a second copy of that database and two
+                -- processes queued on the same disks -- not half the runtime.
+                -- Raising it is possible but is not a throughput control.
+                ('scan_max_concurrent',     '1'),
                 -- A single clamscan invocation that exceeds this is abandoned;
                 -- one was found holding 13 minutes of CPU on one file.
                 ('scan_batch_timeout',      '600'),
@@ -263,6 +265,22 @@ class Database {
         }
         if (!in_array('worker_pgid', $jobCols)) {
             $db->exec("ALTER TABLE scan_jobs ADD COLUMN worker_pgid INTEGER");
+        }
+
+        // 3.30.4 shipped scan_max_concurrent defaulting to 2; the intended
+        // number is 1. The seed above is INSERT OR IGNORE, so it cannot change
+        // a row that already exists -- an upgrade would silently keep 2.
+        //
+        // Guarded by a marker so it runs exactly once: an operator who later
+        // sets this to 2 deliberately keeps it, rather than having every
+        // upgrade quietly overrule them.
+        $migrated = $db->query(
+            "SELECT value FROM settings WHERE key='sg_mig_scan_concurrency_1'"
+        )->fetchColumn();
+        if ($migrated === false) {
+            $db->exec("UPDATE settings SET value='1' WHERE key='scan_max_concurrent'");
+            $db->exec("INSERT OR REPLACE INTO settings (key,value) "
+                    . "VALUES ('sg_mig_scan_concurrency_1','1')");
         }
     }
 
