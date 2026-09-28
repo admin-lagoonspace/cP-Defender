@@ -136,10 +136,24 @@ $tasks = [
             $paths = array_filter(array_map('trim', explode(',', setting('scan_paths', '/home'))));
             $type  = setting('scan_type', 'full');
             $sc    = new Scanner();
-            foreach ($paths as $p) {
-                if (!is_dir($p)) { slog("  skip missing path: $p"); continue; }
-                $job = $sc->startScan($p, $type);
-                slog("  started $type scan of $p (job $job)");
+
+            $usable = array_values(array_filter($paths, 'is_dir'));
+            foreach (array_diff($paths, $usable) as $missing) {
+                slog("  skip missing path: $missing");
+            }
+            if (!$usable) { slog('  no usable scan paths'); return; }
+
+            // ONE job covering every path. This loop used to call startScan()
+            // per path, and startScan() spawns a detached worker immediately --
+            // so three configured paths meant three workers and three clamscan
+            // processes running at once, every scheduled run, by design.
+            try {
+                $job = $sc->startScan(implode(',', $usable), $type);
+                slog("  started $type scan of " . implode(', ', $usable) . " (job $job)");
+            } catch (Throwable $e) {
+                // Declining to stack a second scan is the correct outcome, not
+                // a failure worth alarming about.
+                slog('  ' . $e->getMessage());
             }
         },
     ],

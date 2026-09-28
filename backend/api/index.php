@@ -387,8 +387,34 @@ function routeDashboard(string $action, string $method, array $q, ?array $user):
 function routeScanner(string $action, string $method, array $body, array $q, ?string $id, ?array $user): array {
     $scanner = new Scanner();
     return match($action) {
+        // Refusing a second scan is a normal outcome, not a server error, so
+        // it is checked here and answered with 409 rather than left to the
+        // exception handler's "Internal server error".
         'start'  => $method === 'POST'
-            ? ['success' => true, 'job_id' => $scanner->startScan($body['path'] ?? '/home', $body['type'] ?? 'quick')]
+            ? (function () use ($scanner, $body) {
+                $active = Scanner::activeScan();
+                if ($active !== null) {
+                    return ['success' => false, 'code' => 409,
+                            'error' => 'A scan is already running (job ' . $active['id'] . ')',
+                            'job_id' => (int) $active['id']];
+                }
+                return ['success' => true,
+                        'job_id' => $scanner->startScan($body['path'] ?? '/home',
+                                                        $body['type'] ?? 'quick')];
+              })()
+            : ['success' => false, 'error' => 'POST required', 'code' => 405],
+
+        // POST scanner/reap — clear jobs whose worker died and kill clamscan
+        // processes those dead workers left behind.
+        'reap' => $method === 'POST'
+            ? (function () {
+                $jobs = Scanner::reapStaleJobs();
+                $pids = Scanner::reapOrphanClamscans();
+                return ['success' => true,
+                        'stale_jobs' => $jobs, 'killed' => count($pids),
+                        'message' => "Cleared {$jobs} stale job(s), killed "
+                                   . count($pids) . ' orphaned clamscan process(es)'];
+              })()
             : ['success' => false, 'error' => 'POST required', 'code' => 405],
 
         // POST scanner/stop {job_id?} — stop a running scan AND the clamscan it

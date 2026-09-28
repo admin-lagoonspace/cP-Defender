@@ -178,6 +178,21 @@ try {
         break;
     }
 
+    // Clean up after workers that died: stale 'running' rows, and the
+    // clamscan processes they left behind.
+    case 'scan-reap': {
+        $jobs = Scanner::reapStaleJobs();
+        $pids = Scanner::reapOrphanClamscans();
+        echo "Stale jobs cleared: {$jobs}" . PHP_EOL;
+        echo 'Orphaned clamscan processes killed: ' . count($pids)
+           . ($pids ? ' (' . implode(', ', $pids) . ')' : '') . PHP_EOL;
+        $active = Scanner::activeScan();
+        echo $active
+            ? "A scan is still running: job {$active['id']} (pid {$active['worker_pid']})" . PHP_EOL
+            : 'No scan is running.' . PHP_EOL;
+        break;
+    }
+
     case 'quarantine': {
         $sub = $rest[0] ?? 'status';
         switch ($sub) {
@@ -299,6 +314,7 @@ Usage: sentinel <command> [args] [--json]
   reputation <ip>              Look up IP reputation
   update-sigs                  Update malware signatures
   user-reports                 Rebuild the per-user reports the cPanel plugin reads
+  scan-reap                    Clear dead scan jobs and orphaned clamscan processes
   quarantine status            Show where quarantine is and how big\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  license status               Show license state
   license activate <key>       Store and verify a license key
   license refresh              Force a re-check against the server

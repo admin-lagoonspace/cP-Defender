@@ -80,7 +80,137 @@ class Scanner {
     /**
      * Start a new scan job
      */
+    /**
+     * How long a job may sit with no worker pid recorded before it is presumed
+     * dead. The worker writes its pid as its first act, so this only has to
+     * cover process startup.
+     */
+    private const WORKER_GRACE = 120;
+
+    /** Is the worker recorded on this job still alive? */
+    public static function jobWorkerAlive(array $job): bool
+    {
+        $pid = (int) ($job['worker_pid'] ?? 0);
+        if ($pid <= 1) {
+            // Nothing recorded. Either it has not started yet, or it died
+            // before it could write one -- age is what separates the two.
+            $started = (int) ($job['started_at'] ?? 0);
+            return $started > 0 && (time() - $started) < self::WORKER_GRACE;
+        }
+        return self::processAlive($pid);
+    }
+
+    /**
+     * Close out jobs whose worker is gone.
+     *
+     * A worker that is killed, or dies on an out-of-memory, never reaches the
+     * code that sets a final status -- so its row sits at 'running' for ever.
+     * Nothing cleaned these up, so after a few of them the database claimed
+     * several scans were in progress when none were.
+     */
+    public static function reapStaleJobs(): int
+    {
+        $rows = Database::fetchAll(
+            "SELECT * FROM scan_jobs WHERE status IN ('running','pending','cancelling')"
+        );
+        $n = 0;
+        foreach ($rows as $job) {
+            if (self::jobWorkerAlive($job)) { continue; }
+            Database::query(
+                "UPDATE scan_jobs SET status='interrupted', finished_at=? WHERE id=?",
+                [time(), (int) $job['id']]
+            );
+            Logger::warn('Scan job ' . $job['id'] . ' had no live worker - marked interrupted');
+            $n++;
+        }
+        return $n;
+    }
+
+    /**
+     * The scan genuinely in progress, if any. Stale rows are cleared first, so
+     * this never reports a scan that died days ago.
+     */
+    public static function activeScan(): ?array
+    {
+        self::reapStaleJobs();
+        $row = Database::fetchOne(
+            "SELECT * FROM scan_jobs WHERE status IN ('running','pending','cancelling')
+              ORDER BY id DESC LIMIT 1"
+        );
+        return $row ?: null;
+    }
+
+    /**
+     * Kill clamscan processes left behind by workers that are gone.
+     *
+     * Deliberately narrow: ONLY processes whose process group matches a
+     * scan_jobs row whose worker is dead. cPanel runs its own clamscan for
+     * mail, and a reaper that matched on the process name alone would kill
+     * that too -- silently breaking mail scanning on every cPanel server this
+     * ships to.
+     */
+    public static function reapOrphanClamscans(): array
+    {
+        $killed = [];
+        if (!is_dir('/proc')) { return $killed; }
+
+        $deadGroups = [];
+        foreach (Database::fetchAll(
+            "SELECT worker_pid, worker_pgid FROM scan_jobs
+              WHERE worker_pgid IS NOT NULL AND worker_pgid > 1"
+        ) as $row) {
+            $pgid = (int) $row['worker_pgid'];
+            $pid  = (int) $row['worker_pid'];
+            // A group whose worker is still alive is a running scan, not an
+            // orphan. Leave it entirely alone.
+            if ($pid > 1 && self::processAlive($pid)) { continue; }
+            $deadGroups[$pgid] = true;
+        }
+        if (!$deadGroups) { return $killed; }
+
+        foreach (array_keys($deadGroups) as $pgid) {
+            foreach (self::clamscanPidsForGroup((int) $pgid) as $pid) {
+                if (function_exists('posix_kill')) { @posix_kill($pid, 15); }
+                else { @exec('kill -TERM ' . $pid . ' 2>/dev/null'); }
+                $killed[] = $pid;
+            }
+        }
+        if ($killed) {
+            Logger::warn('Reaped ' . count($killed) . ' orphaned clamscan process(es): '
+                       . implode(', ', $killed));
+        }
+        return $killed;
+    }
+
+    /**
+     * Start a scan -- at most one at a time.
+     *
+     * There was no guard here at all. Every call inserted a job and spawned a
+     * detached worker, so each one added a clamscan to the server. The UI's
+     * Start button, the CLI and the scheduler all landed here, and the
+     * scheduler called this once PER CONFIGURED PATH, in a loop, launching
+     * them all in parallel.
+     *
+     * Concurrency is not a tuning question for this particular program: every
+     * clamscan process loads the whole ClamAV signature database into its own
+     * memory, which is most of a gigabyte each. Six of them is six copies of
+     * the same database and six processes competing for the same disks, which
+     * is strictly worse than one scan that finishes sooner.
+     */
     public function startScan(string $path = '/home', string $type = 'quick'): int {
+        $active = self::activeScan();
+        if ($active !== null) {
+            throw new RuntimeException(
+                'A scan is already running (job ' . $active['id'] . ', started '
+                . date('Y-m-d H:i:s', (int) $active['started_at'])
+                . '). Stop it before starting another.'
+            );
+        }
+
+        // Anything left over from a worker that died takes CPU from the scan
+        // about to start.
+        self::reapOrphanClamscans();
+
         $jobId = Database::insert('scan_jobs', [
             'scan_type'  => $type,
             'status'     => 'running',
@@ -284,16 +414,35 @@ class Scanner {
         file_put_contents($listFile, implode("\n", $files) . "\n");
 
         $nice = self::getCpuNice();
+
+        // Bounded. A single archive can keep clamscan busy for a very long
+        // time -- one was found holding 13 minutes of CPU and 1.3GB of RSS on
+        // one file -- and while it does, the worker is blocked and the scan
+        // makes no progress at all. The batch is abandoned rather than the
+        // scan, so one bad file costs this batch and nothing more.
+        $timeout = max(60, min(3600,
+            (int) (Database::setting('scan_batch_timeout', '600') ?? 600)));
+
         $cmd  = sprintf(
-            'nice -n%d ionice -c3 %s --infected --no-summary --max-filesize=50M --max-scansize=200M --file-list=%s 2>&1',
+            'timeout %d nice -n%d ionice -c3 %s --infected --no-summary --max-filesize=50M --max-scansize=200M --file-list=%s 2>&1',
+            $timeout,
             $nice,
             escapeshellarg($bin),
             escapeshellarg($listFile)
         );
 
         $output = [];
-        exec($cmd, $output);
+        $rc     = 0;
+        exec($cmd, $output, $rc);
         @unlink($listFile);
+
+        // 124 is timeout(1) giving up. Any threats clamscan printed before it
+        // was cut off are still in $output and are still real, so they are
+        // kept -- only the rest of the batch is lost.
+        if ($rc === 124) {
+            Logger::warn("Scan job {$jobId}: a batch of " . count($files)
+                       . " file(s) exceeded {$timeout}s and was abandoned");
+        }
 
         $threats = [];
         foreach ($output as $line) {
