@@ -16,6 +16,8 @@ require_once SG_ROOT . '/backend/lib/Database.php';
 require_once SG_ROOT . '/backend/lib/Logger.php';
 require_once SG_ROOT . '/backend/lib/Scanner.php';
 require_once SG_ROOT . '/backend/lib/License.php';
+// The scan pauses itself while a backup runs, which needs the process probe.
+require_once SG_ROOT . '/backend/lib/RealTimeMonitor.php';
 
 // ── License gate ─────────────────────────────────────────────────────────────
 // Scheduled scans never touch the API, so they must be gated here or an

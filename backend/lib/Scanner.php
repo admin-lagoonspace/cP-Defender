@@ -423,6 +423,19 @@ class Scanner {
             );
         }
 
+        // Starting a scan into a running backup is the same mistake as not
+        // pausing one: two processes reading the whole filesystem at once.
+        if ((Database::setting('scan_pause_on_backup', '1') ?? '1') === '1') {
+            $backups = self::backupRunning();
+            if ($backups) {
+                throw new RuntimeException(
+                    'A backup is running (' . implode(', ', $backups) . '). '
+                    . 'Scanning now would compete with it for the same disks. '
+                    . 'The scheduled scan will run once it has finished.'
+                );
+            }
+        }
+
         // Anything left over from a worker that died takes CPU from the scan
         // about to start.
         self::reapOrphanClamscans();
@@ -734,6 +747,13 @@ class Scanner {
                 self::recordProgress($jobId, $scanned, count($threats));
                 return $threats;
             }
+
+            // Stand down while a backup runs. Between batches, so the check is
+            // cheap and the scan never stops mid-clamscan.
+            if (!self::waitOutBackup($jobId)) {
+                self::recordProgress($jobId, $scanned, count($threats));
+                return $threats;
+            }
         }
 
         if ($batch) {
@@ -1002,6 +1022,84 @@ class Scanner {
      *
      * @return array{removed:int,bytes:int,kept:int}
      */
+    /**
+     * Is a backup running? Cached, because the batch loop asks constantly.
+     *
+     * The pause added in 3.30.0 lives inside the real-time monitor daemon and
+     * suspends ITS scanning. A malware scan is a different process entirely
+     * and knew nothing about any of it -- so during a backup the monitor sat
+     * politely idle at 1% CPU while clamscan ran flat out at 58% in
+     * uninterruptible I/O wait, competing with rsync for the same disks. The
+     * quiet half of the product was suspended and the loud half was not.
+     */
+    public static function backupRunning(): array
+    {
+        static $cachedAt = 0;
+        static $cached   = [];
+
+        if ((time() - $cachedAt) < 30) { return $cached; }
+
+        if (!class_exists('RealTimeMonitor')) {
+            $lib = SG_ROOT . '/backend/lib/RealTimeMonitor.php';
+            if (is_file($lib)) { require_once $lib; }
+        }
+        $cached   = class_exists('RealTimeMonitor')
+            ? RealTimeMonitor::backupProcesses()
+            : [];
+        $cachedAt = time();
+        return $cached;
+    }
+
+    /**
+     * Hold the scan while a backup runs.
+     *
+     * Waiting rather than aborting: the scan resumes and finishes, and a
+     * sleeping worker costs one idle process. It holds its lock slot while it
+     * waits, which is correct -- a second scan starting because this one is
+     * politely asleep would defeat the point.
+     *
+     * Returns false when the scan should give up: the wait cap was reached, or
+     * the job was cancelled while waiting.
+     */
+    private static function waitOutBackup(int $jobId): bool
+    {
+        if ((Database::setting('scan_pause_on_backup', '1') ?? '1') !== '1') {
+            return true;
+        }
+        $running = self::backupRunning();
+        if (!$running) { return true; }
+
+        $maxWait = max(60, min(86400,
+            (int) (Database::setting('scan_backup_max_wait', '14400') ?? 14400)));
+        $waited  = 0;
+        $logged  = false;
+
+        while ($running) {
+            if (self::isCancelled($jobId)) { return false; }
+            if ($waited >= $maxWait) {
+                Logger::warn("Scan job {$jobId}: backup still running after {$waited}s; "
+                           . 'deferring the rest of this scan');
+                return false;
+            }
+            if (!$logged) {
+                Logger::info("Scan job {$jobId}: pausing, backup in progress ("
+                           . implode(', ', $running) . ')');
+                Database::setSetting('scan_paused_for_backup', '1');
+                $logged = true;
+            }
+            sleep(30);
+            $waited += 30;
+            // Force a fresh look rather than the 30s cache.
+            $running = self::backupRunning();
+        }
+
+        if ($logged) {
+            Logger::info("Scan job {$jobId}: backup finished after {$waited}s, resuming");
+            Database::setSetting('scan_paused_for_backup', '0');
+        }
+        return true;
+    }
+
     /** True once a stop has been requested for this job. */
     public static function isCancelled(int $jobId): bool
     {

@@ -213,6 +213,14 @@ class Database {
                 -- A single clamscan invocation that exceeds this is abandoned;
                 -- one was found holding 13 minutes of CPU on one file.
                 ('scan_batch_timeout',      '600'),
+                -- Hold a scan while a backup is running. The real-time monitor
+                -- has paused during backups since 3.30.0; the scanner did not,
+                -- so clamscan competed with rsync for the same disks while the
+                -- monitor sat idle.
+                ('scan_pause_on_backup',    '1'),
+                -- After this long waiting, the scan gives up and the next
+                -- scheduled run picks it up rather than sleeping for ever.
+                ('scan_backup_max_wait',    '14400'),
                 -- Quarantine grew without limit until this existed. 0 disables
                 -- pruning, for anyone who would rather keep everything.
                 ('quarantine_retention_days', '30'),

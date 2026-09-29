@@ -146,6 +146,15 @@ $tasks = [
             $type  = setting('scan_type', 'full');
             $sc    = new Scanner();
 
+            // Do not start a scheduled scan into a backup window. startScan()
+            // refuses anyway; catching it here keeps the log readable and
+            // leaves the scan to the next tick.
+            $busy = Scanner::backupRunning();
+            if ($busy) {
+                slog('  backup in progress (' . implode(', ', $busy) . ') - scan deferred');
+                return;
+            }
+
             $usable = array_values(array_filter($paths, 'is_dir'));
             foreach (array_diff($paths, $usable) as $missing) {
                 slog("  skip missing path: $missing");

@@ -328,3 +328,81 @@ t_eq(true, Scanner::isCancelled($job), 'a job whose row is gone stops the worker
 $stopAll = substr($sc, strpos($sc, 'public static function stopAllScans'), 1600);
 t_contains($stopAll, 'self::killRunawayScans()',
     'stopping everything also kills workers no row accounts for');
+
+
+// -- A scan must stand down during a backup ----------------------------------
+// Reported with a top capture: the real-time monitor sat at 1% CPU, correctly
+// suspended, while clamscan ran at 58% in uninterruptible I/O wait against the
+// same disks rsync was using. The pause added in 3.30.0 lives inside the
+// monitor daemon; a malware scan is a different process and knew nothing about
+// it. The quiet half of the product stood down and the loud half did not.
+$sc2 = t_code($repo . '/backend/lib/Scanner.php');
+
+t_contains($sc2, 'function backupRunning', 'the scanner can see a running backup');
+t_contains($sc2, 'RealTimeMonitor::backupProcesses',
+    'using the same probe as the monitor, so both agree on what a backup is');
+t_contains($sc2, 'function waitOutBackup', 'and holds the scan while one runs');
+
+// The probe forks nothing and must not be run per batch.
+$br = substr($sc2, strpos($sc2, 'function backupRunning'), 700);
+t_contains($br, 'static $cachedAt', 'the probe is cached, not run for every batch');
+
+// Waiting, not aborting: the scan resumes and finishes.
+$wo = substr($sc2, strpos($sc2, 'function waitOutBackup'), 1600);
+t_contains($wo, 'sleep(30)', 'it waits rather than abandoning the scan');
+t_contains($wo, 'scan_backup_max_wait', 'with a cap on how long it will wait');
+t_contains($wo, 'self::isCancelled($jobId)',
+    'and a stop request still takes effect while it is waiting');
+
+// A scan that gives up must not be recorded as having completed.
+$loop = substr($sc2, strpos($sc2, 'foreach ($this->walkFiles($path)'), 1400);
+t_contains($loop, 'self::waitOutBackup($jobId)',
+    'the batch loop checks between batches');
+$cancelPos = strpos($loop, 'self::isCancelled($jobId)');
+$waitPos   = strpos($loop, 'self::waitOutBackup($jobId)');
+t_ok($cancelPos !== false && $waitPos !== false && $cancelPos < $waitPos,
+    'cancellation is checked before settling in to wait');
+
+// Starting a scan into a backup is the same mistake as not pausing one.
+$start2 = substr($sc2, strpos($sc2, 'public function startScan'), 1800);
+t_contains($start2, 'self::backupRunning()', 'a scan will not start during a backup');
+t_contains($start2, 'compete with it for the same disks', 'and says why');
+
+// The scheduler should not even try.
+$sched2 = t_code($repo . '/backend/cron/scheduler.php');
+t_contains($sched2, 'Scanner::backupRunning()',
+    'the scheduler defers a scheduled scan during a backup');
+t_contains($sched2, 'scan deferred', 'and logs that it did');
+
+// The worker needs the probe class loaded, or it fatals in cron the moment a
+// backup starts -- which is the worst possible time to find out.
+$worker2 = t_code($repo . '/backend/cron/scan.php');
+t_contains($worker2, "require_once SG_ROOT . '/backend/lib/RealTimeMonitor.php'",
+    'the scan worker loads the probe it depends on');
+
+// Switched on by default, or none of this happens.
+$db3 = t_code($repo . '/backend/lib/Database.php');
+t_contains($db3, "'scan_pause_on_backup',    '1'", 'scans pause during backups by default');
+t_contains($db3, "'scan_backup_max_wait',    '14400'", 'with a wait cap');
+
+// -- Behaviour that can be exercised here ------------------------------------
+// The positive path needs /proc to find a backup process, which this Windows
+// build does not have -- so what is checked here is that switching the feature
+// off is honoured, and that the probe degrades to "no backup" rather than
+// throwing when it cannot look.
+t_ok(is_array(Scanner::backupRunning()),
+    'the probe returns a list even where it cannot read /proc');
+
+Database::setSetting('scan_pause_on_backup', '0');
+$jobW = Database::insert('scan_jobs', [
+    'scan_type' => 'quick', 'status' => 'running',
+    'started_at' => time(), 'scan_path' => '/home',
+]);
+$rm = new ReflectionMethod('Scanner', 'waitOutBackup');
+$rm->setAccessible(true);
+t_eq(true, $rm->invoke(null, $jobW),
+    'with the setting off, a scan is never held up');
+Database::setSetting('scan_pause_on_backup', '1');
+t_eq(true, $rm->invoke(null, $jobW),
+    'and with it on but no backup running, it proceeds immediately');
+Database::query('DELETE FROM scan_jobs WHERE id=?', [$jobW]);
