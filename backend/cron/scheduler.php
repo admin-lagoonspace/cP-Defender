@@ -51,6 +51,8 @@ require_once SG_ROOT . '/backend/lib/UserReport.php';
 // The rtguard task starts the monitor once backups finish; without this
 // require the task fatals in cron and nothing ever resumes.
 require_once SG_ROOT . '/backend/lib/RealTimeMonitor.php';
+// The wafingest task reads ModSecurity events into waf_events.
+require_once SG_ROOT . '/backend/lib/WAF.php';
 
 $force  = null;
 $dryRun = false;
@@ -331,6 +333,26 @@ $tasks = [
     // down during a backup window otherwise stays down until somebody notices
     // and presses Start. This probes for JetBackup and rsync directly and
     // starts the monitor once they have gone.
+    // Read new ModSecurity events into waf_events.
+    //
+    // This had no scheduled run at all: ingestModSecLog() was reachable only
+    // from an API route nothing calls, so waf_events stayed empty for ever and
+    // the WAF page reported no attacks on a server certainly receiving some.
+    // Cheap now that it reads only what has been appended since last time.
+    'wafingest' => [
+        'schedule' => setting('waf_ingest_schedule', 'every'),
+        'time'     => '00:00',
+        'day'      => 0,
+        'run'      => function () {
+            $w  = new WAF();
+            $n  = $w->ingestModSecLog();
+            $st = $w->ingestStatus();
+            slog($st['log_found']
+                ? "  WAF: ingested {$n} event(s) from {$st['log_path']}"
+                : '  WAF: no ModSecurity audit log found - nothing to ingest');
+        },
+    ],
+
     'rtguard' => [
         'schedule' => setting('rt_autostart_schedule', 'every'),
         'time'     => '00:00',

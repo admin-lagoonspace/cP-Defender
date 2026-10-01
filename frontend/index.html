@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.32.0">
+<link rel="stylesheet" href="css/app.css?v=3.33.0">
 </head>
 <body>
 <div id="app">
@@ -289,7 +289,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.32.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.33.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -703,6 +703,20 @@
       </div>
 
       <!-- ── WAF engine provisioning ──────────────────────────────────────── -->
+      <!-- Why the event table is empty. "No attacks" and "we are not reading
+           any log" look identical as a blank table, and the second was true
+           for every install: nothing ever ran the ingester. -->
+      <div class="card mb-5" id="waf-ingest-banner" style="display:none;border-left:3px solid var(--amber,#f59e0b)">
+        <div class="card-body" style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+          <div style="font-size:1.3rem">⚠️</div>
+          <div style="flex:1;min-width:260px">
+            <div style="font-weight:600;font-size:.86rem" id="waf-ingest-title">Not reading any ModSecurity log</div>
+            <div style="font-size:.75rem;color:var(--txt3);margin-top:5px;line-height:1.6" id="waf-ingest-detail"></div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="wafIngestNow()">Read log now</button>
+        </div>
+      </div>
+
       <div class="card mb-5" id="waf-engine-card">
         <div class="card-header">
           <div class="card-title">WAF Engine</div>
@@ -2186,9 +2200,9 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.32.0"></script>
+<script src="js/api.js?v=3.33.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.32.0"></script>
+<script src="js/app.js?v=3.33.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2297,5 +2311,47 @@ document.addEventListener('DOMContentLoaded', async () => {
   </div>
 </div>
 
+
+<!-- Blocking busy overlay.
+     Shown while an action the user started is in flight, so the page cannot be
+     clicked into a queue of overlapping work. Deliberately NOT shown for
+     background polling: the monitor page refreshes itself every 15 seconds and
+     an overlay flashing on each poll would be worse than none at all. -->
+<style>
+  #sg-busy {
+    position: fixed; inset: 0; z-index: 9999;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.42);
+    backdrop-filter: blur(1.5px);
+  }
+  #sg-busy.on { display: flex; }
+  #sg-busy .sg-busy-box {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--card, #1b1f23);
+    border: 1px solid var(--line, #2d333a);
+    border-radius: 10px;
+    padding: 14px 20px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.45);
+    font-size: .84rem;
+    color: var(--txt, #e6e9ec);
+  }
+  #sg-busy .sg-spin {
+    width: 18px; height: 18px; flex: none;
+    border: 2px solid rgba(255,255,255,.18);
+    border-top-color: var(--blue, #7c6cff);
+    border-radius: 50%;
+    animation: sg-spin .7s linear infinite;
+  }
+  @keyframes sg-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    #sg-busy .sg-spin { animation-duration: 2.4s; }
+  }
+</style>
+<div id="sg-busy" role="status" aria-live="polite" aria-hidden="true">
+  <div class="sg-busy-box">
+    <div class="sg-spin"></div>
+    <span id="sg-busy-text">Working…</span>
+  </div>
+</div>
 </body>
 </html>

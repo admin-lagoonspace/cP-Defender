@@ -88,7 +88,63 @@ const API = (() => {
     return localStorage.getItem('sg_token') || '';
   }
 
-  async function req(method, path, data = null) {
+  // ── Busy overlay ─────────────────────────────────────────────────────────
+  //
+  // Counted rather than boolean: several requests can be in flight at once and
+  // the overlay must survive until the last one finishes.
+  //
+  // Shown only for requests that CHANGE something. Every button that acts --
+  // start, stop, save, block, delete -- is a POST, so this covers them without
+  // a per-handler opt-in that someone would forget. Plain GETs are reads,
+  // including the background polls, and an overlay that flashed on those would
+  // be a permanent strobe on the monitor page.
+  let _busy = 0;
+  let _busyTimer = null;
+
+  function busyShow(label) {
+    const el = document.getElementById('sg-busy');
+    if (!el) return;
+    const t = document.getElementById('sg-busy-text');
+    if (t && label) t.textContent = label;
+    el.classList.add('on');
+    el.setAttribute('aria-hidden', 'false');
+  }
+
+  function busyHide() {
+    const el = document.getElementById('sg-busy');
+    if (!el) return;
+    el.classList.remove('on');
+    el.setAttribute('aria-hidden', 'true');
+  }
+
+  function busyStart(label) {
+    _busy++;
+    if (_busy === 1) {
+      // Delayed: a request that finishes in 80ms should not produce a flash of
+      // overlay, which reads as a glitch rather than as feedback.
+      clearTimeout(_busyTimer);
+      _busyTimer = setTimeout(() => busyShow(label), 180);
+    }
+  }
+
+  function busyEnd() {
+    _busy = Math.max(0, _busy - 1);
+    if (_busy === 0) {
+      clearTimeout(_busyTimer);
+      _busyTimer = null;
+      busyHide();
+    }
+  }
+
+  // For handlers that want the overlay around work that is not a single
+  // mutating request -- a slow read, or several calls in sequence.
+  async function withBusy(label, fn) {
+    busyStart(label);
+    try { return await fn(); }
+    finally { busyEnd(); }
+  }
+
+  async function req(method, path, data = null, opts2 = {}) {
     const opts = {
       method,
       headers: {
@@ -100,6 +156,11 @@ const API = (() => {
 
     const base = await resolveBase();
     const url  = buildUrl(base, path);
+
+    // Mutations block; reads do not, unless the caller asks.
+    const block = (method !== 'GET' && opts2.silent !== true) || opts2.busy === true;
+    if (block) busyStart(opts2.label);
+
     try {
       const r = await fetch(url, opts);
 
@@ -142,10 +203,18 @@ const API = (() => {
     } catch (e) {
       console.error('API fetch error:', e);
       return { success: false, error: 'Could not reach the server — please try again' };
+    } finally {
+      // finally, not after the return: a thrown fetch or an early return above
+      // would otherwise leave the counter raised and the overlay stuck on,
+      // locking the UI out of the very error it is trying to report.
+      if (block) busyEnd();
     }
   }
 
   return {
+    // Exposed so a handler can wrap a slow read, or a sequence of calls, in the
+    // same overlay the mutating requests get.
+    withBusy,
     resolveBase,
     baseUrl: () => BASE,
 
@@ -203,6 +272,8 @@ const API = (() => {
     wafEvents:    (sev)        => req('GET',  `waf/events${sev ? '?severity='+sev : ''}`),
     wafCats:      ()           => req('GET',  'waf/categories'),
     wafSetMode:   (mode)       => req('POST', 'waf/set-mode', { mode }),
+    wafIngest:    ()           => req('POST', 'waf/ingest-logs'),
+    wafIngestStatus: ()        => req('GET',  'waf/ingest-status'),
 
     // IP Reputation
     ipCheck:      (ip)         => req('GET',  `iprep/check?ip=${encodeURIComponent(ip)}`),

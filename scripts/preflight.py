@@ -178,6 +178,21 @@ def main():
         else:
             ok("every UI handler resolves to a defined function")
 
+    # 2c-cron. a scheduled task that names a class the script never required
+    # fatals the moment it becomes due, and cron output goes to a log nobody
+    # reads -- so the symptom is a feature that silently never runs. This has
+    # happened three times now: UserReport, RealTimeMonitor and WAF.
+    if php:
+        r = subprocess.run([php, os.path.join(REPO, "scripts", "check-cron-requires.php")],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            for line in (r.stdout + r.stderr).strip().splitlines():
+                if line.strip():
+                    fail(line.strip())
+            problems += 1
+        else:
+            ok("every class a cron script uses is required by it")
+
     # 2c-js. the front-end must at least be bracket-balanced
     # There is no Node here, so for this whole project the only JS validation
     # was a regex brace counter that mis-handled template literals -- it

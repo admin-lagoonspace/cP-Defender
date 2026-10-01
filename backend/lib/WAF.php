@@ -104,10 +104,104 @@ class WAF {
         ];
     }
 
-    public function ingestModSecLog(): int {
-        if (!file_exists(MODSEC_AUDIT)) return 0;
+    /**
+     * Where ModSecurity actually writes its audit log.
+     *
+     * MODSEC_AUDIT is /var/log/modsec_audit.log, which is the Debian default
+     * and the path our own installer writes into its config. It is NOT where
+     * cPanel puts it: EasyApache 4 logs to /var/log/apache2, and a server
+     * using cPanel's own ModSecurity never had a file at our path at all. The
+     * ingester checked file_exists() and returned 0, so the WAF page showed no
+     * events and no error -- indistinguishable from a quiet server.
+     *
+     * The resolved path is remembered, and re-resolved when it stops existing
+     * so a server that switches Apache builds recovers on its own.
+     */
+    public static function auditLogPath(): ?string
+    {
+        $stored = (string) (Database::setting('waf_audit_log', '') ?? '');
+        if ($stored !== '' && is_readable($stored)) { return $stored; }
 
-        $handle = fopen(MODSEC_AUDIT, 'r');
+        foreach (self::auditLogCandidates() as $cand) {
+            if (is_readable($cand)) {
+                Database::setSetting('waf_audit_log', $cand);
+                return $cand;
+            }
+        }
+        return null;
+    }
+
+    /** Every place ModSecurity is known to write, most likely first. */
+    public static function auditLogCandidates(): array
+    {
+        $configured = (string) (Database::setting('waf_audit_log_override', '') ?? '');
+        $list = $configured !== '' ? [$configured] : [];
+        return array_merge($list, [
+            '/var/log/apache2/modsec_audit.log',        // EasyApache 4 (cPanel)
+            '/usr/local/apache/logs/modsec_audit.log',  // older cPanel
+            '/var/log/httpd/modsec_audit.log',          // RHEL-family httpd
+            MODSEC_AUDIT,                               // our own config / Debian
+            '/var/log/modsec/modsec_audit.log',
+        ]);
+    }
+
+    /**
+     * What the WAF log ingest is actually doing.
+     *
+     * "No attacks" and "we never looked" render identically as an empty table.
+     * This is what lets the page tell them apart.
+     */
+    public function ingestStatus(): array
+    {
+        $path = self::auditLogPath();
+        return [
+            'log_found'    => $path !== null,
+            'log_path'     => $path,
+            'log_size'     => $path !== null ? (int) @filesize($path) : 0,
+            'candidates'   => self::auditLogCandidates(),
+            'last_run'     => (int) (Database::setting('waf_ingest_last_run', '0') ?? 0),
+            'last_count'   => (int) (Database::setting('waf_ingest_last_count', '0') ?? 0),
+            'total_events' => (int) (Database::fetchOne(
+                                  'SELECT COUNT(*) c FROM waf_events')['c'] ?? 0),
+            'offset'       => (int) (Database::setting('waf_ingest_offset', '0') ?? 0),
+        ];
+    }
+
+    /**
+     * Read new ModSecurity audit entries into waf_events.
+     *
+     * Reads only what has been appended since last time. The previous version
+     * opened the file and read it from the top on every call, which with a
+     * scheduled run would re-parse the whole audit log every 15 minutes --
+     * gigabytes of I/O on a busy server, and duplicate rows for everything
+     * older than the 60-second dedup window.
+     */
+    public function ingestModSecLog(): int {
+        $path = self::auditLogPath();
+        if ($path === null) {
+            Database::setSetting('waf_ingest_last_run', (string) time());
+            Database::setSetting('waf_ingest_last_count', '0');
+            return 0;
+        }
+
+        $size   = (int) @filesize($path);
+        $offset = (int) (Database::setting('waf_ingest_offset', '0') ?? 0);
+
+        // Rotation, or a different file entirely: start again from the top.
+        if ($size < $offset) { $offset = 0; }
+        if ($size === $offset) {
+            Database::setSetting('waf_ingest_last_run', (string) time());
+            Database::setSetting('waf_ingest_last_count', '0');
+            return 0;
+        }
+
+        $handle = @fopen($path, 'r');
+        if ($handle === false) {
+            Logger::warn('WAF: cannot read ' . $path);
+            return 0;
+        }
+        if ($offset > 0) { @fseek($handle, $offset); }
+
         $count  = 0;
         $entry  = [];
 
@@ -135,7 +229,17 @@ class WAF {
                 $entry['host'] = trim($m[1]);
             }
         }
+        // The trailing entry has no terminator yet if the file is mid-write;
+        // leaving it means the next run picks it up complete.
+        $newOffset = ftell($handle);
         fclose($handle);
+
+        Database::setSetting('waf_ingest_offset', (string) (int) $newOffset);
+        Database::setSetting('waf_ingest_last_run', (string) time());
+        Database::setSetting('waf_ingest_last_count', (string) $count);
+        if ($count > 0) {
+            Logger::info("WAF: ingested {$count} ModSecurity event(s) from {$path}");
+        }
 
         return $count;
     }

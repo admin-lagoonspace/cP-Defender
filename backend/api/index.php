@@ -606,8 +606,14 @@ function routeWAF(string $action, string $method, array $body, array $q, ?array 
             : ['success' => false, 'code' => 405],
 
         'ingest-logs' => $method === 'POST'
-            ? ['success' => true, 'ingested' => $waf->ingestModSecLog()]
+            ? ['success' => true, 'ingested' => $waf->ingestModSecLog(),
+               'status' => $waf->ingestStatus()]
             : ['success' => false, 'code' => 405],
+
+        // GET waf/ingest-status — whether we are reading a ModSecurity log at
+        // all. An empty events table means "no attacks" or "we never looked",
+        // and those render identically; this is what tells them apart.
+        'ingest-status' => ['success' => true, 'data' => $waf->ingestStatus()],
 
         default => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };

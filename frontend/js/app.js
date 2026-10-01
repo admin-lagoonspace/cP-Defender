@@ -934,7 +934,71 @@ async function saveGeoBlock() {
 }
 
 // ── WAF ───────────────────────────────────────────────────────────────────────
+// Explain an empty WAF table.
+//
+// "No attacks were blocked" and "nothing is reading a ModSecurity log" look
+// identical as a blank table, and the second was true on every install:
+// ingestModSecLog() was reachable only from an API route nothing called, so
+// waf_events stayed empty for ever. The banner names which it is.
+async function loadWafIngestState() {
+  const banner = document.getElementById('waf-ingest-banner');
+  if (!banner) return;
+
+  const res = await API.wafIngestStatus();
+  if (!res?.success) { banner.style.display = 'none'; return; }
+  const d = res.data || {};
+
+  const title  = document.getElementById('waf-ingest-title');
+  const detail = document.getElementById('waf-ingest-detail');
+
+  if (!d.log_found) {
+    banner.style.display = '';
+    if (title) title.textContent = 'No ModSecurity audit log found';
+    if (detail) {
+      detail.textContent =
+        'Nothing can be reported until ModSecurity is writing an audit log this '
+        + 'server can read. Looked in: ' + (d.candidates || []).join(', ')
+        + '. If ModSecurity logs somewhere else, set waf_audit_log_override in Settings.';
+    }
+    return;
+  }
+
+  // Found, but never read — the state every install was in.
+  if (!d.last_run) {
+    banner.style.display = '';
+    if (title) title.textContent = 'ModSecurity log found but not yet read';
+    if (detail) {
+      detail.textContent = d.log_path + ' (' + fmtNum(d.log_size || 0)
+        + ' bytes). It is read every 15 minutes from now on; use the button to '
+        + 'read it immediately.';
+    }
+    return;
+  }
+
+  // Working. Only worth saying something if it is finding nothing at all.
+  if ((d.total_events || 0) === 0) {
+    banner.style.display = '';
+    if (title) title.textContent = 'Reading the log, no events recorded yet';
+    if (detail) {
+      detail.textContent = 'Reading ' + d.log_path + '. No ModSecurity events have '
+        + 'been logged yet — that is normal on a quiet server, or if ModSecurity '
+        + 'is in DetectionOnly with no rules matching.';
+    }
+    return;
+  }
+  banner.style.display = 'none';
+}
+
+async function wafIngestNow() {
+  const res = await API.wafIngest();
+  if (!res?.success) { toast(res?.error || 'Could not read the log', 'error'); return; }
+  toast('Read ' + (res.ingested || 0) + ' new event(s)', 'success');
+  loadWafIngestState();
+  loadWAF();
+}
+
 async function loadWAF() {
+  loadWafIngestState();
   const [stats, cats] = await Promise.all([
     Demo.active ? Demo.mockWAFStats() : API.wafStats(),
     API.wafCats(),
