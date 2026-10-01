@@ -29,6 +29,10 @@ SG_PORT=31150
 REGISTER_ONLY=false
 INSTALL_MODE=""
 SKIP_DEPS=false
+# rkhunter and chkrootkit come from EPEL on RHEL-family hosts, and some
+# operators will not have EPEL on a cPanel box at any price. The built-in
+# engine covers the same ground without them, so declining is supported.
+SKIP_ROOTKIT_TOOLS=false
 ADMIN_USER=""
 ADMIN_PASS=""
 GENERATED_PASS=false
@@ -36,6 +40,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --register-only) REGISTER_ONLY=true ;;
     --no-deps)       SKIP_DEPS=true ;;
+    --no-rootkit-tools) SKIP_ROOTKIT_TOOLS=true ;;
     --mode)          shift; INSTALL_MODE="${1:-}" ;;
     --mode=*)        INSTALL_MODE="${1#--mode=}" ;;
     --admin-user)    shift; ADMIN_USER="${1:-}" ;;
@@ -1460,9 +1465,100 @@ CPANELEOF
 
 fi  # end: if standalone / elif cpanel
 
+# ── Rootkit scanning tools ────────────────────────────────────────────────────
+# The Rootkit Scanner page offered rkhunter and chkrootkit and then reported
+# both "Not installed", leaving the operator to work out what to do about it.
+# A tool the product offers should be present when the product is.
+#
+# ON EPEL: on RHEL-family hosts these two live in EPEL, and cPanel cautions
+# against enabling it because it can shadow packages cPanel manages. So EPEL is
+# installed with the repository DISABLED and enabled for this one transaction
+# only (--enablerepo=epel). Nothing else on the server is exposed to it, now or
+# at the next update.
+#
+# None of this is fatal: RootkitEngine is built in and needs neither tool.
+if ! $REGISTER_ONLY && ! $SKIP_DEPS && ! $SKIP_ROOTKIT_TOOLS; then
+  section "Rootkit scanning tools"
+
+  _RK_HAVE=true
+  command -v rkhunter   >/dev/null 2>&1 || _RK_HAVE=false
+  command -v chkrootkit >/dev/null 2>&1 || _RK_HAVE=false
+
+  if $_RK_HAVE; then
+    ok "  rkhunter and chkrootkit are already installed"
+  else
+    _RK_PM=""
+    if   command -v apt-get >/dev/null 2>&1; then _RK_PM=apt
+    elif command -v dnf     >/dev/null 2>&1; then _RK_PM=dnf
+    elif command -v yum     >/dev/null 2>&1; then _RK_PM=yum
+    fi
+
+    case "$_RK_PM" in
+      apt)
+        info "  Installing rkhunter and chkrootkit (apt)…"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q rkhunter chkrootkit >/dev/null 2>&1 || true
+        ;;
+      dnf|yum)
+        # Try the configured repositories first: a host that already carries
+        # these packages needs nothing doing to it.
+        info "  Installing rkhunter and chkrootkit…"
+        $_RK_PM install -y -q rkhunter chkrootkit >/dev/null 2>&1 || true
+
+        if ! command -v rkhunter >/dev/null 2>&1 || ! command -v chkrootkit >/dev/null 2>&1; then
+          if [[ ! -f /etc/yum.repos.d/epel.repo ]]; then
+            info "  Adding EPEL (disabled by default) for these two packages…"
+            $_RK_PM install -y -q epel-release >/dev/null 2>&1 || true
+            # Disabled unless explicitly asked for, so EPEL cannot take part in
+            # any later transaction on a cPanel server.
+            if [[ -f /etc/yum.repos.d/epel.repo ]]; then
+              sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/epel.repo 2>/dev/null || true
+              echo "EPEL_ADDED=1" >> "${MANIFEST}"
+            fi
+          fi
+          $_RK_PM install -y -q --enablerepo=epel rkhunter chkrootkit >/dev/null 2>&1 || true
+        fi
+        ;;
+      *)
+        warn "  No supported package manager — skipping rootkit tools"
+        ;;
+    esac
+
+    # Report what actually happened rather than assuming the install worked.
+    _RK_OK=0
+    if command -v rkhunter >/dev/null 2>&1; then
+      ok "  rkhunter installed"; _RK_OK=$((_RK_OK+1))
+      echo "ROOTKIT_TOOL_RKHUNTER=1" >> "${MANIFEST}"
+    else
+      warn "  rkhunter unavailable"
+    fi
+    if command -v chkrootkit >/dev/null 2>&1; then
+      ok "  chkrootkit installed"; _RK_OK=$((_RK_OK+1))
+      echo "ROOTKIT_TOOL_CHKROOTKIT=1" >> "${MANIFEST}"
+    else
+      warn "  chkrootkit unavailable"
+    fi
+    if [[ $_RK_OK -eq 0 ]]; then
+      info "  The built-in rootkit engine needs neither tool and is used instead."
+    fi
+  fi
+
+  # rkhunter compares system binaries against a database of their expected
+  # properties. Until that database exists every binary looks modified, so the
+  # first scan is a wall of warnings that means nothing. Build it now, in the
+  # background: on a large server this takes a while and must not hold up the
+  # install.
+  if command -v rkhunter >/dev/null 2>&1; then
+    if [[ ! -f /var/lib/rkhunter/db/rkhunter.dat ]]; then
+      info "  Initialising rkhunter's file property database in the background…"
+      nohup rkhunter --propupd --nocolors >/dev/null 2>&1 &
+      disown 2>/dev/null || true
+    fi
+  fi
+fi
+
 # ── Apache restart (cpanel mode) ─────────────────────────────────────────────
 if [[ "$INSTALL_MODE" == "cpanel" ]]; then
-  # ── Stop anything still scanning ──────────────────────────────────────────────
+# ── Stop anything still scanning ──────────────────────────────────────────────
 # An upgrade replaces the code underneath any worker that is mid-scan. Those
 # workers are detached, so nothing else stops them: they keep running the old
 # code against a database this installer may have just migrated, and they keep

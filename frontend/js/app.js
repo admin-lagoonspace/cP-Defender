@@ -2460,6 +2460,25 @@ async function loadRootkit() {
     if (rkSt)   rkSt.textContent   = d?.rkhunter_available ? 'Available' : 'Not installed';
     if (ckIcon) ckIcon.textContent = d?.chkrootkit_available ? 'OK' : 'X';
     if (ckSt)   ckSt.textContent   = d?.chkrootkit_available ? 'Available' : 'Not installed';
+
+    // "Not installed" on its own left the operator to work out what to do
+    // about it. The installer fits these now, so if they are still missing
+    // something went wrong -- say what, and what covers the gap meanwhile.
+    const note = document.getElementById('rk-tools-note');
+    if (note) {
+      const missing = [];
+      if (!d?.rkhunter_available)   missing.push('rkhunter');
+      if (!d?.chkrootkit_available) missing.push('chkrootkit');
+      if (missing.length) {
+        note.style.display = '';
+        note.textContent =
+          missing.join(' and ') + ' could not be installed on this server. '
+          + 'Scans still run: the built-in engine needs neither and covers the '
+          + 'same checks. To retry, run  sentinel install-rootkit-tools  as root.';
+      } else {
+        note.style.display = 'none';
+      }
+    }
   }
 
   const scans = scansRes?.data || [];

@@ -183,6 +183,64 @@ try {
     // Stop everything that is scanning right now. This is the one to reach
     // for when scans have stacked up and the server is struggling.
     // Show what the parser makes of the real ModSecurity log on this server.
+    // Install rkhunter and chkrootkit after the fact.
+    //
+    // The installer does this, so this is the retry path: a host with no
+    // network at install time, or one where the operator declined with
+    // --no-rootkit-tools and later changed their mind.
+    case 'install-rootkit-tools': {
+        $have = static function (string $bin): bool {
+            @exec('command -v ' . escapeshellarg($bin) . ' 2>/dev/null', $o, $rc);
+            return $rc === 0;
+        };
+
+        if ($have('rkhunter') && $have('chkrootkit')) {
+            echo 'Both tools are already installed.' . PHP_EOL;
+            break;
+        }
+
+        $pm = '';
+        foreach (['dnf', 'yum', 'apt-get'] as $cand) {
+            @exec('command -v ' . $cand . ' 2>/dev/null', $o2, $rc2);
+            if ($rc2 === 0) { $pm = $cand; break; }
+        }
+        if ($pm === '') {
+            echo 'No supported package manager found (dnf/yum/apt-get).' . PHP_EOL;
+            break;
+        }
+
+        echo "Installing rkhunter and chkrootkit with {$pm}…" . PHP_EOL;
+        if ($pm === 'apt-get') {
+            @exec('DEBIAN_FRONTEND=noninteractive apt-get install -y -q rkhunter chkrootkit 2>&1', $out);
+        } else {
+            @exec($pm . ' install -y -q rkhunter chkrootkit 2>&1', $out);
+            if (!$have('rkhunter') || !$have('chkrootkit')) {
+                // Same treatment as the installer: EPEL added with the repo
+                // left disabled, and enabled for this transaction only, so it
+                // cannot take part in anything cPanel does later.
+                echo 'Not in the configured repositories; trying EPEL…' . PHP_EOL;
+                if (!file_exists('/etc/yum.repos.d/epel.repo')) {
+                    @exec($pm . ' install -y -q epel-release 2>&1');
+                    @exec("sed -i 's/^enabled=1/enabled=0/' /etc/yum.repos.d/epel.repo 2>/dev/null");
+                }
+                @exec($pm . ' install -y -q --enablerepo=epel rkhunter chkrootkit 2>&1', $out2);
+            }
+        }
+
+        $rk = $have('rkhunter'); $ck = $have('chkrootkit');
+        echo '  rkhunter:   ' . ($rk ? 'installed' : 'NOT installed') . PHP_EOL;
+        echo '  chkrootkit: ' . ($ck ? 'installed' : 'NOT installed') . PHP_EOL;
+        if ($rk && !file_exists('/var/lib/rkhunter/db/rkhunter.dat')) {
+            echo 'Building the rkhunter file property database (this takes a while)...' . PHP_EOL;
+            @exec('rkhunter --propupd --nocolors 2>&1');
+        }
+        if (!$rk && !$ck) {
+            echo 'Neither could be installed. The built-in engine needs neither'
+               . ' and is used instead.' . PHP_EOL;
+        }
+        break;
+    }
+
     case 'waf-parse-test': {
         require_once $BASE . '/lib/WAF.php';
         $w = new WAF();
@@ -387,6 +445,7 @@ Usage: sentinel <command> [args] [--json]
   user-reports                 Rebuild the per-user reports the cPanel plugin reads
   scan-reap                    Clear dead scan jobs and orphaned clamscan processes
   scan-stop-all                Stop every running scan and kill its clamscan processes
+  install-rootkit-tools        Install rkhunter and chkrootkit (retry of the installer step)
   waf-parse-test [n]           Show what the parser reads from the ModSecurity log
   waf-reingest [--clear]       Re-read the audit log from the beginning
   quarantine status            Show where quarantine is and how big\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  license status               Show license state

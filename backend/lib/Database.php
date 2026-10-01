@@ -218,6 +218,13 @@ class Database {
                 -- so clamscan competed with rsync for the same disks while the
                 -- monitor sat idle.
                 ('scan_pause_on_backup',    '1'),
+                -- Rootkit scanning runs nightly. It was unseeded, so it fell
+                -- back to the code default of weekly; a rootkit that lands on
+                -- Monday should not wait until Sunday to be noticed. 03:00 is
+                -- after the usual backup window.
+                ('rootkit_schedule',        'daily'),
+                ('rootkit_time',            '03:00'),
+                ('rootkit_day',             '0'),
                 -- After this long waiting, the scan gives up and the next
                 -- scheduled run picks it up rather than sleeping for ever.
                 ('scan_backup_max_wait',    '14400'),
