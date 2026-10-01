@@ -25,24 +25,20 @@ $html = file_get_contents($repo . '/frontend/index.html');
 t_contains($waf, 'server_ip', 'the server address is captured as well');
 t_ok(strpos($waf, "'/\] (\d+\.\d+\.\d+\.\d+) /'") === false,
     'the pattern that never matched is gone');
-t_contains($waf, '[0-9a-fA-F:.]', 'and the replacement accepts IPv6 too');
+t_contains($waf, 'FILTER_VALIDATE_IP',
+    'addresses are identified by validating tokens, not by counting fields');
 
-// The regex is the fix, so assert it against a real line rather than its shape.
-$line = '[01/Oct/2026:16:21:03 +0000] aYx9QwAAQgEAAFt2 203.0.113.77 54321 198.51.100.10 443';
-$re   = '/^\[[^\]]*\]\s+\S+\s+([0-9a-fA-F:.]+)\s+\d+\s+([0-9a-fA-F:.]+)\s+\d+/';
-t_ok(strpos($waf, '^\[[^\]]*\]\s+\S+\s+([0-9a-fA-F:.]+)') !== false,
-    'the shipped pattern is the one tested here');
-t_eq(1, preg_match($re, $line, $m), 'a real section-A line is matched');
-t_eq('203.0.113.77', $m[1], 'and the CLIENT address is what is taken');
-t_eq('198.51.100.10', $m[2], 'with the server address kept separate');
-
-$v6 = '[01/Oct/2026:16:21:03 +0000] aYx9Qw 2001:db8::1 54321 2001:db8::2 443';
-t_eq(1, preg_match($re, $v6, $m6), 'an IPv6 client is matched');
-t_eq('2001:db8::1', $m6[1], 'and parsed correctly');
-
-// The old pattern must genuinely have failed, or this was never the bug.
-t_eq(0, preg_match('/\] (\d+\.\d+\.\d+\.\d+) /', $line),
-    'the previous pattern does not match a real line, which is why IPs were blank');
+// Why that matters, and why this is no longer asserted as a regex shape: the
+// number of fields on the line varies. With mod_unique_id it is
+//   [time] uniqueId clientIp clientPort serverIp serverPort
+// and without it the id is simply absent. Both previous attempts here were
+// positional and each missed one of those layouts. tests/test_waf_parse.php
+// runs the real ingester over logs in both and checks what reaches the
+// database, which is the only assertion that could have caught either bug.
+t_ok(strpos($waf, 'preg_split') !== false,
+    'the line is tokenised rather than matched positionally');
+t_contains($waf, "\$ips[0]", 'the first valid address is taken as the client');
+t_contains($waf, "\$ips[1]", 'and the second as the server');
 
 // -- user_agent had a column and nothing ever filled it ---------------------
 t_contains($waf, '^User-Agent:', 'the user agent is parsed');

@@ -146,6 +146,101 @@ class WAF {
     }
 
     /**
+     * Show what the parser makes of the log on THIS server.
+     *
+     * The address parsing has now been wrong twice, each time because the
+     * audit log on the target server was not laid out the way the code
+     * assumed. Guessing again is not a plan: this reads the real file and
+     * reports, side by side, the raw section-A lines and what was extracted
+     * from them.
+     *
+     * @param int $limit how many entries to sample
+     */
+    public function parseTest(int $limit = 5): array
+    {
+        $path = self::auditLogPath();
+        if ($path === null) {
+            return ['ok' => false, 'error' => 'No ModSecurity audit log found',
+                    'candidates' => self::auditLogCandidates()];
+        }
+
+        $handle = @fopen($path, 'r');
+        if ($handle === false) {
+            return ['ok' => false, 'error' => 'Cannot read ' . $path];
+        }
+
+        // Sample from the END: the beginning of a long-lived log is the least
+        // interesting part and may predate the current configuration.
+        $size = (int) @filesize($path);
+        $tail = 256 * 1024;
+        if ($size > $tail) { @fseek($handle, $size - $tail); @fgets($handle); }
+
+        $samples = [];
+        $pending = null;
+
+        while (($line = fgets($handle)) !== false && count($samples) < $limit) {
+            $line = rtrim($line, "\r\n");
+
+            // The line after an -A-- boundary is the one carrying addresses.
+            if (preg_match('/^--\S+-A--/', $line)) { $pending = true; continue; }
+            if ($pending !== true) { continue; }
+            $pending = null;
+
+            $ips = [];
+            if (preg_match('/^\[[^\]]+\]\s+(.*)$/', $line, $m)) {
+                foreach (preg_split('/\s+/', trim($m[1])) as $tok) {
+                    if (filter_var($tok, FILTER_VALIDATE_IP) !== false) { $ips[] = $tok; }
+                }
+            }
+            $samples[] = [
+                'raw'        => mb_substr($line, 0, 300),
+                'client_ip'  => $ips[0] ?? null,
+                'server_ip'  => $ips[1] ?? null,
+                'matched'    => !empty($ips),
+            ];
+        }
+        fclose($handle);
+
+        $withIp = 0;
+        foreach ($samples as $x) { if ($x['matched']) { $withIp++; } }
+
+        return [
+            'ok'          => true,
+            'log_path'    => $path,
+            'log_size'    => $size,
+            'sampled'     => count($samples),
+            'with_ip'     => $withIp,
+            'samples'     => $samples,
+            'stored_blank'=> (int) (Database::fetchOne(
+                "SELECT COUNT(*) c FROM waf_events WHERE ip_address IS NULL OR ip_address=''"
+            )['c'] ?? 0),
+            'stored_total'=> (int) (Database::fetchOne(
+                'SELECT COUNT(*) c FROM waf_events')['c'] ?? 0),
+        ];
+    }
+
+    /**
+     * Read the log again from the beginning.
+     *
+     * Events already stored keep whatever was parsed when they were ingested,
+     * so a parser fix does nothing for them -- the offset has long since moved
+     * past. This rewinds it. Clearing first is offered because re-reading
+     * without it produces a second copy of everything older than the 60-second
+     * dedup window.
+     */
+    public function reingest(bool $clearExisting = false): array
+    {
+        if ($clearExisting) {
+            Database::query('DELETE FROM waf_events');
+        }
+        Database::setSetting('waf_ingest_offset', '0');
+        $n = $this->ingestModSecLog();
+        Logger::info('WAF: re-ingested from the start, ' . $n . ' event(s)'
+                   . ($clearExisting ? ' (existing cleared)' : ''));
+        return ['success' => true, 'ingested' => $n, 'cleared' => $clearExisting];
+    }
+
+    /**
      * What the WAF log ingest is actually doing.
      *
      * "No attacks" and "we never looked" render identically as an empty table.
@@ -205,9 +300,33 @@ class WAF {
         $count  = 0;
         $entry  = [];
 
+        // Offset of the end of the last COMPLETE entry. Only that is committed,
+        // so an entry still being written is read again next time rather than
+        // half-parsed and then skipped for ever.
+        $safeOffset = $offset;
+
         while (($line = fgets($handle)) !== false) {
-            if (preg_match('/^--[a-f0-9]+-A--/', $line)) {
-                // New entry
+            // -Z-- terminates a transaction. Saving here, rather than when the
+            // NEXT entry begins, is what makes the most recent event appear:
+            // the old code only ever flushed an entry upon meeting the one
+            // after it, so the newest was never stored -- and because the read
+            // offset still advanced to the end of the file, it was never seen
+            // again either. On a quiet server that is every event.
+            if (preg_match('/^--\S+-Z--/', $line)) {
+                if (!empty($entry)) {
+                    $this->saveWafEvent($entry);
+                    $count++;
+                }
+                $entry = [];
+                $safeOffset = ftell($handle);
+                continue;
+            }
+
+            if (preg_match('/^--\S+-A--/', $line)) {
+                // A new entry beginning without a -Z-- before it means the
+                // previous one was truncated. Keep what was parsed: a partial
+                // event is still a recorded attack, and dropping it silently
+                // would be worse.
                 if (!empty($entry)) {
                     $this->saveWafEvent($entry);
                     $count++;
@@ -220,22 +339,30 @@ class WAF {
                 $entry['rule_id']  = $idM[1]  ?? '';
                 $entry['rule_msg'] = $msgM[1] ?? '';
                 $entry['severity'] = strtolower($sevM[1] ?? 'medium');
-            } elseif (preg_match(
-                    '/^\[[^\]]*\]\s+\S+\s+([0-9a-fA-F:.]+)\s+\d+\s+([0-9a-fA-F:.]+)\s+\d+/',
-                    $line, $m)) {
-                // ModSecurity section A is:
-                //   [time] uniqueId clientIp clientPort serverIp serverPort
+            } elseif (preg_match('/^\[[^\]]+\]\s+(.*)$/', $line, $m)) {
+                // ModSecurity section A, which carries the addresses.
                 //
-                // The old pattern was '\] (\d+\.\d+\.\d+\.\d+) ' -- an IP
-                // immediately after the closing bracket. What actually follows
-                // the bracket is the unique id, so it never matched and every
-                // event was stored with an empty ip_address. The IP is the one
-                // field an operator acts on, so the table was listing attacks
-                // with no way to block their source.
-                //
-                // The character class covers IPv6 as well; the old one did not.
-                $entry['ip_address'] = $m[1];
-                $entry['server_ip']  = $m[2];
+                // Parsed by looking for IP-shaped tokens rather than by
+                // counting fields, because the number of fields varies. With
+                // mod_unique_id the line is
+                //     [time] uniqueId clientIp clientPort serverIp serverPort
+                // and without it the id is simply absent. The previous two
+                // attempts here were both positional: the first looked for an
+                // address straight after the bracket (where the id is, when
+                // there is one) and matched nothing at all; the second assumed
+                // the id was always present and missed every server that does
+                // not load mod_unique_id. Taking the first token that actually
+                // validates as an IP is true for both layouts, and for IPv6.
+                $ips = [];
+                foreach (preg_split('/\s+/', trim($m[1])) as $tok) {
+                    if (filter_var($tok, FILTER_VALIDATE_IP) !== false) {
+                        $ips[] = $tok;
+                    }
+                }
+                if ($ips) {
+                    $entry['ip_address'] = $ips[0];
+                    if (isset($ips[1])) { $entry['server_ip'] = $ips[1]; }
+                }
             } elseif (preg_match('/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT) (.+) HTTP/', $line, $m)) {
                 $entry['method'] = $m[1];
                 $entry['uri']    = $m[2];
@@ -247,9 +374,9 @@ class WAF {
                 $entry['user_agent'] = trim($m[1]);
             }
         }
-        // The trailing entry has no terminator yet if the file is mid-write;
-        // leaving it means the next run picks it up complete.
-        $newOffset = ftell($handle);
+        // Commit only as far as the last terminated entry. Anything after it
+        // is still being written, and will be read in full next time.
+        $newOffset = $safeOffset;
         fclose($handle);
 
         Database::setSetting('waf_ingest_offset', (string) (int) $newOffset);

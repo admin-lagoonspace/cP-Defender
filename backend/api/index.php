@@ -615,6 +615,19 @@ function routeWAF(string $action, string $method, array $body, array $q, ?array 
         // and those render identically; this is what tells them apart.
         'ingest-status' => ['success' => true, 'data' => $waf->ingestStatus()],
 
+        // GET waf/parse-test — what the parser makes of the real log on this
+        // server. The address parsing has been wrong twice because the log was
+        // not laid out as assumed; this reports ground truth instead.
+        'parse-test' => ['success' => true,
+                         'data' => $waf->parseTest((int)($q['limit'] ?? 5))],
+
+        // POST waf/reingest {clear} — read the log again from the start.
+        // Events already stored keep whatever was parsed at the time, so a
+        // parser fix does nothing for them without this.
+        'reingest' => $method === 'POST'
+            ? $waf->reingest(!empty($body['clear']))
+            : ['success' => false, 'error' => 'POST required', 'code' => 405],
+
         default => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }

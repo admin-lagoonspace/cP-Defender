@@ -182,6 +182,52 @@ try {
     // clamscan processes they left behind.
     // Stop everything that is scanning right now. This is the one to reach
     // for when scans have stacked up and the server is struggling.
+    // Show what the parser makes of the real ModSecurity log on this server.
+    case 'waf-parse-test': {
+        require_once $BASE . '/lib/WAF.php';
+        $w = new WAF();
+        $r = $w->parseTest((int)($args[1] ?? 5));
+        if (empty($r['ok'])) {
+            echo 'ERROR: ' . $r['error'] . PHP_EOL;
+            if (!empty($r['candidates'])) {
+                echo 'Looked in:' . PHP_EOL;
+                foreach ($r['candidates'] as $c) { echo '  ' . $c . PHP_EOL; }
+            }
+            break;
+        }
+        echo "Log:     {$r['log_path']} ({$r['log_size']} bytes)" . PHP_EOL;
+        echo "Sampled: {$r['sampled']} entries, {$r['with_ip']} with a readable IP" . PHP_EOL;
+        echo "Stored:  {$r['stored_total']} event(s), {$r['stored_blank']} with no IP" . PHP_EOL;
+        echo PHP_EOL;
+        foreach ($r['samples'] as $i => $x) {
+            echo '--- sample ' . ($i + 1) . ' ---' . PHP_EOL;
+            echo '  raw:    ' . $x['raw'] . PHP_EOL;
+            echo '  client: ' . ($x['client_ip'] ?? '(not found)') . PHP_EOL;
+            echo '  server: ' . ($x['server_ip'] ?? '(not found)') . PHP_EOL;
+        }
+        if ($r['stored_blank'] > 0) {
+            echo PHP_EOL . 'Existing rows keep what was parsed when they were ingested.' . PHP_EOL;
+            echo 'To re-read the log with the current parser:' . PHP_EOL;
+            echo '  sentinel waf-reingest --clear' . PHP_EOL;
+        }
+        break;
+    }
+
+    // Re-read the audit log from the beginning.
+    case 'waf-reingest': {
+        require_once $BASE . '/lib/WAF.php';
+        $clear = in_array('--clear', $args, true);
+        $w = new WAF();
+        $r = $w->reingest($clear);
+        echo 'Re-ingested ' . $r['ingested'] . ' event(s)'
+           . ($clear ? ' after clearing the existing ones' : '') . PHP_EOL;
+        if (!$clear) {
+            echo 'Note: without --clear, entries older than the 60s dedup window' . PHP_EOL;
+            echo 'are stored a second time.' . PHP_EOL;
+        }
+        break;
+    }
+
     case 'scan-stop-all': {
         $r = Scanner::stopAllScans();
         echo $r['message'] . PHP_EOL;
@@ -341,6 +387,8 @@ Usage: sentinel <command> [args] [--json]
   user-reports                 Rebuild the per-user reports the cPanel plugin reads
   scan-reap                    Clear dead scan jobs and orphaned clamscan processes
   scan-stop-all                Stop every running scan and kill its clamscan processes
+  waf-parse-test [n]           Show what the parser reads from the ModSecurity log
+  waf-reingest [--clear]       Re-read the audit log from the beginning
   quarantine status            Show where quarantine is and how big\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  license status               Show license state
   license activate <key>       Store and verify a license key
   license refresh              Force a re-check against the server
