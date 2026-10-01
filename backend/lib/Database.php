@@ -237,6 +237,16 @@ class Database {
                 ('ip_rep_enabled',          '1'),
                 ('geo_block_countries',     ''),
                 ('rate_limit_ssh',          '5'),
+                -- Brute-force detection. The dashboard has charted this since
+                -- it was written and nothing ever produced the data.
+                ('bf_enabled',              '1'),
+                ('bf_threshold',            '10'),
+                ('bf_window',               '600'),
+                ('bf_auto_block',           '1'),
+                ('bf_block_duration',       '3600'),
+                ('bf_retention_days',       '7'),
+                ('bf_schedule',             'every'),
+                ('bf_whitelist',            ''),
                 ('rate_limit_http',         '100'),
                 ('php_disable_funcs',       'exec,passthru,shell_exec,system,proc_open,popen'),
                 ('installed_at',            CAST(strftime('%s','now') AS TEXT)),

@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.35.0">
+<link rel="stylesheet" href="css/app.css?v=3.36.0">
 </head>
 <body>
 <div id="app">
@@ -255,6 +255,10 @@
       <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
       CMS Guard
     </div>
+    <div class="sidebar-item" data-page="bruteforce">
+      <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/><line x1="12" y1="15" x2="12" y2="18"/></svg>
+      Brute Force
+    </div>
     <div class="sidebar-item" data-page="rootkit">
       <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
       Rootkit Scan
@@ -289,7 +293,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.35.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.36.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -473,6 +477,19 @@
       <div class="card mb-5">
         <div class="card-header">
           <div class="card-title">Attack Timeline — Last 30 Days</div>
+          <!-- Numbers beside the chart. The brute-force line had no data at
+               all until there was a detector to produce it. -->
+          <div style="display:flex;gap:18px;align-items:center;margin-left:auto;margin-right:16px;font-size:.74rem">
+            <div style="text-align:right">
+              <div style="font-weight:800;font-size:1rem;color:var(--amber,#f59e0b)" id="dash-bf-24h">—</div>
+              <div class="dim">Failed logins 24h</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-weight:800;font-size:1rem;color:var(--red)" id="dash-bf-blocked">—</div>
+              <div class="dim">IPs blocked</div>
+            </div>
+            <a class="btn btn-ghost btn-xs" onclick="openPage('bruteforce')" style="cursor:pointer">Details →</a>
+          </div>
           <div class="chart-legend">
             <div class="legend-item"><div class="legend-dot" style="background:var(--blue)"></div>WAF Blocks</div>
             <div class="legend-item"><div class="legend-dot" style="background:var(--amber)"></div>Brute Force</div>
@@ -1943,7 +1960,131 @@
     </div>
 
     <!-- ════ PAGE: ROOTKIT SCAN ═════════════════════════════════════════════ -->
-    <div id="page-rootkit" class="page hidden">
+    <div id="page-bruteforce" class="page hidden">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px">
+    <div>
+      <h1 class="page-title">Brute Force Protection</h1>
+      <div class="page-sub">Failed logins across SSH, cPanel, mail and FTP &middot;
+        <span id="bf-state">checking…</span></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost btn-sm" onclick="loadBruteForce()">&#8635; Refresh</button>
+      <button class="btn btn-primary btn-sm" onclick="bfScanNow()">Check logs now</button>
+    </div>
+  </div>
+
+  <!-- Counts. These were the numbers the dashboard chart had no data for. -->
+  <div class="stat-grid mb-5">
+    <div class="stat-card"><div class="stat-label">Failed logins (24h)</div>
+      <div class="stat-value" id="bf-24h">—</div></div>
+    <div class="stat-card"><div class="stat-label">Failed logins (7d)</div>
+      <div class="stat-value" id="bf-7d">—</div></div>
+    <div class="stat-card"><div class="stat-label">Offending addresses</div>
+      <div class="stat-value" id="bf-offenders">—</div></div>
+    <div class="stat-card"><div class="stat-label">Blocked</div>
+      <div class="stat-value" id="bf-blocked" style="color:var(--red)">—</div></div>
+  </div>
+
+  <div class="card mb-5">
+    <div class="card-header"><div class="card-title">Failed logins &mdash; last 14 days</div></div>
+    <div class="card-body"><svg id="bf-chart" width="100%" height="180" style="overflow:visible"></svg></div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:16px;align-items:start" id="bf-cols">
+    <div class="card">
+      <div class="card-header"><div class="card-title">Offending addresses</div></div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>IP</th><th>Service</th><th>Attempts</th><th>Usernames tried</th>
+                     <th>Last seen</th><th>Status</th><th></th></tr></thead>
+          <tbody id="bf-offenders-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">Usernames being tried</div></div>
+      <div class="card-body">
+        <div style="font-size:.74rem;color:var(--txt3);margin-bottom:10px;line-height:1.6">
+          A spray across many usernames looks different from a sustained attempt
+          on one account. The second is worth investigating on its own.
+        </div>
+        <div id="bf-targets"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Where the log sources actually are. An empty table means "nothing is
+       attacking you" or "we are reading nothing", and those look identical. -->
+  <div class="card mb-5" style="margin-top:16px">
+    <div class="card-header"><div class="card-title">Log sources</div></div>
+    <div class="card-body"><div id="bf-sources" style="display:grid;gap:8px"></div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><div class="card-title">Settings</div></div>
+    <div class="card-body">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-weight:600;font-size:.84rem">Detect brute-force attempts</div>
+          <div style="font-size:.73rem;color:var(--txt3);margin-top:3px;line-height:1.6;max-width:62ch">
+            Reads authentication logs and counts failures per source address.
+          </div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="bf-set-enabled" onchange="bfSave()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--line,#2d333a)">
+        <div>
+          <div style="font-weight:600;font-size:.84rem">Block offenders automatically</div>
+          <div style="font-size:.73rem;color:var(--txt3);margin-top:3px;line-height:1.6;max-width:62ch">
+            Adds the address to the firewall. Loopback, private ranges and
+            anything on the allow list are never blocked &mdash; locking yourself
+            out of the server while defending it is not a trade worth making.
+          </div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="bf-set-block" onchange="bfSave()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="form-row" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px">
+        <div class="form-group" style="flex:1;min-width:150px;margin:0">
+          <label class="form-label" style="font-size:.75rem">Failures before blocking</label>
+          <input type="number" id="bf-set-threshold" class="form-input" min="3" max="1000" value="10">
+        </div>
+        <div class="form-group" style="flex:1;min-width:150px;margin:0">
+          <label class="form-label" style="font-size:.75rem">Counted within (minutes)</label>
+          <input type="number" id="bf-set-window" class="form-input" min="1" max="1440" value="10">
+        </div>
+        <div class="form-group" style="flex:1;min-width:150px;margin:0">
+          <label class="form-label" style="font-size:.75rem">Block for (minutes, 0 = forever)</label>
+          <input type="number" id="bf-set-duration" class="form-input" min="0" max="43200" value="60">
+        </div>
+        <div class="form-group" style="flex:1;min-width:150px;margin:0">
+          <label class="form-label" style="font-size:.75rem">Keep records for (days)</label>
+          <input type="number" id="bf-set-retention" class="form-input" min="1" max="90" value="7">
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-top:12px">
+        <label class="form-label" style="font-size:.75rem">Never block these addresses (comma separated)</label>
+        <input type="text" id="bf-set-whitelist" class="form-input" placeholder="203.0.113.5, 198.51.100.0">
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;margin-top:14px">
+        <button class="btn btn-primary btn-sm" onclick="bfSave()">Save Settings</button>
+        <span id="bf-save-status" style="font-size:.75rem;color:var(--txt3)"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="page-rootkit" class="page hidden">
       <div class="page-header">
         <div>
           <div class="page-title">Rootkit Scanner</div>
@@ -2201,9 +2342,9 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.35.0"></script>
+<script src="js/api.js?v=3.36.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.35.0"></script>
+<script src="js/app.js?v=3.36.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {

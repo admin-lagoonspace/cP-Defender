@@ -41,6 +41,7 @@ require_once __DIR__ . '/../lib/Logger.php';
 require_once __DIR__ . '/../lib/Scanner.php';
 require_once __DIR__ . '/../lib/Firewall.php';
 require_once __DIR__ . '/../lib/WAF.php';
+require_once __DIR__ . '/../lib/BruteForce.php';
 require_once __DIR__ . '/../lib/IPReputation.php';
 require_once __DIR__ . '/../lib/RealTimeMonitor.php';
 require_once __DIR__ . '/../lib/BotShield.php';
@@ -171,6 +172,7 @@ try {
         'botshield'  => routeBotShield($action, $method, $body, $query, $user),
         'cmsguard'   => routeCMSGuard($action, $method, $body, $query, $user),
         'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
+        'bruteforce' => routeBruteForce($action, $method, $body, $query, $user),
         'integrity'  => routeIntegrity($action, $method, $body, $query, $id, $user),
         'phphard'    => routePHPHard($action, $method, $body, $query, $user),
         'update'     => routeUpdate($action, $method, $user),
@@ -370,6 +372,9 @@ function routeDashboard(string $action, string $method, array $q, ?array $user):
                 'scanner'   => $scanStats,
                 'firewall'  => $fwStats,
                 'waf'       => $wafStats,
+                // The dashboard charted brute force from the start and had no
+                // numbers to put beside it.
+                'bruteforce'=> BruteForce::stats(),
                 'events'    => $events,
                 'timeline'  => $timeline,
                 'server'    => [
@@ -565,6 +570,39 @@ function routeFirewall(string $action, string $method, array $body, array $q, ?s
         'reload' => $method === 'POST'
             ? $fw->reloadFirewall()
             : ['success' => false, 'code' => 405],
+
+        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+/**
+ * Brute-force detection.
+ *
+ * The dashboard's "Brute Force" series queries security_events for
+ * type='brute_force'. Nothing wrote one until BruteForce existed, so the line
+ * was flat at zero on servers that were certainly being attacked.
+ */
+function routeBruteForce(string $action, string $method, array $body, array $q, ?array $user): array {
+    Auth::requireRole('admin', $user);
+
+    return match($action) {
+        'stats'     => ['success' => true, 'data' => BruteForce::stats()],
+        'timeline'  => ['success' => true,
+                        'data' => BruteForce::timeline((int)($q['days'] ?? 14))],
+        'offenders' => ['success' => true,
+                        'data' => BruteForce::offenders((int)($q['limit'] ?? 100))],
+        'targets'   => ['success' => true, 'data' => BruteForce::topTargets()],
+
+        // Run the detector now rather than waiting for the next tick.
+        'scan' => $method === 'POST'
+            ? ['success' => true, 'data' => BruteForce::run()]
+            : ['success' => false, 'error' => 'POST required', 'code' => 405],
+
+        // Unblock an address and forget it. Needed when the detector catches
+        // somebody who simply mistyped a password a few times.
+        'release' => $method === 'POST'
+            ? BruteForce::release((string)($body['ip'] ?? ''))
+            : ['success' => false, 'error' => 'POST required', 'code' => 405],
 
         default => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };

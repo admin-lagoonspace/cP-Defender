@@ -33,7 +33,7 @@ foreach ([
     'Database', 'Auth', 'Logger', 'Scanner', 'Firewall', 'WAF', 'IPReputation',
     'RealTimeMonitor', 'BotShield', 'CMSGuard', 'RootkitScanner', 'FileIntegrity',
     'PHPHardening', 'UpdateChecker', 'License', 'FirewallEngine', 'RootkitEngine',
-    'BlocklistRegistry', 'WAFInstaller', 'UserReport',
+    'BlocklistRegistry', 'WAFInstaller', 'UserReport', 'BruteForce',
 ] as $lib) {
     require_once $repo . '/backend/lib/' . $lib . '.php';
 }

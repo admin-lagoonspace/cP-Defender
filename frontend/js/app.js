@@ -153,6 +153,7 @@ function openPage(name) {
     case 'waf':       loadWAF(); loadWafEngine();            break;
     case 'iprep':     loadTopAttackers(); loadServerIpForBlocklist();   break;
     case 'events':    loadEvents();         break;
+    case 'bruteforce': loadBruteForce();     break;
     case 'settings':  loadSettings();       break;
     case 'botshield': loadBotShield();      break;
     case 'cms':       loadCMSGuard();       break;
@@ -334,6 +335,13 @@ async function refreshDashboard() {
   // Threat breakdown
   const byType = sc?.by_type || [];
   Charts.threatBars(document.getElementById('dash-threat-breakdown'), byType);
+
+  // Brute force counts beside the chart that has always drawn the series.
+  const bf = data.bruteforce;
+  if (bf) {
+    setText('dash-bf-24h',     fmtNum(bf.attempts_24h || 0));
+    setText('dash-bf-blocked', fmtNum(bf.blocked      || 0));
+  }
 
   // Timeline chart
   if (data.timeline?.length) {
@@ -1177,6 +1185,151 @@ async function setWAFMode() {
   const res  = Demo.active ? { success: true } : await API.wafSetMode(mode);
   if (res?.success) toast(`WAF mode set to ${mode}`, 'success');
   else toast('Failed', 'error');
+}
+
+// ── Brute Force ────────────────────────────────────────────────────────────────
+//
+// The dashboard has charted a "Brute Force" series since it was written, and
+// nothing ever produced the data for it. These read what the detector now
+// records.
+
+async function loadBruteForce() {
+  const [statsRes, tlRes, offRes, tgtRes] = await Promise.all([
+    API.bfStats().catch(() => null),
+    API.bfTimeline(14).catch(() => null),
+    API.bfOffenders().catch(() => null),
+    API.bfTargets().catch(() => null),
+  ]);
+
+  const d = statsRes?.data;
+  if (d) {
+    setText('bf-24h',       fmtNum(d.attempts_24h || 0));
+    setText('bf-7d',        fmtNum(d.attempts_7d  || 0));
+    setText('bf-offenders', fmtNum(d.offenders    || 0));
+    setText('bf-blocked',   fmtNum(d.blocked      || 0));
+
+    const state = document.getElementById('bf-state');
+    if (state) {
+      state.textContent = d.enabled
+        ? (d.auto_block ? 'detecting and blocking automatically' : 'detecting only')
+        : 'detection is switched off';
+      state.style.color = d.enabled ? 'var(--ok, #22c55e)' : 'var(--amber, #f59e0b)';
+    }
+
+    // Settings, filled from what the server actually has rather than from
+    // whatever the markup shipped with.
+    const chk = (id, v) => { const e = document.getElementById(id); if (e) e.checked = !!v; };
+    const val = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
+    chk('bf-set-enabled', d.enabled);
+    chk('bf-set-block',   d.auto_block);
+    val('bf-set-threshold', d.threshold || 10);
+    val('bf-set-window',    Math.round((d.window || 600) / 60));
+    val('bf-set-duration',  Math.round((d.block_duration || 3600) / 60));
+
+    // Which logs are actually being read. An empty table means "nothing is
+    // attacking you" or "we are reading nothing", and those look identical.
+    const src = document.getElementById('bf-sources');
+    if (src) {
+      src.innerHTML = Object.entries(d.sources || {}).map(([k, v]) => `
+        <div style="display:flex;gap:10px;align-items:center;font-size:.78rem">
+          <span style="width:16px;color:${v.log_found ? 'var(--ok,#22c55e)' : 'var(--amber,#f59e0b)'}">
+            ${v.log_found ? '\u2713' : '\u2717'}</span>
+          <span style="min-width:150px">${esc(v.label)}</span>
+          <span class="mono dim" style="flex:1">${esc(v.log_path || 'no readable log found')}</span>
+          <span class="dim">${fmtNum(v.attempts_24h || 0)} in 24h</span>
+        </div>`).join('');
+    }
+  }
+
+  const tl = tlRes?.data || [];
+  const svg = document.getElementById('bf-chart');
+  if (svg && tl.length && window.Charts?.timeline) {
+    Charts.timeline(svg, tl.map(x => x.date), [
+      { values: tl.map(x => x.attempts), color: '#f59e0b', label: 'Failed logins' },
+      { values: tl.map(x => x.blocked),  color: '#ef4444', label: 'Blocked' },
+    ]);
+  }
+
+  // Offenders. Every value here comes from a log line written by whoever is
+  // attacking the server, so all of it is escaped.
+  const tb = document.getElementById('bf-offenders-body');
+  if (tb) {
+    const rows = offRes?.data || [];
+    if (!rows.length) {
+      tb.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:22px">'
+        + 'No offending addresses. Either nothing has crossed the threshold, or no '
+        + 'authentication log could be read — the Log sources panel below says which.</td></tr>';
+    } else {
+      tb.innerHTML = rows.map(r => `
+        <tr>
+          <td class="mono">${esc(r.ip_address)}</td>
+          <td>${esc(r.service)}</td>
+          <td><b>${fmtNum(r.attempts)}</b></td>
+          <td class="dim" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+              title="${esc(r.usernames || '')}">${esc(r.usernames || '—')}</td>
+          <td class="dim">${esc(reltime(r.last_seen))}</td>
+          <td>${Number(r.blocked)
+                ? '<span class="badge badge-red">Blocked</span>'
+                : '<span class="badge badge-amber">Watching</span>'}</td>
+          <td><button class="btn btn-ghost btn-xs"
+                      onclick="bfRelease('${esc(r.ip_address)}')">Release</button></td>
+        </tr>`).join('');
+    }
+  }
+
+  const tgt = document.getElementById('bf-targets');
+  if (tgt) {
+    const rows = tgtRes?.data || [];
+    tgt.innerHTML = rows.length
+      ? rows.map(r => `
+          <div style="display:flex;justify-content:space-between;gap:10px;font-size:.8rem;padding:4px 0">
+            <span class="mono">${esc(r.username)}</span>
+            <span class="dim">${fmtNum(r.attempts)}</span>
+          </div>`).join('')
+      : '<div class="dim" style="font-size:.8rem">No usernames recorded in the last 24 hours.</div>';
+  }
+}
+
+async function bfScanNow() {
+  const res = await API.bfScan();
+  if (!res?.success) { toast(res?.error || 'Could not read the logs', 'error'); return; }
+  const d = res.data || {};
+  toast(d.enabled === false
+    ? 'Detection is switched off'
+    : `${d.collected || 0} failure(s) read, ${d.blocked || 0} address(es) blocked`,
+    'success');
+  loadBruteForce();
+}
+
+async function bfRelease(ip) {
+  const res = await API.bfRelease(ip);
+  if (res?.success) { toast('Released ' + ip, 'success'); loadBruteForce(); }
+  else { toast(res?.error || 'Could not release that address', 'error'); }
+}
+
+async function bfSave() {
+  const g = (id) => document.getElementById(id);
+  const status = g('bf-save-status');
+
+  // Minutes in the UI, seconds in the settings: an operator thinks in minutes
+  // and the detector works in seconds.
+  const payload = {
+    bf_enabled:        g('bf-set-enabled')?.checked ? '1' : '0',
+    bf_auto_block:     g('bf-set-block')?.checked   ? '1' : '0',
+    bf_threshold:      String(g('bf-set-threshold')?.value || '10'),
+    bf_window:         String((parseInt(g('bf-set-window')?.value, 10)   || 10) * 60),
+    bf_block_duration: String((parseInt(g('bf-set-duration')?.value, 10) || 60) * 60),
+    bf_retention_days: String(g('bf-set-retention')?.value || '7'),
+    bf_whitelist:      (g('bf-set-whitelist')?.value || '').trim(),
+  };
+
+  const res = await API.saveSettings(payload);
+  if (status) {
+    status.textContent = res?.success ? 'Saved' : (res?.error || 'Could not save');
+    status.style.color = res?.success ? 'var(--ok, #22c55e)' : 'var(--red)';
+    setTimeout(() => { status.textContent = ''; }, 4000);
+  }
+  if (res?.success) loadBruteForce();
 }
 
 // ── IP Reputation ──────────────────────────────────────────────────────────────

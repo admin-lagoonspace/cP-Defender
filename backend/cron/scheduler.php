@@ -53,6 +53,8 @@ require_once SG_ROOT . '/backend/lib/UserReport.php';
 require_once SG_ROOT . '/backend/lib/RealTimeMonitor.php';
 // The wafingest task reads ModSecurity events into waf_events.
 require_once SG_ROOT . '/backend/lib/WAF.php';
+// The bruteforce task reads auth logs and blocks repeat offenders.
+require_once SG_ROOT . '/backend/lib/BruteForce.php';
 
 $force  = null;
 $dryRun = false;
@@ -339,6 +341,22 @@ $tasks = [
     // from an API route nothing calls, so waf_events stayed empty for ever and
     // the WAF page reported no attacks on a server certainly receiving some.
     // Cheap now that it reads only what has been appended since last time.
+    // Read authentication logs, and block addresses that keep failing.
+    //
+    // Every tick: an attack that lasts ten minutes is over before an hourly
+    // task would notice, and reading is incremental so the cost is small.
+    'bruteforce' => [
+        'schedule' => setting('bf_schedule', 'every'),
+        'time'     => '00:00',
+        'day'      => 0,
+        'run'      => function () {
+            $r = BruteForce::run();
+            if (!$r['enabled']) { slog('  brute force: disabled'); return; }
+            slog('  brute force: ' . $r['collected'] . ' failure(s), '
+               . $r['offenders'] . ' offender(s), ' . $r['blocked'] . ' blocked');
+        },
+    ],
+
     'wafingest' => [
         'schedule' => setting('waf_ingest_schedule', 'every'),
         'time'     => '00:00',

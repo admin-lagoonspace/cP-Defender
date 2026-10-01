@@ -272,6 +272,12 @@ const API = (() => {
     wafEvents:    (sev)        => req('GET',  `waf/events${sev ? '?severity='+sev : ''}`),
     wafCats:      ()           => req('GET',  'waf/categories'),
     wafSetMode:   (mode)       => req('POST', 'waf/set-mode', { mode }),
+    bfStats:      ()           => req('GET',  'bruteforce/stats'),
+    bfTimeline:   (days)       => req('GET',  `bruteforce/timeline?days=${days || 14}`),
+    bfOffenders:  ()           => req('GET',  'bruteforce/offenders'),
+    bfTargets:    ()           => req('GET',  'bruteforce/targets'),
+    bfScan:       ()           => req('POST', 'bruteforce/scan'),
+    bfRelease:    (ip)         => req('POST', 'bruteforce/release', { ip }),
     wafIngest:    ()           => req('POST', 'waf/ingest-logs'),
     wafIngestStatus: ()        => req('GET',  'waf/ingest-status'),
 
