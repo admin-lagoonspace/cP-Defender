@@ -220,13 +220,31 @@ class WAF {
                 $entry['rule_id']  = $idM[1]  ?? '';
                 $entry['rule_msg'] = $msgM[1] ?? '';
                 $entry['severity'] = strtolower($sevM[1] ?? 'medium');
-            } elseif (preg_match('/\] (\d+\.\d+\.\d+\.\d+) /', $line, $m)) {
+            } elseif (preg_match(
+                    '/^\[[^\]]*\]\s+\S+\s+([0-9a-fA-F:.]+)\s+\d+\s+([0-9a-fA-F:.]+)\s+\d+/',
+                    $line, $m)) {
+                // ModSecurity section A is:
+                //   [time] uniqueId clientIp clientPort serverIp serverPort
+                //
+                // The old pattern was '\] (\d+\.\d+\.\d+\.\d+) ' -- an IP
+                // immediately after the closing bracket. What actually follows
+                // the bracket is the unique id, so it never matched and every
+                // event was stored with an empty ip_address. The IP is the one
+                // field an operator acts on, so the table was listing attacks
+                // with no way to block their source.
+                //
+                // The character class covers IPv6 as well; the old one did not.
                 $entry['ip_address'] = $m[1];
-            } elseif (preg_match('/^(GET|POST|PUT|DELETE|PATCH) (.+) HTTP/', $line, $m)) {
+                $entry['server_ip']  = $m[2];
+            } elseif (preg_match('/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT) (.+) HTTP/', $line, $m)) {
                 $entry['method'] = $m[1];
                 $entry['uri']    = $m[2];
-            } elseif (preg_match('/^Host: (.+)/', $line, $m)) {
+            } elseif (preg_match('/^Host:\s*(.+)/i', $line, $m)) {
                 $entry['host'] = trim($m[1]);
+            } elseif (preg_match('/^User-Agent:\s*(.+)/i', $line, $m)) {
+                // The table has had a user_agent column all along and nothing
+                // ever filled it.
+                $entry['user_agent'] = trim($m[1]);
             }
         }
         // The trailing entry has no terminator yet if the file is mid-write;
@@ -262,6 +280,7 @@ class WAF {
             'uri'        => $e['uri']        ?? '',
             'method'     => $e['method']     ?? '',
             'host'       => $e['host']       ?? '',
+            'user_agent' => mb_substr((string)($e['user_agent'] ?? ''), 0, 512),
             'action'     => 'block',
         ]);
     }

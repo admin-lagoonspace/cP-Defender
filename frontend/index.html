@@ -6,7 +6,7 @@
 <title>Sentinel Gate — Security Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=3.33.0">
+<link rel="stylesheet" href="css/app.css?v=3.34.0">
 </head>
 <body>
 <div id="app">
@@ -289,7 +289,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.33.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v3.34.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -2200,9 +2200,9 @@
 <!-- Written by the installer with the API endpoint for THIS server. Absent on
      installs that do not pin one; api.js then discovers the base itself. -->
 <script src="config.js"></script>
-<script src="js/api.js?v=3.33.0"></script>
+<script src="js/api.js?v=3.34.0"></script>
 <script src="js/charts.js"></script>
-<script src="js/app.js?v=3.33.0"></script>
+<script src="js/app.js?v=3.34.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2351,6 +2351,89 @@ document.addEventListener('DOMContentLoaded', async () => {
   <div class="sg-busy-box">
     <div class="sg-spin"></div>
     <span id="sg-busy-text">Working…</span>
+  </div>
+</div>
+
+<!-- WAF event detail.
+     The table truncates the message and the URI, which are the two fields that
+     actually tell you what was attempted -- so a row could be read but not
+     understood, and there was no way to see the rest. -->
+<style>
+  #waf-event-modal {
+    position: fixed; inset: 0; z-index: 9000;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.55);
+    padding: 20px;
+  }
+  #waf-event-modal.hidden { display: none; }
+  #waf-event-modal .wem-box {
+    background: var(--card, #1b1f23);
+    border: 1px solid var(--line, #2d333a);
+    border-radius: 12px;
+    width: 100%; max-width: 760px;
+    max-height: 86vh; display: flex; flex-direction: column;
+    box-shadow: 0 18px 60px rgba(0,0,0,.5);
+  }
+  #waf-event-modal .wem-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 18px; border-bottom: 1px solid var(--line, #2d333a);
+  }
+  #waf-event-modal .wem-body { padding: 16px 18px; overflow: auto; }
+  #waf-event-modal .wem-foot {
+    display: flex; gap: 8px; justify-content: flex-end;
+    padding: 12px 18px; border-top: 1px solid var(--line, #2d333a);
+    flex-wrap: wrap;
+  }
+  #waf-event-modal dl { margin: 0; display: grid; grid-template-columns: 148px 1fr; gap: 9px 14px; }
+  #waf-event-modal dt { color: var(--txt3, #98a2ad); font-size: .72rem;
+                        text-transform: uppercase; letter-spacing: .03em; padding-top: 2px; }
+  #waf-event-modal dd { margin: 0; font-size: .82rem; word-break: break-all; }
+  #waf-event-modal .wem-pre {
+    background: rgba(0,0,0,.28); border: 1px solid var(--line, #2d333a);
+    border-radius: 7px; padding: 9px 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .76rem; white-space: pre-wrap; word-break: break-all; margin: 0;
+  }
+  @media (max-width: 560px) {
+    #waf-event-modal dl { grid-template-columns: 1fr; gap: 3px 0; }
+    #waf-event-modal dt { margin-top: 8px; }
+  }
+</style>
+<div id="waf-event-modal" class="hidden" role="dialog" aria-modal="true"
+     aria-labelledby="wem-title" onclick="if(event.target===this)closeModal('waf-event-modal')">
+  <div class="wem-box">
+    <div class="wem-head">
+      <span id="wem-sev"></span>
+      <div style="font-weight:700;font-size:.92rem" id="wem-title">WAF event</div>
+      <button class="btn btn-ghost btn-xs" style="margin-left:auto"
+              onclick="closeModal('waf-event-modal')" aria-label="Close">✕</button>
+    </div>
+    <div class="wem-body">
+      <dl>
+        <dt>Rule ID</dt>      <dd class="mono" id="wem-rule"></dd>
+        <dt>Message</dt>      <dd id="wem-msg"></dd>
+        <dt>Source IP</dt>    <dd class="mono" id="wem-ip"></dd>
+        <dt>Method</dt>       <dd class="mono" id="wem-method"></dd>
+        <dt>Host</dt>         <dd class="mono" id="wem-host"></dd>
+        <dt>Action</dt>       <dd id="wem-action"></dd>
+        <dt>When</dt>         <dd id="wem-when"></dd>
+      </dl>
+      <div style="margin-top:14px">
+        <div style="color:var(--txt3);font-size:.72rem;text-transform:uppercase;
+                    letter-spacing:.03em;margin-bottom:6px">Request URI</div>
+        <pre class="wem-pre" id="wem-uri"></pre>
+      </div>
+      <div style="margin-top:12px" id="wem-ua-wrap">
+        <div style="color:var(--txt3);font-size:.72rem;text-transform:uppercase;
+                    letter-spacing:.03em;margin-bottom:6px">User agent</div>
+        <pre class="wem-pre" id="wem-ua"></pre>
+      </div>
+    </div>
+    <div class="wem-foot">
+      <button class="btn btn-ghost btn-sm" onclick="copyWafEvent()">Copy details</button>
+      <button class="btn btn-ghost btn-sm" id="wem-lookup" onclick="lookupWafEventIp()">Check reputation</button>
+      <button class="btn btn-primary btn-sm" id="wem-block" onclick="blockWafEventIp()">Block this IP</button>
+    </div>
   </div>
 </div>
 </body>

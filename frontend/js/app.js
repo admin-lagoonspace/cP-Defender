@@ -1041,15 +1041,135 @@ async function loadWAFEvents() {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:24px">No WAF events. Events are ingested from ModSecurity audit log.</td></tr>';
     return;
   }
+  // Keyed by id so the dialog can render from what is already loaded, without
+  // a second request and without putting the row's data into the markup.
+  _wafEvents = {};
+  events.forEach(e => { _wafEvents[String(e.id)] = e; });
+
+  // EVERY field here comes from an attacker-controlled HTTP request: the URI,
+  // the rule message quoting the matched data, the user agent. Interpolating
+  // them raw into innerHTML -- which is what this did -- means a request
+  // crafted to contain markup runs as script in the dashboard of whoever reads
+  // the log. A security product's own attack log is the last place that should
+  // be true.
   tbody.innerHTML = events.map(e => `
-    <tr>
+    <tr class="waf-row" tabindex="0" role="button"
+        style="cursor:pointer"
+        onclick="showWafEvent('${esc(String(e.id))}')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();showWafEvent('${esc(String(e.id))}')}"
+        title="Show full details">
       <td>${sevBadge(e.severity)}</td>
-      <td class="mono">${e.rule_id}</td>
-      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.rule_msg}</td>
-      <td class="mono">${e.ip_address}</td>
-      <td class="mono" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.uri}</td>
-      <td class="dim">${reltime(e.timestamp)}</td>
+      <td class="mono">${esc(e.rule_id)}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.rule_msg)}</td>
+      <td class="mono">${esc(e.ip_address) || '<span class="dim">—</span>'}</td>
+      <td class="mono" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.uri)}</td>
+      <td class="dim">${esc(reltime(e.timestamp))}</td>
     </tr>`).join('');
+}
+
+// ── WAF event detail ────────────────────────────────────────────────────────
+let _wafEvents = {};
+let _wafEventShown = null;
+
+function showWafEvent(id) {
+  const e = _wafEvents[String(id)];
+  if (!e) return;
+  _wafEventShown = e;
+
+  const put = (elId, val, mono) => {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    // textContent, not innerHTML: same attacker-controlled data as the table.
+    el.textContent = (val === null || val === undefined || val === '') ? '—' : String(val);
+    if (mono) el.classList.add('mono');
+  };
+
+  const sev = document.getElementById('wem-sev');
+  if (sev) sev.innerHTML = sevBadge(e.severity);   // our own markup, fixed set
+
+  put('wem-rule',   e.rule_id);
+  put('wem-msg',    e.rule_msg);
+  put('wem-ip',     e.ip_address);
+  put('wem-method', e.method);
+  put('wem-host',   e.host);
+  put('wem-action', e.action);
+  put('wem-when',   e.timestamp ? new Date(e.timestamp * 1000).toLocaleString()
+                                + ' (' + reltime(e.timestamp) + ')' : '—');
+  put('wem-uri',    e.uri);
+
+  // Hide the user-agent block entirely when there is none, rather than showing
+  // an empty box: these rows predate the parser learning to read it.
+  const uaWrap = document.getElementById('wem-ua-wrap');
+  if (uaWrap) uaWrap.style.display = e.user_agent ? '' : 'none';
+  put('wem-ua', e.user_agent);
+
+  // Nothing to block or look up without a source address.
+  ['wem-block', 'wem-lookup'].forEach(b => {
+    const el = document.getElementById(b);
+    if (el) el.disabled = !e.ip_address;
+  });
+
+  openModal('waf-event-modal');
+}
+
+async function blockWafEventIp() {
+  const e = _wafEventShown;
+  if (!e?.ip_address) return;
+  const res = await API.fwBlockIP(e.ip_address,
+    'WAF rule ' + (e.rule_id || '') + ' - ' + (e.rule_msg || ''), false);
+  if (res?.success) {
+    toast('Blocked ' + e.ip_address, 'success');
+    closeModal('waf-event-modal');
+  } else {
+    toast(res?.error || 'Could not block that address', 'error');
+  }
+}
+
+function lookupWafEventIp() {
+  const e = _wafEventShown;
+  if (!e?.ip_address) return;
+  closeModal('waf-event-modal');
+  openPage('iprep');
+  const input = document.getElementById('iprep-ip-input');
+  if (input) { input.value = e.ip_address; checkIP(); }
+}
+
+function copyWafEvent() {
+  const e = _wafEventShown;
+  if (!e) return;
+  const text = [
+    'Rule ID:    ' + (e.rule_id    || '—'),
+    'Message:    ' + (e.rule_msg   || '—'),
+    'Severity:   ' + (e.severity   || '—'),
+    'Source IP:  ' + (e.ip_address || '—'),
+    'Method:     ' + (e.method     || '—'),
+    'Host:       ' + (e.host       || '—'),
+    'URI:        ' + (e.uri        || '—'),
+    'User agent: ' + (e.user_agent || '—'),
+    'Action:     ' + (e.action     || '—'),
+    'When:       ' + (e.timestamp ? new Date(e.timestamp * 1000).toISOString() : '—'),
+  ].join('\n');
+
+  const done = () => toast('Event details copied', 'success');
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+
+function fallbackCopy(text, done) {
+  // clipboard API needs a secure context; WHM is often reached over a hostname
+  // with a self-signed certificate, where it is unavailable.
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); }
+  catch (_) { toast('Could not copy to the clipboard', 'error'); }
+  document.body.removeChild(ta);
 }
 
 async function setWAFMode() {
