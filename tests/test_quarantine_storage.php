@@ -119,7 +119,13 @@ t_contains($rel['error'], 'absolute', 'and says an absolute path is required');
 // Without this the retention setting is decorative: nothing would ever apply it.
 $sched = t_code($repo . '/backend/cron/scheduler.php');
 t_contains($sched, "'quarclean' => [", 'quarantine cleanup is scheduled');
-t_contains($sched, 'Scanner::pruneQuarantine', 'the task actually prunes');
+// The task now calls sweepQuarantine(), which applies the per-severity
+// deadlines and then falls back to pruneQuarantine() for the age-based
+// backstop. Pruning still happens; it is just no longer the whole job.
+t_contains($sched, 'Scanner::sweepQuarantine', 'the task sweeps quarantine');
+$sc2 = t_code($repo . '/backend/lib/Scanner.php');
+t_contains($sc2, 'self::pruneQuarantine()',
+    'and the sweep still prunes by age underneath');
 t_contains($sched, 'scan_*.log', 'old per-scan logs are pruned too');
 
 // ── The installer moves existing installs off root ───────────────────────────

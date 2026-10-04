@@ -700,9 +700,7 @@ class Scanner {
         Logger::event('malware_detected', $this->getSeverity($threatName), '',
                       $filePath, "Malware detected: {$threatName}");
 
-        if (Database::setting('auto_quarantine') === '1') {
-            $this->quarantine($filePath, $threatId);
-        }
+        $this->applyThreatPolicy($filePath, $threatId, $this->getSeverity($threatName));
 
         return ['id' => $threatId, 'file' => $filePath, 'name' => $threatName];
     }
@@ -809,10 +807,9 @@ class Scanner {
                     "Malware detected: {$threatName}"
                 );
 
-                // Auto-quarantine if enabled
-                if (Database::setting('auto_quarantine') === '1') {
-                    $this->quarantine($filePath, $threatId);
-                }
+                // Severity decides what happens: delete outright, or
+                // quarantine with a deadline.
+                $this->applyThreatPolicy($filePath, $threatId, $this->getSeverity($threatName));
             }
         }
 
@@ -856,10 +853,10 @@ class Scanner {
                     ]);
                     $threats[] = ['id' => $threatId, 'file' => $file, 'name' => $sigName];
 
-                    // Auto-quarantine
-                    if (Database::setting('auto_quarantine') === '1') {
-                        $this->quarantine($file, $threatId);
-                    }
+                    // Severity decides: delete outright, or quarantine with
+                    // a deadline.
+                    $this->applyThreatPolicy($file, $threatId,
+                                             $this->getSeverityFromSig($sigName));
                     break; // One match per file is enough
                 }
             }
@@ -920,6 +917,253 @@ class Scanner {
      *
      * @return array{success:bool,error?:string,dest?:string}
      */
+    // ── Threat policy ────────────────────────────────────────────────────────
+    //
+    // What happens to an infected file depends on how bad it is:
+    //
+    //   high / critical  disable, then delete outright
+    //   medium           disable, quarantine, delete after 5 days
+    //   low              disable, quarantine, delete after 7 days
+    //
+    // and nothing stays in quarantine beyond the global retention period
+    // whatever its own deadline says.
+    //
+    // ON DELETING WITHOUT A COPY: a high-severity detection is removed with no
+    // way back, so a false positive destroys a customer's file permanently.
+    // That is the configured behaviour and it is what was asked for, but it is
+    // the sharpest edge in this product -- so the path, size and SHA-256 are
+    // written to the log and to the threat record first. That does not restore
+    // the file; it does mean an operator can see exactly what was taken and
+    // from where. `policy_high_action` can be set to 'quarantine' to give high
+    // severity the same grace as the others.
+
+    /** Days a file of this severity may sit in quarantine. 0 means delete now. */
+    public static function policyDaysFor(string $severity): int
+    {
+        switch (strtolower($severity)) {
+            case 'critical':
+            case 'high':
+                return (Database::setting('policy_high_action', 'delete') ?? 'delete') === 'delete'
+                    ? 0
+                    : self::policyClamp('policy_medium_days', 5);
+            case 'medium':
+                return self::policyClamp('policy_medium_days', 5);
+            default:
+                return self::policyClamp('policy_low_days', 7);
+        }
+    }
+
+    private static function policyClamp(string $key, int $fallback): int
+    {
+        $n = (int) (Database::setting($key, (string) $fallback) ?? $fallback);
+        // Never longer than the global retention: a per-severity deadline that
+        // outlived the sweep would promise a grace period it does not get.
+        $max = max(1, (int) (Database::setting('quarantine_retention_days', '7') ?? 7));
+        return max(0, min($max, $n));
+    }
+
+    /**
+     * Make a file inert before acting on it.
+     *
+     * Between detection and the move there is a window in which the file is
+     * still executable by the web server. Removing every permission bit closes
+     * it. The previous mode is returned so it can be put back if what follows
+     * fails -- leaving a customer with an unreadable file AND the malware still
+     * present would be the worst of both.
+     */
+    public static function disableFile(string $filePath): ?int
+    {
+        if (!file_exists($filePath)) { return null; }
+        $mode = @fileperms($filePath);
+        $mode = $mode === false ? null : ($mode & 0777);
+        @chmod($filePath, 0000);
+        return $mode;
+    }
+
+    /** Put back a mode captured by disableFile(). */
+    public static function restoreMode(string $filePath, ?int $mode): void
+    {
+        if ($mode !== null && file_exists($filePath)) { @chmod($filePath, $mode); }
+    }
+
+    /**
+     * Delete an infected file, recording what was destroyed.
+     *
+     * The record is the only thing left afterwards, so it is written before
+     * the file is removed rather than after.
+     */
+    public function deleteInfected(string $filePath, int $threatId, string $why,
+                                   ?array $meta = null): array
+    {
+        if (!file_exists($filePath)) {
+            Database::query(
+                "UPDATE threats SET status='deleted', action_taken='delete', resolved_at=? WHERE id=?",
+                [time(), $threatId]
+            );
+            return ['success' => true, 'already_gone' => true];
+        }
+
+        // Taken before the file was made unreadable, where the caller had the
+        // chance. Hashing a file after chmod 0000 only works because root can
+        // read anything -- relying on that would mean no hash at all whenever
+        // this runs as anyone else.
+        $size = $meta['size'] ?? (int) @filesize($filePath);
+        $hash = $meta['hash'] ?? (@hash_file('sha256', $filePath) ?: '');
+
+        Logger::warn("Deleting infected file (threat {$threatId}, {$why}): {$filePath} "
+                   . "[{$size} bytes, sha256 {$hash}]");
+
+        if (!@unlink($filePath)) {
+            // A file with no permission bits cannot be unlinked on Windows,
+            // and a read-only one resists deletion on some filesystems. Give
+            // it back write access and try once more before giving up -- the
+            // alternative is leaving the malware in place.
+            @chmod($filePath, 0600);
+            if (!@unlink($filePath)) {
+                return ['success' => false,
+                        'error' => 'Could not delete ' . $filePath . ' ('
+                                 . self::lastError() . '). ' . self::permissionHint($filePath)];
+            }
+        }
+
+        // So whoever owns the site knows where the file went, and what it was.
+        @file_put_contents($filePath . '.sentinel_removed',
+            "File DELETED by Sentinel Gate at " . date('Y-m-d H:i:s') .
+            "
+Reason: {$why}
+Threat ID: {$threatId}
+Original: {$filePath}" .
+            "
+Size: {$size} bytes
+SHA-256: {$hash}
+" .
+            "
+This file was removed and not kept. Restore it from your backups
+" .
+            "if you believe this was a mistake.
+");
+
+        Database::query(
+            "UPDATE threats SET status='deleted', action_taken='delete',
+                                resolved_at=?, hash=COALESCE(NULLIF(hash,''), ?) WHERE id=?",
+            [time(), $hash, $threatId]
+        );
+        Database::insert('security_events', [
+            'type'        => 'malware_deleted',
+            'severity'    => 'high',
+            'target'      => $filePath,
+            'description' => 'Infected file deleted (' . $why . '), ' . $size
+                           . ' bytes, sha256 ' . substr($hash, 0, 16),
+        ]);
+        return ['success' => true, 'bytes' => $size, 'sha256' => $hash];
+    }
+
+    /**
+     * Act on a detected threat according to its severity.
+     *
+     * This replaced three identical copies of "if auto_quarantine is on,
+     * quarantine it", which treated a webshell and a suspicious comment
+     * exactly alike.
+     */
+    public function applyThreatPolicy(string $filePath, int $threatId, string $severity): array
+    {
+        if ((Database::setting('auto_quarantine', '0') ?? '0') !== '1') {
+            return ['action' => 'none', 'reason' => 'auto-quarantine is off'];
+        }
+
+        $days = self::policyDaysFor($severity);
+
+        // Recorded while the file is still readable. For a delete this is the
+        // only trace that will remain of it.
+        $meta = is_file($filePath)
+            ? ['size' => (int) @filesize($filePath),
+               'hash' => @hash_file('sha256', $filePath) ?: '']
+            : null;
+
+        // Inert first, whatever happens next.
+        $mode = self::disableFile($filePath);
+
+        if ($days === 0) {
+            $r = $this->deleteInfected($filePath, $threatId, $severity . ' severity', $meta);
+            if (empty($r['success'])) {
+                // Could not delete: put the file back as it was rather than
+                // leave it unreadable and still infected.
+                self::restoreMode($filePath, $mode);
+                return ['action' => 'failed', 'error' => $r['error'] ?? 'delete failed'];
+            }
+            return ['action' => 'deleted'];
+        }
+
+        $r = $this->quarantine($filePath, $threatId);
+        if (empty($r['success'])) {
+            self::restoreMode($filePath, $mode);
+            return ['action' => 'failed', 'error' => $r['error'] ?? 'quarantine failed'];
+        }
+
+        $expires = time() + ($days * 86400);
+        Database::query(
+            'UPDATE threats SET quarantine_path=?, quarantine_expires_at=? WHERE id=?',
+            [$r['dest'] ?? '', $expires, $threatId]
+        );
+        return ['action' => 'quarantined', 'days' => $days, 'expires_at' => $expires];
+    }
+
+    /**
+     * Delete quarantined files whose time is up.
+     *
+     * Two rules, and the second is the backstop: a file goes when its own
+     * deadline passes, and anything still present beyond the global retention
+     * period goes regardless -- including files quarantined before expiry
+     * dates were recorded at all, which is what clears the backlog on an
+     * existing install.
+     */
+    public static function sweepQuarantine(): array
+    {
+        $now     = time();
+        $deleted = 0;
+        $bytes   = 0;
+
+        // 1. Per-threat deadlines.
+        $rows = Database::fetchAll(
+            "SELECT id, quarantine_path, quarantine_expires_at
+               FROM threats
+              WHERE status='quarantined'
+                AND quarantine_expires_at IS NOT NULL
+                AND quarantine_expires_at > 0
+                AND quarantine_expires_at <= CAST(? AS INTEGER)",
+            [$now]
+        );
+        foreach ($rows as $r) {
+            $path = (string) ($r['quarantine_path'] ?? '');
+            if ($path !== '' && is_file($path)) {
+                $bytes += (int) @filesize($path);
+                if (@unlink($path)) { $deleted++; }
+            }
+            Database::query(
+                "UPDATE threats SET status='deleted', action_taken='expired', resolved_at=? WHERE id=?",
+                [$now, (int) $r['id']]
+            );
+        }
+
+        // 2. The backstop, by file age. pruneQuarantine already walks the tree
+        //    and removes anything past the retention period; it is what clears
+        //    files that predate per-threat deadlines.
+        $pruned = self::pruneQuarantine();
+
+        if ($deleted > 0 || (int) ($pruned['removed'] ?? 0) > 0) {
+            Logger::info('Quarantine sweep: ' . $deleted . ' expired by policy, '
+                       . (int) ($pruned['removed'] ?? 0) . ' by retention age');
+        }
+
+        return [
+            'expired'        => $deleted,
+            'expired_bytes'  => $bytes,
+            'aged_out'       => (int) ($pruned['removed'] ?? 0),
+            'aged_bytes'     => (int) ($pruned['bytes'] ?? 0),
+            'kept'           => (int) ($pruned['kept'] ?? 0),
+        ];
+    }
+
     public function quarantine(string $filePath, int $threatId): array {
         if (!file_exists($filePath)) {
             return ['success' => false,

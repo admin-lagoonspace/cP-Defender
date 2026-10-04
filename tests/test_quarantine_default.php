@@ -45,8 +45,15 @@ t_eq('0', Database::setting('auto_quarantine'), 'and back off again');
 // Every consumer compares against the string '1', so any other value is off.
 // A mismatch here would mean quarantine ran when the UI said it would not.
 $scanner = t_code($repo . '/backend/lib/Scanner.php');
-t_eq(3, substr_count($scanner, "Database::setting('auto_quarantine') === '1'"),
-    'the scanner gates all three quarantine sites on the same test');
+
+// There used to be three identical copies of this check, one per detection
+// path, which is how a webshell and a suspicious comment came to be treated
+// alike. They now all call applyThreatPolicy(), which makes the decision once
+// -- so the gate is asserted in one place and the three call sites separately.
+t_eq(1, substr_count($scanner, "Database::setting('auto_quarantine', '0')"),
+    'the setting is checked once, in the policy');
+t_eq(3, substr_count($scanner, '$this->applyThreatPolicy('),
+    'and all three detection paths go through it');
 
 $daemon = file_get_contents($repo . '/backend/daemon/monitor.py');
 t_contains($daemon, "db_get(conn,'auto_quarantine') == '1'",

@@ -62,7 +62,7 @@ t_contains($js, 'auto-quarantine state unknown',
 
 // The setting has to be honoured somewhere, or the toggle really is decorative.
 $sc = t_code($repo . '/backend/lib/Scanner.php');
-t_ok(substr_count($sc, "Database::setting('auto_quarantine')") >= 1,
+t_ok(substr_count($sc, "Database::setting('auto_quarantine'") >= 1,
     'the scanner consults auto_quarantine when acting on a threat');
 
 // ── 2. The dashboard monitor widget ─────────────────────────────────────────

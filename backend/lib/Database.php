@@ -203,6 +203,13 @@ class Database {
                 -- still records the threat; acting on it is a decision the
                 -- operator opts into.
                 ('auto_quarantine',         '0'),
+                -- What happens to an infected file, by severity.
+                -- high/critical: deleted outright, with no copy kept.
+                -- medium: quarantined for 5 days, then deleted.
+                -- low: quarantined for 7 days, then deleted.
+                ('policy_high_action',      'delete'),
+                ('policy_medium_days',      '5'),
+                ('policy_low_days',         '7'),
                 -- At most this many scans at once, and one is the intended
                 -- number. Each clamscan loads the whole ClamAV signature
                 -- database into its own memory (650MB to 1.3GB observed), so
@@ -230,7 +237,7 @@ class Database {
                 ('scan_backup_max_wait',    '14400'),
                 -- Quarantine grew without limit until this existed. 0 disables
                 -- pruning, for anyone who would rather keep everything.
-                ('quarantine_retention_days', '30'),
+                ('quarantine_retention_days', '7'),
                 ('firewall_enabled',        '1'),
                 ('waf_enabled',             '1'),
                 ('bot_shield_enabled',      '1'),
@@ -308,6 +315,17 @@ class Database {
             $db->exec("ALTER TABLE scan_jobs ADD COLUMN worker_pgid INTEGER");
         }
 
+        // Where a quarantined file went, and when it may be deleted. The sweep
+        // needs the exact path: guessing it from the threat's original name
+        // would eventually delete the wrong thing.
+        $thCols = array_column($db->query("PRAGMA table_info(threats)")->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('quarantine_path', $thCols)) {
+            $db->exec("ALTER TABLE threats ADD COLUMN quarantine_path TEXT");
+        }
+        if (!in_array('quarantine_expires_at', $thCols)) {
+            $db->exec("ALTER TABLE threats ADD COLUMN quarantine_expires_at INTEGER");
+        }
+
         // 3.30.4 shipped scan_max_concurrent defaulting to 2; the intended
         // number is 1. The seed above is INSERT OR IGNORE, so it cannot change
         // a row that already exists -- an upgrade would silently keep 2.
@@ -315,6 +333,22 @@ class Database {
         // Guarded by a marker so it runs exactly once: an operator who later
         // sets this to 2 deliberately keeps it, rather than having every
         // upgrade quietly overrule them.
+        // Quarantine used to be kept for 30 days. The policy is that nothing
+        // stays beyond 7, and the seed is INSERT OR IGNORE so it cannot change
+        // a row that already exists -- an upgrade would otherwise keep 30 and
+        // the backlog would never clear. Marked so it runs once: an operator
+        // who deliberately sets a longer retention afterwards keeps it.
+        $qmig = $db->query(
+            "SELECT value FROM settings WHERE key='sg_mig_quarantine_7d'"
+        )->fetchColumn();
+        if ($qmig === false) {
+            $db->exec("UPDATE settings SET value='7'
+                        WHERE key='quarantine_retention_days'
+                          AND CAST(value AS INTEGER) > 7");
+            $db->exec("INSERT OR REPLACE INTO settings (key,value) "
+                    . "VALUES ('sg_mig_quarantine_7d','1')");
+        }
+
         $migrated = $db->query(
             "SELECT value FROM settings WHERE key='sg_mig_scan_concurrency_1'"
         )->fetchColumn();
