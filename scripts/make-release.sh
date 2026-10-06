@@ -48,7 +48,13 @@ VERSION="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION")"
 # rendered an unstyled 1536px logo over the whole page, and on a customer server
 # would silently mix new markup with old styles.
 if [[ -f "${REPO_DIR}/frontend/index.html" ]]; then
-  sed -i -E "s#(css/app\.css|js/api\.js|js/app\.js)(\?v=[^\"]*)?#\1?v=${VERSION}#g"     "${REPO_DIR}/frontend/index.html"
+  # Every local css/js reference, not a hand-kept list of three. charts.js was
+  # missing from that list, so a browser kept the pre-4.1.0 copy after an
+  # update: Charts was defined but had no donut() or bars(), the new dashboard
+  # skipped those panels rather than throwing, and three sections were blank
+  # with nothing in the console to say why.
+  sed -i -E "s#(src|href)=\"(css/[A-Za-z0-9_.-]+\.css|js/[A-Za-z0-9_.-]+\.js)(\?v=[^\"]*)?\"#\1=\"\2?v=${VERSION}\"#g" \
+      "${REPO_DIR}/frontend/index.html"
 fi
 info "Building ServerScrub v${VERSION}"
 
