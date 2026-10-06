@@ -754,18 +754,26 @@ async function updateSignatures() {
 }
 
 // ── Firewall ──────────────────────────────────────────────────────────────────
+// Loaded in stages, newest-first, with each panel drawn as its data arrives.
+//
+// All three were fetched together and rendered together, so the slowest
+// decided when ANY of them appeared -- the page sat entirely blank until the
+// last one landed. Staging them means the numbers at the top are on screen
+// while the tables are still coming, and a slow panel can no longer hold up
+// the ones that are ready.
+//
+// The overlay is up for the whole sequence, which is what stops the page being
+// clicked into a queue of overlapping work while it fills in.
 async function loadFirewall() {
-  // Awaited together, these three render together -- so the slowest one decides
-  // when ANY of them appears. The stats call shells out to iptables and csf,
-  // which on a busy server is the slow one, and the rules and blocked lists
-  // are plain queries that were being held behind it for no reason.
-  const statsP   = Demo.active ? Promise.resolve({ success: true, data: { blocked_ips: 382, active_rules: 14, blocked_today: 8241 } }) : API.fwStats();
-  const rulesP   = Demo.active ? Promise.resolve(Demo.mockFWRules()) : API.fwRules();
-  const blockedP = Demo.active ? Promise.resolve({ success: true, data: [] }) : API.fwBlocked();
+  return API.withBusy('Loading firewall…', () => loadFirewallStages());
+}
 
-  const [stats, rules, blocked] = await Promise.all([
-    statsP.catch(() => null), rulesP.catch(() => null), blockedP.catch(() => null),
-  ]);
+async function loadFirewallStages() {
+  // Stage 1 — the three counts. Indexed queries, so this is the one that is
+  // reliably quick, and it is what the eye goes to first.
+  const stats = Demo.active
+    ? { success: true, data: { blocked_ips: 382, active_rules: 14, blocked_today: 8241 } }
+    : await API.fwStats().catch(() => null);
 
   if (stats?.success) {
     document.getElementById('fw-stat-rules').textContent   = fmtNum(stats.data?.active_rules || 0);
@@ -789,7 +797,9 @@ async function loadFirewall() {
       + ' · ' + ipt;
   }
 
-  // Rules table
+  // Stage 2 — the rules table.
+  const rules = Demo.active ? Demo.mockFWRules() : await API.fwRules().catch(() => null);
+
   const tbody = document.getElementById('fw-rules-body');
   if (tbody && rules?.data) {
     tbody.innerHTML = rules.data.map(r => `
@@ -811,7 +821,13 @@ async function loadFirewall() {
       </tr>`).join('');
   }
 
-  // Recent blocked IPs
+  // Stage 3 — recently blocked addresses. Last because it is the panel you
+  // look at after the counts and the rules, so it is the one that can afford
+  // to arrive last.
+  const blocked = Demo.active
+    ? { success: true, data: [] }
+    : await API.fwBlocked().catch(() => null);
+
   const recentEl = document.getElementById('fw-recent-blocked');
   if (recentEl && blocked?.data?.length) {
     recentEl.innerHTML = blocked.data.slice(0, 8).map(b => `

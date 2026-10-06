@@ -124,3 +124,79 @@ $api = t_code($repo . '/backend/api/index.php');
 t_contains($api, "SG_REQ_START", 'requests are timed');
 t_contains($api, "\$response['ms'] = \$__ms", 'and the duration returned to the caller');
 t_contains($api, 'Slow API request', 'with slow ones logged server-side');
+
+
+// ── The licence gate, which is on the path of EVERY request ─────────────────
+// Three attempts at "the firewall page is slow" looked only at firewall code.
+// The cost was not there: License::status() runs on the licence gate for every
+// request, and with a licence key whose local key has gone stale it called the
+// licence server with a 12-second timeout. A failure was recorded nowhere, so
+// the next request tried again, and the next. The firewall page fires three
+// requests and cpsrvd serialises them.
+$lic = t_code($repo . '/backend/lib/License.php');
+
+t_contains($lic, 'REMOTE_RETRY_SECS', 'a failed licence check backs off');
+t_contains($lic, 'function noteRemoteFailure', 'failures are recorded');
+t_contains($lic, 'function remoteAllowed', 'and checked before calling out again');
+t_contains($lic, 'TIMEOUT_INTERACTIVE',
+    'a request gets a shorter timeout than a background refresh');
+
+$rc = substr($lic, strpos($lic, 'function remoteCheck'), 700);
+t_contains($rc, 'self::remoteAllowed()',
+    'the remote check bails out while backing off');
+
+// The scheduler and the refresh button must still get a real check.
+t_contains($lic, 'self::$background = true',
+    'a deliberate refresh ignores the back-off');
+
+// ── Behaviour: repeated requests must not each pay a timeout ────────────────
+Database::setSetting('license_key', 'TEST-KEY-0000');
+Database::setSetting('license_localkey', '');
+Database::setSetting('license_remote_next_try', '0');
+
+$ref = new ReflectionClass('License');
+$cacheProp = $ref->getProperty('cache');
+$cacheProp->setAccessible(true);
+
+// First call may attempt the server; that is allowed once.
+$cacheProp->setValue(null, null);
+License::status();
+
+$next = (int) Database::setting('license_remote_next_try', '0');
+t_ok($next > time(), 'a failed check sets a back-off window');
+
+// Every subsequent request, each a fresh PHP process, must be instant.
+$worst = 0;
+for ($i = 0; $i < 5; $i++) {
+    $cacheProp->setValue(null, null);
+    $t0 = microtime(true);
+    License::status();
+    $worst = max($worst, (microtime(true) - $t0) * 1000);
+}
+t_ok($worst < 150,
+    sprintf('subsequent requests do not re-attempt the licence server (worst %.1fms)', $worst));
+
+Database::setSetting('license_key', '');
+Database::setSetting('license_remote_next_try', '0');
+
+// ── The firewall page loads in stages ───────────────────────────────────────
+// Fetched together, the slowest call decided when ANY panel appeared, so the
+// page sat blank until the last one landed.
+$js = file_get_contents($repo . '/frontend/js/app.js');
+t_contains($js, 'async function loadFirewallStages', 'the page loads in stages');
+t_contains($js, "API.withBusy('Loading firewall", 'behind a blocking overlay');
+
+$fw = substr($js, strpos($js, 'async function loadFirewallStages'), 4000);
+t_contains($fw, 'Stage 1', 'the counts come first');
+t_contains($fw, 'Stage 2', 'then the rules');
+t_contains($fw, 'Stage 3', 'then the blocked list');
+
+// Each stage must fetch where it renders, not up front -- otherwise it is the
+// old all-at-once load with comments on it.
+$s1 = strpos($fw, 'API.fwStats()');
+$s2 = strpos($fw, 'API.fwRules()');
+$s3 = strpos($fw, 'API.fwBlocked()');
+t_ok($s1 !== false && $s2 !== false && $s3 !== false, 'all three calls are present');
+t_ok($s1 < $s2 && $s2 < $s3, 'and issued in stage order');
+t_ok(strpos($fw, 'Promise.all') === false,
+    'they are no longer awaited together, which is what made one slow call blank the page');

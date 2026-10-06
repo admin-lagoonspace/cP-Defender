@@ -93,6 +93,29 @@ class License
     /** Seconds to wait on the license server before giving up. */
     const TIMEOUT = 12;
 
+    /**
+     * How long to leave the licence server alone after it fails to answer.
+     *
+     * Without this, a licence server that is slow or unreachable costs every
+     * single API request up to TIMEOUT seconds. status() runs on the licence
+     * gate, which is on the path of every request, and a failed check was not
+     * recorded anywhere -- so the next request tried again, and the next. The
+     * firewall page fires three requests and cpsrvd serialises them, so one
+     * unreachable licence server turned a page load into half a minute. Three
+     * separate attempts at "the firewall page is slow" missed this because the
+     * cost was not in the firewall code at all.
+     */
+    const REMOTE_RETRY_SECS = 900;
+
+    /**
+     * Timeout for a check that happens while someone is waiting for a page.
+     * The scheduler can afford TIMEOUT; a request cannot.
+     */
+    const TIMEOUT_INTERACTIVE = 3;
+
+    /** Set while the scheduler is refreshing, so it gets the full timeout. */
+    private static bool $background = false;
+
     private static $cache = null;
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -259,11 +282,27 @@ class License
     }
 
     /** Drop the cached local key so the next call re-checks remotely. */
+    /**
+     * Force a fresh check against the licence server.
+     *
+     * Marked as a background check, so it gets the full timeout and ignores
+     * the back-off window that protects the request path. This is what the
+     * scheduler and the "refresh" button call; an ordinary page load must
+     * never end up here.
+     */
     public static function refresh(): array
     {
         Database::setSetting('license_localkey', '');
+        Database::setSetting('license_remote_next_try', '0');
         self::$cache = null;
-        return self::status();
+        self::$background = true;
+        try {
+            $r = self::status();
+        } finally {
+            self::$background = false;
+        }
+        Database::setSetting('license_last_refresh', (string) time());
+        return $r;
     }
 
     // ── Core evaluation ──────────────────────────────────────────────────────
@@ -320,8 +359,45 @@ class License
     }
 
     /** @return array|null null when the server could not be reached at all. */
+    /**
+     * Is a remote check allowed right now?
+     *
+     * False while we are inside the back-off window after a failure. The
+     * caller then falls through to the cached licence and its grace period,
+     * which is the correct behaviour anyway: a licence that was valid an hour
+     * ago is not invalid because the licence server is down.
+     */
+    private static function remoteAllowed(): bool
+    {
+        if (self::$background) { return true; }
+        $next = (int) Database::setting('license_remote_next_try', '0');
+        return $next === 0 || time() >= $next;
+    }
+
+    /**
+     * Remember that the licence server did not answer.
+     *
+     * The cost of a failed check is the full timeout, and without recording it
+     * every subsequent request paid that cost again. One slow licence server
+     * made every page in the product slow.
+     */
+    private static function noteRemoteFailure(): void
+    {
+        if (self::$background) { return; }   // the scheduler may keep trying
+        Database::setSetting('license_remote_next_try',
+                             (string) (time() + self::REMOTE_RETRY_SECS));
+    }
+
     private static function remoteCheck(string $key): ?array
     {
+        // Not while we are backing off from a failure. Returning null here is
+        // exactly what an unreachable server returns, so every caller already
+        // handles it -- they fall back to the cached licence and its grace.
+        if (!self::remoteAllowed()) {
+            self::log('remote check skipped: backing off after a recent failure');
+            return null;
+        }
+
         $checkToken = time() . self::rand(12);
         $post = [
             'licensekey'  => $key,
@@ -335,12 +411,14 @@ class License
         $body = self::post(rtrim(self::whmcsUrl(), '/') . '/modules/servers/licensing/verify.php', $post);
         if ($body === null) {
             self::log('remote check: server unreachable');
+            self::noteRemoteFailure();
             return null;   // distinct from "server said no"
         }
 
         $results = self::parseXml($body);
         if (!$results || empty($results['status'])) {
             self::log('remote check: unparseable response');
+            self::noteRemoteFailure();
             return null;
         }
 
@@ -973,7 +1051,11 @@ class License
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_POST           => true,
                 CURLOPT_POSTFIELDS     => http_build_query($fields),
-                CURLOPT_TIMEOUT        => self::TIMEOUT,
+                // A page load must not wait TIMEOUT seconds for a licence
+                // server. The scheduler, which nobody is waiting on, still does.
+                CURLOPT_TIMEOUT        => self::$background
+                                            ? self::TIMEOUT
+                                            : self::TIMEOUT_INTERACTIVE,
                 CURLOPT_CONNECTTIMEOUT => 6,
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_SSL_VERIFYHOST => 2,
