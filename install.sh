@@ -84,13 +84,20 @@ fi
 # ── Banner ─────────────────────────────────────────────────────────────────────
 clear
 echo ""
-echo -e "${CYAN}${BOLD}"
-echo "  ███████╗███████╗███╗   ██╗████████╗██╗███╗   ██╗███████╗██╗      "
-echo "  ██╔════╝██╔════╝████╗  ██║╚══██╔══╝██║████╗  ██║██╔════╝██║      "
-echo "  ███████╗█████╗  ██╔██╗ ██║   ██║   ██║██╔██╗ ██║█████╗  ██║      "
-echo "  ╚════██║██╔══╝  ██║╚██╗██║   ██║   ██║██║╚██╗██║██╔══╝  ██║      "
-echo "  ███████║███████╗██║ ╚████║   ██║   ██║██║ ╚████║███████╗███████╗ "
-echo "  ╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝"
+echo -e "${BOLD}${CYAN}"
+echo "  ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ "
+echo "  ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗"
+echo "  ███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝"
+echo "  ╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗"
+echo "  ███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║"
+echo "  ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝"
+echo -e "${NC}${BOLD}${GREEN}"
+echo "      ███████╗ ██████╗ ██████╗ ██╗   ██╗██████╗ "
+echo "      ██╔════╝██╔════╝ ██╔══██╗██║   ██║██╔══██╗"
+echo "      ███████╗██║      ██████╔╝██║   ██║██████╔╝"
+echo "      ╚════██║██║      ██╔══██╗██║   ██║██╔══██╗"
+echo "      ███████║╚██████╗ ██║  ██║╚██████╔╝██████╔╝"
+echo "      ╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ "
 echo -e "${NC}"
 echo -e "  ${BOLD}SERVERSCRUB v${SG_VERSION}${NC} — Security Suite"
 echo ""
@@ -844,8 +851,8 @@ mkdir -p "${SG_ETC}"
 
 # ── CSF / LFD (ConfigServer Firewall) ──
 # Firewall.php already speaks `csf -a/-d` at runtime; here we register the
-# persistent include files CSF reads on every restart, and exempt Sentinel
-# Gate's own long-running root daemons from LFD process tracking so they are
+# persistent include files CSF reads on every restart, and exempt
+# ServerScrub's own long-running root daemons from LFD process tracking so they are
 # never flagged or killed.
 section "CSF / LFD firewall integration"
 if [[ -f /usr/sbin/csf ]]; then

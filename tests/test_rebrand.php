@@ -150,3 +150,46 @@ foreach (['ServerScrub.pm', 'ServerScrub/META.pm'] as $f) {
 // And the old one is cleaned up, or cPanel keeps loading a Perl package for a
 // plugin that no longer exists.
 t_contains($mig, 'Driver/SentinelGate.pm', 'the old driver module is removed on migration');
+
+
+// ── The installer banner ────────────────────────────────────────────────────
+// The banner is ASCII art: the product name drawn in block characters rather
+// than written as text. No search for "Sentinel" could find it, so it survived
+// the rename and was the first thing an operator saw when installing
+// ServerScrub. Asserting the drawn letters is the only way to check art.
+$bannerStart = strpos($install, 'echo -e "${BOLD}${CYAN}"');
+t_ok($bannerStart !== false, 'the banner block is present');
+$banner = substr($install, $bannerStart, 4000);
+
+$B = "█";   // full block
+
+// Top row of S, then E, then R — the start of SERVER in this font.
+t_contains($banner, str_repeat($B, 7) . "\u{2557}" . str_repeat($B, 7) . "\u{2557}",
+    'the banner draws SERVER');
+// Top row of S followed by C, which only occurs in SCRUB.
+t_contains($banner, str_repeat($B, 7) . "\u{2557} " . str_repeat($B, 6) . "\u{2557}",
+    'and SCRUB beneath it');
+
+$artLines = [];
+foreach (explode("\n", $banner) as $ln) {
+    if (strpos($ln, $B) !== false) { $artLines[] = $ln; }
+}
+// Ten, not twelve: the bottom row of each word is drawn entirely with
+// box-drawing characters and contains no full block, so it is not counted
+// here. Two words of six rows gives ten rows that include one.
+t_ok(count($artLines) >= 10, 'the art is two words of six rows each');
+
+// Eleven letters on one line in this font is 99 columns, which wraps on an
+// 80-column terminal and turns the banner into noise. Two lines keeps it
+// readable on the terminals this is actually installed from.
+$widest = 0;
+foreach ($artLines as $ln) {
+    // Strip the shell wrapper: echo "  ....."
+    if (preg_match('/^echo "(.*)"$/', trim($ln), $m)) {
+        $widest = max($widest, mb_strlen($m[1], 'UTF-8'));
+    }
+}
+t_ok($widest > 0 && $widest <= 80,
+    "the banner fits an 80-column terminal ({$widest} columns)");
+
+t_contains($install, 'SERVERSCRUB v${SG_VERSION}', 'the version line names the product');
