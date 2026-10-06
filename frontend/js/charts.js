@@ -62,7 +62,8 @@ const Charts = {
     }
     const W   = svgEl.clientWidth  || 900;
     const H   = 180;
-    const PAD = { top: 10, right: 10, bottom: 30, left: 40 };
+    // Room at the top for the value labels, which sit above their points.
+    const PAD = { top: 20, right: 14, bottom: 30, left: 44 };
     const cW  = W - PAD.left - PAD.right;
     const cH  = H - PAD.top  - PAD.bottom;
 
@@ -72,8 +73,11 @@ const Charts = {
     const ptX = i => PAD.left + (i / (data.length - 1)) * cW;
     const ptY = v  => PAD.top  + cH - (v / mx) * cH * 0.9;
 
-    let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"
-                 style="width:100%;height:${H}px;overflow:visible">`;
+    // Thousands separators: an unseparated 97400 beside a 3174 is hard to
+    // compare at a glance, which is the whole point of putting it there.
+    const fmt = v => Number(v).toLocaleString();
+
+    let svg = '';
 
     // Grid lines + Y labels
     for (let i = 0; i <= 4; i++) {
@@ -82,7 +86,7 @@ const Charts = {
       svg += `<line x1="${PAD.left}" y1="${y}" x2="${W - PAD.right}" y2="${y}"
                 stroke="#1e293b" stroke-width="1"/>`;
       svg += `<text x="${PAD.left - 6}" y="${y + 4}" text-anchor="end"
-                font-size="10" fill="#475569" font-family="monospace">${val}</text>`;
+                font-size="10" fill="#475569" font-family="monospace">${fmt(val)}</text>`;
     }
 
     // Y axis
@@ -93,30 +97,113 @@ const Charts = {
     data.forEach((d, i) => {
       if (i % 5 === 0 || i === data.length - 1) {
         const x = ptX(i);
-        const label = d.slice(5); // MM-DD
+        const label = String(d).slice(5); // MM-DD
         svg += `<text x="${x}" y="${H - 4}" text-anchor="middle"
                   font-size="10" fill="#475569" font-family="monospace">${label}</text>`;
       }
     });
 
+    // Which points carry a printed value.
+    //
+    // Not all of them: thirty days times three series is ninety labels on one
+    // small chart, which is less readable than none. The rule is the points
+    // that tell you something -- the regularly spaced ones, the final one, and
+    // each series' own peak -- and never a zero, because a flat line of "0 0 0
+    // 0 0" is noise that hides the numbers that matter.
+    const labelled = datasets.map(({ values }) => {
+      const keep = new Set();
+      values.forEach((v, i) => {
+        if (v > 0 && (i % 5 === 0 || i === values.length - 1)) { keep.add(i); }
+      });
+      const peak = values.indexOf(Math.max(...values));
+      if (values[peak] > 0) { keep.add(peak); }
+      return keep;
+    });
+
     // Dataset lines
-    datasets.forEach(({ values, color, label }) => {
+    datasets.forEach(({ values, color }, di) => {
       const points = values.map((v, i) => `${ptX(i)},${ptY(v)}`).join(' ');
       svg += `<polyline points="${points}" fill="none" stroke="${color}"
                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
                 vector-effect="non-scaling-stroke"/>`;
 
-      // Dots every 5th
       values.forEach((v, i) => {
-        if (i % 5 === 0 || i === values.length - 1) {
-          svg += `<circle cx="${ptX(i)}" cy="${ptY(v)}" r="3.5"
-                    fill="${color}" stroke="#0f172a" stroke-width="1.5"/>`;
-        }
+        const isDot = i % 5 === 0 || i === values.length - 1 || labelled[di].has(i);
+        if (!isDot) return;
+        svg += `<circle cx="${ptX(i)}" cy="${ptY(v)}" r="3.5"
+                  fill="${color}" stroke="#0f172a" stroke-width="1.5"/>`;
       });
     });
 
-    svg += '</svg>';
-    svgEl.outerHTML = svg;
+    // Value labels, drawn after every line so nothing is painted over them.
+    //
+    // Series are offset from each other at the same date: two numbers at the
+    // same place would overlap into something unreadable, and the whole reason
+    // they are here is to be read.
+    // Placed labels, so a new one can be moved clear of the ones already
+    // down. Offsetting by series index alone is not enough: two series at
+    // ADJACENT dates with similar values collide, which is how "120" and "58"
+    // ended up printed on top of each other.
+    const placed = [];
+    const hits = (x, y, w) => placed.some(q =>
+      Math.abs(q.x - x) < (q.w + w) / 2 + 3 && Math.abs(q.y - y) < 12);
+
+    datasets.forEach(({ values, color }, di) => {
+      values.forEach((v, i) => {
+        if (!labelled[di].has(i)) return;
+
+        const x = ptX(i);
+        const text = fmt(v);
+        // Monospace at this size is close enough to 6.3px a glyph for
+        // collision purposes; being a pixel out only costs a little spacing.
+        const w = text.length * 6.3;
+
+        let y = ptY(v) - 8;
+        let tries = 0;
+        while (hits(x, y, w) && tries < 6) { y -= 12; tries++; }
+        // Out of room above: go below the point instead and try again there.
+        if (y < 10) {
+          y = ptY(v) + 16;
+          tries = 0;
+          while (hits(x, y, w) && tries < 4) { y += 12; tries++; }
+        }
+        placed.push({ x, y, w });
+
+        // Nudge the ends inward so a label is not clipped by the edge.
+        const anchor = i === 0 ? 'start'
+                     : (i === values.length - 1 ? 'end' : 'middle');
+
+        // paint-order puts the dark stroke behind the glyphs, so a number
+        // sitting on a grid line or another series stays legible.
+        svg += `<text x="${x}" y="${y}" text-anchor="${anchor}"
+                  font-size="10.5" font-weight="700" font-family="monospace"
+                  fill="${color}" stroke="#0b1220" stroke-width="3"
+                  paint-order="stroke" style="pointer-events:none">${fmt(v)}</text>`;
+      });
+    });
+
+    // One hover target per day, carrying every series' value for that date.
+    // The printed labels cover the notable points; this covers all the rest
+    // without putting ninety numbers on the chart.
+    const band = cW / Math.max(1, data.length - 1);
+    data.forEach((d, i) => {
+      const lines = datasets
+        .map(ds => `${ds.label || 'series'}: ${fmt(ds.values[i] ?? 0)}`)
+        .join('\n');
+      svg += `<rect x="${ptX(i) - band / 2}" y="${PAD.top}" width="${band}" height="${cH}"
+                fill="transparent"><title>${d}\n${lines}</title></rect>`;
+    });
+
+    // innerHTML, not outerHTML.
+    //
+    // Replacing the element discarded its id, so every later refresh looked
+    // the chart up by id, found nothing, and silently did nothing -- the
+    // dashboard has been showing whatever was true when the page first loaded.
+    svgEl.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svgEl.style.width    = '100%';
+    svgEl.style.height   = `${H}px`;
+    svgEl.style.overflow = 'visible';
+    svgEl.innerHTML = svg;
   },
 
   /**
