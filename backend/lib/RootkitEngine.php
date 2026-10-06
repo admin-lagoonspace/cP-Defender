@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — built-in rootkit detection engine
+ * ServerScrub — built-in rootkit detection engine
  *
  * A native scanner, so rootkit detection works on a bare server with no
  * third-party tools installed. RootkitScanner previously wrapped rkhunter and

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — version bump sanity check
+# ServerScrub — version bump sanity check
 #
 # Compares the version bump in ./VERSION against the commits since the last tag
 # and complains when they disagree.

@@ -1,0 +1,28 @@
+[Unit]
+Description=ServerScrub Real-Time File Monitor
+Documentation=https://github.com/admin-lagoonspace/cP-Defender
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment="SG_ROOT=/usr/local/serverscrub"
+ExecStart=/usr/bin/python3 /usr/local/serverscrub/backend/daemon/monitor.py
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=append:/usr/local/serverscrub/logs/monitor.log
+StandardError=append:/usr/local/serverscrub/logs/monitor.log
+
+# Hardening
+NoNewPrivileges=false
+PrivateTmp=false
+ProtectSystem=false
+ReadWritePaths=/usr/local/serverscrub /tmp /home /var/www
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — GitHub webhook receiver
+ * ServerScrub — GitHub webhook receiver
  *
  * Deployed into the public docroot so GitHub can call it the moment a release is
  * published. It triggers cdn-sync.sh, which does the actual download/extract.
@@ -19,7 +19,7 @@
  *      chmod 600 /home/lwss1/.sg-webhook-secret
  * 3. Copy this file to  <docroot>/webhook.php
  * 4. GitHub → repo → Settings → Webhooks → Add webhook
- *      Payload URL : https://defender.lws-s1.com/sentinel-gate/code/webhook.php
+ *      Payload URL : https://defender.lws-s1.com/serverscrub/code/webhook.php
  *      Content type: application/json
  *      Secret      : <the same secret>
  *      Events      : "Let me select individual events" → Releases  (and Pushes

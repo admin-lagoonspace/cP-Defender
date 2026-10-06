@@ -1,4 +1,4 @@
-# Sentinel Gate Custom Signature File
+# ServerScrub Custom Signature File
 # Format: NAME:TYPE:PATTERN
 # TYPE: regex | hash | string
 # One signature per line. Lines starting with # are comments.

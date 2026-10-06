@@ -1,0 +1,29 @@
+[Unit]
+Description=ServerScrub Web Dashboard (port 31150)
+Documentation=https://github.com/admin-lagoonspace/cP-Defender
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/usr/local/serverscrub
+Environment="SG_ROOT=/usr/local/serverscrub"
+ExecStart=/usr/bin/php -S 0.0.0.0:31150 /usr/local/serverscrub/backend/standalone-router.php
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=10
+StandardOutput=append:/usr/local/serverscrub/logs/web.log
+StandardError=append:/usr/local/serverscrub/logs/web.log
+
+# Security hardening
+NoNewPrivileges=false
+PrivateTmp=false
+ProtectSystem=false
+ReadWritePaths=/usr/local/serverscrub /tmp /home /var/www
+
+[Install]
+WantedBy=multi-user.target

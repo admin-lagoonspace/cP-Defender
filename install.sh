@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — Installer
+# ServerScrub — Installer
 # Version is read dynamically from the VERSION file in this directory.
 # Supports: cPanel/WHM  |  Standalone Linux (any distro)
 # Usage:    bash install.sh
 # ═══════════════════════════════════════════════════════════════════════════════
 
 set -o pipefail
-PLUGIN_NAME="sentinel-gate"
-INSTALL_DIR="/usr/local/sentinel-gate"
-CRON_FILE="/etc/cron.d/sentinel-gate"
+PLUGIN_NAME="serverscrub"
+INSTALL_DIR="/usr/local/serverscrub"
+CRON_FILE="/etc/cron.d/serverscrub"
 # Defined here, not down beside the block that populates it: that block sits
 # inside the INSTALL-ONLY span, which --register-only skips entirely, while the
 # cPanel registration section below it appends to MANIFEST in either mode.
@@ -92,10 +92,116 @@ echo "  ╚════██║██╔══╝  ██║╚██╗██�
 echo "  ███████║███████╗██║ ╚████║   ██║   ██║██║ ╚████║███████╗███████╗ "
 echo "  ╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝"
 echo -e "${NC}"
-echo -e "  ${BOLD}SENTINEL GATE v${SG_VERSION}${NC} — Security Suite"
+echo -e "  ${BOLD}SERVERSCRUB v${SG_VERSION}${NC} — Security Suite"
 echo ""
 
 # ── Pre-flight checks ──────────────────────────────────────────────────────────
+# ── Migrating a Sentinel Gate install ─────────────────────────────────────────
+# The product was called Sentinel Gate and lived in /usr/local/sentinel-gate.
+# An existing server has its database, its quarantine and its settings there,
+# so this is a MOVE, not a fresh install beside the old one. Getting it wrong
+# would either lose a customer's quarantined files or leave two copies of the
+# product fighting over the same cron entries and systemd units.
+#
+# Everything here uses the old names literally. They are deliberately not
+# swept by the rebrand: this is the one place that still has to know them.
+MIGRATED_FROM=""
+OLD_DIR="/usr/local/sentinel-gate"
+if [[ -d "${OLD_DIR}" && "${OLD_DIR}" != "${INSTALL_DIR}" ]]; then
+  section "Migrating from Sentinel Gate"
+
+  # 1. Stop the old services FIRST. Moving a directory out from under a running
+  #    daemon leaves it writing into a path that no longer exists.
+  for _svc in sentinel-gate-monitor sentinel-gate-web sentinel-gate-firewall; do
+    if systemctl list-unit-files 2>/dev/null | grep -q "^${_svc}.service"; then
+      systemctl stop "${_svc}" 2>/dev/null || true
+      systemctl disable "${_svc}" 2>/dev/null || true
+      systemctl reset-failed "${_svc}" 2>/dev/null || true
+      rm -f "/etc/systemd/system/${_svc}.service"
+      info "  Removed old service: ${_svc}"
+    fi
+  done
+  systemctl daemon-reload 2>/dev/null || true
+
+  # 2. Scan workers are detached and outlive their service. One left running
+  #    would keep writing to the old path and spawning clamscan.
+  pkill -f "${OLD_DIR}/backend/cron/scan.php" 2>/dev/null || true
+  pkill -f "${OLD_DIR}/backend/daemon/monitor.py" 2>/dev/null || true
+
+  # 3. Old cron entries, before new ones are written, so the two never overlap.
+  rm -f /etc/cron.d/sentinel-gate /etc/cron.d/sentinel_gate 2>/dev/null || true
+
+  # 4. Deregister the old WHM plugin. Left in place it stays in the WHM menu
+  #    pointing at a directory that is about to stop existing.
+  if [[ -x /usr/local/cpanel/bin/unregister_appconfig ]]; then
+    /usr/local/cpanel/bin/unregister_appconfig sentinel_gate >/dev/null 2>&1 || true
+    /usr/local/cpanel/bin/unregister_appconfig sentinelgate  >/dev/null 2>&1 || true
+  fi
+  rm -f /var/cpanel/apps/sentinel_gate.conf /var/cpanel/apps/sentinelgate.conf 2>/dev/null || true
+  rm -rf /usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate \
+         /usr/local/cpanel/whostmgr/docroot/cgi/sentinelgate 2>/dev/null || true
+
+  # 5. The old cPanel user plugin, in both themes.
+  for _th in paper_lantern jupiter; do
+    rm -rf "/usr/local/cpanel/base/frontend/${_th}/sentinel_gate" 2>/dev/null || true
+    rm -f  "/usr/local/cpanel/base/frontend/${_th}/dynamicui/dynamicui_sentinel_gate.conf" 2>/dev/null || true
+  done
+
+  # 6. The old WHM Driver module. Left behind, cPanel keeps loading a Perl
+  #    package for a plugin that no longer exists.
+  rm -f  /usr/local/cpanel/Cpanel/Config/ConfigObj/Driver/SentinelGate.pm 2>/dev/null || true
+  rm -rf /usr/local/cpanel/Cpanel/Config/ConfigObj/Driver/SentinelGate 2>/dev/null || true
+
+  # 7. The old CLI.
+  rm -f /usr/bin/sentinel 2>/dev/null || true
+
+  # 8. Move the data across. A move keeps the database, the quarantined files
+  #    and the logs exactly as they are; copying and deleting would risk
+  #    half-copying several hundred quarantined files.
+  if [[ -e "${INSTALL_DIR}" ]]; then
+    # Both present: an interrupted migration, or someone installed fresh after
+    # the rename. Keep whatever is already under the new name and put the old
+    # one aside rather than overwriting either.
+    _BAK="${OLD_DIR}.pre-serverscrub.$(date +%s)"
+    mv "${OLD_DIR}" "${_BAK}"
+    warn "  ${INSTALL_DIR} already existed; old install kept at ${_BAK}"
+  else
+    mv "${OLD_DIR}" "${INSTALL_DIR}"
+    ok "  Moved ${OLD_DIR} -> ${INSTALL_DIR} (database and quarantine preserved)"
+
+    # The database file is named after the product too.
+    if [[ -f "${INSTALL_DIR}/database/sentinel.db" && ! -f "${INSTALL_DIR}/database/serverscrub.db" ]]; then
+      mv "${INSTALL_DIR}/database/sentinel.db" "${INSTALL_DIR}/database/serverscrub.db"
+      # SQLite keeps its write-ahead log and shared-memory file beside the
+      # database; leaving them behind under the old name can strand a
+      # transaction that has not been checkpointed.
+      for _x in wal shm journal; do
+        [[ -f "${INSTALL_DIR}/database/sentinel.db-${_x}" ]] && \
+          mv "${INSTALL_DIR}/database/sentinel.db-${_x}" \
+             "${INSTALL_DIR}/database/serverscrub.db-${_x}"
+      done
+      ok "  Database renamed, contents untouched"
+    fi
+  fi
+
+  # 9. The WAF include is named after the product and is referenced by Apache.
+  #    Renaming it without putting the new name in place would drop every rule.
+  for _d in /etc/apache2/conf.d /usr/local/apache/conf /etc/httpd/conf.d; do
+    if [[ -f "${_d}/sentinel-waf.conf" ]]; then
+      if [[ ! -f "${_d}/serverscrub-waf.conf" ]]; then
+        mv "${_d}/sentinel-waf.conf" "${_d}/serverscrub-waf.conf"
+        ok "  WAF config renamed in ${_d}"
+      else
+        rm -f "${_d}/sentinel-waf.conf"
+      fi
+    fi
+  done
+
+  rm -rf /tmp/sentinel-gate 2>/dev/null || true
+  MIGRATED_FROM="${OLD_DIR}"
+  ok "  Migration complete — continuing as ServerScrub"
+fi
+
 section "Pre-flight checks"
 [[ $EUID -ne 0 ]] && error "Must be run as root"
 
@@ -187,7 +293,7 @@ if $REGISTER_ONLY; then
   info "Register-only mode — skipping cleanup, dirs, files, DB, services"
 fi
 if ! $REGISTER_ONLY && command -v systemctl >/dev/null 2>&1; then
-  for _SVC in sentinel-gate-web sentinel-gate-monitor; do
+  for _SVC in serverscrub-web serverscrub-monitor; do
     if systemctl is-active --quiet "${_SVC}" 2>/dev/null; then
       systemctl stop "${_SVC}" 2>/dev/null || true
       info "Stopped running service: ${_SVC}"
@@ -202,12 +308,12 @@ if ! $REGISTER_ONLY && [[ -d "${INSTALL_DIR}" ]]; then
 fi
 # Legacy artifacts from pre-3.2 layouts — harmless to sweep when absent
 for _LEGACY in \
-  /usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinel_gate.cgi \
-  /usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinelgate.cgi \
-  /usr/local/cpanel/whostmgr/docroot/cgi/sentinel-gate \
-  /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel-gate.conf \
-  /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel_gate.conf \
-  /var/cpanel/apps/sentinel-gate.conf; do
+  /usr/local/cpanel/whostmgr/docroot/cgi/addon_serverscrub.cgi \
+  /usr/local/cpanel/whostmgr/docroot/cgi/addon_serverscrub.cgi \
+  /usr/local/cpanel/whostmgr/docroot/cgi/serverscrub \
+  /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/serverscrub.conf \
+  /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/serverscrub.conf \
+  /var/cpanel/apps/serverscrub.conf; do
   [[ -e "${_LEGACY}" ]] && rm -rf "${_LEGACY}" && info "Removed legacy artifact: ${_LEGACY}"
 done
 ok "Pre-install cleanup complete"
@@ -230,11 +336,11 @@ elif [[ ! -t 0 ]]; then
   fi
 else
   echo ""
-  echo -e "  ${BOLD}Select where you are installing Sentinel Gate:${NC}"
+  echo -e "  ${BOLD}Select where you are installing ServerScrub:${NC}"
   echo ""
   echo -e "  ${CYAN}1)${NC} ${BOLD}cPanel / WHM Server${NC}"
   echo "     Integrates into WHM as a plugin. Uses cPanel authentication."
-  echo "     Accessed via: WHM → Plugins → Sentinel Gate"
+  echo "     Accessed via: WHM → Plugins → ServerScrub"
   echo ""
   echo -e "  ${CYAN}2)${NC} ${BOLD}Standalone Linux Server${NC} (no cPanel)"
   echo "     Self-contained browser dashboard on port ${SG_PORT}."
@@ -277,7 +383,7 @@ fi
 _SG_QUAR_OLD="${INSTALL_DIR}/quarantine"
 _SG_QUAR_NEW=""
 for _v in /home /var; do
-  if [[ -d "$_v" && -w "$_v" ]]; then _SG_QUAR_NEW="${_v}/.sentinel-gate/quarantine"; break; fi
+  if [[ -d "$_v" && -w "$_v" ]]; then _SG_QUAR_NEW="${_v}/.serverscrub/quarantine"; break; fi
 done
 
 if [[ -n "$_SG_QUAR_NEW" ]]; then
@@ -308,8 +414,8 @@ if [[ -n "$_SG_QUAR_NEW" ]]; then
   fi
 
   # Record the location so the app writes there from now on.
-  if [[ -f "${INSTALL_DIR}/database/sentinel.db" ]] && command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "${INSTALL_DIR}/database/sentinel.db" \
+  if [[ -f "${INSTALL_DIR}/database/serverscrub.db" ]] && command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "${INSTALL_DIR}/database/serverscrub.db" \
       "INSERT INTO settings(key,value,updated_at) VALUES('quarantine_dir','${_SG_QUAR_NEW}',strftime('%s','now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at;" \
       2>/dev/null && ok "  Quarantine directory set to ${_SG_QUAR_NEW}"
   fi
@@ -381,8 +487,7 @@ cp    "${SCRIPT_DIR}/VERSION"  "$INSTALL_DIR/"
 [[ -f "${SCRIPT_DIR}/install.sh"   ]] && cp "${SCRIPT_DIR}/install.sh"   "$INSTALL_DIR/"
 [[ -f "${SCRIPT_DIR}/update.sh"   ]] && cp "${SCRIPT_DIR}/update.sh"   "$INSTALL_DIR/"
 [[ -f "${SCRIPT_DIR}/uninstall.sh" ]] && cp "${SCRIPT_DIR}/uninstall.sh" "$INSTALL_DIR/"
-# Keep whm/sentinel.conf version in sync with VERSION file
-sed -i "s/\"version\":.*\"[0-9.]*\"/\"version\":     \"${SG_VERSION}\"/" "${SCRIPT_DIR}/whm/sentinel.conf" 2>/dev/null || true
+# The WHM appconfig is generated below, not copied from the tree.
 # Keep SG_VERSION constant in config.php in sync with VERSION file
 sed -i "s/define('SG_VERSION',  '[0-9.]*')/define('SG_VERSION',  '${SG_VERSION}')/" "${INSTALL_DIR}/backend/config/config.php" 2>/dev/null || true
 ok "Files installed to $INSTALL_DIR"
@@ -396,7 +501,7 @@ chmod -R 700 "$INSTALL_DIR/logs"
 chmod +x "$INSTALL_DIR/backend/cron/scan.php"
 chmod +x "$INSTALL_DIR/backend/cron/scheduler.php" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/backend/daemon/monitor.py"
-[[ -f "$INSTALL_DIR/backend/cli/sentinel.php" ]] && chmod +x "$INSTALL_DIR/backend/cli/sentinel.php"
+[[ -f "$INSTALL_DIR/backend/cli/serverscrub.php" ]] && chmod +x "$INSTALL_DIR/backend/cli/serverscrub.php"
 ok "Permissions set"
 
 # ── Write mode.php ─────────────────────────────────────────────────────────────
@@ -426,18 +531,18 @@ ok "Install mode recorded"
 # Stamp the install time so the trial starts at install rather than at first
 # login — otherwise a server set up and left alone would still show 3 full days
 # whenever someone eventually opened the dashboard.
-mkdir -p /var/lib/sentinel-gate 2>/dev/null || true
-[[ -f /var/lib/sentinel-gate/installed-at ]] || date +%s > /var/lib/sentinel-gate/installed-at
+mkdir -p /var/lib/serverscrub 2>/dev/null || true
+[[ -f /var/lib/serverscrub/installed-at ]] || date +%s > /var/lib/serverscrub/installed-at
 
 # ── Initialize database ────────────────────────────────────────────────────────
 section "Initialising database"
-"$SG_PHP" -r "define('SG_ROOT', '$INSTALL_DIR'); define('SG_DB', '$INSTALL_DIR/database/sentinel.db'); define('SG_LOGS', '$INSTALL_DIR/logs'); define('SG_TMP', '/tmp/sentinel-gate'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR', '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS', serialize([])); define('JWT_SECRET', hash('sha256', gethostname() . 'sentinel_gate_secret_2024')); define('JWT_EXPIRY', 28800); define('INSTALL_MODE', '${INSTALL_MODE}'); define('SG_PORT', ${SG_PORT}); require_once '$INSTALL_DIR/backend/lib/Database.php'; \$db = Database::get(); Database::setSetting('install_mode', '${INSTALL_MODE}'); echo 'Database initialised' . PHP_EOL;"
+"$SG_PHP" -r "define('SG_ROOT', '$INSTALL_DIR'); define('SG_DB', '$INSTALL_DIR/database/serverscrub.db'); define('SG_LOGS', '$INSTALL_DIR/logs'); define('SG_TMP', '/tmp/serverscrub'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR', '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS', serialize([])); define('JWT_SECRET', hash('sha256', gethostname() . 'serverscrub_secret_2024')); define('JWT_EXPIRY', 28800); define('INSTALL_MODE', '${INSTALL_MODE}'); define('SG_PORT', ${SG_PORT}); require_once '$INSTALL_DIR/backend/lib/Database.php'; \$db = Database::get(); Database::setSetting('install_mode', '${INSTALL_MODE}'); echo 'Database initialised' . PHP_EOL;"
 ok "SQLite database ready"
 
 # ── Set standalone admin credentials ──────────────────────────────────────────
 if [[ "$INSTALL_MODE" == "standalone" ]]; then
   PASS_HASH=$("$SG_PHP" -r "echo password_hash('${ADMIN_PASS}', PASSWORD_BCRYPT, ['cost'=>12]);")
-  "$SG_PHP" -r "define('SG_ROOT', '$INSTALL_DIR'); define('SG_DB', '$INSTALL_DIR/database/sentinel.db'); define('SG_LOGS', '$INSTALL_DIR/logs'); define('SG_TMP', '/tmp/sentinel-gate'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR', '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS', serialize([])); define('JWT_SECRET', hash('sha256', gethostname() . 'sentinel_gate_secret_2024')); define('JWT_EXPIRY', 28800); define('INSTALL_MODE', 'standalone'); define('SG_PORT', ${SG_PORT}); require_once '$INSTALL_DIR/backend/lib/Database.php'; require_once '$INSTALL_DIR/backend/lib/Auth.php'; Auth::setLocalCredentials('${ADMIN_USER}', '${ADMIN_PASS}'); echo 'Admin credentials stored' . PHP_EOL;"
+  "$SG_PHP" -r "define('SG_ROOT', '$INSTALL_DIR'); define('SG_DB', '$INSTALL_DIR/database/serverscrub.db'); define('SG_LOGS', '$INSTALL_DIR/logs'); define('SG_TMP', '/tmp/serverscrub'); define('CPANEL_BASE', '/usr/local/cpanel'); define('CPANEL_USER', 'root'); define('SCAN_MAX_SIZE', 52428800); define('SIG_DIR', '$INSTALL_DIR/backend/signatures'); define('QUARANTINE_DIR', '$INSTALL_DIR/quarantine'); define('RBL_FEEDS', serialize([])); define('JWT_SECRET', hash('sha256', gethostname() . 'serverscrub_secret_2024')); define('JWT_EXPIRY', 28800); define('INSTALL_MODE', 'standalone'); define('SG_PORT', ${SG_PORT}); require_once '$INSTALL_DIR/backend/lib/Database.php'; require_once '$INSTALL_DIR/backend/lib/Auth.php'; Auth::setLocalCredentials('${ADMIN_USER}', '${ADMIN_PASS}'); echo 'Admin credentials stored' . PHP_EOL;"
   ok "Admin credentials stored (bcrypt)"
 fi
 
@@ -479,7 +584,7 @@ done
 if [[ -n "${CLAMSCAN_BIN}" ]]; then
   ok "ClamAV found: ${CLAMSCAN_BIN}"
   # Record path so the scanner backend can use it directly
-  "$SG_PHP" -r "define('SG_ROOT','${INSTALL_DIR}'); define('SG_DB','${INSTALL_DIR}/database/sentinel.db'); define('SG_LOGS','${INSTALL_DIR}/logs'); define('SG_TMP','/tmp/sentinel-gate'); define('CPANEL_BASE','/usr/local/cpanel'); define('CPANEL_USER','root'); define('SCAN_MAX_SIZE',52428800); define('SIG_DIR','${INSTALL_DIR}/backend/signatures'); define('QUARANTINE_DIR','${INSTALL_DIR}/quarantine'); define('RBL_FEEDS',serialize([])); define('JWT_SECRET',hash('sha256',gethostname().'sentinel_gate_secret_2024')); define('JWT_EXPIRY',28800); define('INSTALL_MODE','${INSTALL_MODE}'); define('SG_PORT',${SG_PORT}); require_once '${INSTALL_DIR}/backend/lib/Database.php'; Database::setSetting('clamscan_path','${CLAMSCAN_BIN}'); echo 'ClamAV path stored' . PHP_EOL;" 2>/dev/null || true
+  "$SG_PHP" -r "define('SG_ROOT','${INSTALL_DIR}'); define('SG_DB','${INSTALL_DIR}/database/serverscrub.db'); define('SG_LOGS','${INSTALL_DIR}/logs'); define('SG_TMP','/tmp/serverscrub'); define('CPANEL_BASE','/usr/local/cpanel'); define('CPANEL_USER','root'); define('SCAN_MAX_SIZE',52428800); define('SIG_DIR','${INSTALL_DIR}/backend/signatures'); define('QUARANTINE_DIR','${INSTALL_DIR}/quarantine'); define('RBL_FEEDS',serialize([])); define('JWT_SECRET',hash('sha256',gethostname().'serverscrub_secret_2024')); define('JWT_EXPIRY',28800); define('INSTALL_MODE','${INSTALL_MODE}'); define('SG_PORT',${SG_PORT}); require_once '${INSTALL_DIR}/backend/lib/Database.php'; Database::setSetting('clamscan_path','${CLAMSCAN_BIN}'); echo 'ClamAV path stored' . PHP_EOL;" 2>/dev/null || true
   if [[ -n "${FRESHCLAM_BIN}" ]]; then
     # On Debian/Ubuntu the clamav-freshclam DAEMON starts automatically on
     # install and holds a lock on the database directory. A manual freshclam run
@@ -562,9 +667,9 @@ fi
 # limit (often 8192) is far too low for a busy hosting server — the monitor
 # silently stops receiving events once it's exhausted. Raise it persistently.
 section "Kernel tuning (inotify watch limit)"
-SYSCTL_CONF="/etc/sysctl.d/60-sentinel-gate.conf"
+SYSCTL_CONF="/etc/sysctl.d/60-serverscrub.conf"
 cat > "${SYSCTL_CONF}" << SYSCTLEOF
-# Sentinel Gate — raise inotify limits for the real-time file monitor
+# ServerScrub — raise inotify limits for the real-time file monitor
 fs.inotify.max_user_watches = 1048576
 fs.inotify.max_user_instances = 1024
 SYSCTLEOF
@@ -592,9 +697,9 @@ else
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /etc/systemd/system ]]; then
     # Generate the service unit dynamically so paths match this installation
-    cat > /etc/systemd/system/sentinel-gate-monitor.service << SVCEOF
+    cat > /etc/systemd/system/serverscrub-monitor.service << SVCEOF
 [Unit]
-Description=Sentinel Gate Real-Time File Monitor
+Description=ServerScrub Real-Time File Monitor
 After=network.target
 Wants=network.target
 
@@ -613,11 +718,11 @@ TimeoutStopSec=10
 [Install]
 WantedBy=multi-user.target
 SVCEOF
-    chmod 644 /etc/systemd/system/sentinel-gate-monitor.service
+    chmod 644 /etc/systemd/system/serverscrub-monitor.service
     systemctl daemon-reload
-    systemctl enable sentinel-gate-monitor 2>/dev/null
-    systemctl start  sentinel-gate-monitor 2>/dev/null && \
-      ok "Real-time monitor started" || warn "Monitor start failed — check: journalctl -u sentinel-gate-monitor"
+    systemctl enable serverscrub-monitor 2>/dev/null
+    systemctl start  serverscrub-monitor 2>/dev/null && \
+      ok "Real-time monitor started" || warn "Monitor start failed — check: journalctl -u serverscrub-monitor"
   else
     nohup python3 "${INSTALL_DIR}/backend/daemon/monitor.py" \
       >> "${LOG_DIR}/monitor.log" 2>&1 &
@@ -644,6 +749,10 @@ if ! $REGISTER_ONLY; then
     echo "CRON_FILE=${CRON_FILE}"
     echo "SOURCE_DIR=${SCRIPT_DIR}"
   } > "${MANIFEST}"
+# Recorded after the manifest exists: the migration runs long before this
+# point, and a line appended then would be thrown away by the truncation
+# above.
+[[ -n "${MIGRATED_FROM:-}" ]] && echo "MIGRATED_FROM=${MIGRATED_FROM}" >> "${MANIFEST}"
   info "Manifest started: ${MANIFEST}"
 else
   info "Register-only — re-registering plugin against existing install"
@@ -676,9 +785,9 @@ fi
 # still reports them as active — the product claiming protection it is not
 # providing.
 if command -v systemctl >/dev/null 2>&1 && [[ -d /etc/systemd/system ]]; then
-  cat > /etc/systemd/system/sentinel-gate-firewall.service << FWEOF
+  cat > /etc/systemd/system/serverscrub-firewall.service << FWEOF
 [Unit]
-Description=Sentinel Gate firewall rule restore
+Description=ServerScrub firewall rule restore
 DefaultDependencies=no
 After=network-pre.target
 Before=network-pre.target
@@ -692,17 +801,17 @@ ExecStart=${SG_PHP} -r "define('SG_API',true); require_once '${INSTALL_DIR}/back
 [Install]
 WantedBy=multi-user.target
 FWEOF
-  chmod 644 /etc/systemd/system/sentinel-gate-firewall.service
+  chmod 644 /etc/systemd/system/serverscrub-firewall.service
   systemctl daemon-reload
-  systemctl enable sentinel-gate-firewall 2>/dev/null && ok "Boot-time rule restore enabled"
-  echo "FIREWALL_SERVICE=/etc/systemd/system/sentinel-gate-firewall.service" >> "${MANIFEST}"
+  systemctl enable serverscrub-firewall 2>/dev/null && ok "Boot-time rule restore enabled"
+  echo "FIREWALL_SERVICE=/etc/systemd/system/serverscrub-firewall.service" >> "${MANIFEST}"
 fi
 echo "FIREWALL_BACKEND=${FW_INIT}" >> "${MANIFEST}"
 
 # ── Cron jobs ──────────────────────────────────────────────────────────────────
 section "Cron jobs"
 cat > "${CRON_FILE}" << CRONEOF
-# Sentinel Gate — scheduled tasks
+# ServerScrub — scheduled tasks
 MAILTO=""
 # Task scheduler — decides what is due from the user's Settings. Runs every
 # 15 min; exits silently when nothing is due. Schedules are changed in the UI,
@@ -727,10 +836,10 @@ fi
 fi  # ═══ end INSTALL-ONLY SECTIONS ═══════════════════════════════════════════════
 
 # ── Firewall & WAF integration (CSF/LFD + ModSecurity) ─────────────────────────
-# These wire Sentinel Gate into the server's existing security stack. They are
+# These wire ServerScrub into the server's existing security stack. They are
 # idempotent (guarded by grep) so they run safely on both fresh installs and
 # --register-only upgrades. All entries are removed by uninstall.sh.
-SG_ETC="/etc/sentinel-gate"
+SG_ETC="/etc/serverscrub"
 mkdir -p "${SG_ETC}"
 
 # ── CSF / LFD (ConfigServer Firewall) ──
@@ -743,20 +852,20 @@ if [[ -f /usr/sbin/csf ]]; then
   touch "${SG_ETC}/csf_allow.txt" "${SG_ETC}/csf_ignore.txt"
   chmod 600 "${SG_ETC}/csf_allow.txt" "${SG_ETC}/csf_ignore.txt"
 
-  if [[ -f /etc/csf/csf.allow ]] && ! grep -q "sentinel-gate/csf_allow.txt" /etc/csf/csf.allow 2>/dev/null; then
+  if [[ -f /etc/csf/csf.allow ]] && ! grep -q "serverscrub/csf_allow.txt" /etc/csf/csf.allow 2>/dev/null; then
     echo "Include ${SG_ETC}/csf_allow.txt" >> /etc/csf/csf.allow
     ok "Registered allow include in csf.allow"
   fi
-  if [[ -f /etc/csf/csf.ignore ]] && ! grep -q "sentinel-gate/csf_ignore.txt" /etc/csf/csf.ignore 2>/dev/null; then
+  if [[ -f /etc/csf/csf.ignore ]] && ! grep -q "serverscrub/csf_ignore.txt" /etc/csf/csf.ignore 2>/dev/null; then
     echo "Include ${SG_ETC}/csf_ignore.txt" >> /etc/csf/csf.ignore
     ok "Registered ignore include in csf.ignore"
   fi
   if [[ -f /etc/csf/csf.pignore ]]; then
-    grep -q "sentinel-gate/backend/daemon/monitor.py" /etc/csf/csf.pignore 2>/dev/null || \
-      echo "cmd:.*sentinel-gate/backend/daemon/monitor.py" >> /etc/csf/csf.pignore
-    grep -q "sentinel-gate/backend/standalone-router.php" /etc/csf/csf.pignore 2>/dev/null || \
-      echo "cmd:.*sentinel-gate/backend/standalone-router.php" >> /etc/csf/csf.pignore
-    ok "Exempted Sentinel Gate daemons in csf.pignore"
+    grep -q "serverscrub/backend/daemon/monitor.py" /etc/csf/csf.pignore 2>/dev/null || \
+      echo "cmd:.*serverscrub/backend/daemon/monitor.py" >> /etc/csf/csf.pignore
+    grep -q "serverscrub/backend/standalone-router.php" /etc/csf/csf.pignore 2>/dev/null || \
+      echo "cmd:.*serverscrub/backend/standalone-router.php" >> /etc/csf/csf.pignore
+    ok "Exempted ServerScrub daemons in csf.pignore"
   fi
 
   # `csf -r` reloads csf AND lfd; fall back to a direct lfd restart if absent.
@@ -789,20 +898,20 @@ for _MSC in \
   [[ -f "${_MSC}" ]] && { MODSEC_USER_CONF="${_MSC}"; break; }
 done
 if [[ -n "${MODSEC_USER_CONF}" ]]; then
-  SG_MODSEC_DIR="/etc/apache2/conf.d/modsec_vendor_configs/sentinel-gate"
+  SG_MODSEC_DIR="/etc/apache2/conf.d/modsec_vendor_configs/serverscrub"
   SG_MODSEC_RULES="${SG_MODSEC_DIR}/custom_rules.conf"
   mkdir -p "${SG_MODSEC_DIR}"
   if [[ ! -f "${SG_MODSEC_RULES}" ]]; then
     cat > "${SG_MODSEC_RULES}" << 'MODRULEEOF'
-# Sentinel Gate — custom ModSecurity rules (managed by the WAF module).
+# ServerScrub — custom ModSecurity rules (managed by the WAF module).
 # Rules added from the dashboard are written here; Apache reload applies them.
 MODRULEEOF
     chmod 644 "${SG_MODSEC_RULES}"
   fi
-  if ! grep -q "sentinel-gate/custom_rules.conf" "${MODSEC_USER_CONF}" 2>/dev/null; then
+  if ! grep -q "serverscrub/custom_rules.conf" "${MODSEC_USER_CONF}" 2>/dev/null; then
     {
       echo ""
-      echo "# Sentinel Gate WAF rules"
+      echo "# ServerScrub WAF rules"
       echo "Include ${SG_MODSEC_RULES}"
     } >> "${MODSEC_USER_CONF}"
     ok "Registered WAF Include in ${MODSEC_USER_CONF}"
@@ -817,23 +926,23 @@ else
   info "ModSecurity user config not found — skipping WAF Apache hook (WAF stays app-level)"
 fi
 
-# ── CLI entrypoint (`sentinel` command) ───────────────────────────────────────
-# Thin bash wrapper in /usr/bin so admins get a `sentinel` command (parity with
+# ── CLI entrypoint (`serverscrub` command) ───────────────────────────────────────
+# Thin bash wrapper in /usr/bin so admins get a `serverscrub` command (parity with
 # CPGuard's cpgcli). Placed here (not the install-only block) so upgrades run via
 # --register-only pick it up too. Points at the installed CLI, not the source.
 section "CLI entrypoint"
-if [[ -f "${INSTALL_DIR}/backend/cli/sentinel.php" ]]; then
+if [[ -f "${INSTALL_DIR}/backend/cli/serverscrub.php" ]]; then
   _PHP_BIN="${SG_PHP}"
-  cat > /usr/bin/sentinel << CLIEOF
+  cat > /usr/bin/serverscrub << CLIEOF
 #!/usr/bin/env bash
-# Sentinel Gate CLI — installed by install.sh (do not edit)
-exec ${_PHP_BIN} ${INSTALL_DIR}/backend/cli/sentinel.php "\$@"
+# ServerScrub CLI — installed by install.sh (do not edit)
+exec ${_PHP_BIN} ${INSTALL_DIR}/backend/cli/serverscrub.php "\$@"
 CLIEOF
-  chmod 755 /usr/bin/sentinel
-  ok "CLI installed: /usr/bin/sentinel (run: sentinel help)"
-  grep -q "^SG_CLI=" "${MANIFEST}" 2>/dev/null || echo "SG_CLI=/usr/bin/sentinel" >> "${MANIFEST}"
+  chmod 755 /usr/bin/serverscrub
+  ok "CLI installed: /usr/bin/serverscrub (run: serverscrub help)"
+  grep -q "^SG_CLI=" "${MANIFEST}" 2>/dev/null || echo "SG_CLI=/usr/bin/serverscrub" >> "${MANIFEST}"
 else
-  info "CLI script not present in install dir — skipping /usr/bin/sentinel"
+  info "CLI script not present in install dir — skipping /usr/bin/serverscrub"
 fi
 
 # ── Mode-specific setup ────────────────────────────────────────────────────────
@@ -866,17 +975,17 @@ if [[ "$INSTALL_MODE" == "standalone" ]]; then
   # ── Systemd web service ──
   WEB_SVC=""
   if command -v systemctl >/dev/null 2>&1 && [[ -d /etc/systemd/system ]]; then
-    WEB_SVC="/etc/systemd/system/sentinel-gate-web.service"
+    WEB_SVC="/etc/systemd/system/serverscrub-web.service"
     info "Installing systemd service: ${WEB_SVC}"
-    cp "${SCRIPT_DIR}/whm/sentinel-gate-web.service" "${WEB_SVC}"
+    cp "${SCRIPT_DIR}/whm/serverscrub-web.service" "${WEB_SVC}"
     chmod 644 "${WEB_SVC}"
     systemctl daemon-reload
-    systemctl enable sentinel-gate-web 2>&1 | sed 's/^/  /'
-    if systemctl start sentinel-gate-web 2>&1; then
-      ok "Service started: sentinel-gate-web"
-      systemctl status sentinel-gate-web --no-pager -l 2>&1 | head -6 | sed 's/^/  /'
+    systemctl enable serverscrub-web 2>&1 | sed 's/^/  /'
+    if systemctl start serverscrub-web 2>&1; then
+      ok "Service started: serverscrub-web"
+      systemctl status serverscrub-web --no-pager -l 2>&1 | head -6 | sed 's/^/  /'
     else
-      warn "Service start failed — check: journalctl -u sentinel-gate-web -n 20"
+      warn "Service start failed — check: journalctl -u serverscrub-web -n 20"
     fi
     echo "WEB_SERVICE=${WEB_SVC}" >> "${MANIFEST}"
   else
@@ -936,7 +1045,7 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
     info "PHP handler: ${PHP_HANDLER}"
   fi
 
-  # ── What should https://<host>/sentinel-gate/ serve? ──────────────────────
+  # ── What should https://<host>/serverscrub/ serve? ──────────────────────
   # On cPanel: NOT the app. That copy cannot work — Apache has no PHP handler
   # for this directory and would run it as the web user anyway — yet it looks
   # identical to the real dashboard and silently fails every API call. Anyone
@@ -950,39 +1059,39 @@ elif [[ "$INSTALL_MODE" == "cpanel" ]]; then
     mkdir -p "${SG_WEB_DIR}"
     cat > "${SG_WEB_DIR}/index.html" << 'ENDREDIR'
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Sentinel Gate</title>
+<html><head><meta charset="utf-8"><title>ServerScrub</title>
 <style>body{background:#0b1020;color:#e2e8f0;font-family:system-ui,-apple-system,
 Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;
 height:100vh;margin:0;text-align:center}a{color:#a78bfa}</style></head>
 <body><div>
   <div style="font-size:2.2rem;margin-bottom:12px">&#x1F6E1;&#xFE0F;</div>
-  <h2 style="margin:0 0 8px;font-size:1.2rem">Sentinel Gate</h2>
+  <h2 style="margin:0 0 8px;font-size:1.2rem">ServerScrub</h2>
   <p style="color:#94a3b8;font-size:.9rem" id="m">Taking you to the dashboard&hellip;</p>
   <p style="margin-top:16px;font-size:.85rem"><a id="l" href="#">Open the dashboard</a></p>
 </div>
 <script>
 // The dashboard runs under WHM (cpsrvd), which is what gives it the privileges
 // the firewall and scanner need. This address is only a signpost.
-var u = 'https://' + location.hostname + ':2087/cgi/sentinel_gate/sentinel_gate.cgi';
+var u = 'https://' + location.hostname + ':2087/cgi/serverscrub/serverscrub.cgi';
 document.getElementById('l').href = u;
 location.replace(u);
 </script>
 </body></html>
 ENDREDIR
-    ok "  /sentinel-gate/ redirects to the WHM plugin"
+    ok "  /serverscrub/ redirects to the WHM plugin"
   else
     SG_WEB_DIR="${INSTALL_DIR}/frontend"
   fi
 
   # ── Write Apache alias config ──
-  APACHE_CONF="${APACHE_CONF_D}/sentinel-gate.conf"
+  APACHE_CONF="${APACHE_CONF_D}/serverscrub.conf"
   info "Writing Apache alias config: ${APACHE_CONF}"
   cat > "${APACHE_CONF}" << APACHEEOF
-# Sentinel Gate v${SG_VERSION} — Apache aliases
+# ServerScrub v${SG_VERSION} — Apache aliases
 # API alias MUST come before the root alias (more-specific path first)
 <IfModule mod_alias.c>
-  Alias /sentinel-gate/backend/api ${INSTALL_DIR}/backend/api
-  Alias /sentinel-gate             ${SG_WEB_DIR}
+  Alias /serverscrub/backend/api ${INSTALL_DIR}/backend/api
+  Alias /serverscrub             ${SG_WEB_DIR}
 </IfModule>
 
 <Directory "${INSTALL_DIR}/backend/api">
@@ -1028,7 +1137,7 @@ APACHEEOF
   #   2. register_appconfig copies the conf to /var/cpanel/apps/ AND restarts cpsrvd
   #   3. No manual cpsrvd restart is needed — register_appconfig handles it
   #   4. Invalid AppConfig fields (like icon=plugin) cause silent rejection
-  info "Registering Sentinel Gate with cPanel AppConfig system…"
+  info "Registering ServerScrub with cPanel AppConfig system…"
   if [[ ! -d /usr/local/cpanel ]]; then
     warn "/usr/local/cpanel not found — skipping cPanel registration"
   else
@@ -1038,15 +1147,15 @@ APACHEEOF
 
     # ── Step 1: Create named CGI subdirectory in WHM docroot ─────────────────
     # CSF uses:  /usr/local/cpanel/whostmgr/docroot/cgi/configserver/csf/
-    # We follow: /usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate/
-    WHM_CGI_DIR="/usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate"
-    WHM_CGI="${WHM_CGI_DIR}/sentinel_gate.cgi"
-    WHM_PLUGIN_CONF="${WHM_CGI_DIR}/sentinel_gate.conf"
+    # We follow: /usr/local/cpanel/whostmgr/docroot/cgi/serverscrub/
+    WHM_CGI_DIR="/usr/local/cpanel/whostmgr/docroot/cgi/serverscrub"
+    WHM_CGI="${WHM_CGI_DIR}/serverscrub.cgi"
+    WHM_PLUGIN_CONF="${WHM_CGI_DIR}/serverscrub.conf"
     mkdir -p "${WHM_CGI_DIR}"
     info "  WHM CGI dir: ${WHM_CGI_DIR}"
 
     # ── Step 2: Serve the app from cpsrvd, not Apache ─────────────────────────
-    # The CGI used to redirect to https://<host>/sentinel-gate/, handing the app
+    # The CGI used to redirect to https://<host>/serverscrub/, handing the app
     # to Apache. That was wrong for a WHM plugin in two ways that only show up on
     # a real server:
     #
@@ -1107,7 +1216,7 @@ APACHEEOF
     info "  Writing CGI: ${WHM_CGI}"
     cat > "${WHM_CGI}" << ENDCGI
 #!/bin/sh
-# Sentinel Gate — the one AppConfig-registered entry point (runs as root).
+# ServerScrub — the one AppConfig-registered entry point (runs as root).
 #   ?r=module/action  -> REST API, handed to php-cgi
 #   anything else     -> the dashboard
 #
@@ -1142,9 +1251,9 @@ ENDCGI
 // Written by the installer. The API is served by the same registered CGI as
 // the dashboard: AppConfig authorises exactly one application per directory, so
 // a separate endpoint is refused by cpsrvd with 403.
-window.SG_API_BASE = './sentinel_gate.cgi';
+window.SG_API_BASE = './serverscrub.cgi';
 ENDCFG
-    ok "  API base pinned: ./sentinel_gate.cgi"
+    ok "  API base pinned: ./serverscrub.cgi"
 
     # ── Prove the API actually answers, here, now ─────────────────────────────
     # The installer previously reported success without ever invoking the API,
@@ -1185,8 +1294,8 @@ ENDCFG
     # WHM renders the icon referenced by the AppConfig `icon=` field from
     # whostmgr/docroot/addon_plugins/. Without it the plugin shows a blank tile.
     ADDON_PLUGINS_DIR="/usr/local/cpanel/whostmgr/docroot/addon_plugins"
-    SG_ICON_SRC="${SCRIPT_DIR}/whm/sentinel_gate.png"
-    SG_ICON_DEST="${ADDON_PLUGINS_DIR}/sentinel_gate.png"
+    SG_ICON_SRC="${SCRIPT_DIR}/whm/serverscrub.png"
+    SG_ICON_DEST="${ADDON_PLUGINS_DIR}/serverscrub.png"
     if [[ -f "${SG_ICON_SRC}" && -d "${ADDON_PLUGINS_DIR}" ]]; then
       cp -f "${SG_ICON_SRC}" "${SG_ICON_DEST}"
       chmod 644 "${SG_ICON_DEST}"
@@ -1198,15 +1307,15 @@ ENDCFG
 
     info "  Writing AppConfig conf: ${WHM_PLUGIN_CONF}"
     # Remove any stale /var/cpanel/apps/ copy first so register_appconfig writes fresh
-    rm -f /var/cpanel/apps/sentinel_gate.conf 2>/dev/null || true
+    rm -f /var/cpanel/apps/serverscrub.conf 2>/dev/null || true
     cat > "${WHM_PLUGIN_CONF}" << APPEOF
-name=sentinel_gate
+name=serverscrub
 service=whostmgr
-url=/cgi/sentinel_gate/sentinel_gate.cgi
-entryurl=sentinel_gate/sentinel_gate.cgi
+url=/cgi/serverscrub/serverscrub.cgi
+entryurl=serverscrub/serverscrub.cgi
 acls=any
-displayname=Sentinel Gate Security
-icon=sentinel_gate.png
+displayname=ServerScrub Security
+icon=serverscrub.png
 target=_blank
 APPEOF
     chmod 644 "${WHM_PLUGIN_CONF}"
@@ -1227,9 +1336,9 @@ APPEOF
     DRIVER_SRC="${SCRIPT_DIR}/whm/Driver"
     if [[ -d "${DRIVER_DEST}" && -d "${DRIVER_SRC}" ]]; then
       info "  Installing Driver files to ${DRIVER_DEST}…"
-      cp -af "${DRIVER_SRC}/SentinelGate.pm" "${DRIVER_DEST}/"
-      mkdir -p "${DRIVER_DEST}/SentinelGate"
-      cp -af "${DRIVER_SRC}/SentinelGate/META.pm" "${DRIVER_DEST}/SentinelGate/"
+      cp -af "${DRIVER_SRC}/ServerScrub.pm" "${DRIVER_DEST}/"
+      mkdir -p "${DRIVER_DEST}/ServerScrub"
+      cp -af "${DRIVER_SRC}/ServerScrub/META.pm" "${DRIVER_DEST}/ServerScrub/"
       touch "${DRIVER_DEST}"
       ok "  Driver files installed; directory mtime updated"
       echo "DRIVER_DEST=${DRIVER_DEST}" >> "${MANIFEST}"
@@ -1254,9 +1363,9 @@ APPEOF
         ok "  register_appconfig succeeded"
         _REG_OK=true
         # Verify it landed in /var/cpanel/apps/
-        if [[ -f /var/cpanel/apps/sentinel_gate.conf ]]; then
-          ok "  Confirmed deployed to /var/cpanel/apps/sentinel_gate.conf"
-          echo "APPCONFIG_CONF=/var/cpanel/apps/sentinel_gate.conf" >> "${MANIFEST}"
+        if [[ -f /var/cpanel/apps/serverscrub.conf ]]; then
+          ok "  Confirmed deployed to /var/cpanel/apps/serverscrub.conf"
+          echo "APPCONFIG_CONF=/var/cpanel/apps/serverscrub.conf" >> "${MANIFEST}"
         fi
       else
         warn "  register_appconfig exited ${_REG_EXIT} — trying --all rescan…"
@@ -1266,13 +1375,13 @@ APPEOF
     else
       warn "  register_appconfig not found — manually restarting cpsrvd to pick up conf…"
       # Fallback: copy conf directly and restart
-      cp -f "${WHM_PLUGIN_CONF}" /var/cpanel/apps/sentinel_gate.conf 2>/dev/null || true
-      echo "APPCONFIG_CONF=/var/cpanel/apps/sentinel_gate.conf" >> "${MANIFEST}"
+      cp -f "${WHM_PLUGIN_CONF}" /var/cpanel/apps/serverscrub.conf 2>/dev/null || true
+      echo "APPCONFIG_CONF=/var/cpanel/apps/serverscrub.conf" >> "${MANIFEST}"
     fi
 
     # ── Step 6: cPanel user-level plugin (per-account cPanel dashboard) ─────
-    # Each cPanel account holder sees a "Sentinel Gate" icon in their dashboard.
-    # Clicking it opens the Sentinel Gate dashboard in a new tab.
+    # Each cPanel account holder sees a "ServerScrub" icon in their dashboard.
+    # Clicking it opens the ServerScrub dashboard in a new tab.
     # Registered via:
     #   a) install_plugin (modern, 11.44+) — processes install.json
     #   b) dynamicui .conf (legacy fallback) — direct conf file
@@ -1283,11 +1392,11 @@ APPEOF
       [[ ! -d "${CPANEL_THEME_BASE}" ]] && { info "  Theme not found: ${CPANEL_THEME} — skip"; continue; }
 
       # Create plugin directory and PHP redirect page
-      CPANEL_PLUGIN_DIR="${CPANEL_THEME_BASE}/sentinel_gate"
+      CPANEL_PLUGIN_DIR="${CPANEL_THEME_BASE}/serverscrub"
       mkdir -p "${CPANEL_PLUGIN_DIR}"
       # The user-facing page, shipped as a file rather than written inline.
       #
-      # It used to be a redirect to https://<host>/sentinel-gate/ -- the WHM
+      # It used to be a redirect to https://<host>/serverscrub/ -- the WHM
       # dashboard, which authenticates against WHM. A cPanel user following the
       # menu entry therefore arrived at a login screen they could never pass,
       # so the plugin was present and useless. The page now reads the report
@@ -1295,11 +1404,11 @@ APPEOF
       # place, with no login of its own and no access to the server-wide
       # database (which is 0700 root, and must stay that way).
       #
-      # Keeping it in the repo as cpanel/sentinel_gate/index.php means php -l,
+      # Keeping it in the repo as cpanel/serverscrub/index.php means php -l,
       # the preflight gates and the test suite all see it; a heredoc inside an
       # installer is invisible to every one of them.
-      if [[ -f "${SCRIPT_DIR}/cpanel/sentinel_gate/index.php" ]]; then
-        cp -f "${SCRIPT_DIR}/cpanel/sentinel_gate/index.php" "${CPANEL_PLUGIN_DIR}/index.php"
+      if [[ -f "${SCRIPT_DIR}/cpanel/serverscrub/index.php" ]]; then
+        cp -f "${SCRIPT_DIR}/cpanel/serverscrub/index.php" "${CPANEL_PLUGIN_DIR}/index.php"
       else
         warn "  cPanel user page missing from the package — menu entry would be empty"
       fi
@@ -1310,22 +1419,22 @@ APPEOF
       #   Cpanel::Exception::MissingParameter ... lacks the required parameter "icon"
       # for both themes, and the plugin only ever appeared through the legacy
       # dynamicui fallback.
-      if [[ -f "${SCRIPT_DIR}/whm/sentinel_gate.png" ]]; then
-        cp -f "${SCRIPT_DIR}/whm/sentinel_gate.png" "${CPANEL_PLUGIN_DIR}/sentinel_gate.png"
-        chmod 644 "${CPANEL_PLUGIN_DIR}/sentinel_gate.png"
+      if [[ -f "${SCRIPT_DIR}/whm/serverscrub.png" ]]; then
+        cp -f "${SCRIPT_DIR}/whm/serverscrub.png" "${CPANEL_PLUGIN_DIR}/serverscrub.png"
+        chmod 644 "${CPANEL_PLUGIN_DIR}/serverscrub.png"
       fi
 
       # install.json for the modern install_plugin mechanism (cPanel 11.44+)
       cat > "${CPANEL_PLUGIN_DIR}/install.json" << JSONEOF
 [
   {
-    "id":       "sentinel_gate",
+    "id":       "serverscrub",
     "type":     "link",
-    "name":     "Sentinel Gate",
+    "name":     "ServerScrub",
     "order":    100,
     "group_id": "security",
-    "uri":      "/frontend/${CPANEL_THEME}/sentinel_gate/index.php",
-    "icon":     "sentinel_gate.png"
+    "uri":      "/frontend/${CPANEL_THEME}/serverscrub/index.php",
+    "icon":     "serverscrub.png"
   }
 ]
 JSONEOF
@@ -1349,16 +1458,16 @@ JSONEOF
       # Legacy dynamicui conf (works on all cPanel versions, parallel to install_plugin)
       DYNUI_DIR="${CPANEL_THEME_BASE}/dynamicui"
       if [[ -d "${DYNUI_DIR}" ]]; then
-        DYNUI_CONF="${DYNUI_DIR}/dynamicui_sentinel_gate.conf"
+        DYNUI_CONF="${DYNUI_DIR}/dynamicui_serverscrub.conf"
         cat > "${DYNUI_CONF}" << DYNEOF
 group=security
 groupdesc=Security
 grouporder=30
-name=sentinel_gate
-itemdesc=Sentinel Gate Security
+name=serverscrub
+itemdesc=ServerScrub Security
 imgtype=icon
-icon=sentinel_gate.png
-url=/frontend/${CPANEL_THEME}/sentinel_gate/index.php
+icon=serverscrub.png
+url=/frontend/${CPANEL_THEME}/serverscrub/index.php
 target=_blank
 itemorder=1
 DYNEOF
@@ -1371,31 +1480,31 @@ DYNEOF
 
     # cPanel-level AppConfig entry (service=cpanel) — integrates with cPanel security framework
     # features=any means ALL cPanel users see it regardless of their feature list
-    CPANEL_APPCONF="${WHM_CGI_DIR}/sentinel_gate_cpanel.conf"
-    rm -f /var/cpanel/apps/sentinel_gate_cpanel.conf 2>/dev/null || true
+    CPANEL_APPCONF="${WHM_CGI_DIR}/serverscrub_cpanel.conf"
+    rm -f /var/cpanel/apps/serverscrub_cpanel.conf 2>/dev/null || true
     cat > "${CPANEL_APPCONF}" << CPANELEOF
-name=sentinel_gate_cpanel
+name=serverscrub_cpanel
 service=cpanel
-url=/frontend/jupiter/sentinel_gate/index.php
+url=/frontend/jupiter/serverscrub/index.php
 features=any
-displayname=Sentinel Gate Security
+displayname=ServerScrub Security
 CPANELEOF
     chmod 644 "${CPANEL_APPCONF}"
     if [[ -x /usr/local/cpanel/bin/register_appconfig ]]; then
       _CREG_OUT=$(/usr/local/cpanel/bin/register_appconfig "${CPANEL_APPCONF}" 2>&1)
       echo "${_CREG_OUT}" | sed 's/^/    /'
       ok "  cPanel AppConfig registered (service=cpanel, features=any)"
-      [[ -f /var/cpanel/apps/sentinel_gate_cpanel.conf ]] && \
-        echo "CPANEL_APPCONFIG=/var/cpanel/apps/sentinel_gate_cpanel.conf" >> "${MANIFEST}"
+      [[ -f /var/cpanel/apps/serverscrub_cpanel.conf ]] && \
+        echo "CPANEL_APPCONFIG=/var/cpanel/apps/serverscrub_cpanel.conf" >> "${MANIFEST}"
     fi
 
-    # ── Step 7: Feature flags — enable Sentinel Gate for all cPanel users ─────
+    # ── Step 7: Feature flags — enable ServerScrub for all cPanel users ─────
     # Feature flags control which icons appear in a cPanel user's dashboard.
-    # Adding sentinel_gate=1 to the 'default' feature list means it's ON for
+    # Adding serverscrub=1 to the 'default' feature list means it's ON for
     # every account unless an admin or reseller explicitly disables it.
     # NOTE ON THE FEATURE GATE
     #
-    # install.json and the dynamicui conf no longer carry feature=sentinel_gate.
+    # install.json and the dynamicui conf no longer carry feature=serverscrub.
     # cPanel hides an item whose feature is not enabled in the user's feature
     # list, and only /var/cpanel/features/default was ever updated -- so every
     # account on a reseller's own feature list, which is most of them on a
@@ -1414,18 +1523,18 @@ CPANELEOF
     _SG_FEAT_N=0
     for _fl in /var/cpanel/features/*; do
       [[ -f "$_fl" ]] || continue
-      grep -q "^sentinel_gate=" "$_fl" 2>/dev/null || echo "sentinel_gate=1" >> "$_fl"
+      grep -q "^serverscrub=" "$_fl" 2>/dev/null || echo "serverscrub=1" >> "$_fl"
       _SG_FEAT_N=$((_SG_FEAT_N + 1))
     done
-    grep -q "^sentinel_gate=" /var/cpanel/features/default 2>/dev/null || \
-      echo "sentinel_gate=1" >> /var/cpanel/features/default
+    grep -q "^serverscrub=" /var/cpanel/features/default 2>/dev/null || \
+      echo "serverscrub=1" >> /var/cpanel/features/default
     ok "  Feature flag written to ${_SG_FEAT_N} feature list(s)"
     echo "FEATURE_FLAG_MODERN=/var/cpanel/features/default" >> "${MANIFEST}"
     # Legacy location (older cPanel — kept for compatibility)
     _LEGACY_FEAT="/usr/local/cpanel/cpanel/features"
     if [[ -d "${_LEGACY_FEAT}" ]]; then
-      grep -q "^sentinel_gate=" "${_LEGACY_FEAT}/default" 2>/dev/null || \
-        echo "sentinel_gate=1" >> "${_LEGACY_FEAT}/default"
+      grep -q "^serverscrub=" "${_LEGACY_FEAT}/default" 2>/dev/null || \
+        echo "serverscrub=1" >> "${_LEGACY_FEAT}/default"
       ok "  Feature flag (legacy): ${_LEGACY_FEAT}/default"
       echo "FEATURE_FLAG_LEGACY=${_LEGACY_FEAT}/default" >> "${MANIFEST}"
     fi
@@ -1447,16 +1556,16 @@ CPANELEOF
     _VERIFIED=false
     if command -v whmapi1 >/dev/null 2>&1; then
       _APP_LIST=$(whmapi1 appconfig_get_apps 2>/dev/null)
-      if echo "${_APP_LIST}" | grep -q "sentinel_gate"; then
-        ok "  VERIFIED via whmapi1: Sentinel Gate is live in WHM Plugins menu"
+      if echo "${_APP_LIST}" | grep -q "serverscrub"; then
+        ok "  VERIFIED via whmapi1: ServerScrub is live in WHM Plugins menu"
         _VERIFIED=true
       else
-        warn "  whmapi1 does not yet list sentinel_gate"
+        warn "  whmapi1 does not yet list serverscrub"
         warn "  If plugin is not visible in WHM → Plugins, try: Log out and log back in to WHM"
       fi
     fi
-    if ! $_VERIFIED && [[ -f /var/cpanel/apps/sentinel_gate.conf ]]; then
-      ok "  /var/cpanel/apps/sentinel_gate.conf exists — plugin should appear after WHM re-login"
+    if ! $_VERIFIED && [[ -f /var/cpanel/apps/serverscrub.conf ]]; then
+      ok "  /var/cpanel/apps/serverscrub.conf exists — plugin should appear after WHM re-login"
       _VERIFIED=true
     fi
     $_VERIFIED || warn "  Registration could not be verified — check WHM manually"
@@ -1610,7 +1719,7 @@ rm -f "$_SG_STOPALL"
 # Stale slot locks from workers that were killed rather than exiting. The
 # kernel releases a lock when its process dies, so these files are only ever
 # empty husks -- but leaving them is untidy and confuses manual inspection.
-rm -f /tmp/sentinel-gate/scan.lock.* 2>/dev/null || true
+rm -f /tmp/serverscrub/scan.lock.* 2>/dev/null || true
 
 # ── Per-user reports ──────────────────────────────────────────────────────────
 # Generated now so the cPanel menu entry has something to show immediately.
@@ -1671,13 +1780,13 @@ fi
 echo ""
 if [[ $TEST_EXIT -eq 0 ]]; then
   echo -e "${CYAN}${BOLD}══════════════════════════════════════════════════════${NC}"
-  echo -e "${GREEN}${BOLD}  Sentinel Gate v${SG_VERSION} installed successfully!${NC}"
+  echo -e "${GREEN}${BOLD}  ServerScrub v${SG_VERSION} installed successfully!${NC}"
   echo -e "${CYAN}${BOLD}══════════════════════════════════════════════════════${NC}"
   echo ""
 
   if [[ "$INSTALL_MODE" == "cpanel" ]]; then
-    echo -e "  ${BOLD}Access:${NC}  WHM → Plugins → Sentinel Gate Security"
-    echo -e "  ${BOLD}Also:${NC}    https://$(hostname -f 2>/dev/null || hostname)/sentinel-gate/"
+    echo -e "  ${BOLD}Access:${NC}  WHM → Plugins → ServerScrub Security"
+    echo -e "  ${BOLD}Also:${NC}    https://$(hostname -f 2>/dev/null || hostname)/serverscrub/"
   elif [[ "$INSTALL_MODE" == "standalone" ]]; then
     echo -e "  ${BOLD}Access:${NC}  http://$(hostname -f 2>/dev/null || hostname):${SG_PORT}"
     if $GENERATED_PASS; then
@@ -1704,7 +1813,7 @@ if [[ $TEST_EXIT -eq 0 ]]; then
   echo -e "  ${YELLOW}${BOLD}│${NC}  first sign-in — paste your key there."
   echo -e "  ${YELLOW}${BOLD}│${NC}"
   echo -e "  ${YELLOW}${BOLD}│${NC}  Or from the shell:"
-  echo -e "  ${YELLOW}${BOLD}│${NC}    ${BOLD}sentinel license activate <your-key>${NC}"
+  echo -e "  ${YELLOW}${BOLD}│${NC}    ${BOLD}serverscrub license activate <your-key>${NC}"
   echo -e "  ${YELLOW}${BOLD}└────────────────────────────────────────────────────────┘${NC}"
   echo ""
   echo -e "  ${BOLD}Install dir:${NC}  ${INSTALL_DIR}"

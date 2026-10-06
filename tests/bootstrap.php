@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — test bootstrap.
+ * ServerScrub — test bootstrap.
  *
  * DEVELOPMENT ONLY. Nothing in tests/ is packaged; scripts/build.py excludes it
  * and asserts its absence from the finished zip.

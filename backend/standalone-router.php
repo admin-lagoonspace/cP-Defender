@@ -1,9 +1,9 @@
 <?php
 /**
- * Sentinel Gate — Standalone PHP Router
+ * ServerScrub — Standalone PHP Router
  * ─────────────────────────────────────
  * Used with PHP's built-in web server:
- *   php -S 0.0.0.0:31150 /usr/local/sentinel-gate/backend/standalone-router.php
+ *   php -S 0.0.0.0:31150 /usr/local/serverscrub/backend/standalone-router.php
  *
  * URL layout:
  *   http://ip:31150/              → SPA (frontend/index.html)
@@ -12,7 +12,7 @@
  *   http://ip:31150/backend/api/* → backend REST API
  */
 
-$root = dirname(__DIR__);                          // /usr/local/sentinel-gate
+$root = dirname(__DIR__);                          // /usr/local/serverscrub
 $uri  = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $uri  = '/' . ltrim($uri, '/');
 

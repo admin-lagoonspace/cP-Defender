@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — built-in firewall engine
+ * ServerScrub — built-in firewall engine
  *
  * A self-contained packet-filter manager, so the product does not require the
  * operator to install and learn a separate firewall first.
@@ -11,8 +11,8 @@
  * That distinction is a licensing requirement, not a stylistic one. CSF was
  * discontinued on 2025-08-31 and released as-is under GPLv3 (cPanel now
  * maintains a fork for security fixes). GPLv3 is strong copyleft: code derived
- * from it makes the whole work a derivative, obliging us to publish Sentinel
- * Gate's source under GPLv3 — which would be incompatible with licensing it
+ * from it makes the whole work a derivative, obliging us to publish
+ * ServerScrub's source under GPLv3 — which would be incompatible with licensing it
  * commercially. CPGuard is proprietary, so copying from it is simply
  * infringement. Behaviour and features are not copyrightable; code is. So this
  * implements the same CAPABILITIES from first principles using the kernel's own
@@ -21,8 +21,8 @@
  * ── DESIGN ───────────────────────────────────────────────────────────────────
  * Everything lives in a DEDICATED table/chain that carries our name:
  *
- *   nftables : table inet sentinel_gate  { set sg_deny / sg_allow }
- *   iptables : chain SENTINEL_GATE, jumped to from INPUT
+ *   nftables : table inet serverscrub  { set sg_deny / sg_allow }
+ *   iptables : chain SERVERSCRUB, jumped to from INPUT
  *
  * Nothing outside that namespace is ever touched. The alternative — writing
  * loose rules into INPUT, which the previous implementation did — means we
@@ -38,13 +38,13 @@ if (!defined('SG_ROOT')) { die('Direct access denied'); }
 
 class FirewallEngine
 {
-    const TABLE = 'sentinel_gate';     // nftables table
-    const CHAIN = 'SENTINEL_GATE';     // iptables chain
+    const TABLE = 'serverscrub';     // nftables table
+    const CHAIN = 'SERVERSCRUB';     // iptables chain
     const SET_DENY  = 'sg_deny';
     const SET_ALLOW = 'sg_allow';
 
     /** Persisted rule state, restored at boot. */
-    const STATE_DIR = '/etc/sentinel-gate';
+    const STATE_DIR = '/etc/serverscrub';
 
     private static $backend = null;
 
@@ -179,7 +179,7 @@ class FirewallEngine
         if (!self::validIp($ip)) { return ['success' => false, 'error' => 'Invalid IP']; }
         switch (self::detect()) {
             case 'csf':
-                $r = self::sh('csf -d ' . escapeshellarg($ip) . ' "Sentinel Gate"'); break;
+                $r = self::sh('csf -d ' . escapeshellarg($ip) . ' "ServerScrub"'); break;
             case 'nftables':
                 $r = self::sh('nft add element inet ' . self::TABLE . ' ' .
                               self::SET_DENY . ' { ' . escapeshellarg($ip) . ' }'); break;
@@ -231,7 +231,7 @@ class FirewallEngine
         if (!self::validIp($ip)) { return ['success' => false, 'error' => 'Invalid IP']; }
         switch (self::detect()) {
             case 'csf':
-                $r = self::sh('csf -a ' . escapeshellarg($ip) . ' "Sentinel Gate"'); break;
+                $r = self::sh('csf -a ' . escapeshellarg($ip) . ' "ServerScrub"'); break;
             case 'nftables':
                 $r = self::sh('nft add element inet ' . self::TABLE . ' ' .
                               self::SET_ALLOW . ' { ' . escapeshellarg($ip) . ' }'); break;

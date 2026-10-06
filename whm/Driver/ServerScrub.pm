@@ -1,15 +1,15 @@
-package Cpanel::Config::ConfigObj::Driver::SentinelGate;
+package Cpanel::Config::ConfigObj::Driver::ServerScrub;
 
 use strict;
-use Cpanel::Config::ConfigObj::Driver::SentinelGate::META ();
-*VERSION = \$Cpanel::Config::ConfigObj::Driver::SentinelGate::META::VERSION;
+use Cpanel::Config::ConfigObj::Driver::ServerScrub::META ();
+*VERSION = \$Cpanel::Config::ConfigObj::Driver::ServerScrub::META::VERSION;
 
 our @ISA = qw(Cpanel::Config::ConfigObj::Interface::Config::v1);
 
 sub init {
     my ( $class, $software_obj ) = @_;
     my $self = $class->SUPER::base(
-        { 'thirdparty_ns' => 'SentinelGate', 'meta' => {} },
+        { 'thirdparty_ns' => 'ServerScrub', 'meta' => {} },
         $software_obj
     );
     return $self;

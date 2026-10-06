@@ -167,7 +167,7 @@ t_contains($api, "'quarantine-move'",  'and relocated');
 t_contains($api, 'file_put_contents($probe',
     'the write test actually writes rather than trusting is_writable()');
 t_contains($html, 'id="set-quar-dir"', 'the settings page exposes the path');
-t_ok(strpos($html, '<code>/usr/local/sentinel-gate/quarantine</code>') === false,
+t_ok(strpos($html, '<code>/usr/local/serverscrub/quarantine</code>') === false,
     'the settings page no longer names the root-partition path as fact');
 
 $cfg = t_code($repo . '/backend/config/config.php');
@@ -197,5 +197,5 @@ t_contains($update, '--register-only',
 // cPanel user cannot authenticate to. It is now a real page shipped from the
 // repo, so what matters is that the installer copies the current one on every
 // registration -- including the --register-only pass an update performs.
-t_contains($install, 'cpanel/sentinel_gate/index.php',
+t_contains($install, 'cpanel/serverscrub/index.php',
     'the cPanel user page is copied from the package on every registration');

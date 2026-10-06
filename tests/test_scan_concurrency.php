@@ -202,7 +202,7 @@ $stopPos  = strpos($install, 'Scanner::stopAllScans()');
 $cronPos  = strpos($install, 'Installing cron');
 t_ok($stopPos !== false,
     'and does so as its own step rather than leaving them to the new scheduler');
-t_contains($install, 'rm -f /tmp/sentinel-gate/scan.lock.',
+t_contains($install, 'rm -f /tmp/serverscrub/scan.lock.',
     'stale slot locks are cleared too');
 
 // -- The cap is reachable and visible ---------------------------------------
@@ -224,7 +224,7 @@ $api = t_code($repo . '/backend/api/index.php');
 t_contains($api, "'stop-all' =>", 'stopping everything is exposed over the API');
 t_contains($api, 'Scanner::maxConcurrent()', 'and the cap is reported to the UI');
 
-$cli = t_code($repo . '/backend/cli/sentinel.php');
+$cli = t_code($repo . '/backend/cli/serverscrub.php');
 t_contains($cli, "case 'scan-stop-all'", 'and from the command line');
 
 

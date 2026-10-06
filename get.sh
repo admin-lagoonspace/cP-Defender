@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — Online bootstrap installer
+# ServerScrub — Online bootstrap installer
 # Downloads the latest build from the release channel and runs the installer in
 # one step. Works on cPanel/WHM servers and plain Linux servers alike — the mode
 # is auto-detected (cPanel if /usr/local/cpanel exists, else standalone).
 #
 # ── INSTALL (one line, as root) ───────────────────────────────────────────────
 # curl — present by default on RHEL/CentOS/AlmaLinux/CloudLinux (all cPanel hosts):
-#   bash <(curl -fsSL https://defender.lws-s1.com/sentinel-gate/code/get.sh)
+#   bash <(curl -fsSL https://defender.lws-s1.com/serverscrub/code/get.sh)
 #
 # wget — present by default on Debian/Ubuntu:
-#   bash <(wget -qO- https://defender.lws-s1.com/sentinel-gate/code/get.sh)
+#   bash <(wget -qO- https://defender.lws-s1.com/serverscrub/code/get.sh)
 #
 # Both forms behave identically. Once this script is running it uses whichever of
 # curl/wget exists, so only the bootstrap line differs.
@@ -36,7 +36,7 @@
 #
 # ── CHANNELS ──────────────────────────────────────────────────────────────────
 # Tried in order; the sha256 in latest.json is verified regardless of source:
-#   1. https://defender.lws-s1.com/sentinel-gate/code   (primary)
+#   1. https://defender.lws-s1.com/serverscrub/code   (primary)
 #   2. raw.githubusercontent.com/<repo>/main            (mirror)
 # Override with SG_BASE_URL=<base> (pins to that one channel).
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -50,8 +50,8 @@ PIN_VERSION="${SG_VERSION:-}"
 # ── Release channels, tried in order ───────────────────────────────────────────
 # Primary is our own CDN: no API rate limits, and it stays reachable on servers
 # whose firewall blocks github.com / api.github.com. GitHub raw is the fallback.
-# Each base must serve:  <base>/latest.json  and  <base>/dist/sentinel-gate-<v>.zip
-PRIMARY_BASE="${SG_BASE_URL:-https://defender.lws-s1.com/sentinel-gate/code}"
+# Each base must serve:  <base>/latest.json  and  <base>/dist/serverscrub-<v>.zip
+PRIMARY_BASE="${SG_BASE_URL:-https://defender.lws-s1.com/serverscrub/code}"
 GITHUB_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 MIRRORS=("$PRIMARY_BASE" "$GITHUB_BASE")
 
@@ -64,7 +64,7 @@ ok()   { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 die()  { echo -e "${RED}[x]${NC} $*" >&2; exit 1; }
 
-echo -e "${CYAN}${BOLD}Sentinel Gate — online installer${NC}"
+echo -e "${CYAN}${BOLD}ServerScrub — online installer${NC}"
 
 # ── Must be root (install.sh needs it anyway; fail early with a clear message) ──
 # Suggest whichever downloader this box actually has.
@@ -200,7 +200,7 @@ fi
 # ── Download the package ───────────────────────────────────────────────────────
 TMP="$(mktemp -d /tmp/sg-get.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
-ZIP="${TMP}/sentinel-gate-${VERSION}.zip"
+ZIP="${TMP}/serverscrub-${VERSION}.zip"
 
 # Order: the manifest's own URL, then the channel that resolved the version, then
 # every remaining channel. Both the per-version folder and the flat dist/ path are
@@ -214,15 +214,15 @@ ZIP="${TMP}/sentinel-gate-${VERSION}.zip"
 CANDIDATES=()
 [[ -n "$URL" ]] && CANDIDATES+=("$URL")
 [[ -n "$SRC_BASE" ]] && CANDIDATES+=(
-  "${SRC_BASE}/dist/sentinel-gate-${VERSION}.zip"
-  "${SRC_BASE}/builds/sentinel-gate-${VERSION}.zip"
-  "${SRC_BASE}/v${VERSION}/sentinel-gate-${VERSION}.zip"
+  "${SRC_BASE}/dist/serverscrub-${VERSION}.zip"
+  "${SRC_BASE}/builds/serverscrub-${VERSION}.zip"
+  "${SRC_BASE}/v${VERSION}/serverscrub-${VERSION}.zip"
 )
 for BASE in "${MIRRORS[@]}"; do
   CANDIDATES+=(
-    "${BASE}/dist/sentinel-gate-${VERSION}.zip"
-    "${BASE}/builds/sentinel-gate-${VERSION}.zip"
-    "${BASE}/v${VERSION}/sentinel-gate-${VERSION}.zip"
+    "${BASE}/dist/serverscrub-${VERSION}.zip"
+    "${BASE}/builds/serverscrub-${VERSION}.zip"
+    "${BASE}/v${VERSION}/serverscrub-${VERSION}.zip"
   )
 done
 

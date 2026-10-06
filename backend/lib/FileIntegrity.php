@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — File Integrity Monitor
+ * ServerScrub — File Integrity Monitor
  * Creates and monitors SHA-256 baselines for watched directories
  * Uses the existing `file_integrity` table in the core schema.
  */

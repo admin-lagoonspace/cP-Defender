@@ -6,7 +6,7 @@
  * root space is now totally full".
  *
  * QUARANTINE_DIR defaulted to SG_ROOT . '/quarantine', i.e.
- * /usr/local/sentinel-gate/quarantine -- on the root filesystem. Quarantine
+ * /usr/local/serverscrub/quarantine -- on the root filesystem. Quarantine
  * MOVES infected files there, so on a hosting server, where customer data is a
  * separate and far larger volume, a busy scan fills / and takes the machine
  * down. A security tool must not be the cause of the outage.
@@ -88,7 +88,7 @@ t_ok(isset($usage['human']), 'and reports a readable size');
 t_eq(false, $usage['on_root'],
     'a quarantine outside /usr/local is not flagged as being on root');
 
-Database::setSetting('quarantine_dir', '/usr/local/sentinel-gate/quarantine');
+Database::setSetting('quarantine_dir', '/usr/local/serverscrub/quarantine');
 t_eq(true, Scanner::quarantineUsage()['on_root'],
     'a quarantine under /usr/local IS flagged as being on the root partition');
 Database::setSetting('quarantine_dir', $qdir);
@@ -143,7 +143,7 @@ t_ok(strpos($mig, 'rm -rf "$_SG_QUAR_OLD"') === false,
     'the migration never deletes the old quarantine tree wholesale');
 
 // ── The CLI can see and fix this without a database editor ───────────────────
-$cli = t_code($repo . '/backend/cli/sentinel.php');
+$cli = t_code($repo . '/backend/cli/serverscrub.php');
 t_contains($cli, "case 'quarantine'", 'there is a quarantine command');
 t_contains($cli, 'Scanner::quarantineUsage', 'it can report usage');
 t_contains($cli, 'Scanner::pruneQuarantine', 'it can prune');

@@ -1,12 +1,12 @@
 <?php
 /**
- * Sentinel Gate - cPanel user page.
+ * ServerScrub - cPanel user page.
  *
  * Runs as the cPanel user, under cpsrvd, inside the user's own session. It
- * reads ONE file: ~/.sentinel-gate/report.json, written by the privileged side
+ * reads ONE file: ~/.serverscrub/report.json, written by the privileged side
  * after each scan.
  *
- * It deliberately does not talk to the Sentinel Gate API or database. Both are
+ * It deliberately does not talk to the ServerScrub API or database. Both are
  * root-owned (the database directory is 0700) and server-wide; reaching them
  * from a page every hosting customer can load would mean either a setuid
  * helper or loosening those permissions, and each would hand every customer on
@@ -36,7 +36,7 @@ $error  = '';
 if ($home === '') {
     $error = 'Could not determine your home directory.';
 } else {
-    $path = rtrim($home, '/') . '/.sentinel-gate/report.json';
+    $path = rtrim($home, '/') . '/.serverscrub/report.json';
     if (!is_file($path)) {
         $error = 'No security report has been generated for your account yet.';
     } else {
@@ -71,7 +71,7 @@ $s = $report['summary'] ?? [];
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sentinel Gate</title>
+<title>ServerScrub</title>
 <style>
   :root {
     --bg:#fff; --fg:#33383c; --dim:#7d8792; --line:#e3e7ea;
@@ -114,7 +114,7 @@ $s = $report['summary'] ?? [];
 </head>
 <body>
 
-<h1>Sentinel Gate</h1>
+<h1>ServerScrub</h1>
 <div class="sub">
   Security findings for <strong><?= e($user !== '' ? $user : 'your account') ?></strong>
 </div>
@@ -124,7 +124,7 @@ $s = $report['summary'] ?? [];
     <?= e($error) ?>
     <div class="foot">
       Reports are produced by the server-wide scan. If your hosting provider has
-      only just enabled Sentinel Gate, one will appear after the next scheduled
+      only just enabled ServerScrub, one will appear after the next scheduled
       scan. Nothing is wrong with your account.
     </div>
   </div>

@@ -1,6 +1,6 @@
 ﻿<?php
 /**
- * Sentinel Gate - Background Scan Runner
+ * ServerScrub - Background Scan Runner
  * Called by Scanner::startScan() as a background process:
  *   nice -nX php backend/cron/scan.php --job-id=N --path=/home
  * Called by cron jobs:

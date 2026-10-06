@@ -1,5 +1,5 @@
 /**
- * Sentinel Gate — API Client
+ * ServerScrub — API Client
  * Thin fetch wrapper around the PHP REST API
  */
 
@@ -7,7 +7,7 @@ const API = (() => {
   // Where the API lives depends on how this page is being served, and that is
   // not knowable at build time:
   //
-  //   • WHM plugin  — cpsrvd serves us from /cgi/sentinel_gate/, and the API is
+  //   • WHM plugin  — cpsrvd serves us from /cgi/serverscrub/, and the API is
   //                   a sibling CGI running as root in the same origin.
   //   • standalone  — the bundled router serves /backend/api directly.
   //   • Apache      — an aliased directory, which only executes PHP if the
@@ -19,7 +19,7 @@ const API = (() => {
   // is probed once, and the first that answers with JSON wins.
   const CANDIDATES = [
     window.SG_API_BASE || '',      // stamped by the installer when it knows
-    './sentinel_gate.cgi',         // cpsrvd (WHM): the ONE AppConfig-registered
+    './serverscrub.cgi',         // cpsrvd (WHM): the ONE AppConfig-registered
                                    // entry point. A second CGI in that directory
                                    // is refused by cpsrvd with a 403 HTML page.
     './api.cgi',                   // pre-3.19.5 layout, kept for a stale install
@@ -70,14 +70,14 @@ const API = (() => {
           if (await probe(cand)) {
             BASE = cand;
             try { sessionStorage.setItem(CACHE_KEY, cand); } catch (_) {}
-            console.info('Sentinel Gate API base:', cand);
+            console.info('ServerScrub API base:', cand);
             return cand;
           }
         }
         // Nothing answered. Fall back to the first candidate so calls still
         // produce a real error rather than throwing on a null base.
         BASE = CANDIDATES[0];
-        console.error('Sentinel Gate: no API endpoint responded. Tried:', CANDIDATES);
+        console.error('ServerScrub: no API endpoint responded. Tried:', CANDIDATES);
         return BASE;
       })();
     }

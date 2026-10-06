@@ -80,8 +80,8 @@ $ev = Database::fetchOne(
 t_ok($ev !== null, 'and the deletion is raised as a security event');
 
 // Something left behind for whoever owns the site.
-t_ok(is_file($path . '.sentinel_removed'), 'a note is left where the file was');
-$note = file_get_contents($path . '.sentinel_removed');
+t_ok(is_file($path . '.serverscrub_removed'), 'a note is left where the file was');
+$note = file_get_contents($path . '.serverscrub_removed');
 t_contains($note, 'DELETED', 'saying it was deleted, not quarantined');
 t_contains($note, 'SHA-256', 'and recording the hash');
 t_contains($note, 'backups', 'and that restoring means going to backups');

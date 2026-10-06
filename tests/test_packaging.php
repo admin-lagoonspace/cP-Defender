@@ -17,7 +17,7 @@ $ctx = require __DIR__ . '/bootstrap.php';
 $repo = $ctx['repo'];
 
 $version = trim(file_get_contents($repo . '/VERSION'));
-$zipPath = $repo . '/dist/sentinel-gate-' . $version . '.zip';
+$zipPath = $repo . '/dist/serverscrub-' . $version . '.zip';
 
 if (!is_file($zipPath)) {
     echo "SKIP no zip for {$version} yet — run scripts/build.py first\n";
@@ -61,25 +61,25 @@ t_eq(0, count($php), 'the bundled PHP interpreter is not packaged');
 
 // test.sh is DIFFERENT: it is the post-install self-test the wiki documents,
 // a product feature rather than development tooling. It must ship.
-t_ok(in_array('sentinel-gate/test.sh', $names, true),
+t_ok(in_array('serverscrub/test.sh', $names, true),
     'test.sh (the product self-test) IS packaged');
 
 // ── Everything the product needs does ship ───────────────────────────────────
 foreach ([
-    'sentinel-gate/backend/api/index.php',
-    'sentinel-gate/backend/config/config.php',
-    'sentinel-gate/backend/lib/Database.php',
-    'sentinel-gate/backend/lib/License.php',
-    'sentinel-gate/frontend/index.html',
-    'sentinel-gate/frontend/js/api.js',
-    'sentinel-gate/install.sh',
-    'sentinel-gate/uninstall.sh',
-    'sentinel-gate/update.sh',
-    'sentinel-gate/VERSION',
+    'serverscrub/backend/api/index.php',
+    'serverscrub/backend/config/config.php',
+    'serverscrub/backend/lib/Database.php',
+    'serverscrub/backend/lib/License.php',
+    'serverscrub/frontend/index.html',
+    'serverscrub/frontend/js/api.js',
+    'serverscrub/install.sh',
+    'serverscrub/uninstall.sh',
+    'serverscrub/update.sh',
+    'serverscrub/VERSION',
     // The page every cPanel user opens. If this is missing from the archive the
     // installer has nothing to copy, and the Security menu entry leads to a
     // blank page for every customer on the server.
-    'sentinel-gate/cpanel/sentinel_gate/index.php',
+    'serverscrub/cpanel/serverscrub/index.php',
 ] as $required) {
     t_ok(in_array($required, $names, true), "packaged: " . basename($required));
 }
@@ -103,8 +103,8 @@ t_eq(0, count($empties), 'no packaged PHP file is empty'
 // ── The package declares the version it claims to be ─────────────────────────
 $zip = new ZipArchive();
 $zip->open($zipPath);
-$cfg = $zip->getFromName('sentinel-gate/backend/config/config.php');
-$ver = $zip->getFromName('sentinel-gate/VERSION');
+$cfg = $zip->getFromName('serverscrub/backend/config/config.php');
+$ver = $zip->getFromName('serverscrub/VERSION');
 $zip->close();
 t_eq($version, trim((string)$ver), 'packaged VERSION matches the filename');
 t_ok(strpos((string)$cfg, "'" . $version . "'") !== false,

@@ -1,4 +1,4 @@
-# Sentinel Gate — Work Handoff (resume in Claude Code)
+# ServerScrub — Work Handoff (resume in Claude Code)
 
 **Repo:** `admin-lagoonspace/cP-Defender` (GitHub, **public**) · working copy `C:\Users\rohan\OneDrive\code\cP-Defender`
 **Target version this cycle:** `3.5.0` (bumped in files, **not built/committed yet**)
@@ -21,10 +21,10 @@ python3 -m py_compile backend/daemon/monitor.py
 If all green:
 
 ```bash
-bash scripts/make-release.sh          # builds dist/sentinel-gate-3.5.0.zip + dist/latest.json
+bash scripts/make-release.sh          # builds dist/serverscrub-3.5.0.zip + dist/latest.json
 git add -A && git commit -m "feat: v3.5.0 — manifest+checksum updater, --register-only, public channel"
 # then publish so servers can pull the update:
-#   commit dist/sentinel-gate-3.5.0.zip and latest.json to the repo root/dist, and push
+#   commit dist/serverscrub-3.5.0.zip and latest.json to the repo root/dist, and push
 git push
 ```
 
@@ -37,7 +37,7 @@ Author identity for commits (repo convention): `admin-lagoonspace <admin@lagoons
 ### 1. Clean install / uninstall (was v3.4.1)
 - **uninstall.sh** now removes everything by default, no prompts:
   - web service unit has a hardcoded fallback path (was only removed if manifest existed)
-  - deletes `/tmp/sentinel-gate`, `/var/backups/sentinel-gate`, leftover `/tmp/sg-update.*`
+  - deletes `/tmp/serverscrub`, `/var/backups/serverscrub`, leftover `/tmp/sg-update.*`
   - persists iptables rule removal to `/etc/iptables/rules.v4` (port was reopening on reboot)
   - safety check: only `rm -rf` the source dir if it contains `install.sh` + `VERSION`
 - **install.sh** pre-install cleanup: stops services, wipes stale `backend/`/`frontend/` (so files deleted between versions don't linger), sweeps pre-3.2 legacy CGI/AppConfig artifacts; non-interactive guard on the failed-verification rollback prompt.
@@ -62,12 +62,12 @@ Author identity for commits (repo convention): `admin-lagoonspace <admin@lagoons
 ## Still TODO (in priority order)
 
 1. **Run validation + build + commit** (commands above). This is the only thing blocking a shippable 3.5.0.
-2. **Publish the release**: put `sentinel-gate-3.5.0.zip` under `dist/` and `latest.json` at repo root, push. Until `latest.json` is live, `update.sh` has nothing to pull (it fails with a clear diagnostic).
+2. **Publish the release**: put `serverscrub-3.5.0.zip` under `dist/` and `latest.json` at repo root, push. Until `latest.json` is live, `update.sh` has nothing to pull (it fails with a clear diagnostic).
 3. **git history secret scan** — could not run (needed shell). Working tree is clean (no keys/tokens/.env/.pem). Run:
    ```bash
    git log -p | grep -niE 'AKIA|ghp_|github_pat_|BEGIN .*PRIVATE KEY|password\s*=\s*.[^ ]'
    ```
-4. **JWT secret weakness** (design, now public-relevant): `backend/config/config.php` derives the JWT signing key from `hash('sha256', gethostname() . 'sentinel_gate_secret_2024')`. Since source is public, anyone who knows a server's hostname can reproduce its token-signing key → possible session forgery. Fix: generate a random secret at install time, store per-server (mode.php or DB), fall back to the old scheme only if unset. `install.sh` DB-init block also hardcodes the same salt — update both.
+4. **JWT secret weakness** (design, now public-relevant): `backend/config/config.php` derives the JWT signing key from `hash('sha256', gethostname() . 'serverscrub_secret_2024')`. Since source is public, anyone who knows a server's hostname can reproduce its token-signing key → possible session forgery. Fix: generate a random secret at install time, store per-server (mode.php or DB), fall back to the old scheme only if unset. `install.sh` DB-init block also hardcodes the same salt — update both.
 5. **Optional: signature verification** beyond SHA256 (minisign/GPG) — SHA256 covers corruption/MITM of the zip but not a compromised repo. Deferred; user aware.
 6. **Palette mismatch** (cosmetic, tracked separately): new logo is emerald/graphite, dashboard UI still cyan/indigo (older) — v3.4.0 did a UI redesign to violet/emerald; confirm logo vs UI are consistent.
 
@@ -83,7 +83,7 @@ Author identity for commits (repo convention): `admin-lagoonspace <admin@lagoons
 
 ## Versioning rule (project convention — apply on every build)
 
-`X.Y.Z`, max 99/segment. Bug fix → bump Z. New feature/functional change → bump Y (reset Z). Major rework → bump X. Update version in **all** of: `VERSION`, `backend/config/config.php` (`SG_VERSION`), `whm/sentinel.conf` (`version`), `frontend/index.html` (sidebar label), and the zip filename. (This cycle = new feature → 3.4.1 → **3.5.0**.)
+`X.Y.Z`, max 99/segment. Bug fix → bump Z. New feature/functional change → bump Y (reset Z). Major rework → bump X. Update version in **all** of: `VERSION`, `backend/config/config.php` (`SG_VERSION`), `whm/serverscrub.conf` (`version`), `frontend/index.html` (sidebar label), and the zip filename. (This cycle = new feature → 3.4.1 → **3.5.0**.)
 
 ## Key files
 - `install.sh` / `uninstall.sh` / `update.sh` — lifecycle (bash, run as root)
@@ -92,5 +92,5 @@ Author identity for commits (repo convention): `admin-lagoonspace <admin@lagoons
 - `backend/daemon/monitor.py` — real-time inotify/polling monitor
 - `backend/api/index.php` — REST API router; `backend/standalone-router.php` — standalone web entry
 - `frontend/` — dashboard (index.html + js/app.js, api.js, charts.js)
-- `whm/` — AppConfig conf, systemd units, ConfigObj Driver (SentinelGate.pm)
+- `whm/` — AppConfig conf, systemd units, ConfigObj Driver (ServerScrub.pm)
 - `tests/run-tests.sh` — mock test suite (no Docker/WSL needed)

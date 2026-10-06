@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — Bot Shield Module
+ * ServerScrub — Bot Shield Module
  * Detects and blocks malicious bots via access log analysis and UA pattern matching
  */
 

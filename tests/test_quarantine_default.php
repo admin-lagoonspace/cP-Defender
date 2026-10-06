@@ -2,7 +2,7 @@
 /**
  * Auto-quarantine ships OFF.
  *
- * Quarantine MOVES a detected file into /usr/local/sentinel-gate/quarantine,
+ * Quarantine MOVES a detected file into /usr/local/serverscrub/quarantine,
  * which lives on the root partition. On a hosting box whose customer data sits
  * on a separate volume, an enthusiastic scan can fill / -- and a security tool
  * that takes the server down has done more harm than the malware it moved.

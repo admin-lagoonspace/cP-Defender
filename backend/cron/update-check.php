@@ -1,13 +1,13 @@
 #!/usr/bin/env php
 <?php
 /**
- * Sentinel Gate — Daily Update Check Cron
+ * ServerScrub — Daily Update Check Cron
  * Installed by install.sh to run once per day.
  * Fetches latest GitHub release and caches the result.
  */
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
-$root = getenv('SG_ROOT') ?: '/usr/local/sentinel-gate';
+$root = getenv('SG_ROOT') ?: '/usr/local/serverscrub';
 $cfg  = $root . '/backend/config/mode.php';
 
 if (!file_exists($cfg)) {

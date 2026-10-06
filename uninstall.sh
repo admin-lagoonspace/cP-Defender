@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — Uninstaller
+# ServerScrub — Uninstaller
 # Removes everything: services, cron, Apache config, WHM plugin registration,
 # all data (database, logs, quarantine), and the install directory.
 #
@@ -9,7 +9,7 @@
 
 set -o pipefail
 
-INSTALL_DIR="/usr/local/sentinel-gate"
+INSTALL_DIR="/usr/local/serverscrub"
 MANIFEST="${INSTALL_DIR}/install-manifest.env"
 SG_PORT=31150
 
@@ -26,7 +26,7 @@ section() { echo -e "\n${BOLD}${BLUE}▶ $*${NC}"; }
 
 echo ""
 echo -e "${BOLD}${RED}╔═══════════════════════════════════════╗"
-echo -e "║    Sentinel Gate — Uninstaller        ║"
+echo -e "║    ServerScrub — Uninstaller        ║"
 echo -e "╚═══════════════════════════════════════╝${NC}"
 echo ""
 
@@ -42,20 +42,20 @@ DYNUI_JUPITER=""
 CPANEL_APPCONFIG=""
 CPANEL_PLUGIN_PAPER=""
 CPANEL_PLUGIN_JUPITER=""
-CRON_FILE="/etc/cron.d/sentinel-gate"
-MONITOR_SERVICE="/etc/systemd/system/sentinel-gate-monitor.service"
-WEB_SERVICE="/etc/systemd/system/sentinel-gate-web.service"
+CRON_FILE="/etc/cron.d/serverscrub"
+MONITOR_SERVICE="/etc/systemd/system/serverscrub-monitor.service"
+WEB_SERVICE="/etc/systemd/system/serverscrub-web.service"
 WEB_PID_FILE=""
 FIREWALL_TOOL=""
 SOURCE_DIR=""
-SG_ETC="/etc/sentinel-gate"
-SYSCTL_CONF="/etc/sysctl.d/60-sentinel-gate.conf"
+SG_ETC="/etc/serverscrub"
+SYSCTL_CONF="/etc/sysctl.d/60-serverscrub.conf"
 CSF_ALLOW_INCLUDE=""
 CSF_IGNORE_INCLUDE=""
 MODSEC_USER_CONF=""
 SG_MODSEC_DIR=""
 WHM_ICON=""
-SG_CLI="/usr/bin/sentinel"
+SG_CLI="/usr/bin/serverscrub"
 
 if [[ -f "${MANIFEST}" ]]; then
     info "Reading install manifest…"
@@ -102,7 +102,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -z "$SOURCE_DIR" ]] && SOURCE_DIR="$SCRIPT_DIR"
 
 echo ""
-info "Uninstalling Sentinel Gate v${INSTALL_VERSION} (${INSTALL_MODE} mode)"
+info "Uninstalling ServerScrub v${INSTALL_VERSION} (${INSTALL_MODE} mode)"
 info "Install dir: ${INSTALL_DIR}"
 echo ""
 
@@ -121,14 +121,14 @@ stop_service() {
         rm -f "${svc_file}" && ok "Removed service file: ${svc_file}" || true
 }
 
-stop_service "sentinel-gate-firewall" "/etc/systemd/system/sentinel-gate-firewall.service"
-stop_service "sentinel-gate-web"     "${WEB_SERVICE}"
-stop_service "sentinel-gate-monitor" "${MONITOR_SERVICE}"
+stop_service "serverscrub-firewall" "/etc/systemd/system/serverscrub-firewall.service"
+stop_service "serverscrub-web"     "${WEB_SERVICE}"
+stop_service "serverscrub-monitor" "${MONITOR_SERVICE}"
 command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload 2>/dev/null || true
 
 # Kill any PID-file processes
 for PID_FILE in "${WEB_PID_FILE}" "${INSTALL_DIR}/web.pid" \
-                "${INSTALL_DIR}/monitor.pid" "/var/run/sentinel-gate-monitor.pid"; do
+                "${INSTALL_DIR}/monitor.pid" "/var/run/serverscrub-monitor.pid"; do
     [[ -z "${PID_FILE}" || ! -f "${PID_FILE}" ]] && continue
     PID=$(cat "${PID_FILE}" 2>/dev/null); [[ -z "$PID" ]] && continue
     kill "${PID}" 2>/dev/null && ok "Killed process PID ${PID}" || true
@@ -140,26 +140,26 @@ done
 # firewalld or the operator are never touched.
 section "Removing firewall rules"
 if [[ -f "${INSTALL_DIR}/backend/lib/FirewallEngine.php" ]] && command -v php >/dev/null 2>&1; then
-    php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; FirewallEngine::teardown();" 2>/dev/null && ok "Sentinel Gate firewall rules removed" || warn "Could not remove firewall rules"
+    php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; require_once '${INSTALL_DIR}/backend/lib/FirewallEngine.php'; FirewallEngine::teardown();" 2>/dev/null && ok "ServerScrub firewall rules removed" || warn "Could not remove firewall rules"
 else
     # Fall back to removing the namespace directly if the code is already gone
-    nft delete table inet sentinel_gate 2>/dev/null && ok "nftables table removed" || true
-    iptables -D INPUT -j SENTINEL_GATE 2>/dev/null || true
-    iptables -F SENTINEL_GATE 2>/dev/null || true
-    iptables -X SENTINEL_GATE 2>/dev/null && ok "iptables chain removed" || true
+    nft delete table inet serverscrub 2>/dev/null && ok "nftables table removed" || true
+    iptables -D INPUT -j SERVERSCRUB 2>/dev/null || true
+    iptables -F SERVERSCRUB 2>/dev/null || true
+    iptables -X SERVERSCRUB 2>/dev/null && ok "iptables chain removed" || true
 fi
-rm -rf /etc/sentinel-gate/nftables.rules /etc/sentinel-gate/iptables.rules 2>/dev/null || true
+rm -rf /etc/serverscrub/nftables.rules /etc/serverscrub/iptables.rules 2>/dev/null || true
 
 # Remove the WAF include we added to Apache. Left in place it would reference a
 # deleted config and Apache would fail its next restart.
-for _WAFINC in /etc/apache2/conf.d/zz-sentinel-gate-waf.conf                /etc/httpd/conf.d/zz-sentinel-gate-waf.conf                /etc/apache2/conf-enabled/zz-sentinel-gate-waf.conf; do
+for _WAFINC in /etc/apache2/conf.d/zz-serverscrub-waf.conf                /etc/httpd/conf.d/zz-serverscrub-waf.conf                /etc/apache2/conf-enabled/zz-serverscrub-waf.conf; do
     [[ -f "$_WAFINC" ]] && rm -f "$_WAFINC" && ok "Removed WAF include: $_WAFINC" || true
 done
-rm -rf /etc/sentinel-gate/waf 2>/dev/null || true
+rm -rf /etc/serverscrub/waf 2>/dev/null || true
 
 # ── 2. Remove cron jobs ────────────────────────────────────────────────────────
 section "Removing cron jobs"
-for _CRON in "${CRON_FILE}" /etc/cron.d/sentinel-gate /etc/cron.d/sentinel_gate; do
+for _CRON in "${CRON_FILE}" /etc/cron.d/serverscrub /etc/cron.d/serverscrub; do
     [[ -f "${_CRON}" ]] && rm -f "${_CRON}" && ok "Removed ${_CRON}" || true
 done
 
@@ -168,9 +168,9 @@ section "Removing Apache config"
 APACHE_REMOVED=false
 for CANDIDATE in \
     "${APACHE_CONF}" \
-    /etc/apache2/conf.d/sentinel-gate.conf \
-    /usr/local/apache/conf/includes/sentinel-gate.conf \
-    /etc/httpd/conf.d/sentinel-gate.conf; do
+    /etc/apache2/conf.d/serverscrub.conf \
+    /usr/local/apache/conf/includes/serverscrub.conf \
+    /etc/httpd/conf.d/serverscrub.conf; do
     [[ -z "${CANDIDATE}" || ! -f "${CANDIDATE}" ]] && continue
     rm -f "${CANDIDATE}" && ok "Removed: ${CANDIDATE}" && APACHE_REMOVED=true
 done
@@ -196,7 +196,7 @@ if [[ "$INSTALL_MODE" != "standalone" ]]; then
 
     # A — Deregister both AppConfig entries via whmapi1
     if command -v whmapi1 >/dev/null 2>&1; then
-        for _APPNAME in sentinel_gate sentinel_gate_cpanel sentinel-gate; do
+        for _APPNAME in serverscrub serverscrub_cpanel serverscrub; do
             whmapi1 unregister_appconfig_application appname="${_APPNAME}" 2>/dev/null && \
                 ok "whmapi1: deregistered ${_APPNAME}" || true
         done
@@ -205,9 +205,9 @@ if [[ "$INSTALL_MODE" != "standalone" ]]; then
     # B — Remove AppConfig conf files from /var/cpanel/apps/ and CGI dir
     REGISTER_APPCONFIG="/usr/local/cpanel/bin/register_appconfig"
     for APPCONF in \
-        /var/cpanel/apps/sentinel_gate.conf \
-        /var/cpanel/apps/sentinel_gate_cpanel.conf \
-        /var/cpanel/apps/sentinel-gate.conf \
+        /var/cpanel/apps/serverscrub.conf \
+        /var/cpanel/apps/serverscrub_cpanel.conf \
+        /var/cpanel/apps/serverscrub.conf \
         "${APPCONFIG_CONF}" \
         "${WHM_PLUGIN_CONF}" \
         "${CPANEL_APPCONFIG}"; do
@@ -221,45 +221,45 @@ if [[ "$INSTALL_MODE" != "standalone" ]]; then
 
     # C — Remove WHM CGI directories
     for CGI_DIR in \
-        /usr/local/cpanel/whostmgr/docroot/cgi/sentinel_gate \
-        /usr/local/cpanel/whostmgr/docroot/cgi/sentinel-gate; do
+        /usr/local/cpanel/whostmgr/docroot/cgi/serverscrub \
+        /usr/local/cpanel/whostmgr/docroot/cgi/serverscrub; do
         [[ -d "${CGI_DIR}" ]] && rm -rf "${CGI_DIR}" && ok "Removed CGI dir: ${CGI_DIR}" || true
     done
 
     # D — Remove legacy standalone CGI files
     for CGI_FILE in \
         "${WHM_CGI}" \
-        /usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinel_gate.cgi \
-        /usr/local/cpanel/whostmgr/docroot/cgi/addon_sentinelgate.cgi; do
+        /usr/local/cpanel/whostmgr/docroot/cgi/addon_serverscrub.cgi \
+        /usr/local/cpanel/whostmgr/docroot/cgi/addon_serverscrub.cgi; do
         [[ -z "${CGI_FILE}" || ! -f "${CGI_FILE}" ]] && continue
         rm -f "${CGI_FILE}" && ok "Removed legacy CGI: ${CGI_FILE}"
     done
 
     # E — Remove legacy addon_plugins entries
     for LEGACY in \
-        /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel-gate.conf \
-        /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/sentinel_gate.conf \
-        /usr/local/cpanel/whostmgr/docroot/cgi/sentinelgate.conf \
-        /usr/local/cpanel/base/3rdparty/sentinel-gate; do
+        /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/serverscrub.conf \
+        /usr/local/cpanel/whostmgr/docroot/cgi/addon_plugins/serverscrub.conf \
+        /usr/local/cpanel/whostmgr/docroot/cgi/serverscrub.conf \
+        /usr/local/cpanel/base/3rdparty/serverscrub; do
         [[ -e "${LEGACY}" ]] && rm -rf "${LEGACY}" && ok "Removed legacy: ${LEGACY}" || true
     done
 
     # F — Remove ConfigObj Driver files (WHM nav registration)
     DRIVER_DEST="/usr/local/cpanel/Cpanel/Config/ConfigObj/Driver"
     for _DF in \
-        "${DRIVER_DEST}/SentinelGate.pm" \
-        "${DRIVER_DEST}/SentinelGate/META.pm"; do
+        "${DRIVER_DEST}/ServerScrub.pm" \
+        "${DRIVER_DEST}/ServerScrub/META.pm"; do
         [[ -f "$_DF" ]] && rm -f "$_DF" && ok "Removed Driver file: $_DF" || true
     done
-    [[ -d "${DRIVER_DEST}/SentinelGate" ]] && \
-        rmdir "${DRIVER_DEST}/SentinelGate" 2>/dev/null || true
+    [[ -d "${DRIVER_DEST}/ServerScrub" ]] && \
+        rmdir "${DRIVER_DEST}/ServerScrub" 2>/dev/null || true
 
     # G — Remove cPanel user-level plugin from both themes
     for CPANEL_PLUGIN_DIR in \
         "${CPANEL_PLUGIN_PAPER}" \
         "${CPANEL_PLUGIN_JUPITER}" \
-        /usr/local/cpanel/base/frontend/paper_lantern/sentinel_gate \
-        /usr/local/cpanel/base/frontend/jupiter/sentinel_gate; do
+        /usr/local/cpanel/base/frontend/paper_lantern/serverscrub \
+        /usr/local/cpanel/base/frontend/jupiter/serverscrub; do
         [[ -z "${CPANEL_PLUGIN_DIR}" || ! -d "${CPANEL_PLUGIN_DIR}" ]] && continue
         if [[ -x /usr/local/cpanel/scripts/uninstall_plugin ]]; then
             _THEME=$(basename "$(dirname "${CPANEL_PLUGIN_DIR}")")
@@ -273,8 +273,8 @@ if [[ "$INSTALL_MODE" != "standalone" ]]; then
     for DYNUI_CONF in \
         "${DYNUI_PAPER}" \
         "${DYNUI_JUPITER}" \
-        /usr/local/cpanel/base/frontend/paper_lantern/dynamicui/dynamicui_sentinel_gate.conf \
-        /usr/local/cpanel/base/frontend/jupiter/dynamicui/dynamicui_sentinel_gate.conf; do
+        /usr/local/cpanel/base/frontend/paper_lantern/dynamicui/dynamicui_serverscrub.conf \
+        /usr/local/cpanel/base/frontend/jupiter/dynamicui/dynamicui_serverscrub.conf; do
         [[ -z "${DYNUI_CONF}" || ! -f "${DYNUI_CONF}" ]] && continue
         rm -f "${DYNUI_CONF}" && ok "Removed dynamicui conf: ${DYNUI_CONF}"
     done
@@ -284,7 +284,7 @@ if [[ "$INSTALL_MODE" != "standalone" ]]; then
         [[ -d "${_FEAT_DIR}" ]] || continue
         for FEAT_FILE in "${_FEAT_DIR}"/*; do
             [[ -f "${FEAT_FILE}" ]] && \
-                sed -i '/^sentinel_gate=/d' "${FEAT_FILE}" 2>/dev/null || true
+                sed -i '/^serverscrub=/d' "${FEAT_FILE}" 2>/dev/null || true
         done
         ok "Feature flags cleared: ${_FEAT_DIR}"
     done
@@ -305,7 +305,7 @@ if [[ "$INSTALL_MODE" != "standalone" ]]; then
     if [[ -x /usr/local/cpanel/scripts/restartsrv_cpsrvd ]]; then
         info "Restarting cpsrvd to flush WHM nav cache…"
         /usr/local/cpanel/scripts/restartsrv_cpsrvd 2>&1 | tail -3 | sed 's/^/    /'
-        ok "cpsrvd restarted — Sentinel Gate removed from WHM Plugins menu"
+        ok "cpsrvd restarted — ServerScrub removed from WHM Plugins menu"
     elif command -v whmapi1 >/dev/null 2>&1; then
         info "restartsrv_cpsrvd not found — rescanning AppConfig entries…"
         [[ -x "${REGISTER_APPCONFIG}" ]] && \
@@ -322,22 +322,22 @@ fi
 section "Removing firewall & WAF integration"
 
 # inotify sysctl tuning
-for _SC in "${SYSCTL_CONF}" /etc/sysctl.d/60-sentinel-gate.conf; do
+for _SC in "${SYSCTL_CONF}" /etc/sysctl.d/60-serverscrub.conf; do
     [[ -n "${_SC}" && -f "${_SC}" ]] && rm -f "${_SC}" && ok "Removed sysctl conf: ${_SC}" || true
 done
 
 # CSF includes + LFD process-tracking exemptions
 if [[ -f /etc/csf/csf.allow ]]; then
-    sed -i '\#sentinel-gate/csf_allow.txt#d' /etc/csf/csf.allow 2>/dev/null && \
+    sed -i '\#serverscrub/csf_allow.txt#d' /etc/csf/csf.allow 2>/dev/null && \
         ok "Cleaned csf.allow include" || true
 fi
 if [[ -f /etc/csf/csf.ignore ]]; then
-    sed -i '\#sentinel-gate/csf_ignore.txt#d' /etc/csf/csf.ignore 2>/dev/null && \
+    sed -i '\#serverscrub/csf_ignore.txt#d' /etc/csf/csf.ignore 2>/dev/null && \
         ok "Cleaned csf.ignore include" || true
 fi
 if [[ -f /etc/csf/csf.pignore ]]; then
-    sed -i '\#sentinel-gate/backend/daemon/monitor.py#d' /etc/csf/csf.pignore 2>/dev/null || true
-    sed -i '\#sentinel-gate/backend/standalone-router.php#d' /etc/csf/csf.pignore 2>/dev/null || true
+    sed -i '\#serverscrub/backend/daemon/monitor.py#d' /etc/csf/csf.pignore 2>/dev/null || true
+    sed -i '\#serverscrub/backend/standalone-router.php#d' /etc/csf/csf.pignore 2>/dev/null || true
     ok "Cleaned csf.pignore exemptions"
 fi
 if [[ -f /usr/sbin/csf ]]; then
@@ -348,7 +348,7 @@ fi
 # ModSecurity Include + rules dir
 MODSEC_RELOAD=false
 if [[ -n "${MODSEC_USER_CONF}" && -f "${MODSEC_USER_CONF}" ]]; then
-    sed -i '\#sentinel-gate/custom_rules.conf#d;/# Sentinel Gate WAF rules/d' "${MODSEC_USER_CONF}" 2>/dev/null && \
+    sed -i '\#serverscrub/custom_rules.conf#d;/# ServerScrub WAF rules/d' "${MODSEC_USER_CONF}" 2>/dev/null && \
         { ok "Removed WAF Include from ${MODSEC_USER_CONF}"; MODSEC_RELOAD=true; } || true
 else
     for _MSC in \
@@ -356,13 +356,13 @@ else
         /etc/apache2/conf.d/modsec2.user.conf \
         /usr/local/apache/conf/modsec2.user.conf \
         /etc/httpd/conf.d/mod_security.conf; do
-        [[ -f "${_MSC}" ]] && grep -q "sentinel-gate/custom_rules.conf" "${_MSC}" 2>/dev/null && {
-            sed -i '\#sentinel-gate/custom_rules.conf#d;/# Sentinel Gate WAF rules/d' "${_MSC}" 2>/dev/null && \
+        [[ -f "${_MSC}" ]] && grep -q "serverscrub/custom_rules.conf" "${_MSC}" 2>/dev/null && {
+            sed -i '\#serverscrub/custom_rules.conf#d;/# ServerScrub WAF rules/d' "${_MSC}" 2>/dev/null && \
                 { ok "Removed WAF Include from ${_MSC}"; MODSEC_RELOAD=true; }
         } || true
     done
 fi
-for _MD in "${SG_MODSEC_DIR}" /etc/apache2/conf.d/modsec_vendor_configs/sentinel-gate; do
+for _MD in "${SG_MODSEC_DIR}" /etc/apache2/conf.d/modsec_vendor_configs/serverscrub; do
     [[ -n "${_MD}" && -d "${_MD}" ]] && rm -rf "${_MD}" && ok "Removed WAF rules dir: ${_MD}" || true
 done
 # Reload Apache so the removed Include stops loading
@@ -375,20 +375,20 @@ if $MODSEC_RELOAD; then
 fi
 
 # WHM plugin icon
-for _IC in "${WHM_ICON}" /usr/local/cpanel/whostmgr/docroot/addon_plugins/sentinel_gate.png; do
+for _IC in "${WHM_ICON}" /usr/local/cpanel/whostmgr/docroot/addon_plugins/serverscrub.png; do
     [[ -n "${_IC}" && -f "${_IC}" ]] && rm -f "${_IC}" && ok "Removed plugin icon: ${_IC}" || true
 done
 
 # CLI wrapper (only remove if it's ours)
-for _CLI in "${SG_CLI}" /usr/bin/sentinel; do
+for _CLI in "${SG_CLI}" /usr/bin/serverscrub; do
     [[ -n "${_CLI}" && -f "${_CLI}" ]] || continue
-    if grep -q "sentinel-gate/backend/cli/sentinel.php" "${_CLI}" 2>/dev/null; then
+    if grep -q "serverscrub/backend/cli/serverscrub.php" "${_CLI}" 2>/dev/null; then
         rm -f "${_CLI}" && ok "Removed CLI: ${_CLI}"
     fi
 done
 
-# Sentinel Gate config dir
-for _SE in "${SG_ETC}" /etc/sentinel-gate; do
+# ServerScrub config dir
+for _SE in "${SG_ETC}" /etc/serverscrub; do
     [[ -n "${_SE}" && -d "${_SE}" ]] && rm -rf "${_SE}" && ok "Removed config dir: ${_SE}" || true
 done
 
@@ -429,25 +429,25 @@ fi
 # ── 7. Remove runtime temp files and update backups ───────────────────────────
 section "Removing temp files and update backups"
 # Scanner scratch dir (created at runtime by backend, lives outside INSTALL_DIR)
-if [[ -d /tmp/sentinel-gate ]]; then
-    rm -rf /tmp/sentinel-gate && ok "Removed: /tmp/sentinel-gate" || true
+if [[ -d /tmp/serverscrub ]]; then
+    rm -rf /tmp/serverscrub && ok "Removed: /tmp/serverscrub" || true
 else
-    info "/tmp/sentinel-gate not found — nothing to remove"
+    info "/tmp/serverscrub not found — nothing to remove"
 fi
 # Leftover update.sh temp dirs (from interrupted updates)
 for _SGTMP in /tmp/sg-update.*; do
     [[ -d "${_SGTMP}" ]] && rm -rf "${_SGTMP}" && ok "Removed: ${_SGTMP}" || true
 done
 # update.sh version backups
-if [[ -d /var/backups/sentinel-gate ]]; then
-    rm -rf /var/backups/sentinel-gate && ok "Removed update backups: /var/backups/sentinel-gate" || true
+if [[ -d /var/backups/serverscrub ]]; then
+    rm -rf /var/backups/serverscrub && ok "Removed update backups: /var/backups/serverscrub" || true
 else
     info "No update backups found"
 fi
 
 # ── 8. Remove source/unzip directory ──────────────────────────────────────────
 section "Removing source directory"
-# Safety: only delete if it actually looks like a Sentinel Gate source dir —
+# Safety: only delete if it actually looks like a ServerScrub source dir —
 # never blindly rm -rf a path read from a manifest.
 if [[ -n "${SOURCE_DIR}" && -d "${SOURCE_DIR}" && "${SOURCE_DIR}" != "${INSTALL_DIR}" \
       && -f "${SOURCE_DIR}/install.sh" && -f "${SOURCE_DIR}/VERSION" ]]; then
@@ -456,12 +456,12 @@ if [[ -n "${SOURCE_DIR}" && -d "${SOURCE_DIR}" && "${SOURCE_DIR}" != "${INSTALL_
     nohup bash -c "sleep 2 && rm -rf '${SOURCE_DIR}'" >/dev/null 2>&1 &
     ok "Source directory will be deleted in 2 seconds: ${SOURCE_DIR}"
 else
-    info "Source dir not found, same as install dir, or not a Sentinel Gate source — skipping"
+    info "Source dir not found, same as install dir, or not a ServerScrub source — skipping"
 fi
 
 # ── Done ───────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}${GREEN}╔═══════════════════════════════════════╗"
-echo -e "║  ✔  Sentinel Gate fully removed.      ║"
+echo -e "║  ✔  ServerScrub fully removed.      ║"
 echo -e "╚═══════════════════════════════════════╝${NC}"
 echo ""

@@ -101,7 +101,7 @@ t_contains($js, 'could not be installed on this server',
 t_contains($js, 'install-rootkit-tools', 'with the command to retry');
 t_contains($html, 'id="rk-tools-note"', 'and somewhere to say it');
 
-$cli = t_code($repo . '/backend/cli/sentinel.php');
+$cli = t_code($repo . '/backend/cli/serverscrub.php');
 t_contains($cli, "case 'install-rootkit-tools'", 'that command exists');
 t_contains($cli, '--enablerepo=epel', 'and treats EPEL the same way the installer does');
 t_contains($cli, "sed -i 's/^enabled=1/enabled=0/'", 'leaving it disabled too');

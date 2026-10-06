@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — DNS blocklist registry and checker
+ * ServerScrub — DNS blocklist registry and checker
  *
  * Queries the major public DNSBL/RBL services and reports EACH ONE separately,
  * so the UI can show the full matrix and highlight exactly which services list

@@ -1,5 +1,5 @@
 /**
- * Sentinel Gate — Main Application
+ * ServerScrub — Main Application
  * SPA controller, page routing, all UI interactions
  */
 
@@ -224,7 +224,7 @@ async function checkForUpdates(forceLive = false) {
 }
 
 async function runUpdate() {
-  toast('To update: SSH into your server and run:  bash /usr/local/sentinel-gate/update.sh', 'info', 8000);
+  toast('To update: SSH into your server and run:  bash /usr/local/serverscrub/update.sh', 'info', 8000);
 }
 
 async function refreshDashboard() {
@@ -258,7 +258,7 @@ async function refreshDashboard() {
     // Prefer the server's detail over the generic line: pointing the user at a
     // log file they then have to go and read is a worse answer than the error.
     if (meta)   meta.textContent = (data && (data.detail || data.error))
-                                   || 'Could not reach the Sentinel Gate API.';
+                                   || 'Could not reach the ServerScrub API.';
     if (info)   info.textContent = 'Could not reach the API — protection status cannot be confirmed.';
 
     ['stat-files','stat-threats','stat-fw','stat-waf'].forEach(id => {
@@ -1541,7 +1541,7 @@ function downloadLogs() {
   const blob = new Blob([rows], { type: 'text/plain' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `sentinel-gate-${day}.log`;
+  a.download = `serverscrub-${day}.log`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1818,7 +1818,7 @@ async function moveQuarantineDir() {
 
 async function loadQuarantineInfo() {
   const res = Demo.active
-    ? { success: true, data: { dir: '/home/.sentinel-gate/quarantine', files: 0, human: '0 B', writable: true, on_root: false } }
+    ? { success: true, data: { dir: '/home/.serverscrub/quarantine', files: 0, human: '0 B', writable: true, on_root: false } }
     : await API.get('storage/quarantine-usage');
   const d = res?.data || {};
 
@@ -2143,8 +2143,8 @@ async function loadServiceStatus() {
         active_state: 'active', sub_state: 'running',
         since: Math.floor(Date.now() / 1000) - 3600,
         main_pid: 1234, memory_mb: 18.4,
-        description: 'Sentinel Gate Real-Time File Monitor',
-        unit_file: '/etc/systemd/system/sentinel-gate-monitor.service'
+        description: 'ServerScrub Real-Time File Monitor',
+        unit_file: '/etc/systemd/system/serverscrub-monitor.service'
       }}
     : await API.monitorServiceStatus();
 
@@ -2220,10 +2220,10 @@ async function loadServiceLogs() {
   if (Demo.active) {
     const el = document.getElementById('svc-journal-log');
     if (el) el.textContent =
-      '2024-01-15T14:22:01+0000 sentinel-gate-monitor[1234]: INFO  Monitor started\n' +
-      '2024-01-15T14:22:01+0000 sentinel-gate-monitor[1234]: INFO  inotify engine active\n' +
-      '2024-01-15T14:22:01+0000 sentinel-gate-monitor[1234]: INFO  Watching /home\n' +
-      '2024-01-15T15:30:00+0000 sentinel-gate-monitor[1234]: ALERT c99_shell detected';
+      '2024-01-15T14:22:01+0000 serverscrub-monitor[1234]: INFO  Monitor started\n' +
+      '2024-01-15T14:22:01+0000 serverscrub-monitor[1234]: INFO  inotify engine active\n' +
+      '2024-01-15T14:22:01+0000 serverscrub-monitor[1234]: INFO  Watching /home\n' +
+      '2024-01-15T15:30:00+0000 serverscrub-monitor[1234]: ALERT c99_shell detected';
     return;
   }
   const sel   = document.getElementById('svc-log-lines');
@@ -2248,10 +2248,10 @@ function setText(id, val) {
 async function loadStorageStats() {
   if (Demo.active) {
     populateStorageUI({
-      quarantine: { path: '/usr/local/sentinel-gate/quarantine', size_bytes: 4718592, files: 7, writable: true },
-      logs:       { path: '/usr/local/sentinel-gate/logs', size_bytes: 2097152, files: 12,
+      quarantine: { path: '/usr/local/serverscrub/quarantine', size_bytes: 4718592, files: 7, writable: true },
+      logs:       { path: '/usr/local/serverscrub/logs', size_bytes: 2097152, files: 12,
                     writable: true, monitor_log_bytes: 1048576 },
-      database:   { path: '/usr/local/sentinel-gate/database/sentinel.db', size_bytes: 8388608,
+      database:   { path: '/usr/local/serverscrub/database/serverscrub.db', size_bytes: 8388608,
                     rows: { waf_events: 94441, security_events: 12803, threats: 47, cron_log: 342 } },
       settings:   { quarantine_dir: '', log_dir: '', log_retention_days: 30,
                     quarantine_retention_days: 90, db_max_waf_events: 100000,
@@ -2633,7 +2633,7 @@ async function loadRootkit() {
         note.textContent =
           missing.join(' and ') + ' could not be installed on this server. '
           + 'Scans still run: the built-in engine needs neither and covers the '
-          + 'same checks. To retry, run  sentinel install-rootkit-tools  as root.';
+          + 'same checks. To retry, run  serverscrub install-rootkit-tools  as root.';
       } else {
         note.style.display = 'none';
       }
@@ -3075,7 +3075,7 @@ async function startUpdate() {
   overlay.classList.remove('hidden');
   _el('update-close').classList.add('hidden');
   _el('update-spinner').className = 'update-spinner';
-  _setProgress(1, 'Starting update…', 'Updating Sentinel Gate');
+  _setProgress(1, 'Starting update…', 'Updating ServerScrub');
 
   const res = await API.post('update/run', {});
   if (!res || !res.success) {
@@ -3434,7 +3434,7 @@ async function loadWafEngine() {
         ? 'ModSecurity is enforcing the OWASP Core Rule Set.'
         : 'ModSecurity is installed and logging matches, but not blocking them yet.')
     : 'No web application firewall engine is active on this server. '
-    + 'Sentinel Gate can install and configure ModSecurity with the OWASP Core Rule Set.';
+    + 'ServerScrub can install and configure ModSecurity with the OWASP Core Rule Set.';
 
   document.getElementById('waf-engine-meta').classList.remove('hidden');
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
@@ -3511,7 +3511,7 @@ function _demoWafInstall() {
   return { success: true, data: { success: true, steps: [
     { ok: true, message: 'Installed ea-apache24-mod_security2' },
     { ok: true, message: 'Installed OWASP CRS 4.7.0' },
-    { ok: true, message: 'Wrote Sentinel Gate WAF config (DetectionOnly)' },
+    { ok: true, message: 'Wrote ServerScrub WAF config (DetectionOnly)' },
     { ok: true, message: 'Apache configuration validated' },
     { ok: true, message: 'Apache reloaded — WAF active in DetectionOnly' },
   ], note: 'Running in DetectionOnly: attacks are logged, not blocked. '

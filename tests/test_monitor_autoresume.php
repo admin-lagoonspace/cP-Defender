@@ -26,13 +26,13 @@ $rtm = t_code($repo . '/backend/lib/RealTimeMonitor.php');
 
 // -- A failed or rate-limited unit must still be startable -------------------
 $start = substr($rtm, strpos($rtm, 'public function start()'), 2600);
-t_contains($start, 'systemctl reset-failed sentinel-gate-monitor',
+t_contains($start, 'systemctl reset-failed serverscrub-monitor',
     'starting clears a failed unit first');
 t_contains($start, 'repeated too quickly',
     'and recognises systemd refusing on its start rate limit');
 
 $resetPos = strpos($start, 'reset-failed');
-$startPos = strpos($start, 'systemctl start sentinel-gate-monitor');
+$startPos = strpos($start, 'systemctl start serverscrub-monitor');
 t_ok($resetPos !== false && $startPos !== false && $resetPos < $startPos,
     'the reset happens before the start, not after it has already failed');
 

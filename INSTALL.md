@@ -1,4 +1,4 @@
-# Installing Sentinel Gate
+# Installing ServerScrub
 
 Security suite for cPanel/WHM servers and standalone Linux servers.
 Malware scanning, firewall management, WAF, rootkit detection and real-time
@@ -26,13 +26,13 @@ it; if not, pattern-based scanning is used until you install it.
 SSH in **as root** and run one line:
 
 ```bash
-bash <(curl -fsSL https://defender.lws-s1.com/sentinel-gate/code/get.sh)
+bash <(curl -fsSL https://defender.lws-s1.com/serverscrub/code/get.sh)
 ```
 
 If the box has `wget` but not `curl`:
 
 ```bash
-bash <(wget -qO- https://defender.lws-s1.com/sentinel-gate/code/get.sh)
+bash <(wget -qO- https://defender.lws-s1.com/serverscrub/code/get.sh)
 ```
 
 That is the whole install. It detects whether this is a cPanel server or a
@@ -41,7 +41,7 @@ plain Linux server and configures itself accordingly.
 ### What it does
 
 1. Fetches the release manifest and verifies the download's SHA-256
-2. Installs to `/usr/local/sentinel-gate/`
+2. Installs to `/usr/local/serverscrub/`
 3. **cPanel host** — registers the WHM plugin, adds the Apache alias, installs
    the per-account plugin for both themes
    **Plain Linux** — starts a self-contained dashboard on port `31150`
@@ -57,9 +57,9 @@ Takes 1–3 minutes.
 
 **cPanel / WHM**
 
-> WHM → Plugins → **Sentinel Gate Security**
+> WHM → Plugins → **ServerScrub Security**
 
-or directly: `https://your-server-hostname/sentinel-gate/`
+or directly: `https://your-server-hostname/serverscrub/`
 Sign in with your existing WHM credentials — no separate account.
 
 **Standalone Linux**
@@ -79,7 +79,7 @@ Piping to `bash` makes the installer fully non-interactive — it detects the
 mode and never prompts:
 
 ```bash
-curl -fsSL https://defender.lws-s1.com/sentinel-gate/code/get.sh | bash
+curl -fsSL https://defender.lws-s1.com/serverscrub/code/get.sh | bash
 ```
 
 Force a mode instead of auto-detecting:
@@ -110,14 +110,14 @@ Other options, passed straight through to the installer:
 ## Verify the install
 
 ```bash
-sentinel status
-sentinel version
+serverscrub status
+serverscrub version
 ```
 
 Or re-run the self-test:
 
 ```bash
-bash /usr/local/sentinel-gate/test.sh
+bash /usr/local/serverscrub/test.sh
 ```
 
 ---
@@ -125,17 +125,17 @@ bash /usr/local/sentinel-gate/test.sh
 ## Updating
 
 ```bash
-bash /usr/local/sentinel-gate/update.sh
+bash /usr/local/serverscrub/update.sh
 ```
 
 Your database, settings, quarantine and logs are preserved, and a backup is
-written to `/var/backups/sentinel-gate/` before anything changes.
+written to `/var/backups/serverscrub/` before anything changes.
 
 Non-interactive, or pinned to a version:
 
 ```bash
-bash /usr/local/sentinel-gate/update.sh --yes
-bash /usr/local/sentinel-gate/update.sh --version 3.7.1
+bash /usr/local/serverscrub/update.sh --yes
+bash /usr/local/serverscrub/update.sh --version 3.7.1
 ```
 
 ---
@@ -143,7 +143,7 @@ bash /usr/local/sentinel-gate/update.sh --version 3.7.1
 ## Uninstalling
 
 ```bash
-bash /usr/local/sentinel-gate/uninstall.sh
+bash /usr/local/serverscrub/uninstall.sh
 ```
 
 Removes everything — services, cron jobs, Apache config, WHM registration and
@@ -176,7 +176,7 @@ installer aborts rather than proceeding. Re-run it; if it persists, report it.
 **Logs**
 
 ```
-/usr/local/sentinel-gate/logs/
+/usr/local/serverscrub/logs/
 ```
 
 ---
@@ -185,14 +185,14 @@ installer aborts rather than proceeding. Re-run it; if it persists, report it.
 
 | Path | |
 |---|---|
-| `/usr/local/sentinel-gate/` | Application, database, quarantine, logs |
-| `/etc/cron.d/sentinel-gate` | Scheduled scans |
-| `/etc/systemd/system/sentinel-gate-monitor.service` | Real-time monitor |
-| `/usr/bin/sentinel` | Command-line interface |
-| `/var/backups/sentinel-gate/` | Pre-update backups |
+| `/usr/local/serverscrub/` | Application, database, quarantine, logs |
+| `/etc/cron.d/serverscrub` | Scheduled scans |
+| `/etc/systemd/system/serverscrub-monitor.service` | Real-time monitor |
+| `/usr/bin/serverscrub` | Command-line interface |
+| `/var/backups/serverscrub/` | Pre-update backups |
 
 On cPanel hosts the plugin also registers under `/var/cpanel/apps/` and
 `/usr/local/cpanel/`. Nothing but registration stubs live there, so a cPanel
 update cannot remove the application. The uninstaller reads
-`/usr/local/sentinel-gate/install-manifest.env`, which records every path
+`/usr/local/serverscrub/install-manifest.env`, which records every path
 touched, so it removes exactly what was added.

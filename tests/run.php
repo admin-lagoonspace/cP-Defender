@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — test runner.
+ * ServerScrub — test runner.
  *
  * DEVELOPMENT ONLY. Never packaged. No external dependencies: adding a
  * dependency manager to run a few dozen assertions is not worth the weight, and

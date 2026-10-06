@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — Rootkit Scanner Module
+ * ServerScrub — Rootkit Scanner Module
  * Executes rkhunter and/or chkrootkit and stores parsed results
  */
 

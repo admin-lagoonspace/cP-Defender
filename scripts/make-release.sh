@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — Release builder
+# ServerScrub — Release builder
 # Builds the distributable zip, computes its SHA256, and writes latest.json so the
 # update channel is always internally consistent (kills filename/hash drift).
 #
@@ -10,11 +10,11 @@
 #   SG_RELEASES_REPO=owner/repo bash scripts/make-release.sh
 #
 # Output (default ./dist):
-#   dist/sentinel-gate-<version>.zip
+#   dist/serverscrub-<version>.zip
 #   dist/latest.json
 #
 # Publish step (manual, to the PUBLIC releases repo):
-#   cp dist/sentinel-gate-<v>.zip  <releases-repo>/dist/
+#   cp dist/serverscrub-<v>.zip  <releases-repo>/dist/
 #   cp dist/latest.json            <releases-repo>/latest.json
 #   git -C <releases-repo> add -A && git commit -m "release <v>" && git push
 # ════════════════════════════════════════════════════════════════════════════════
@@ -50,12 +50,12 @@ VERSION="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION")"
 if [[ -f "${REPO_DIR}/frontend/index.html" ]]; then
   sed -i -E "s#(css/app\.css|js/api\.js|js/app\.js)(\?v=[^\"]*)?#\1?v=${VERSION}#g"     "${REPO_DIR}/frontend/index.html"
 fi
-info "Building Sentinel Gate v${VERSION}"
+info "Building ServerScrub v${VERSION}"
 
 # ── Stage the payload (code only — mirrors what install.sh consumes) ───────────
 STAGE="$(mktemp -d /tmp/sg-rel.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
-PKG="${STAGE}/sentinel-gate"
+PKG="${STAGE}/serverscrub"
 mkdir -p "$PKG"
 for item in backend frontend whm cpanel install.sh uninstall.sh update.sh test.sh VERSION; do
   [[ -e "${REPO_DIR}/${item}" ]] && cp -r "${REPO_DIR}/${item}" "${PKG}/"
@@ -72,7 +72,7 @@ find "$PKG" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || 
 find "$PKG" -type f \( -name '*.pyc' -o -name '*.pyo' -o -name '.DS_Store' \) -delete 2>/dev/null || true
 
 mkdir -p "$OUT_DIR"
-ZIP_NAME="sentinel-gate-${VERSION}.zip"
+ZIP_NAME="serverscrub-${VERSION}.zip"
 ZIP_PATH="${OUT_DIR}/${ZIP_NAME}"
 rm -f "$ZIP_PATH"
 # `zip` where it exists, Python where it does not. The maintainer builds on
@@ -82,7 +82,7 @@ rm -f "$ZIP_PATH"
 # branch sets the mode bits explicitly, because zipfile defaults to 0600 and
 # the shell scripts inside must stay executable.
 if command -v zip >/dev/null 2>&1; then
-  ( cd "$STAGE" && zip -rq "$ZIP_PATH" sentinel-gate )
+  ( cd "$STAGE" && zip -rq "$ZIP_PATH" serverscrub )
 else
   SG_PY=""
   for c in "${REPO_DIR}/python/python.exe" "${REPO_DIR}/python/python" python3 python; do
@@ -95,7 +95,7 @@ import os, sys, zipfile
 
 stage, out = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
-    for root, dirs, files in os.walk(os.path.join(stage, 'sentinel-gate')):
+    for root, dirs, files in os.walk(os.path.join(stage, 'serverscrub')):
         dirs.sort()
         for name in sorted(files):
             full = os.path.join(root, name)
@@ -199,7 +199,7 @@ fi
 # ── Manifest ──────────────────────────────────────────────────────────────────
 # Primary download is our own CDN (no API limits, reachable when GitHub is
 # firewalled); get.sh/update.sh fall back to the GitHub raw mirror on failure.
-CDN_BASE="${SG_CDN_BASE:-https://defender.lws-s1.com/sentinel-gate/code}"
+CDN_BASE="${SG_CDN_BASE:-https://defender.lws-s1.com/serverscrub/code}"
 DL_URL="${CDN_BASE}/dist/${ZIP_NAME}"
 MIRROR_URL="https://raw.githubusercontent.com/${RELEASES_REPO}/${RELEASES_BRANCH}/dist/${ZIP_NAME}"
 # Notes point at THIS version's notes, not the full history. A user opening the
@@ -221,10 +221,10 @@ ok "Wrote ${OUT_DIR}/latest.json  (primary: CDN, mirror: GitHub raw)"
 #
 #   <cdn>/get.sh                          bootstrap installer (always current)
 #   <cdn>/latest.json                     pointer to the newest release
-#   <cdn>/dist/sentinel-gate-<v>.zip      flat path — get.sh/update.sh build this
+#   <cdn>/dist/serverscrub-<v>.zip      flat path — get.sh/update.sh build this
 #                                         URL by convention when a manifest is
 #                                         stale, so it must keep working
-#   <cdn>/v<v>/sentinel-gate-<v>.zip      permanent per-version archive
+#   <cdn>/v<v>/serverscrub-<v>.zip      permanent per-version archive
 #   <cdn>/v<v>/latest.json                version-pinned manifest
 #   <cdn>/v<v>/CHANGELOG.md               notes as shipped for that version
 #

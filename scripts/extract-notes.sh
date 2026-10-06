@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — extract ONE version's notes from CHANGELOG.md
+# ServerScrub — extract ONE version's notes from CHANGELOG.md
 #
 # CHANGELOG.md in the repo is the full history, which is correct for the repo and
 # wrong for everything else: the per-version folder on the CDN was receiving a
@@ -40,7 +40,7 @@ fi
 HEADING="$(grep -m1 -F "## [${VER}]" "$SRC")"
 
 cat << EOF
-# Sentinel Gate ${VER}
+# ServerScrub ${VER}
 
 ${HEADING#\#\# }
 

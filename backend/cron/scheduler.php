@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php
 /**
- * Sentinel Gate — task scheduler
+ * ServerScrub — task scheduler
  *
  * Runs every 15 minutes from cron and decides which scheduled tasks are due,
  * based on the user's settings.

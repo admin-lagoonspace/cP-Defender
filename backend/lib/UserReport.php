@@ -5,7 +5,7 @@
  * WHY A FILE AND NOT AN API CALL
  *
  * The cPanel plugin page runs as the cPanel user, under cpsrvd. The database
- * lives in /usr/local/sentinel-gate/database, which is 0700 root, and the API
+ * lives in /usr/local/serverscrub/database, which is 0700 root, and the API
  * that reads it requires an admin role. A user process therefore cannot reach
  * any of it, and the alternatives -- a setuid helper, or relaxing those
  * permissions -- would hand every hosting customer on the box a path to the
@@ -21,7 +21,7 @@
  * WRITING INTO A DIRECTORY THE USER CONTROLS
  *
  * Every write here is root writing into a path a hostile user can rearrange
- * between one call and the next. A symlink at ~/.sentinel-gate, or at
+ * between one call and the next. A symlink at ~/.serverscrub, or at
  * report.json, would make root overwrite whatever it points at -- /etc/shadow,
  * an authorized_keys file, anything. Each step below therefore verifies what
  * it is about to touch and refuses rather than following a link.
@@ -30,7 +30,7 @@
 class UserReport
 {
     /** Directory created inside each user's home. */
-    private const DIR = '.sentinel-gate';
+    private const DIR = '.serverscrub';
 
     /** How many rows of each kind a report carries. */
     private const LIMIT = 200;

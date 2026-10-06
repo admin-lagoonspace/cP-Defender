@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — CDN sync (runs ON the cPanel server, via cron)
+# ServerScrub — CDN sync (runs ON the cPanel server, via cron)
 #
 # Pulls the current release from GitHub into the public docroot. The server
 # reaches OUT to GitHub, so nothing has to connect IN: no FTP, no firewall
@@ -30,7 +30,7 @@
 set -uo pipefail
 
 # ── Config (override via environment) ─────────────────────────────────────────
-DOCROOT="${SG_DOCROOT:-/home/lwss1/public_html/defender.lws-s1.com/sentinel-gate/code}"
+DOCROOT="${SG_DOCROOT:-/home/lwss1/public_html/defender.lws-s1.com/serverscrub/code}"
 REPO="${SG_REPO:-admin-lagoonspace/cP-Defender}"
 BRANCH="${SG_BRANCH:-main}"
 SRC="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
@@ -108,7 +108,7 @@ NEW_SHA="$(json_get "$REMOTE_JSON" sha256)"
 CUR_VER=""
 [ -f "${DOCROOT}/latest.json" ] && CUR_VER="$(json_get "$(cat "${DOCROOT}/latest.json")" version)"
 
-ZIP_NAME="sentinel-gate-${NEW_VER}.zip"
+ZIP_NAME="serverscrub-${NEW_VER}.zip"
 
 # Fast path: same version AND the artifacts are actually present.
 if [ "$CUR_VER" = "$NEW_VER" ] \
@@ -209,7 +209,7 @@ if command -v unzip >/dev/null 2>&1; then
         die "extraction failed for ${ZIP_NAME}"
     fi
 
-    # The archive wraps everything in a single sentinel-gate/ directory. Lift its
+    # The archive wraps everything in a single serverscrub/ directory. Lift its
     # contents up so latest/ holds backend/, frontend/, install.sh … directly.
     INNER="$(find "$STAGE" -mindepth 1 -maxdepth 1 -type d | head -1)"
     if [ -n "$INNER" ] && [ "$(find "$STAGE" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 ]; then
@@ -272,7 +272,7 @@ if command -v unzip >/dev/null 2>&1; then
     #
     # Written on every sync because the wipe-and-replace would otherwise drop it.
     cat > "${LATEST_DIR}/.htaccess" <<'HTACCESS'
-# Sentinel Gate — this tree is for DOWNLOAD ONLY. Never execute anything in it.
+# ServerScrub — this tree is for DOWNLOAD ONLY. Never execute anything in it.
 # Written automatically by cdn-sync.sh on every publish; edits here are lost.
 
 # SetHandler default-handler — NOT "none". On cPanel EA4 PHP runs as a PHP-FPM

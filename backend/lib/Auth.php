@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — Authentication & JWT
+ * ServerScrub — Authentication & JWT
  * Validates against cPanel's native auth system
  */
 

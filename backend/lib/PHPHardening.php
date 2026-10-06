@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — PHP Hardening Module
+ * ServerScrub — PHP Hardening Module
  * Audits and applies PHP security configuration for the server and per cPanel account
  */
 

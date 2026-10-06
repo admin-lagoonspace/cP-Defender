@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sentinel Gate - Real-Time File Monitor Daemon
+ServerScrub - Real-Time File Monitor Daemon
 Watches filesystem paths for new/modified PHP files and scans for malware.
 Uses inotify_simple if available, falls back to polling.
 
@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Optional, List, Dict
 
 SG_ROOT  = os.environ.get('SG_ROOT', str(Path(__file__).resolve().parent.parent.parent))
-SG_DB    = os.path.join(SG_ROOT, 'database', 'sentinel.db')
-PID_FILE = '/var/run/sentinel-gate-monitor.pid'
+SG_DB    = os.path.join(SG_ROOT, 'database', 'serverscrub.db')
+PID_FILE = '/var/run/serverscrub-monitor.pid'
 
 # force= requires Python 3.8. RHEL-family servers -- which is what cPanel runs
 # on -- ship 3.6, where this raises ValueError before the daemon does anything
@@ -641,8 +641,8 @@ def quarantine(conn, path, tid):
         os.makedirs(qd, 0o700, exist_ok=True)
         dest = os.path.join(qd, os.path.basename(path) + f'_{tid}.quarantine')
         shutil.move(path, dest)
-        open(path+'.sentinel_removed','w').write(
-            f'Quarantined by Sentinel Gate at {datetime.datetime.now()}\nID:{tid}\nOrig:{path}\n')
+        open(path+'.serverscrub_removed','w').write(
+            f'Quarantined by ServerScrub at {datetime.datetime.now()}\nID:{tid}\nOrig:{path}\n')
         conn.execute("UPDATE threats SET status='quarantined',action_taken='quarantine',"
                      "resolved_at=strftime('%s','now') WHERE id=?", (tid,))
         conn.commit()
@@ -692,7 +692,7 @@ def license_ok(conn):
         return False, f'license status: {state}'
     if age > FLAG_MAX_AGE:
         return False, (f'license flag is {int(age/86400)}d old — not re-verified. '
-                       'Is the Sentinel Gate cron still installed?')
+                       'Is the ServerScrub cron still installed?')
     return True, state
 
 def watch_paths(conn):
@@ -879,7 +879,7 @@ def run_polling(conn, paths, limits):
 def main():
     global _SCAN_SLEEP
     write_pid()
-    log.info('Sentinel Gate RT Monitor starting PID=%d SG_ROOT=%s', os.getpid(), SG_ROOT)
+    log.info('ServerScrub RT Monitor starting PID=%d SG_ROOT=%s', os.getpid(), SG_ROOT)
     conn = None
     try:
         conn = db_connect()

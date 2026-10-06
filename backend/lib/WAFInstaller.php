@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — ModSecurity + OWASP CRS provisioning
+ * ServerScrub — ModSecurity + OWASP CRS provisioning
  *
  * Installs and configures the WAF engine so the operator does not have to.
  * WAF.php reads ModSecurity's configuration and audit log; without ModSecurity
@@ -61,7 +61,7 @@ class WAFInstaller
 
     const CRS_VERSION = '4.7.0';
     const CRS_URL     = 'https://github.com/coreruleset/coreruleset/archive/refs/tags/v%s.tar.gz';
-    const SG_CONF_DIR = '/etc/sentinel-gate/waf';
+    const SG_CONF_DIR = '/etc/serverscrub/waf';
 
     /**
      * Where our WAF config is written. Overridable so the write paths can be
@@ -96,7 +96,7 @@ class WAFInstaller
             'apache'                => self::apacheFlavour(),
             'package_manager'       => self::pkgManager(),
             'can_install'           => self::pkgManager() !== null,
-            'managed_by_us'         => is_file(self::confDir() . '/sentinel-waf.conf'),
+            'managed_by_us'         => is_file(self::confDir() . '/serverscrub-waf.conf'),
         ];
     }
 
@@ -155,7 +155,7 @@ class WAFInstaller
 
     public static function currentMode(): string
     {
-        $f = self::confDir() . '/sentinel-waf.conf';
+        $f = self::confDir() . '/serverscrub-waf.conf';
         if (is_readable($f)) {
             $c = (string)@file_get_contents($f);
             if (preg_match('/^\s*SecRuleEngine\s+(\w+)/mi', $c, $m)) {
@@ -230,7 +230,7 @@ class WAFInstaller
         if (!$r['success']) {
             return ['success' => false, 'steps' => $steps, 'error' => $r['error']];
         }
-        $ok('Wrote Sentinel Gate WAF config (DetectionOnly)');
+        $ok('Wrote ServerScrub WAF config (DetectionOnly)');
 
         // 4. Validate BEFORE reloading. A bad include would otherwise take
         //    Apache down on restart, and with it every site on the server.
@@ -291,7 +291,7 @@ class WAFInstaller
     private static function writeConfig(string $mode, ?string $crsDir): array
     {
         @mkdir(self::confDir(), 0750, true);
-        $conf = self::confDir() . '/sentinel-waf.conf';
+        $conf = self::confDir() . '/serverscrub-waf.conf';
 
         $rules = '';
         if ($crsDir) {
@@ -300,7 +300,7 @@ class WAFInstaller
         }
 
         $body = <<<CONF
-# Sentinel Gate — WAF configuration
+# ServerScrub — WAF configuration
 # Generated automatically. Change the mode from the dashboard, not here:
 # edits are overwritten whenever the mode is changed.
 
@@ -328,7 +328,7 @@ class WAFInstaller
 
     # The dashboard itself must never be filtered: a false positive would lock
     # the operator out of the tool needed to turn the WAF off.
-    <LocationMatch "^/sentinel-gate">
+    <LocationMatch "^/serverscrub">
         SecRuleEngine Off
     </LocationMatch>
 
@@ -355,7 +355,7 @@ CONF;
         if ($incDir === null || !is_dir($incDir)) {
             return ['success' => false, 'error' => 'Could not locate the Apache config directory'];
         }
-        $inc = $incDir . '/zz-sentinel-gate-waf.conf';
+        $inc = $incDir . '/zz-serverscrub-waf.conf';
         // zz- prefix so our settings load last and win over earlier includes.
         if (@file_put_contents($inc, "IncludeOptional {$conf}\n") === false) {
             return ['success' => false, 'error' => 'Could not write ' . $inc];
@@ -419,7 +419,7 @@ CONF;
     public static function remove(): void
     {
         self::disableConfig();
-        @unlink(self::confDir() . '/sentinel-waf.conf');
+        @unlink(self::confDir() . '/serverscrub-waf.conf');
         self::reloadApache();
     }
 }

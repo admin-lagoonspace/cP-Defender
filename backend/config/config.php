@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — Core Configuration
+ * ServerScrub — Core Configuration
  * Adjust paths after installation via install.sh
  */
 
@@ -17,7 +17,7 @@
 //
 // Defining it here first makes a stale mode.php a no-op for this constant while
 // still letting mode.php own everything that genuinely is per-installation.
-define('SG_VERSION', '3.37.2');
+define('SG_VERSION', '4.0.0');
 
 // ── Install Mode ──────────────────────────────────────────────────────────────
 // mode.php records what IS per-installation: the mode, the install directory
@@ -29,9 +29,9 @@ if (file_exists(__DIR__ . '/mode.php')) {
 
 if (!defined('INSTALL_MODE')) { define('INSTALL_MODE', 'cpanel'); }
 if (!defined('SG_ROOT'))      { define('SG_ROOT',     dirname(__DIR__, 2)); }
-if (!defined('SG_DB'))        { define('SG_DB',       SG_ROOT . '/database/sentinel.db'); }
+if (!defined('SG_DB'))        { define('SG_DB',       SG_ROOT . '/database/serverscrub.db'); }
 if (!defined('SG_LOGS'))      { define('SG_LOGS',     SG_ROOT . '/logs'); }
-if (!defined('SG_TMP'))       { define('SG_TMP',      '/tmp/sentinel-gate'); }
+if (!defined('SG_TMP'))       { define('SG_TMP',      '/tmp/serverscrub'); }
 
 // Standalone web server port
 define('SG_PORT', 31150);
@@ -65,7 +65,7 @@ define('SCAN_THREADS',   4);
 /**
  * Where quarantined files are kept.
  *
- * NOT under SG_ROOT by default. SG_ROOT is /usr/local/sentinel-gate, which
+ * NOT under SG_ROOT by default. SG_ROOT is /usr/local/serverscrub, which
  * lives on the root filesystem, and quarantine MOVES infected files there --
  * so on a hosting server, where customer data is a separate and much larger
  * volume, a busy scan fills / and takes the whole machine down. That happened.
@@ -80,7 +80,7 @@ if (!defined('QUARANTINE_DIR')) {
     $sgQuarantineDefault = SG_ROOT . '/quarantine';
     foreach (['/home', '/var'] as $sgVolume) {
         if (is_dir($sgVolume) && is_writable($sgVolume)) {
-            $sgQuarantineDefault = $sgVolume . '/.sentinel-gate/quarantine';
+            $sgQuarantineDefault = $sgVolume . '/.serverscrub/quarantine';
             break;
         }
     }
@@ -89,7 +89,7 @@ if (!defined('QUARANTINE_DIR')) {
 }
 
 // ── API Auth ──────────────────────────────────────────────────────────────────
-define('JWT_SECRET',     hash('sha256', gethostname() . 'sentinel_gate_secret_2024'));
+define('JWT_SECRET',     hash('sha256', gethostname() . 'serverscrub_secret_2024'));
 define('JWT_EXPIRY',     3600 * 8);  // 8 hours
 
 // ── Malware Signature patterns ───────────────────────────────────────────────

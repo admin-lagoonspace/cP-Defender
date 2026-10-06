@@ -29,7 +29,7 @@ function call_route(string $route, array $extraGet = []): array
         . '$_SERVER["REQUEST_METHOD"]="GET";' . "\n"
         . '$_SERVER["REMOTE_USER"]="root";' . "\n"
         . '$_SERVER["REMOTE_ADDR"]="127.0.0.1";' . "\n"
-        . '$_SERVER["REQUEST_URI"]=' . var_export('/cgi/sentinel_gate/sentinel_gate.cgi', true) . ';' . "\n"
+        . '$_SERVER["REQUEST_URI"]=' . var_export('/cgi/serverscrub/serverscrub.cgi', true) . ';' . "\n"
         . '$_GET=' . var_export(array_merge(['r' => $route], $extraGet), true) . ';' . "\n"
         . 'ob_start(); require ' . var_export($repo . '/backend/api/index.php', true) . '; echo ob_get_clean();' . "\n";
     file_put_contents($runner, $payload);

@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — API smoke test.
+ * ServerScrub — API smoke test.
  *
  * Executes every read-only API route through the real router, in a throwaway
  * install, and reports any that fail to return JSON or that raise a PHP error.
@@ -81,7 +81,7 @@ $sandbox = $argv[2];
 $route   = $argv[3];
 
 $_SERVER['REQUEST_METHOD'] = 'GET';
-$_SERVER['REQUEST_URI']    = '/cgi/sentinel_gate/sentinel_gate.cgi?r=' . $route;
+$_SERVER['REQUEST_URI']    = '/cgi/serverscrub/serverscrub.cgi?r=' . $route;
 $_SERVER['REMOTE_USER']    = 'root';
 $_SERVER['REMOTE_ADDR']    = '127.0.0.1';
 $_SERVER['SERVER_PROTOCOL'] = 'HTTP/1.1';

@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — License client (WHMCS Licensing Addon)
+ * ServerScrub — License client (WHMCS Licensing Addon)
  *
  * Implements the WHMCS Licensing Addon check contract:
  *   POST licensekey, domain, ip, dir, check_token  ->  XML tag/value response
@@ -69,7 +69,7 @@ class License
      * with --delete — cannot reset the trial, and the EARLIEST of the two is
      * used so removing one does not extend it either.
      */
-    const INSTALL_MARKER = '/var/lib/sentinel-gate/installed-at';
+    const INSTALL_MARKER = '/var/lib/serverscrub/installed-at';
 
     /**
      * Where the install timestamp is stamped outside the install directory.
@@ -217,10 +217,10 @@ class License
         $s = self::status();
         if ($s['protection_allowed']) { return; }
 
-        $msg = "$context requires a valid Sentinel Gate license.\n"
+        $msg = "$context requires a valid ServerScrub license.\n"
              . "  Status : {$s['status']}\n"
              . "  {$s['message']}\n"
-             . "  Activate with:  sentinel license activate <key>\n";
+             . "  Activate with:  serverscrub license activate <key>\n";
         if (PHP_SAPI === 'cli') { fwrite(STDERR, $msg); }
         self::log("blocked: $context — {$s['status']}");
         exit(4);
@@ -357,7 +357,7 @@ class License
                 // they had just correctly pasted.
                 return self::result('Invalid', false, false, false,
                     'The licence server replied, but its signature did not verify. Run '
-                    . '"sentinel license diagnose-hash" to see how the server signs its '
+                    . '"serverscrub license diagnose-hash" to see how the server signs its '
                     . 'replies. If SG_LICENSE_SECRET is set in mode.php and the licence '
                     . 'server has no secret configured, clearing it is the fix.');
             }
@@ -691,7 +691,7 @@ class License
             'matches'  => $matches,
             'licence'  => $parsed['status'] ?? 'unknown',
             'message'  => $matches
-                ? 'This IS the correct secret. Store it with: sentinel license secret <value>'
+                ? 'This IS the correct secret. Store it with: serverscrub license secret <value>'
                 : 'This is not the secret the licence server signs with. Nothing was changed.',
         ];
     }
@@ -977,7 +977,7 @@ class License
                 CURLOPT_CONNECTTIMEOUT => 6,
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_SSL_VERIFYHOST => 2,
-                CURLOPT_USERAGENT      => 'SentinelGate/' . (defined('SG_VERSION') ? SG_VERSION : '0'),
+                CURLOPT_USERAGENT      => 'ServerScrub/' . (defined('SG_VERSION') ? SG_VERSION : '0'),
             ]);
             $out = curl_exec($ch);
             $err = curl_error($ch);

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — Safe Update Script
+# ServerScrub — Safe Update Script
 # Downloads the latest release from GitHub, applies it over the current
 # installation, and preserves ALL user data (database, settings, quarantine,
 # logs, TLS certs, custom signatures).
 #
 # Usage:
-#   bash /usr/local/sentinel-gate/update.sh
-#   bash /usr/local/sentinel-gate/update.sh --yes               # non-interactive
-#   bash /usr/local/sentinel-gate/update.sh --version 3.3.7     # skip API, force version
-#   bash /usr/local/sentinel-gate/update.sh --url https://...   # use a direct zip URL
+#   bash /usr/local/serverscrub/update.sh
+#   bash /usr/local/serverscrub/update.sh --yes               # non-interactive
+#   bash /usr/local/serverscrub/update.sh --version 3.3.7     # skip API, force version
+#   bash /usr/local/serverscrub/update.sh --url https://...   # use a direct zip URL
 #
 # Run as: root
 # ════════════════════════════════════════════════════════════════════════════════
@@ -31,7 +31,7 @@ die()     { err "$*"; exit 1; }
 # Written OUTSIDE the install directory on purpose: the update rsyncs over
 # ${INSTALL_DIR} with --delete, so anything kept inside would be destroyed
 # mid-run — exactly when the UI most needs to read it.
-STATE_DIR="${SG_STATE_DIR:-/var/lib/sentinel-gate}"
+STATE_DIR="${SG_STATE_DIR:-/var/lib/serverscrub}"
 STATE_FILE="${STATE_DIR}/update-state.json"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
@@ -92,7 +92,7 @@ rollback() {
     done
 
     chmod +x "${INSTALL_DIR}"/*.sh 2>/dev/null || true
-    systemctl start sentinel-gate-monitor 2>/dev/null || true
+    systemctl start serverscrub-monitor 2>/dev/null || true
 
     state_rolled "Rolled back to v${CURRENT_VERSION}. Your settings and data are intact."
     err "Rolled back to v${CURRENT_VERSION}. No changes were kept."
@@ -114,13 +114,13 @@ trap on_error ERR
 #
 #   latest.json:
 #     { "version": "3.5.0",
-#       "url":     "https://raw.githubusercontent.com/<repo>/main/dist/sentinel-gate-3.5.0.zip",
+#       "url":     "https://raw.githubusercontent.com/<repo>/main/dist/serverscrub-3.5.0.zip",
 #       "sha256":  "<hex>",
 #       "notes":   "https://..." }
 #
 # The manifest carries the full download URL, so the updater never has to guess
 # the asset filename (kills the old v-prefix / no-prefix naming mismatch).
-INSTALL_DIR="${SG_ROOT:-/usr/local/sentinel-gate}"
+INSTALL_DIR="${SG_ROOT:-/usr/local/serverscrub}"
 # Repo is public, so updates are served straight from it — no separate channel,
 # no credentials on customer servers. Override via env if you ever split it out.
 RELEASES_REPO="${SG_RELEASES_REPO:-admin-lagoonspace/cP-Defender}"
@@ -128,14 +128,14 @@ RELEASES_BRANCH="${SG_RELEASES_BRANCH:-main}"
 # Primary channel is our own CDN — no API rate limits, and it keeps working on
 # servers whose firewall blocks github.com (the exact failure that broke v3.3.6
 # updates in the field). GitHub raw stays as an automatic fallback.
-CDN_BASE="${SG_CDN_BASE:-https://defender.lws-s1.com/sentinel-gate/code}"
+CDN_BASE="${SG_CDN_BASE:-https://defender.lws-s1.com/serverscrub/code}"
 GITHUB_BASE="https://raw.githubusercontent.com/${RELEASES_REPO}/${RELEASES_BRANCH}"
 CHANNELS=("$CDN_BASE" "$GITHUB_BASE")
 # Explicit override wins and disables channel rotation
 [[ -n "${SG_MANIFEST_URL:-}" ]] && CHANNELS=("${SG_MANIFEST_URL%/latest.json}")
 MANIFEST_URL="${CHANNELS[0]}/latest.json"
 DIST_BASE="${CHANNELS[0]}/dist"
-BACKUP_ROOT="/var/backups/sentinel-gate"
+BACKUP_ROOT="/var/backups/serverscrub"
 TMP_DIR="$(mktemp -d /tmp/sg-update.XXXXXX)"
 AUTO_YES=false
 FORCE_VERSION=""
@@ -157,14 +157,14 @@ done
 
 # ── Root check ────────────────────────────────────────────────────────────────
 [[ $EUID -ne 0 ]] && die "Run as root:  sudo bash $0"
-[[ -d "$INSTALL_DIR" ]] || die "Sentinel Gate not found at $INSTALL_DIR"
+[[ -d "$INSTALL_DIR" ]] || die "ServerScrub not found at $INSTALL_DIR"
 
 # Cleanup on exit
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 echo ""
 echo -e "${BOLD}${CYAN}╔═══════════════════════════════════════╗"
-echo -e "║    Sentinel Gate — Safe Updater       ║"
+echo -e "║    ServerScrub — Safe Updater       ║"
 echo -e "╚═══════════════════════════════════════╝${NC}"
 echo ""
 
@@ -203,7 +203,7 @@ if [[ -n "$FORCE_VERSION" ]]; then
     # ── Manual version override — build URL from the public dist path ──────────
     info "Using forced version: ${BOLD}v${FORCE_VERSION}${NC} (--version flag)"
     LATEST_VERSION="$FORCE_VERSION"
-    DOWNLOAD_URL="${DIST_BASE}/sentinel-gate-${LATEST_VERSION}.zip"
+    DOWNLOAD_URL="${DIST_BASE}/serverscrub-${LATEST_VERSION}.zip"
     warn "No checksum available for a forced version — integrity will NOT be verified."
 
 elif [[ -n "$FORCE_URL" ]]; then
@@ -276,7 +276,7 @@ else
         echo -e "  ${YELLOW}To update without channel access, run:${NC}"
         echo -e "  ${BOLD}bash $0 --version 3.5.0${NC}"
         echo -e "  or download the zip manually and use:"
-        echo -e "  ${BOLD}bash $0 --url https://your-mirror/sentinel-gate.zip${NC}"
+        echo -e "  ${BOLD}bash $0 --url https://your-mirror/serverscrub.zip${NC}"
         echo ""
         exit 1
     fi
@@ -299,7 +299,7 @@ else
     if [[ -n "${LIVE_VER:-}" && "$LIVE_VER" != "$LATEST_VERSION" ]]; then
         warn "Manifest says v${LATEST_VERSION} but latest/ holds v${LIVE_VER} — channel mid-sync."
     fi
-    [[ -z "$DOWNLOAD_URL"   ]] && DOWNLOAD_URL="${DIST_BASE}/sentinel-gate-${LATEST_VERSION}.zip"
+    [[ -z "$DOWNLOAD_URL"   ]] && DOWNLOAD_URL="${DIST_BASE}/serverscrub-${LATEST_VERSION}.zip"
 fi
 
 info "Latest version:  ${BOLD}v${LATEST_VERSION}${NC}"
@@ -370,7 +370,7 @@ if [[ -n "$_SG_FREE_KB" && "$_SG_FREE_KB" -lt "$_SG_NEED_KB" ]]; then
     echo "    backups    : $(du -sh "$BACKUP_ROOT" 2>/dev/null | cut -f1 || echo 'n/a')"
     echo ""
     echo "  To free space:"
-    echo "    sentinel quarantine prune 7"
+    echo "    serverscrub quarantine prune 7"
     echo "    ls -1dt ${BACKUP_ROOT}/*/ | tail -n +4 | xargs -r rm -rf"
     echo "    find ${INSTALL_DIR}/logs -name 'scan_*.log' -mtime +2 -delete"
     echo ""
@@ -454,9 +454,9 @@ if [[ "$DOWNLOADED" == false ]] && [[ "$LATEST_VERSION" != *"-manual"* ]]; then
     # asked three times: a dead host does not become alive for the next URL.
     for _B in "${CHANNELS[@]}"; do
         _SG_CHANNEL_DEAD=false
-        for _P in "dist/sentinel-gate-${LATEST_VERSION}.zip" \
-                  "builds/sentinel-gate-${LATEST_VERSION}.zip" \
-                  "v${LATEST_VERSION}/sentinel-gate-${LATEST_VERSION}.zip"; do
+        for _P in "dist/serverscrub-${LATEST_VERSION}.zip" \
+                  "builds/serverscrub-${LATEST_VERSION}.zip" \
+                  "v${LATEST_VERSION}/serverscrub-${LATEST_VERSION}.zip"; do
             ALT_URL="${_B}/${_P}"
             [[ "$ALT_URL" == "$DOWNLOAD_URL" || "$ALT_URL" == "${MIRROR_URL:-}" ]] && continue
             if _download "$ALT_URL" "$RELEASE_ZIP" "${_P%%/*} zip"; then
@@ -476,7 +476,7 @@ if [[ "$DOWNLOADED" == false ]]; then
     err "All download attempts failed for v${LATEST_VERSION}."
     echo ""
     info "Manual option: download the zip on another machine and copy it here, then run:"
-    info "  bash $0 --url file:///path/to/sentinel-gate.zip"
+    info "  bash $0 --url file:///path/to/serverscrub.zip"
     echo ""
     exit 1
 fi
@@ -517,8 +517,8 @@ ok "Extracted to: $EXTRACTED_ROOT"
 
 # ── Stop the monitor daemon ───────────────────────────────────────────────────
 section "Stopping services"
-if systemctl is-active --quiet sentinel-gate-monitor 2>/dev/null; then
-    systemctl stop sentinel-gate-monitor 2>/dev/null && ok "Monitor daemon stopped" || true
+if systemctl is-active --quiet serverscrub-monitor 2>/dev/null; then
+    systemctl stop serverscrub-monitor 2>/dev/null && ok "Monitor daemon stopped" || true
 fi
 
 # ── Apply update — overlay files, skip user-data paths ───────────────────────
@@ -665,12 +665,12 @@ ok "Permissions applied"
 
 # ── Regenerate systemd service file (paths may have changed) ─────────────────
 section "Updating systemd service"
-SERVICE_FILE="/etc/systemd/system/sentinel-gate-monitor.service"
+SERVICE_FILE="/etc/systemd/system/serverscrub-monitor.service"
 if [[ -f "$SERVICE_FILE" ]] && command -v systemctl >/dev/null 2>&1; then
     LOG_DIR="${INSTALL_DIR}/logs"
     cat > "$SERVICE_FILE" << SVCEOF
 [Unit]
-Description=Sentinel Gate Real-Time File Monitor
+Description=ServerScrub Real-Time File Monitor
 After=network.target
 
 [Service]
@@ -689,9 +689,9 @@ TimeoutStopSec=10
 WantedBy=multi-user.target
 SVCEOF
     systemctl daemon-reload
-    systemctl start sentinel-gate-monitor 2>/dev/null \
+    systemctl start serverscrub-monitor 2>/dev/null \
         && ok "Monitor daemon restarted" \
-        || warn "Monitor restart failed — check: journalctl -u sentinel-gate-monitor"
+        || warn "Monitor restart failed — check: journalctl -u serverscrub-monitor"
 else
     info "Systemd service not installed — skipping"
 fi

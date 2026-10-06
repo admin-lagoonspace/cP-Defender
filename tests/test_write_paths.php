@@ -161,14 +161,14 @@ WAFInstaller::setRunner($apacheOk);
 $ok = WAFInstaller::setMode('detectiononly');
 t_eq(true, $ok['success'] ?? false, 'a valid mode is applied');
 t_eq('detectiononly', Database::setting('waf_mode'), 'the applied mode is persisted');
-t_ok(is_file($confDir . '/sentinel-waf.conf'), 'the WAF config file is written');
+t_ok(is_file($confDir . '/serverscrub-waf.conf'), 'the WAF config file is written');
 
-$conf = (string) @file_get_contents($confDir . '/sentinel-waf.conf');
+$conf = (string) @file_get_contents($confDir . '/serverscrub-waf.conf');
 t_contains($conf, 'DetectionOnly', 'the config carries the requested engine mode');
-t_contains($conf, 'sentinel-gate', 'the dashboard is exempted from the rules');
+t_contains($conf, 'serverscrub', 'the dashboard is exempted from the rules');
 
 // Apache must be told to load it, or the config is inert.
-t_ok(is_file($incDir . '/zz-sentinel-gate-waf.conf'),
+t_ok(is_file($incDir . '/zz-serverscrub-waf.conf'),
     'an Apache include is dropped so the config is actually loaded');
 
 // Clean up so later tests are not affected by the injected runners.

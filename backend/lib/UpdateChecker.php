@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — Update Checker
+ * ServerScrub — Update Checker
  * Polls the GitHub Releases API and stores the result in the DB.
  * The cron script calls checkForUpdates() once a day.
  * The API exposes the cached result so the frontend can show a banner.
@@ -10,7 +10,7 @@ class UpdateChecker {
 
     // GitHub repo — change if the repo moves
     private const GITHUB_API = 'https://api.github.com/repos/admin-lagoonspace/cP-Defender/releases/latest';
-    private const USER_AGENT  = 'SentinelGate-UpdateChecker/1.0';
+    private const USER_AGENT  = 'ServerScrub-UpdateChecker/1.0';
 
     // ── Public API ────────────────────────────────────────────────────────────
 

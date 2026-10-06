@@ -108,14 +108,14 @@ t_contains($install, 'CLAMSCAN_BIN', 'the search is derived from the binary in u
 
 // ── The cPanel plugin ships an icon ──────────────────────────────────────────
 // install_plugin refuses an entry without one, so it failed for both themes.
-t_contains($install, '"icon":     "sentinel_gate.png"',
+t_contains($install, '"icon":     "serverscrub.png"',
     'install.json declares an icon');
-t_contains($install, '${CPANEL_PLUGIN_DIR}/sentinel_gate.png',
+t_contains($install, '${CPANEL_PLUGIN_DIR}/serverscrub.png',
     'and the icon is copied in beside it');
-$iconCopy = strpos($install, '${CPANEL_PLUGIN_DIR}/sentinel_gate.png');
-$jsonPos  = strpos($install, '"icon":     "sentinel_gate.png"');
+$iconCopy = strpos($install, '${CPANEL_PLUGIN_DIR}/serverscrub.png');
+$jsonPos  = strpos($install, '"icon":     "serverscrub.png"');
 t_ok($iconCopy < $jsonPos, 'the icon is in place before install_plugin runs');
-t_ok(is_file($repo . '/whm/sentinel_gate.png'), 'the icon exists in the repo to copy');
+t_ok(is_file($repo . '/whm/serverscrub.png'), 'the icon exists in the repo to copy');
 
 // ── test.sh must not fail a working install ──────────────────────────────────
 // The CGI is a /bin/sh dispatcher. Two checks demanded a cPanel Perl shebang

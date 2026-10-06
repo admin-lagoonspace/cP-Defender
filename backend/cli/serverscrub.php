@@ -1,26 +1,26 @@
 #!/usr/bin/env php
 <?php
 /**
- * Sentinel Gate — Command-line interface
+ * ServerScrub — Command-line interface
  * ──────────────────────────────────────
- * Installed as /usr/bin/sentinel (thin wrapper execs this file).
+ * Installed as /usr/bin/serverscrub (thin wrapper execs this file).
  * Reuses the exact same config bootstrap and library classes as the web app,
  * so CLI and dashboard always agree on state.
  *
  * Usage:
- *   sentinel version
- *   sentinel status
- *   sentinel scan [path] [--full|--quick]
- *   sentinel firewall list
- *   sentinel firewall block   <ip> [reason]
- *   sentinel firewall unblock <ip>
- *   sentinel firewall allow   <ip> [comment]
- *   sentinel reputation <ip>
- *   sentinel update-sigs
+ *   serverscrub version
+ *   serverscrub status
+ *   serverscrub scan [path] [--full|--quick]
+ *   serverscrub firewall list
+ *   serverscrub firewall block   <ip> [reason]
+ *   serverscrub firewall unblock <ip>
+ *   serverscrub firewall allow   <ip> [comment]
+ *   serverscrub reputation <ip>
+ *   serverscrub update-sigs
  * Global flag: --json  (machine-readable output for any command)
  */
 
-if (PHP_SAPI !== 'cli') { fwrite(STDERR, "sentinel: CLI only\n"); exit(2); }
+if (PHP_SAPI !== 'cli') { fwrite(STDERR, "serverscrub: CLI only\n"); exit(2); }
 
 // ── Bootstrap: identical to the web app ───────────────────────────────────────
 $BASE = dirname(__DIR__);                       // .../backend
@@ -34,7 +34,7 @@ require_once $BASE . '/lib/License.php';
 require_once $BASE . '/lib/UserReport.php';
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
-$argv0 = 'sentinel';
+$argv0 = 'serverscrub';
 $args  = array_slice($argv, 1);
 $JSON  = false;
 $args  = array_values(array_filter($args, function ($a) use (&$JSON) {
@@ -63,7 +63,7 @@ function render($data, int $indent): void {
         }
     }
 }
-function fail(string $msg, int $code = 1): void { fwrite(STDERR, "sentinel: $msg\n"); exit($code); }
+function fail(string $msg, int $code = 1): void { fwrite(STDERR, "serverscrub: $msg\n"); exit($code); }
 function need_root(): void {
     if (function_exists('posix_geteuid') ? posix_geteuid() !== 0 : trim(shell_exec('id -u')) !== '0') {
         fail('this command needs root', 3);
@@ -76,7 +76,7 @@ try {
     switch ($cmd) {
 
     case 'version':
-        out(['name' => 'Sentinel Gate', 'version' => SG_VERSION, 'mode' => INSTALL_MODE]);
+        out(['name' => 'ServerScrub', 'version' => SG_VERSION, 'mode' => INSTALL_MODE]);
         break;
 
     case 'status': {
@@ -93,8 +93,8 @@ try {
             'firewall'  => $fw->getStats(),
             'csf'       => $fw->getCSFStatus(),
             'services'  => [
-                'web'     => $svc('sentinel-gate-web'),
-                'monitor' => $svc('sentinel-gate-monitor'),
+                'web'     => $svc('serverscrub-web'),
+                'monitor' => $svc('serverscrub-monitor'),
             ],
         ]);
         break;
@@ -114,7 +114,7 @@ try {
         $sc  = new Scanner();
         $job = $sc->startScan($path, $type);
         out(['started' => true, 'job_id' => $job, 'path' => $path, 'type' => $type,
-             'hint' => "check progress: sentinel status --json"]);
+             'hint' => "check progress: serverscrub status --json"]);
         break;
     }
 
@@ -130,19 +130,19 @@ try {
             break;
         case 'block': {
             need_root();
-            $ip = $rest[1] ?? ''; if (!valid_ip($ip)) fail('usage: sentinel firewall block <ip> [reason]');
+            $ip = $rest[1] ?? ''; if (!valid_ip($ip)) fail('usage: serverscrub firewall block <ip> [reason]');
             out($fw->blockIP($ip, $rest[2] ?? 'cli', true));
             break;
         }
         case 'unblock': {
             need_root();
-            $ip = $rest[1] ?? ''; if (!valid_ip($ip)) fail('usage: sentinel firewall unblock <ip>');
+            $ip = $rest[1] ?? ''; if (!valid_ip($ip)) fail('usage: serverscrub firewall unblock <ip>');
             out($fw->unblockIP($ip));
             break;
         }
         case 'allow': {
             need_root();
-            $ip = $rest[1] ?? ''; if (!valid_ip($ip)) fail('usage: sentinel firewall allow <ip> [comment]');
+            $ip = $rest[1] ?? ''; if (!valid_ip($ip)) fail('usage: serverscrub firewall allow <ip> [comment]');
             out($fw->allowIP($ip, $rest[2] ?? 'cli'));
             break;
         }
@@ -154,7 +154,7 @@ try {
 
     case 'reputation': {
         License::requireValid('IP reputation lookup');
-        $ip = $rest[0] ?? ''; if (!valid_ip($ip)) fail('usage: sentinel reputation <ip>');
+        $ip = $rest[0] ?? ''; if (!valid_ip($ip)) fail('usage: serverscrub reputation <ip>');
         out((new IPReputation())->check($ip));
         break;
     }
@@ -266,7 +266,7 @@ try {
         if ($r['stored_blank'] > 0) {
             echo PHP_EOL . 'Existing rows keep what was parsed when they were ingested.' . PHP_EOL;
             echo 'To re-read the log with the current parser:' . PHP_EOL;
-            echo '  sentinel waf-reingest --clear' . PHP_EOL;
+            echo '  serverscrub waf-reingest --clear' . PHP_EOL;
         }
         break;
     }
@@ -340,13 +340,13 @@ try {
         case 'move': {
             need_root();
             $dest = $rest[1] ?? '';
-            if ($dest === '') { fail('usage: sentinel quarantine move /path/on/another/volume'); }
+            if ($dest === '') { fail('usage: serverscrub quarantine move /path/on/another/volume'); }
             out(Scanner::moveQuarantine($dest));
             break;
         }
 
         default:
-            fail('usage: sentinel quarantine [status|prune [days]|move <dir>]');
+            fail('usage: serverscrub quarantine [status|prune [days]|move <dir>]');
         }
         break;
     }
@@ -361,7 +361,7 @@ try {
         case 'activate': {
             need_root();
             $key = $rest[1] ?? '';
-            if ($key === '') fail('usage: sentinel license activate <license-key>');
+            if ($key === '') fail('usage: serverscrub license activate <license-key>');
             $r = License::activate($key);
             out($r);
             // Non-zero exit on a rejected key so scripted installs can branch on it
@@ -390,7 +390,7 @@ try {
         case 'try-secret': {
             need_root();
             $cand = $rest[1] ?? '';
-            if ($cand === '') fail('usage: sentinel license try-secret <candidate>');
+            if ($cand === '') fail('usage: serverscrub license try-secret <candidate>');
             $r = License::trySecret($cand);
             out($r);
             if (empty($r['matches'])) exit(4);
@@ -407,7 +407,7 @@ try {
             need_root();
             $val = $rest[1] ?? '';
             if ($val === '') {
-                fail('usage: sentinel license secret <whmcs-addon-secret>');
+                fail('usage: serverscrub license secret <whmcs-addon-secret>');
             }
             $r = License::setSecret($val);
             // Deliberately does not echo the value back: it is the salt that
@@ -419,7 +419,7 @@ try {
         }
 
         default:
-            fail('usage: sentinel license [status|activate <key>|refresh|identity|secret <value>|probe]');
+            fail('usage: serverscrub license [status|activate <key>|refresh|identity|secret <value>|probe]');
         }
         break;
     }
@@ -430,8 +430,8 @@ try {
     default:
         $v = SG_VERSION;
         echo <<<TXT
-Sentinel Gate CLI v{$v}
-Usage: sentinel <command> [args] [--json]
+ServerScrub CLI v{$v}
+Usage: serverscrub <command> [args] [--json]
 
   version                      Show version and install mode
   status                       Scanner, firewall, CSF and service status

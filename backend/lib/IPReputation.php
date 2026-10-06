@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — IP Reputation & RBL Checker
+ * ServerScrub — IP Reputation & RBL Checker
  */
 
 class IPReputation {

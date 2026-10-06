@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — one-command release publisher
+# ServerScrub — one-command release publisher
 # Builds the release, commits the artifacts, pushes main, and cuts the GitHub
 # Release/tag that the in-app updater watches. Run from the repo root.
 #
@@ -62,7 +62,7 @@ fi
 # ── 1. Build the package + manifest ────────────────────────────────────────────
 info "Building release artifacts…"
 bash scripts/make-release.sh >/dev/null
-ZIP="dist/sentinel-gate-${VER}.zip"
+ZIP="dist/serverscrub-${VER}.zip"
 [[ -f "$ZIP" ]] || die "Build did not produce ${ZIP}"
 # update.sh reads latest.json from the repo ROOT
 cp -f "dist/latest.json" "latest.json"
@@ -72,14 +72,14 @@ ok "Built ${ZIP} ($(wc -c < "$ZIP") bytes), sha256 ${SHA:0:16}…"
 # ── 2. Clean known junk so it never gets committed ─────────────────────────────
 rm -f _wtest.txt __probe_root.txt dist/__probe_new.txt dist/zivb4myo 2>/dev/null || true
 # stray zero-byte zips from interrupted builds
-find dist -maxdepth 1 -name 'sentinel-gate-*.zip' -size 0 -delete 2>/dev/null || true
+find dist -maxdepth 1 -name 'serverscrub-*.zip' -size 0 -delete 2>/dev/null || true
 
 # ── 3. Stage exactly the release files ─────────────────────────────────────────
 info "Staging files…"
 STAGE_LIST=(
   VERSION CHANGELOG.md install.sh uninstall.sh update.sh get.sh
-  backend/config/config.php backend/cli/sentinel.php
-  frontend/index.html whm/sentinel.conf whm/sentinel_gate.png
+  backend/config/config.php backend/cli/serverscrub.php
+  frontend/index.html whm/serverscrub.conf whm/serverscrub.png
   scripts/make-release.sh scripts/publish.sh scripts/extract-notes.sh
   scripts/check-version-bump.sh "dist/notes-${VER}.md"
   "$ZIP" latest.json
@@ -110,20 +110,20 @@ NOTES="$(awk -v hdr="## [${VER}]" '
     grab && index($0, "## [") == 1 {exit}
     grab {print}
 ' CHANGELOG.md)"
-[[ -n "$NOTES" ]] || NOTES="Sentinel Gate ${TAG}"
+[[ -n "$NOTES" ]] || NOTES="ServerScrub ${TAG}"
 
 # ── 6. Create the GitHub Release (this is what the updater watches) ─────────────
 info "Creating GitHub Release ${TAG}…"
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     printf '%s' "$NOTES" | gh release create "$TAG" "$ZIP" \
-        --title "Sentinel Gate ${TAG}" --notes-file - --target main
+        --title "ServerScrub ${TAG}" --notes-file - --target main
     ok "Release created via gh (asset attached)"
 elif [[ -n "$TOKEN" ]]; then
     # Build JSON body safely
     if command -v python3 >/dev/null 2>&1; then
-        BODY="$(NOTES="$NOTES" TAG="$TAG" python3 -c 'import json,os;print(json.dumps({"tag_name":os.environ["TAG"],"target_commitish":"main","name":"Sentinel Gate "+os.environ["TAG"],"body":os.environ["NOTES"],"draft":False,"prerelease":False}))')"
+        BODY="$(NOTES="$NOTES" TAG="$TAG" python3 -c 'import json,os;print(json.dumps({"tag_name":os.environ["TAG"],"target_commitish":"main","name":"ServerScrub "+os.environ["TAG"],"body":os.environ["NOTES"],"draft":False,"prerelease":False}))')"
     elif command -v jq >/dev/null 2>&1; then
-        BODY="$(jq -n --arg t "$TAG" --arg n "Sentinel Gate $TAG" --arg b "$NOTES" \
+        BODY="$(jq -n --arg t "$TAG" --arg n "ServerScrub $TAG" --arg b "$NOTES" \
             '{tag_name:$t,target_commitish:"main",name:$n,body:$b,draft:false,prerelease:false}')"
     else
         die "Need python3 or jq to build the release JSON (or install gh)"
@@ -143,7 +143,7 @@ elif [[ -n "$TOKEN" ]]; then
         -H "Authorization: Bearer ${TOKEN}" \
         -H "Content-Type: application/zip" \
         --data-binary @"$ZIP" \
-        "${UPLOAD_URL}?name=sentinel-gate-${VER}.zip" >/dev/null && ok "Asset uploaded" || warn "Asset upload failed (release + tag still valid; updater uses dist/)"
+        "${UPLOAD_URL}?name=serverscrub-${VER}.zip" >/dev/null && ok "Asset uploaded" || warn "Asset upload failed (release + tag still valid; updater uses dist/)"
 else
     warn "No gh and no GH_TOKEN — pushed code, but DID NOT create the Release."
     warn "Create it manually: repo → Releases → new release, tag ${TAG} on main, attach ${ZIP}."

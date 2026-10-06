@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — Real-Time Monitor Manager
+ * ServerScrub — Real-Time Monitor Manager
  * Controls the Python inotify daemon from the PHP API
  */
 
@@ -23,9 +23,9 @@ class RealTimeMonitor {
 
     public function __construct(?array $paths = null, ?callable $exec = null) {
         $this->daemonScript = $paths['daemon']  ?? SG_ROOT . '/backend/daemon/monitor.py';
-        $this->pidFile      = $paths['pid']     ?? '/var/run/sentinel-gate-monitor.pid';
+        $this->pidFile      = $paths['pid']     ?? '/var/run/serverscrub-monitor.pid';
         $this->logFile      = $paths['log']     ?? SG_LOGS . '/monitor.log';
-        $this->serviceFile  = $paths['service'] ?? '/etc/systemd/system/sentinel-gate-monitor.service';
+        $this->serviceFile  = $paths['service'] ?? '/etc/systemd/system/serverscrub-monitor.service';
 
         $this->exec = $exec ?? function (string $cmd): array {
             $out = [];
@@ -90,7 +90,7 @@ class RealTimeMonitor {
             return ['active' => 'not-installed', 'sub' => '', 'restarts' => 0];
         }
         [$out, ] = $this->run(
-            'systemctl show sentinel-gate-monitor -p ActiveState -p SubState -p NRestarts 2>/dev/null');
+            'systemctl show serverscrub-monitor -p ActiveState -p SubState -p NRestarts 2>/dev/null');
 
         $vals = [];
         foreach ($out as $line) {
@@ -111,7 +111,7 @@ class RealTimeMonitor {
             if ($out) { return trim(implode("\n", $out)); }
         }
         [$out, ] = $this->run(
-            'journalctl -u sentinel-gate-monitor -n ' . (int)$lines . ' --no-pager 2>/dev/null');
+            'journalctl -u serverscrub-monitor -n ' . (int)$lines . ' --no-pager 2>/dev/null');
         return trim(implode("\n", $out));
     }
 
@@ -393,18 +393,18 @@ class RealTimeMonitor {
             // stop() in 3.30.1 and should always have been here too.
             $pre = $this->serviceDetail();
             if (($pre['active'] ?? '') === 'failed' || ($pre['sub'] ?? '') === 'failed') {
-                exec('systemctl reset-failed sentinel-gate-monitor 2>&1');
+                exec('systemctl reset-failed serverscrub-monitor 2>&1');
                 Logger::info('Cleared failed state before starting the monitor');
             }
 
-            [$out, $code] = $this->run('systemctl start sentinel-gate-monitor 2>&1');
+            [$out, $code] = $this->run('systemctl start serverscrub-monitor 2>&1');
 
             // The rate limiter can also refuse a unit that is not currently
             // 'failed'. The message is the only signal, so it is what we act on.
             if ($code !== 0 && stripos(implode(' ', (array) $out), 'repeated too quickly') !== false) {
-                exec('systemctl reset-failed sentinel-gate-monitor 2>&1');
+                exec('systemctl reset-failed serverscrub-monitor 2>&1');
                 Logger::info('Start was rate limited; reset and retrying');
-                [$out, $code] = $this->run('systemctl start sentinel-gate-monitor 2>&1');
+                [$out, $code] = $this->run('systemctl start serverscrub-monitor 2>&1');
             }
 
             if ($code === 0) {
@@ -491,7 +491,7 @@ class RealTimeMonitor {
         // Prefer systemd whenever the unit file is present (installed),
         // regardless of whether auto-start is enabled.
         if (file_exists($this->serviceFile)) {
-            exec('systemctl stop sentinel-gate-monitor 2>&1', $out, $code);
+            exec('systemctl stop serverscrub-monitor 2>&1', $out, $code);
 
             // A unit that died stays in 'failed' after a stop -- `systemctl
             // stop` succeeds and leaves the state exactly where it was. The
@@ -501,8 +501,8 @@ class RealTimeMonitor {
             // the Stop button leave the service in a state Start can act on.
             $detail = $this->serviceDetail();
             if (($detail['active'] ?? '') === 'failed' || ($detail['sub'] ?? '') === 'failed') {
-                exec('systemctl reset-failed sentinel-gate-monitor 2>&1');
-                Logger::info('Cleared failed state on sentinel-gate-monitor');
+                exec('systemctl reset-failed serverscrub-monitor 2>&1');
+                Logger::info('Cleared failed state on serverscrub-monitor');
             }
 
             Database::setSetting('rt_monitor_status', 'stopped');
@@ -590,7 +590,7 @@ class RealTimeMonitor {
             return ['success' => false, 'error' => 'Cannot write service file — run as root'];
         }
         exec('systemctl daemon-reload 2>&1', $o1);
-        exec('systemctl enable sentinel-gate-monitor 2>&1', $o2);
+        exec('systemctl enable serverscrub-monitor 2>&1', $o2);
         Logger::info("systemd service installed and enabled");
         return ['success' => true, 'output' => implode("\n", array_merge($o1, $o2))];
     }
@@ -601,7 +601,7 @@ class RealTimeMonitor {
         $logFile = $this->logFile;
         return <<<UNIT
 [Unit]
-Description=Sentinel Gate Real-Time File Monitor
+Description=ServerScrub Real-Time File Monitor
 After=network.target
 Wants=network.target
 
@@ -630,7 +630,7 @@ UNIT;
      */
     public function isServiceEnabled(): bool {
         if (!file_exists($this->serviceFile)) { return false; }
-        [$out, ] = $this->run('systemctl is-enabled sentinel-gate-monitor 2>/dev/null');
+        [$out, ] = $this->run('systemctl is-enabled serverscrub-monitor 2>/dev/null');
         return trim($out[0] ?? '') === 'enabled';
     }
 
@@ -657,7 +657,7 @@ UNIT;
         }
 
         // `systemctl show` returns KEY=VALUE lines — fast, machine-readable
-        exec('systemctl show sentinel-gate-monitor ' .
+        exec('systemctl show serverscrub-monitor ' .
              '--no-pager 2>/dev/null', $out);
         $props = [];
         foreach ($out as $line) {
@@ -686,7 +686,7 @@ UNIT;
             'since'        => $since ?: null,
             'main_pid'     => $mainPid ?: null,
             'memory_mb'    => $memBytes > 0 ? round($memBytes / 1048576, 1) : null,
-            'description'  => $props['Description'] ?? 'Sentinel Gate Monitor',
+            'description'  => $props['Description'] ?? 'ServerScrub Monitor',
             'unit_file'    => $this->serviceFile,
         ];
     }
@@ -695,13 +695,13 @@ UNIT;
         if (!file_exists($this->serviceFile)) {
             return ['success' => false, 'error' => 'Service not installed — install it first'];
         }
-        exec('systemctl enable sentinel-gate-monitor 2>&1', $out, $code);
+        exec('systemctl enable serverscrub-monitor 2>&1', $out, $code);
         Logger::info("Monitor service enabled");
         return ['success' => $code === 0, 'output' => implode("\n", $out)];
     }
 
     public function disableService(): array {
-        exec('systemctl disable sentinel-gate-monitor 2>&1', $out, $code);
+        exec('systemctl disable serverscrub-monitor 2>&1', $out, $code);
         Logger::info("Monitor service disabled");
         return ['success' => $code === 0, 'output' => implode("\n", $out)];
     }
@@ -712,7 +712,7 @@ UNIT;
      */
     public function getServiceLogs(int $lines = 50): array {
         exec(
-            "journalctl -u sentinel-gate-monitor -n {$lines} " .
+            "journalctl -u serverscrub-monitor -n {$lines} " .
             "--no-pager --output=short-iso 2>/dev/null",
             $out, $code
         );

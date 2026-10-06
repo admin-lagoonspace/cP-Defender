@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "sentinel-demo",
+      "name": "serverscrub-demo",
       "runtimeExecutable": "C:\\Users\\rohan\\OneDrive\\code\\cP-Defender\\python\\python.exe",
       "runtimeArgs": [
         "-m",

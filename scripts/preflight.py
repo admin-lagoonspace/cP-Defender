@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sentinel Gate — pre-release validation.
+"""ServerScrub — pre-release validation.
 
 Runs anywhere Python does, so the same checks apply whether a release is cut on
 Linux via make-release.sh or on Windows via build.py. Previous gates lived only

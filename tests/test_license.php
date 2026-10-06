@@ -107,7 +107,7 @@ t_ok($salt2 !== 'CHANGEME_SET_IN_mode_php', 'the local salt is not the old place
 // ── Setting the secret without hand-editing PHP ──────────────────────────────
 // The fix above tells the operator to edit mode.php over SSH. That file is
 // required by config.php, so a stray quote is a fatal on EVERY request -- a
-// worse outcome than the licensing problem being solved. `sentinel license
+// worse outcome than the licensing problem being solved. `serverscrub license
 // secret <value>` edits the one line, verifies the result parses before putting
 // it in place, and keeps a backup.
 
@@ -150,7 +150,7 @@ t_ok(strpos(json_encode($out), 'never-print-me') === false,
     'setSecret() does not return the secret in its response');
 
 // The CLI must expose it, or the operator is back to editing PHP by hand.
-$cli = t_code(dirname(__DIR__) . '/backend/cli/sentinel.php');
+$cli = t_code(dirname(__DIR__) . '/backend/cli/serverscrub.php');
 t_contains($cli, "case 'secret'", 'the CLI has a license secret subcommand');
 t_contains($cli, 'License::setSecret', 'the CLI calls setSecret()');
 
@@ -159,7 +159,7 @@ t_contains($cli, 'License::setSecret', 'the CLI calls setSecret()');
 // wire says otherwise -- see the block at the top of this file.)
 
 // ── The example text must not be accepted as a secret ────────────────────────
-// It happened: the instructions said `sentinel license secret
+// It happened: the instructions said `serverscrub license secret
 // 'YOUR-WHMCS-ADDON-SECRET'` and that literal string was pasted. The result is
 // worse than setting nothing -- the install reports "configured" while holding
 // a value the licence server has never heard of, so the diagnosis shifts from
@@ -199,7 +199,7 @@ t_contains($probe['url'], '/modules/servers/licensing/verify.php',
 t_ok(array_key_exists('secret_configured', $probe),
     'probe() reports whether a secret is set');
 
-$cli = t_code(dirname(__DIR__) . '/backend/cli/sentinel.php');
+$cli = t_code(dirname(__DIR__) . '/backend/cli/serverscrub.php');
 t_contains($cli, "case 'probe'", 'the CLI exposes probe');
 
 // ── Testing a candidate must not change anything ─────────────────────────────
@@ -218,7 +218,7 @@ t_contains($after, 'known-good-secret-value', 'the stored secret is untouched');
 
 t_eq(false, License::trySecret('')['success'] ?? false, 'an empty candidate is refused');
 
-$cli = t_code(dirname(__DIR__) . '/backend/cli/sentinel.php');
+$cli = t_code(dirname(__DIR__) . '/backend/cli/serverscrub.php');
 t_contains($cli, "case 'try-secret'", 'the CLI exposes try-secret');
 t_contains($cli, 'License::trySecret', 'the CLI calls trySecret()');
 

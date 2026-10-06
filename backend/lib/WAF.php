@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — WAF Module
+ * ServerScrub — WAF Module
  * ModSecurity 3.0 management + OWASP CRS
  */
 
@@ -437,12 +437,12 @@ class WAF {
     }
 
     public function addCustomRule(string $id, string $pattern, string $action = 'block'): array {
-        $confPath = MODSEC_CONF . '/sentinel-gate/custom_rules.conf';
+        $confPath = MODSEC_CONF . '/serverscrub/custom_rules.conf';
         $dir = dirname($confPath);
         if (!is_dir($dir)) mkdir($dir, 0750, true);
 
         $rule = sprintf(
-            'SecRule REQUEST_URI|ARGS|REQUEST_HEADERS "%s" "id:%s,phase:2,deny,status:403,msg:\'Sentinel-Custom\',log,auditlog"' . "\n",
+            'SecRule REQUEST_URI|ARGS|REQUEST_HEADERS "%s" "id:%s,phase:2,deny,status:403,msg:\'ServerScrub-Custom\',log,auditlog"' . "\n",
             addslashes($pattern),
             $id
         );

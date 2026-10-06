@@ -56,6 +56,6 @@ t_ok($checkPos !== false && $backupPos !== false && $checkPos < $backupPos,
 // And it must say how to recover, since the operator is stuck at that moment.
 $msgStart = $checkPos;
 $msg      = substr($up, $msgStart, 1600);
-t_contains($msg, 'sentinel quarantine prune', 'it names the command that frees quarantine');
+t_contains($msg, 'serverscrub quarantine prune', 'it names the command that frees quarantine');
 t_contains($msg, 'scan_*.log', 'it names the log files that accumulate');
 t_contains($msg, 'BACKUP_ROOT', 'it names the backup directory');

@@ -117,7 +117,7 @@ t_contains($api, "'running'", 'and the UI can ask whether a scan is in progress'
 // dashboard showed "failed" with no way to clear it -- and once the start
 // rate limit is hit, systemd refuses to start it again until it is reset.
 $rtm = t_code($repo . '/backend/lib/RealTimeMonitor.php');
-t_contains($rtm, 'systemctl reset-failed sentinel-gate-monitor',
+t_contains($rtm, 'systemctl reset-failed serverscrub-monitor',
     'stopping a failed unit clears the failed state');
 t_contains($rtm, "\$detail['active'] ?? ''",
     'and reads the key serviceDetail actually returns');

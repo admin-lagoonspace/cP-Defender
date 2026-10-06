@@ -62,13 +62,13 @@ t_eq('public_html/bad.php', $report['threats'][0]['relative_path'] ?? '',
     'the path is shown relative to the account home');
 
 // -- The page itself ---------------------------------------------------------
-$page = $repo . '/cpanel/sentinel_gate/index.php';
+$page = $repo . '/cpanel/serverscrub/index.php';
 t_ok(is_file($page), 'the cPanel user page ships as a real file in the repo');
 
 $src = t_code($page);
 // It must not reach for the server-wide database or API: both are root-owned
 // and shared, and this page runs as an ordinary hosting customer.
-foreach (['SG_DB', 'Database::', 'sentinel.db', 'backend/api', 'PDO'] as $forbidden) {
+foreach (['SG_DB', 'Database::', 'serverscrub.db', 'backend/api', 'PDO'] as $forbidden) {
     t_ok(strpos($src, $forbidden) === false,
         "the user page does not reference $forbidden");
 }
@@ -85,11 +85,11 @@ t_contains($install, '"group_id": "security"', 'the entry is registered in the S
 t_contains($install, 'group=security', 'and in the dynamicui group of the same name');
 
 // The feature gate hid it from every account not on the default feature list.
-$jsonBlock = substr($install, strpos($install, '"id":       "sentinel_gate"'), 400);
+$jsonBlock = substr($install, strpos($install, '"id":       "serverscrub"'), 400);
 t_ok(strpos($jsonBlock, '"feature"') === false,
     'the menu entry is no longer gated on a feature list');
 
-$dynBlock = substr($install, strpos($install, 'itemdesc=Sentinel Gate Security'), 200);
+$dynBlock = substr($install, strpos($install, 'itemdesc=ServerScrub Security'), 200);
 t_ok(strpos($dynBlock, 'feature=') === false,
     'the dynamicui entry is not gated either');
 
@@ -98,7 +98,7 @@ t_contains($install, 'for CPANEL_THEME in paper_lantern jupiter',
     'the plugin is installed for both cPanel themes');
 
 // The page has to be copied in, not generated as a redirect.
-t_contains($install, 'cpanel/sentinel_gate/index.php',
+t_contains($install, 'cpanel/serverscrub/index.php',
     'the installer copies the real page');
 
 // -- It must be packaged, or the installer copies nothing --------------------
@@ -121,12 +121,12 @@ t_ok(in_array($m[1] ?? '', ['off', 'hourly', 'daily', 'weekly'], true),
 t_contains($install, 'UserReport::writeAll',
     'the installer generates reports immediately, so the plugin is not empty on day one');
 
-$cli = t_code($repo . '/backend/cli/sentinel.php');
+$cli = t_code($repo . '/backend/cli/serverscrub.php');
 t_contains($cli, "case 'user-reports'", 'an operator can rebuild them on demand');
 
 // -- Root writing into a directory the user controls -------------------------
 // This is the sharp edge of the whole design. Everything under ~ belongs to a
-// hostile party for the purposes of this class: a symlink at ~/.sentinel-gate,
+// hostile party for the purposes of this class: a symlink at ~/.serverscrub,
 // or at report.json, would have root write through it to whatever it points
 // at. The runtime behaviour cannot be exercised here -- creating a symlink on
 // this Windows host requires a privilege the build does not have -- so these
@@ -135,7 +135,7 @@ t_contains($cli, "case 'user-reports'", 'an operator can rebuild them on demand'
 $ur = t_code($repo . '/backend/lib/UserReport.php');
 
 t_contains($ur, 'is_link($dir)',
-    'a symlinked .sentinel-gate directory is detected');
+    'a symlinked .serverscrub directory is detected');
 t_contains($ur, 'refusing to write through it',
     'and refused rather than followed');
 t_contains($ur, 'is_link($home)',

@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — Logger
+ * ServerScrub — Logger
  */
 
 class Logger {

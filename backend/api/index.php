@@ -3,8 +3,8 @@
 // Set before anything else so the timing covers the whole request.
 if (!defined('SG_REQ_START')) { define('SG_REQ_START', microtime(true)); }
 /**
- * Sentinel Gate — REST API Router
- * Endpoint: /sentinel-gate/api/{module}/{action}
+ * ServerScrub — REST API Router
+ * Endpoint: /serverscrub/api/{module}/{action}
  */
 
 // Errors must never be PRINTED (that corrupts the JSON body) but they must
@@ -14,7 +14,7 @@ if (!defined('SG_REQ_START')) { define('SG_REQ_START', microtime(true)); }
 error_reporting(E_ALL);
 @ini_set('display_errors', '0');
 @ini_set('log_errors', '1');
-@ini_set('error_log', '/usr/local/sentinel-gate/logs/php-error.log');
+@ini_set('error_log', '/usr/local/serverscrub/logs/php-error.log');
 
 // A fatal (parse error in an included file, missing class, exhausted memory)
 // bypasses the try/catch below and would otherwise send an empty 200 or an HTML
@@ -88,7 +88,7 @@ $clientIP = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
 //   3. REQUEST_URI        — the original scheme, kept for the Apache alias with
 //                           a rewrite. Note it searched for the literal segment
 //                           'api', which silently mis-parsed under any path not
-//                           containing one (e.g. /cgi/sentinel_gate/api.cgi).
+//                           containing one (e.g. /cgi/serverscrub/api.cgi).
 $route = isset($_GET['r']) ? trim((string)$_GET['r'], '/') : '';
 
 if ($route === '' && !empty($_SERVER['PATH_INFO'])) {
@@ -962,7 +962,7 @@ function routeStorage(string $action, string $method, array $body, ?array $user)
     return match($action) {
 
         // GET storage/quarantine-usage — where quarantine points right now.
-        // The settings page hard-coded /usr/local/sentinel-gate/quarantine into
+        // The settings page hard-coded /usr/local/serverscrub/quarantine into
         // a label, so it kept naming the root partition long after the default
         // moved to /home, and there was no way to see the real location without
         // the CLI.
@@ -1297,7 +1297,7 @@ function routeUpdate(string $action, string $method, ?array $user): array {
         // that is serving it, so a synchronous call would be killed partway
         // through, leaving a half-applied install with nothing to report it.
         'run' => $method === 'POST' ? (function() {
-            $state = '/var/lib/sentinel-gate/update-state.json';
+            $state = '/var/lib/serverscrub/update-state.json';
 
             // Refuse to start a second run over a live one.
             if (is_readable($state)) {
@@ -1314,7 +1314,7 @@ function routeUpdate(string $action, string $method, ?array $user): array {
                 return ['success' => false, 'error' => 'update.sh not found', 'code' => 500];
             }
 
-            @mkdir('/var/lib/sentinel-gate', 0755, true);
+            @mkdir('/var/lib/serverscrub', 0755, true);
             // Seed the state immediately so the UI has something to poll before
             // the script has had a chance to write anything itself.
             @file_put_contents($state, json_encode([
@@ -1339,7 +1339,7 @@ function routeUpdate(string $action, string $method, ?array $user): array {
         // Deliberately outside SG_ROOT: the update rsyncs over the install dir
         // with --delete, so state kept inside would vanish mid-run.
         'progress' => (function() {
-            $state = '/var/lib/sentinel-gate/update-state.json';
+            $state = '/var/lib/serverscrub/update-state.json';
             if (!is_readable($state)) {
                 return ['success' => true, 'data' => ['status' => 'idle', 'percent' => 0]];
             }

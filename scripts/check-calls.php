@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — static call checker.
+ * ServerScrub — static call checker.
  *
  * Every Foo::bar() must exist on Foo and be callable from outside it.
  *

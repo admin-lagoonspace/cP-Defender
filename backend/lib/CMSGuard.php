@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — CMS Guard Module
+ * ServerScrub — CMS Guard Module
  * Discovers and audits WordPress, Joomla, and Drupal installations
  */
 

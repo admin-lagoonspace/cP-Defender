@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — SQLite Database Layer
+ * ServerScrub — SQLite Database Layer
  */
 
 // The scheduled tasks installed before 3.19.4 load mode.php only, which records
@@ -8,7 +8,7 @@
 // update.sh does not rewrite those cron files, so a corrected installer is not
 // enough on its own — derive the path when it is absent.
 if (!defined('SG_DB') && defined('SG_ROOT')) {
-    define('SG_DB', SG_ROOT . '/database/sentinel.db');
+    define('SG_DB', SG_ROOT . '/database/serverscrub.db');
 }
 
 class Database {
@@ -197,7 +197,7 @@ class Database {
                 ('email_alerts',            '1'),
                 ('alert_email',             ''),
                 -- Off by default. Quarantine MOVES the file into
-                -- /usr/local/sentinel-gate/quarantine, which is on the root
+                -- /usr/local/serverscrub/quarantine, which is on the root
                 -- partition, so an enthusiastic scan can fill / on a server
                 -- whose customer data lives on a separate volume. Detection
                 -- still records the threat; acting on it is a decision the

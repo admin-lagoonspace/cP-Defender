@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — Firewall Module
+ * ServerScrub — Firewall Module
  * Wraps CSF (ConfigServer Firewall) and iptables
  */
 

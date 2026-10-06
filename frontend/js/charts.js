@@ -1,5 +1,5 @@
 /**
- * Sentinel Gate — SVG Chart Library
+ * ServerScrub — SVG Chart Library
  * Pure SVG, no dependencies
  */
 

@@ -53,7 +53,7 @@ t_ok(isset($r['dest']) && is_file($r['dest']), 'the file is present in quarantin
 
 $row = Database::fetchOne("SELECT * FROM threats WHERE id = ?", [$id1]);
 t_eq('quarantined', $row['status'], 'the threat row is marked quarantined');
-t_ok(is_file($p1 . '.sentinel_removed'), 'a placeholder is left where the file was');
+t_ok(is_file($p1 . '.serverscrub_removed'), 'a placeholder is left where the file was');
 
 // A missing file must say so rather than failing anonymously.
 $missing = $scanner->quarantine($work . '/not-there.php', $id1);

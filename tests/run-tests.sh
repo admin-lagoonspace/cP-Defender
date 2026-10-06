@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — Mock Environment Test Suite
+# ServerScrub — Mock Environment Test Suite
 # Runs in Git Bash on Windows (no Docker/WSL required)
 # Tests: installer, update script, update checker, file integrity
 #
@@ -59,7 +59,7 @@ TEST_ROOT="$(mktemp -d /tmp/sg-test.XXXXXX)"
 INSTALL_DIR="${TEST_ROOT}/install"
 BACKUP_ROOT="${TEST_ROOT}/backups"
 CRON_DIR="${TEST_ROOT}/cron.d"
-CRON_FILE="${CRON_DIR}/sentinel-gate"
+CRON_FILE="${CRON_DIR}/serverscrub"
 SYSTEMD_DIR="${TEST_ROOT}/systemd"
 SUITE="all"
 
@@ -104,7 +104,7 @@ touch "${TEST_ROOT}/stubs.log"
 
 echo ""
 echo -e "${BOLD}${CYAN}╔════════════════════════════════════════════════╗"
-echo -e "║   Sentinel Gate — Mock Test Suite              ║"
+echo -e "║   ServerScrub — Mock Test Suite              ║"
 echo -e "╚════════════════════════════════════════════════╝${NC}"
 echo ""
 log_info "Repo:         $REPO_DIR"
@@ -122,8 +122,8 @@ patch_install_sh() {
 
     sed \
         -e "s|SCRIPT_DIR=.*BASH_SOURCE.*|SCRIPT_DIR=\"${REPO_DIR}\"|g" \
-        -e "s|INSTALL_DIR=\"/usr/local/sentinel-gate\"|INSTALL_DIR=\"${INSTALL_DIR}\"|g" \
-        -e "s|CRON_FILE=\"/etc/cron.d/sentinel-gate\"|CRON_FILE=\"${CRON_FILE}\"|g" \
+        -e "s|INSTALL_DIR=\"/usr/local/serverscrub\"|INSTALL_DIR=\"${INSTALL_DIR}\"|g" \
+        -e "s|CRON_FILE=\"/etc/cron.d/serverscrub\"|CRON_FILE=\"${CRON_FILE}\"|g" \
         -e "s|/etc/systemd/system/|${SYSTEMD_DIR}/|g" \
         -e "s|\[\[ -d /etc/systemd/system \]\]|[[ -d ${SYSTEMD_DIR} ]]|g" \
         -e "s|\[\[ \$EUID -ne 0 \]\]|false|g" \
@@ -244,7 +244,7 @@ run_install_suite() {
 
     # ── 1.8 Systemd service ──────────────────────────────────────────────────
     header "1.8  Systemd service unit"
-    local SVC="${SYSTEMD_DIR}/sentinel-gate-monitor.service"
+    local SVC="${SYSTEMD_DIR}/serverscrub-monitor.service"
     assert_file     "$SVC"
     assert_contains "$SVC" "ExecStart"
     assert_contains "$SVC" "monitor.py"
@@ -284,7 +284,7 @@ run_update_suite() {
              "${INSTALL_DIR}/backend/signatures"
 
     # Simulate SQLite DB with a placeholder file
-    cat > "${INSTALL_DIR}/database/sentinel.db" << 'EOF'
+    cat > "${INSTALL_DIR}/database/serverscrub.db" << 'EOF'
 SQLITE3_MOCK
 scan_paths=/home,/var/www
 auto_quarantine=1
@@ -302,7 +302,7 @@ EOF
 
     # ── 2.3 Build mock release zip ───────────────────────────────────────────
     header "2.3  Creating mock release zip (v${CURRENT_VER})"
-    local MOCK_RELEASE_DIR="${TEST_ROOT}/mock-release/sentinel-gate-${CURRENT_VER}"
+    local MOCK_RELEASE_DIR="${TEST_ROOT}/mock-release/serverscrub-${CURRENT_VER}"
     mkdir -p "$MOCK_RELEASE_DIR"
     for d in backend frontend whm; do
         cp -r "${REPO_DIR}/${d}" "${MOCK_RELEASE_DIR}/"
@@ -310,8 +310,8 @@ EOF
     for f in VERSION install.sh uninstall.sh update.sh; do
         [[ -f "${REPO_DIR}/${f}" ]] && cp "${REPO_DIR}/${f}" "${MOCK_RELEASE_DIR}/"
     done
-    local MOCK_ZIP="${TEST_ROOT}/sentinel-gate-${CURRENT_VER}.zip"
-    (cd "${TEST_ROOT}/mock-release" && zip -qr "$MOCK_ZIP" "sentinel-gate-${CURRENT_VER}/")
+    local MOCK_ZIP="${TEST_ROOT}/serverscrub-${CURRENT_VER}.zip"
+    (cd "${TEST_ROOT}/mock-release" && zip -qr "$MOCK_ZIP" "serverscrub-${CURRENT_VER}/")
     assert_file "$MOCK_ZIP"
     log_ok "Release zip: $(du -k "$MOCK_ZIP" | cut -f1) KB"
 
@@ -333,8 +333,8 @@ EOF
 EOF
 
     sed \
-        -e "s|INSTALL_DIR=\"\${SG_ROOT:-/usr/local/sentinel-gate}\"|INSTALL_DIR=\"${INSTALL_DIR}\"|g" \
-        -e "s|BACKUP_ROOT=\"/var/backups/sentinel-gate\"|BACKUP_ROOT=\"${BACKUP_ROOT}\"|g" \
+        -e "s|INSTALL_DIR=\"\${SG_ROOT:-/usr/local/serverscrub}\"|INSTALL_DIR=\"${INSTALL_DIR}\"|g" \
+        -e "s|BACKUP_ROOT=\"/var/backups/serverscrub\"|BACKUP_ROOT=\"${BACKUP_ROOT}\"|g" \
         -e "s|\[\[ \$EUID -ne 0 \]\]|false|g" \
         -e "s|\[ \$EUID -ne 0 \]|false|g" \
         -e "s|chown -R root:nobody|chown -R $(id -u):$(id -g)|g" \
@@ -344,7 +344,7 @@ EOF
         -e "s|chmod -R 700 \"\${INSTALL_DIR}/quarantine\"|true|g" \
         -e "s|chmod -R 700 \"\${INSTALL_DIR}/logs\"|true|g" \
         -e "s|chmod 644 \"\$INSTALL_DIR/backend/daemon/monitor.py\"|true|g" \
-        -e "s|/etc/systemd/system/sentinel-gate-monitor.service|${SYSTEMD_DIR}/sentinel-gate-monitor.service|g" \
+        -e "s|/etc/systemd/system/serverscrub-monitor.service|${SYSTEMD_DIR}/serverscrub-monitor.service|g" \
         -e "s|\[\[ -d /etc/systemd/system \]\]|[[ -d ${SYSTEMD_DIR} ]]|g" \
         "${REPO_DIR}/update.sh" > "$MOCK_UPDATE"
 
@@ -393,10 +393,10 @@ EOF
 
     # ── 2.7 User data preserved ──────────────────────────────────────────────
     header "2.7  User data preserved"
-    assert_file    "${INSTALL_DIR}/database/sentinel.db"
+    assert_file    "${INSTALL_DIR}/database/serverscrub.db"
     assert_file    "${INSTALL_DIR}/quarantine/2024-01-15/evil.php.quarantine"
     assert_file    "${INSTALL_DIR}/backend/signatures/custom.sig"
-    assert_contains "${INSTALL_DIR}/database/sentinel.db"             "alert_email"
+    assert_contains "${INSTALL_DIR}/database/serverscrub.db"             "alert_email"
     assert_contains "${INSTALL_DIR}/backend/signatures/custom.sig"    "custom_sig"
     assert_contains "${INSTALL_DIR}/logs/monitor.log"                 "Scan completed"
     assert_contains "${INSTALL_DIR}/quarantine/2024-01-15/evil.php.quarantine" "malware"
@@ -491,7 +491,7 @@ run_checker_suite() {
   "html_url": "https://github.com/admin-lagoonspace/cP-Defender/releases/tag/v3.9.0",
   "body": "## Whats new\n- Feature A\n- Bug fix B",
   "assets": [
-    { "browser_download_url": "https://example.com/sentinel-gate-3.9.0.zip" }
+    { "browser_download_url": "https://example.com/serverscrub-3.9.0.zip" }
   ]
 }
 EOF

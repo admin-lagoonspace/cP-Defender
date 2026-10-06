@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# Sentinel Gate — trigger watcher
+# ServerScrub — trigger watcher
 #
 # Runs every minute. Costs one `test -f` when there is nothing to do, so it is
 # effectively free to schedule tightly.

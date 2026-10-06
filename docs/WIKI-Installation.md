@@ -1,6 +1,6 @@
 # Installation & Uninstallation
 
-Sentinel Gate is a complete server security suite for cPanel/WHM and standalone
+ServerScrub is a complete server security suite for cPanel/WHM and standalone
 Linux servers. It installs with a single command and brings its own firewall,
 malware scanner, rootkit detection and web application firewall — there is
 nothing to download or configure beforehand.
@@ -20,7 +20,7 @@ nothing to download or configure beforehand.
 | **Network** | Outbound HTTPS to `defender.lws-s1.com` |
 
 You do **not** need to install ClamAV, CSF, ModSecurity or rkhunter first.
-Sentinel Gate installs what it needs and includes its own engines where no
+ServerScrub installs what it needs and includes its own engines where no
 third-party tool is present.
 
 ---
@@ -30,13 +30,13 @@ third-party tool is present.
 Log in over SSH as **root** and run:
 
 ```bash
-bash <(curl -fsSL https://defender.lws-s1.com/sentinel-gate/code/get.sh)
+bash <(curl -fsSL https://defender.lws-s1.com/serverscrub/code/get.sh)
 ```
 
 If the server has `wget` but not `curl`:
 
 ```bash
-bash <(wget -qO- https://defender.lws-s1.com/sentinel-gate/code/get.sh)
+bash <(wget -qO- https://defender.lws-s1.com/serverscrub/code/get.sh)
 ```
 
 Installation takes one to three minutes.
@@ -45,7 +45,7 @@ Installation takes one to three minutes.
 
 1. Checks prerequisites and installs any missing packages
 2. Downloads the current release and verifies its SHA-256 checksum
-3. Creates `/usr/local/sentinel-gate/` and its data directories
+3. Creates `/usr/local/serverscrub/` and its data directories
 4. Detects the server type and configures it:
    - **cPanel/WHM** — registers the WHM plugin, adds the Apache alias, installs
      the per-account plugin for the Jupiter and Paper Lantern themes
@@ -71,8 +71,8 @@ To keep protection running after the trial, activate a licence:
 Or from the command line:
 
 ```bash
-sentinel license activate YOUR-LICENCE-KEY
-sentinel license status
+serverscrub license activate YOUR-LICENCE-KEY
+serverscrub license status
 ```
 
 The licence is verified once and then cached locally, so day-to-day use does not
@@ -92,7 +92,7 @@ and quarantined files are all retained.
 
 ### cPanel / WHM
 
-> **WHM → Plugins → Sentinel Gate Security**
+> **WHM → Plugins → ServerScrub Security**
 
 The dashboard opens inside WHM. It is served by cPanel's own web server, so it
 runs with the privileges the firewall and scanner need and shares your WHM
@@ -141,7 +141,7 @@ It starts in **Detection only** — attacks are logged but not blocked. Review t
 audit log, then switch to **Blocking** when you are satisfied the rules are not
 matching normal traffic.
 
-The Sentinel Gate dashboard is always exempt from the rules, so a false positive
+The ServerScrub dashboard is always exempt from the rules, so a false positive
 cannot lock you out of the page you would need to turn the WAF off.
 
 ---
@@ -152,7 +152,7 @@ Piping the installer to `bash` makes it fully non-interactive. It detects the
 server type and never prompts:
 
 ```bash
-curl -fsSL https://defender.lws-s1.com/sentinel-gate/code/get.sh | bash
+curl -fsSL https://defender.lws-s1.com/serverscrub/code/get.sh | bash
 ```
 
 Force a particular mode instead of auto-detecting:
@@ -184,22 +184,22 @@ curl -fsSL .../get.sh | SG_ADMIN_PASS='your-password' bash -s -- --mode standalo
 ## Verifying the installation
 
 ```bash
-sentinel status
-sentinel version
-sentinel license status
+serverscrub status
+serverscrub version
+serverscrub license status
 ```
 
 To re-run the full self-test:
 
 ```bash
-bash /usr/local/sentinel-gate/test.sh
+bash /usr/local/serverscrub/test.sh
 ```
 
 ---
 
 ## Updating
 
-Sentinel Gate checks for updates daily. When one is available a button appears
+ServerScrub checks for updates daily. When one is available a button appears
 in the top right of the dashboard — click it and the update runs with a progress
 display, then reloads.
 
@@ -210,42 +210,42 @@ way.
 To update from the command line instead:
 
 ```bash
-bash /usr/local/sentinel-gate/update.sh
+bash /usr/local/serverscrub/update.sh
 ```
 
 Non-interactive, or pinned to a specific version:
 
 ```bash
-bash /usr/local/sentinel-gate/update.sh --yes
-bash /usr/local/sentinel-gate/update.sh --version 3.18.0
+bash /usr/local/serverscrub/update.sh --yes
+bash /usr/local/serverscrub/update.sh --version 3.18.0
 ```
 
-A backup is written to `/var/backups/sentinel-gate/` before anything is changed.
+A backup is written to `/var/backups/serverscrub/` before anything is changed.
 
 ---
 
 ## Uninstalling
 
 ```bash
-bash /usr/local/sentinel-gate/uninstall.sh
+bash /usr/local/serverscrub/uninstall.sh
 ```
 
 > **This does not ask for confirmation and removes everything**, including your
 > scan history and anything held in quarantine. Take a copy of
-> `/usr/local/sentinel-gate/database/` first if you want to keep that data.
+> `/usr/local/serverscrub/database/` first if you want to keep that data.
 
 ### What is removed
 
 - The monitor, web and firewall services
 - Scheduled scan cron jobs
 - The Apache configuration, alias, and the WAF include
-- The Sentinel Gate firewall rules — only ours; anything belonging to CSF,
+- The ServerScrub firewall rules — only ours; anything belonging to CSF,
   firewalld or you is left untouched
 - WHM plugin registration and the per-account plugin from both themes
-- `/usr/local/sentinel-gate/` and all data within it
-- The `sentinel` command-line tool
+- `/usr/local/serverscrub/` and all data within it
+- The `serverscrub` command-line tool
 
-The uninstaller reads `/usr/local/sentinel-gate/install-manifest.env`, which
+The uninstaller reads `/usr/local/serverscrub/install-manifest.env`, which
 records every path the installer touched, so it removes exactly what was added
 and nothing else.
 
@@ -281,7 +281,7 @@ support — do not bypass the check.
 
 **The dashboard shows an activation screen**
 The trial has ended, or the licence could not be verified. Enter your key, or use
-`sentinel license refresh` to re-check. `sentinel license identity` shows the
+`serverscrub license refresh` to re-check. `serverscrub license identity` shows the
 domain and IP this server reports, which is what a licence is bound to.
 
 **Malware scanning reports no signatures**
@@ -289,27 +289,27 @@ The ClamAV signature download did not finish. It retries on the weekly schedule,
 and scanning continues on the built-in pattern engine meanwhile. To retry now:
 
 ```bash
-sentinel update-sigs
+serverscrub update-sigs
 ```
 
 **Installation finished but reported failed tests**
 The plugin is installed. Review the failed items in the output, then re-run:
 
 ```bash
-bash /usr/local/sentinel-gate/test.sh
+bash /usr/local/serverscrub/test.sh
 ```
 
 **The dashboard will not load on a standalone server**
 Confirm the service is running and port `31150` is open:
 
 ```bash
-systemctl status sentinel-gate-web
+systemctl status serverscrub-web
 ```
 
 **Logs**
 
 ```
-/usr/local/sentinel-gate/logs/
+/usr/local/serverscrub/logs/
 ```
 
 ---
@@ -318,15 +318,15 @@ systemctl status sentinel-gate-web
 
 | Path | Contents |
 |---|---|
-| `/usr/local/sentinel-gate/` | Application, database, quarantine, logs |
-| `/etc/cron.d/sentinel-gate` | Scheduled tasks |
-| `/etc/systemd/system/sentinel-gate-monitor.service` | Real-time file monitor |
-| `/etc/systemd/system/sentinel-gate-firewall.service` | Restores firewall rules at boot |
-| `/etc/sentinel-gate/` | Firewall and WAF configuration |
-| `/usr/bin/sentinel` | Command-line interface |
-| `/var/backups/sentinel-gate/` | Backups taken before each update |
+| `/usr/local/serverscrub/` | Application, database, quarantine, logs |
+| `/etc/cron.d/serverscrub` | Scheduled tasks |
+| `/etc/systemd/system/serverscrub-monitor.service` | Real-time file monitor |
+| `/etc/systemd/system/serverscrub-firewall.service` | Restores firewall rules at boot |
+| `/etc/serverscrub/` | Firewall and WAF configuration |
+| `/usr/bin/serverscrub` | Command-line interface |
+| `/var/backups/serverscrub/` | Backups taken before each update |
 
 On cPanel servers the plugin additionally registers under `/var/cpanel/apps/`
 and `/usr/local/cpanel/`. Only registration stubs are placed there — the
-application itself lives entirely under `/usr/local/sentinel-gate/`, so a cPanel
+application itself lives entirely under `/usr/local/serverscrub/`, so a cPanel
 update cannot remove or damage it.

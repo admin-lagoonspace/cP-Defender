@@ -1,6 +1,6 @@
 <?php
 /**
- * Sentinel Gate — Malware Scanner Module
+ * ServerScrub — Malware Scanner Module
  * ClamAV + custom signature-based scanning
  */
 
@@ -1027,8 +1027,8 @@ class Scanner {
         }
 
         // So whoever owns the site knows where the file went, and what it was.
-        @file_put_contents($filePath . '.sentinel_removed',
-            "File DELETED by Sentinel Gate at " . date('Y-m-d H:i:s') .
+        @file_put_contents($filePath . '.serverscrub_removed',
+            "File DELETED by ServerScrub at " . date('Y-m-d H:i:s') .
             "
 Reason: {$why}
 Threat ID: {$threatId}
@@ -1236,8 +1236,8 @@ This file was removed and not kept. Restore it from your backups
         @chmod($dest, 0600);
 
         // A placeholder so whoever owns the site knows where the file went.
-        @file_put_contents($filePath . '.sentinel_removed',
-            "File quarantined by Sentinel Gate at " . date('Y-m-d H:i:s') .
+        @file_put_contents($filePath . '.serverscrub_removed',
+            "File quarantined by ServerScrub at " . date('Y-m-d H:i:s') .
             "\nThreat ID: $threatId\nOriginal: $filePath\nQuarantined to: $dest\n");
 
         Database::query(
@@ -1736,7 +1736,7 @@ This file was removed and not kept. Restore it from your backups
         $src  = $qDir . '/' . basename($threat['file_path']) . '_' . $threatId . '.quarantine';
 
         if (file_exists($src) && rename($src, $threat['file_path'])) {
-            @unlink($threat['file_path'] . '.sentinel_removed');
+            @unlink($threat['file_path'] . '.serverscrub_removed');
             Database::query(
                 "UPDATE threats SET status='restored', resolved_at=? WHERE id=?",
                 [time(), $threatId]
