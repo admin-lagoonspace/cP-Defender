@@ -176,6 +176,7 @@ try {
         'cmsguard'   => routeCMSGuard($action, $method, $body, $query, $user),
         'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
         'bruteforce' => routeBruteForce($action, $method, $body, $query, $user),
+        'overview'   => routeOverview($action, $method, $query, $user),
         'integrity'  => routeIntegrity($action, $method, $body, $query, $id, $user),
         'phphard'    => routePHPHard($action, $method, $body, $query, $user),
         'update'     => routeUpdate($action, $method, $user),
@@ -595,6 +596,83 @@ function routeFirewall(string $action, string $method, array $body, array $q, ?s
  * type='brute_force'. Nothing wrote one until BruteForce existed, so the line
  * was flat at zero on servers that were certainly being attacked.
  */
+/**
+ * Headline figures for the dashboard, this period against the last.
+ *
+ * Every number here is something the product actually measures. A metric we do
+ * not collect is left out rather than shown as zero -- "Database infections: 0"
+ * on a product that never looks at a database is a claim, not a reading, and
+ * this dashboard has had enough of those.
+ */
+function routeOverview(string $action, string $method, array $q, ?array $user): array {
+    Auth::requireRole('admin', $user);
+    if ($action !== 'stats' && $action !== '') {
+        return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
+
+    $days = max(1, min(90, (int) ($q['days'] ?? 30)));
+    $now  = time();
+    $curFrom  = $now - ($days * 86400);
+    $prevFrom = $now - (2 * $days * 86400);
+
+    $count = function (string $sql, array $p): int {
+        try { return (int) (Database::fetchOne($sql, $p)['c'] ?? 0); }
+        catch (Throwable $e) { return 0; }   // a table a module has not created yet
+    };
+
+    // ── The three headline numbers ──────────────────────────────────────────
+    $threatsCur  = $count("SELECT COUNT(*) c FROM threats WHERE detected_at >= CAST(? AS INTEGER)", [$curFrom]);
+    $threatsPrev = $count("SELECT COUNT(*) c FROM threats WHERE detected_at >= CAST(? AS INTEGER) AND detected_at < CAST(? AS INTEGER)", [$prevFrom, $curFrom]);
+    $threatsAll  = $count("SELECT COUNT(*) c FROM threats", []);
+
+    $wafCur  = $count("SELECT COUNT(*) c FROM waf_events WHERE timestamp >= CAST(? AS INTEGER)", [$curFrom]);
+    $wafPrev = $count("SELECT COUNT(*) c FROM waf_events WHERE timestamp >= CAST(? AS INTEGER) AND timestamp < CAST(? AS INTEGER)", [$prevFrom, $curFrom]);
+    $wafAll  = $count("SELECT COUNT(*) c FROM waf_events", []);
+
+    $blkCur  = $count("SELECT COUNT(*) c FROM blocked_ips WHERE blocked_at >= CAST(? AS INTEGER)", [$curFrom]);
+    $blkPrev = $count("SELECT COUNT(*) c FROM blocked_ips WHERE blocked_at >= CAST(? AS INTEGER) AND blocked_at < CAST(? AS INTEGER)", [$prevFrom, $curFrom]);
+    $blkAll  = $count("SELECT COUNT(*) c FROM blocked_ips", []);
+
+    // Percentage change, with the awkward cases spelled out: from nothing to
+    // something is not "infinity percent", and nothing to nothing is not a
+    // change at all.
+    $delta = function (int $cur, int $prev): ?float {
+        if ($prev === 0) { return $cur === 0 ? 0.0 : null; }
+        return round((($cur - $prev) / $prev) * 100, 2);
+    };
+
+    // ── Per-day series ──────────────────────────────────────────────────────
+    $labels = []; $wafDay = []; $threatDay = []; $bfDay = [];
+    for ($i = $days - 1; $i >= 0; $i--) {
+        $d0 = strtotime('today -' . $i . ' days');
+        $d1 = $d0 + 86400;
+        $labels[]    = date('Y-m-d', $d0);
+        $wafDay[]    = $count("SELECT COUNT(*) c FROM waf_events WHERE timestamp >= CAST(? AS INTEGER) AND timestamp < CAST(? AS INTEGER)", [$d0, $d1]);
+        $threatDay[] = $count("SELECT COUNT(*) c FROM threats WHERE detected_at >= CAST(? AS INTEGER) AND detected_at < CAST(? AS INTEGER)", [$d0, $d1]);
+        $bfDay[]     = $count("SELECT COUNT(*) c FROM brute_force_attempts WHERE attempted_at >= CAST(? AS INTEGER) AND attempted_at < CAST(? AS INTEGER)", [$d0, $d1]);
+    }
+
+    // ── Summary: only things we actually look at ────────────────────────────
+    $summary = [
+        ['label' => 'Outdated applications', 'value' => $count("SELECT COUNT(*) c FROM cms_installs WHERE outdated = 1", []), 'page' => 'cms'],
+        ['label' => 'Applications with issues', 'value' => $count("SELECT COUNT(*) c FROM cms_installs WHERE status != 'ok'", []), 'page' => 'cms'],
+        ['label' => 'Addresses blocked',     'value' => $blkAll, 'page' => 'firewall'],
+        ['label' => 'Files in quarantine',   'value' => $count("SELECT COUNT(*) c FROM threats WHERE status = 'quarantined'", []), 'page' => 'scanner'],
+        ['label' => 'Changed system files',  'value' => $count("SELECT COUNT(*) c FROM file_integrity WHERE status != 'clean'", []), 'page' => 'integrity'],
+    ];
+
+    return ['success' => true, 'data' => [
+        'days' => $days,
+        'cards' => [
+            ['key' => 'threats', 'label' => 'Threats stopped',    'value' => $threatsCur, 'overall' => $threatsAll, 'delta' => $delta($threatsCur, $threatsPrev), 'prev' => $threatsPrev],
+            ['key' => 'waf',     'label' => 'Web attacks blocked','value' => $wafCur,     'overall' => $wafAll,     'delta' => $delta($wafCur, $wafPrev),         'prev' => $wafPrev],
+            ['key' => 'blocked', 'label' => 'Connections blocked','value' => $blkCur,     'overall' => $blkAll,     'delta' => $delta($blkCur, $blkPrev),         'prev' => $blkPrev],
+        ],
+        'series'  => ['labels' => $labels, 'waf' => $wafDay, 'threats' => $threatDay, 'brute' => $bfDay],
+        'summary' => $summary,
+    ]];
+}
+
 function routeBruteForce(string $action, string $method, array $body, array $q, ?array $user): array {
     Auth::requireRole('admin', $user);
 

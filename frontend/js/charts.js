@@ -214,6 +214,110 @@ const Charts = {
    * good outcome -- therefore displayed a panel that looked stuck loading, and
    * was reported as broken.
    */
+  /**
+   * Donut with a total in the middle.
+   *
+   * @param svgEl  target <svg>, kept rather than replaced so its id survives
+   * @param slices [{label, value, color}]
+   * @param centre {value, caption}
+   */
+  donut(svgEl, slices, centre) {
+    if (!svgEl) return;
+    const total = slices.reduce((a, s) => a + (Number(s.value) || 0), 0);
+
+    const S = 220, R = 86, TH = 26, C = S / 2;
+    let out = '';
+
+    if (total <= 0) {
+      // A donut of nothing is a circle, which reads as "all of one thing".
+      out += `<circle cx="${C}" cy="${C}" r="${R}" fill="none"
+                stroke="#1e293b" stroke-width="${TH}"/>`;
+    } else {
+      let a0 = -Math.PI / 2;                     // start at twelve o'clock
+      slices.forEach(sl => {
+        const v = Number(sl.value) || 0;
+        if (v <= 0) return;
+        const a1 = a0 + (v / total) * Math.PI * 2;
+        const big = (a1 - a0) > Math.PI ? 1 : 0;
+        const x0 = C + R * Math.cos(a0), y0 = C + R * Math.sin(a0);
+        const x1 = C + R * Math.cos(a1), y1 = C + R * Math.sin(a1);
+        out += `<path d="M ${x0} ${y0} A ${R} ${R} 0 ${big} 1 ${x1} ${y1}"
+                  fill="none" stroke="${sl.color}" stroke-width="${TH}"
+                  stroke-linecap="butt"><title>${sl.label}: ${Number(v).toLocaleString()}</title></path>`;
+        a0 = a1;
+      });
+    }
+
+    const big = centre && centre.value !== undefined ? String(centre.value) : '';
+    out += `<text x="${C}" y="${C + 2}" text-anchor="middle" dominant-baseline="middle"
+              font-size="30" font-weight="800" fill="var(--txt, #e6e9ec)">${big}</text>`;
+    if (centre && centre.caption) {
+      out += `<text x="${C}" y="${C + 26}" text-anchor="middle"
+                font-size="11" fill="var(--txt3, #98a2ad)">${centre.caption}</text>`;
+    }
+
+    svgEl.setAttribute('viewBox', `0 0 ${S} ${S}`);
+    svgEl.style.width = '100%';
+    svgEl.style.maxWidth = `${S}px`;
+    svgEl.style.height = 'auto';
+    svgEl.innerHTML = out;
+  },
+
+  /**
+   * Vertical bars with a value axis. For "per day over N days".
+   *
+   * @param series [{values:[], color, label}] — drawn side by side per bucket
+   */
+  bars(svgEl, labels, series) {
+    if (!svgEl) return;
+    if (!labels?.length) { svgEl.innerHTML = ''; return; }
+
+    const W = svgEl.clientWidth || 760;
+    const H = 230;
+    const PAD = { top: 12, right: 10, bottom: 26, left: 46 };
+    const cW = W - PAD.left - PAD.right;
+    const cH = H - PAD.top - PAD.bottom;
+
+    const all = series.flatMap(s => s.values);
+    const mx = Math.max(...all, 1);
+    const fmt = v => Number(v) >= 1000
+      ? (Number(v) / 1000).toFixed(Number(v) >= 10000 ? 0 : 1) + 'K'
+      : String(Math.round(Number(v)));
+
+    let out = '';
+    for (let i = 0; i <= 4; i++) {
+      const y = PAD.top + (i / 4) * cH;
+      out += `<line x1="${PAD.left}" y1="${y}" x2="${W - PAD.right}" y2="${y}"
+                stroke="#1e293b" stroke-width="1"/>`;
+      out += `<text x="${PAD.left - 7}" y="${y + 4}" text-anchor="end" font-size="10"
+                fill="#475569" font-family="monospace">${fmt(mx * (1 - i / 4))}</text>`;
+    }
+
+    const slot = cW / labels.length;
+    const bw   = Math.max(2, (slot * 0.72) / series.length);
+
+    labels.forEach((lb, i) => {
+      series.forEach((sr, si) => {
+        const v = Number(sr.values[i]) || 0;
+        const h = v <= 0 ? 0 : Math.max(1, (v / mx) * cH);
+        const x = PAD.left + i * slot + (slot - bw * series.length) / 2 + si * bw;
+        const y = PAD.top + cH - h;
+        out += `<rect x="${x}" y="${y}" width="${Math.max(1, bw - 1)}" height="${h}"
+                  fill="${sr.color}" rx="1"><title>${lb}\n${sr.label || ''}: ${Number(v).toLocaleString()}</title></rect>`;
+      });
+      // Every fourth label, or they collide on a 30-day chart.
+      if (i % 4 === 0 || i === labels.length - 1) {
+        out += `<text x="${PAD.left + i * slot + slot / 2}" y="${H - 6}" text-anchor="middle"
+                  font-size="10" fill="#475569" font-family="monospace">${String(lb).slice(5)}</text>`;
+      }
+    });
+
+    svgEl.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svgEl.style.width = '100%';
+    svgEl.style.height = `${H}px`;
+    svgEl.innerHTML = out;
+  },
+
   empty(container, message) {
     if (!container) return;
     container.innerHTML =

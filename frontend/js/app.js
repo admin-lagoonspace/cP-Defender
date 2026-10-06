@@ -129,6 +129,32 @@ function startMonitorPolling(name) {
   }, 15000);
 }
 
+// The markup every page shows while its data is on the way.
+function loadingMark(caption) {
+  return '<div class="ss-load" style="padding:28px 0">'
+       + '<img src="images/icon.png" alt="">'
+       + '<span class="ss-cap">' + esc(caption || 'Loading…') + '</span>'
+       + '</div>';
+}
+
+// Same thing sized for a table cell, so a table does not jump as it fills.
+function loadingRow(cols, caption) {
+  return '<tr><td colspan="' + (cols || 6) + '" style="padding:18px 0">'
+       + loadingMark(caption) + '</td></tr>';
+}
+
+// Drop the splash once the first page has actually drawn something. Hiding it
+// on a timer would either cover a ready page or uncover a blank one.
+let _splashGone = false;
+function dismissSplash() {
+  if (_splashGone) return;
+  _splashGone = true;
+  const el = document.getElementById('ss-splash');
+  if (!el) return;
+  el.classList.add('gone');
+  setTimeout(() => el.remove(), 400);
+}
+
 function openPage(name) {
   // Hide all pages
   document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
@@ -171,6 +197,8 @@ function reltime(ts) {
   if (diff < 3600)  return `${Math.floor(diff/60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
   return `${Math.floor(diff/86400)}d ago`;
+  // The page is on screen now; the splash has done its job.
+  dismissSplash();
 }
 
 function fmtBytes(b) {
@@ -335,6 +363,11 @@ async function refreshDashboard() {
   // Threat breakdown
   const byType = sc?.by_type || [];
   Charts.threatBars(document.getElementById('dash-threat-breakdown'), byType);
+
+  // Kept so the alerts panel can be built from what is already known rather
+  // than a second round of requests.
+  State.lastDash = data;
+  loadOverview();
 
   // Brute force counts beside the chart that has always drawn the series.
   const bf = data.bruteforce;
@@ -1209,6 +1242,185 @@ async function setWAFMode() {
   else toast('Failed', 'error');
 }
 
+// ── Dashboard overview ─────────────────────────────────────────────────────
+//
+// Headline figures for the period, against the period before it. A number on
+// its own says nothing about direction; the comparison is what makes it worth
+// the space.
+
+function ovDelta(d) {
+  // null means there was nothing to compare against -- a first month, or a
+  // metric that has only just started being collected. "+100%" would be a
+  // fabrication, and "0%" would claim nothing changed.
+  if (d === null || d === undefined) {
+    return '<span class="dim" style="font-size:.72rem">no earlier period</span>';
+  }
+  const up   = d > 0;
+  const flat = Math.abs(d) < 0.005;
+  if (flat) return '<span class="dim" style="font-size:.72rem">no change</span>';
+  // More blocked attacks is not bad news, so neither direction is coloured as
+  // good or bad here -- it is a direction, not a verdict.
+  return '<span style="font-size:.74rem;color:var(--txt2)">'
+       + (up ? '\u25b2 ' : '\u25bc ') + Math.abs(d).toFixed(2) + '%</span>';
+}
+
+async function loadOverview() {
+  const daysEl = document.getElementById('ov-days');
+  const days   = parseInt(daysEl?.value, 10) || 30;
+
+  const cards = document.getElementById('ov-cards');
+  if (cards && !cards.children.length) { cards.innerHTML = loadingMark('Loading figures…'); }
+
+  const res = await API.overview(days).catch(() => null);
+  if (!res?.success) {
+    if (cards) cards.innerHTML = '<div class="dim" style="font-size:.82rem">'
+      + 'Could not load the overview.</div>';
+    return;
+  }
+  const d = res.data;
+
+  // ── Headline cards ──────────────────────────────────────────────────────
+  if (cards) {
+    cards.innerHTML = d.cards.map(c => `
+      <div class="card" style="position:relative;overflow:hidden">
+        <div class="card-body" style="display:flex;align-items:center;gap:14px">
+          <img src="images/icon.png" alt="" aria-hidden="true"
+               style="width:62px;height:62px;object-fit:contain;opacity:.13;flex:none">
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+              <div style="font-size:1.9rem;font-weight:800;letter-spacing:-.02em">${fmtNum(c.value)}</div>
+              ${ovDelta(c.delta)}
+            </div>
+            <div class="dim" style="font-size:.76rem;margin-top:2px">${esc(c.label)}</div>
+          </div>
+          <div style="text-align:right;flex:none">
+            <div style="font-weight:700;font-size:.95rem">${fmtNum(c.overall)}</div>
+            <div class="dim" style="font-size:.66rem">Overall</div>
+          </div>
+        </div>
+      </div>`).join('');
+  }
+
+  // ── Donut: what the period was made of ──────────────────────────────────
+  const slices = [
+    { label: 'Web attacks',   value: d.cards[1].value, color: '#3b82f6' },
+    { label: 'Threats',       value: d.cards[0].value, color: '#ef4444' },
+    { label: 'Blocked IPs',   value: d.cards[2].value, color: '#22c55e' },
+  ];
+  const total = slices.reduce((a, s) => a + s.value, 0);
+  const donut = document.getElementById('ov-donut');
+  if (donut && typeof Charts !== 'undefined' && Charts.donut) {
+    Charts.donut(donut, slices, { value: fmtNum(total), caption: `last ${d.days} days` });
+  }
+  const legend = document.getElementById('ov-donut-legend');
+  if (legend) {
+    legend.innerHTML = slices.map(s => `
+      <div style="display:flex;align-items:center;gap:7px">
+        <span style="width:9px;height:9px;border-radius:2px;background:${s.color};flex:none"></span>
+        <span style="flex:1">${esc(s.label)}</span>
+        <span class="dim">${fmtNum(s.value)}</span>
+      </div>`).join('');
+  }
+
+  // ── This period against the last, as bars ───────────────────────────────
+  const cmp = document.getElementById('ov-compare');
+  if (cmp) {
+    const mx = Math.max(...d.cards.map(c => Math.max(c.value, c.prev)), 1);
+    cmp.innerHTML = d.cards.map(c => `
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;font-size:.76rem;margin-bottom:5px">
+          <span>${esc(c.label)}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+          <div style="flex:1;height:9px;border-radius:5px;background:var(--card2,#1b2029);overflow:hidden">
+            <div style="width:${(c.value / mx) * 100}%;height:100%;background:#3b82f6"></div>
+          </div>
+          <span style="font-size:.74rem;min-width:62px;text-align:right">${fmtNum(c.value)}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="flex:1;height:9px;border-radius:5px;background:var(--card2,#1b2029);overflow:hidden">
+            <div style="width:${(c.prev / mx) * 100}%;height:100%;background:#64748b"></div>
+          </div>
+          <span class="dim" style="font-size:.74rem;min-width:62px;text-align:right">${fmtNum(c.prev)}</span>
+        </div>
+      </div>`).join('')
+      + `<div style="display:flex;gap:16px;font-size:.72rem;margin-top:4px">
+           <span style="display:flex;align-items:center;gap:6px">
+             <span style="width:9px;height:9px;border-radius:2px;background:#3b82f6"></span>This period</span>
+           <span style="display:flex;align-items:center;gap:6px">
+             <span style="width:9px;height:9px;border-radius:2px;background:#64748b"></span>Previous</span>
+         </div>`;
+  }
+
+  // ── Per-day charts ──────────────────────────────────────────────────────
+  const wafTitle = document.getElementById('ov-waf-title');
+  if (wafTitle) wafTitle.textContent = `Web attacks blocked — ${d.days} days`;
+
+  const wafChart = document.getElementById('ov-waf-chart');
+  if (wafChart && typeof Charts !== 'undefined' && Charts.bars) {
+    Charts.bars(wafChart, d.series.labels,
+      [{ values: d.series.waf, color: '#3b82f6', label: 'Web attacks' }]);
+  }
+  const thChart = document.getElementById('ov-threat-chart');
+  if (thChart && typeof Charts !== 'undefined' && Charts.bars) {
+    Charts.bars(thChart, d.series.labels, [
+      { values: d.series.threats, color: '#ef4444', label: 'Malware' },
+      { values: d.series.brute,   color: '#f59e0b', label: 'Failed logins' },
+    ]);
+  }
+
+  // ── Summary ─────────────────────────────────────────────────────────────
+  const sum = document.getElementById('ov-summary');
+  if (sum) {
+    sum.innerHTML = d.summary.map(r => `
+      <div onclick="openPage('${esc(r.page)}')"
+           style="display:flex;align-items:center;justify-content:space-between;
+                  padding:13px 18px;border-bottom:1px solid var(--line,#2d333a);
+                  cursor:pointer;font-size:.84rem">
+        <span>${esc(r.label)}</span>
+        <span style="font-weight:800;font-size:1.05rem;
+                     color:${r.value > 0 ? 'var(--amber,#f59e0b)' : 'var(--txt2)'}">${fmtNum(r.value)}</span>
+      </div>`).join('');
+  }
+
+  renderOverviewAlerts();
+}
+
+// Alerts, built from what the dashboard already knows rather than a second
+// round of requests.
+function renderOverviewAlerts() {
+  const el = document.getElementById('ov-alerts');
+  if (!el) return;
+  const items = [];
+
+  const push = (tone, text, page) => items.push({ tone, text, page });
+
+  if (State.lastDash?.firewall && State.lastDash.firewall.active_rules === 0) {
+    push('red', 'No firewall rules are active', 'firewall');
+  }
+  if (State.lastMonitor && !State.lastMonitor.running) {
+    push('red', 'Real-time monitoring is not running', 'monitor');
+  } else if (State.lastMonitor?.suspended) {
+    push('amber', 'Real-time scanning is paused for a backup', 'monitor');
+  }
+  if (State.lastDash?.scanner?.last_scan) {
+    const age = (Date.now() / 1000) - Number(State.lastDash.scanner.last_scan);
+    if (age > 7 * 86400) { push('amber', 'No scan in over a week', 'scanner'); }
+  }
+
+  el.innerHTML = items.length
+    ? items.map(i => `
+        <div onclick="openPage('${esc(i.page)}')"
+             style="display:flex;align-items:center;gap:11px;padding:12px 14px;border-radius:9px;
+                    cursor:pointer;font-size:.82rem;
+                    background:${i.tone === 'red' ? 'rgba(239,68,68,.12)' : 'rgba(245,158,11,.12)'};
+                    border:1px solid ${i.tone === 'red' ? 'rgba(239,68,68,.32)' : 'rgba(245,158,11,.32)'}">
+          <span style="font-size:1rem">${i.tone === 'red' ? '\u26d4' : '\u26a0\ufe0f'}</span>
+          <span style="flex:1">${esc(i.text)}</span>
+        </div>`).join('')
+    : '<div class="dim" style="font-size:.82rem;padding:6px 0">Nothing needs attention.</div>';
+}
+
 // ── Brute Force ────────────────────────────────────────────────────────────────
 //
 // The dashboard has charted a "Brute Force" series since it was written, and
@@ -1265,7 +1477,7 @@ async function loadBruteForce() {
 
   const tl = tlRes?.data || [];
   const svg = document.getElementById('bf-chart');
-  if (svg && tl.length && window.Charts?.timeline) {
+  if (svg && tl.length && typeof Charts !== 'undefined' && Charts.timeline) {
     Charts.timeline(svg, tl.map(x => x.date), [
       { values: tl.map(x => x.attempts), color: '#f59e0b', label: 'Failed logins' },
       { values: tl.map(x => x.blocked),  color: '#ef4444', label: 'Blocked' },
@@ -1876,6 +2088,7 @@ async function loadMonitorStats() {
   if (!res?.success) return;
   const d = res.data;
   monitorRunning = d.running;
+  State.lastMonitor = d;
 
   const card = document.getElementById('rt-monitor-card');
   if (card) card.style.borderLeftColor = d.running ? 'var(--green)' : 'var(--red)';
