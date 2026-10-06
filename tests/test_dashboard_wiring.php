@@ -110,9 +110,15 @@ t_contains($js, 'iptables status unavailable',
     'and the UI says so rather than printing "iptables active" regardless');
 
 // The probes are cached: the page asks on every visit and every refresh.
-t_contains($fw, 'function cached', 'expensive probes are cached');
-t_contains($fw, "self::cached('iptables_rules'", 'the iptables count is cached');
-t_contains($fw, "self::cached('csf_status'", 'and the CSF status');
+// Caching on a miss was not enough, and this assertion used to require it.
+// One request a minute still paid for an iptables call that can wait on the
+// xtables lock, and cpsrvd serialises requests -- so that one request stalled
+// every other page. The probes now happen in the scheduler and the request
+// path only reads them. tests/test_firewall_speed.php holds the full contract.
+t_contains($fw, 'function cachedOnly', 'probe values are read, never produced on request');
+t_contains($fw, 'function refreshProbes', 'they are taken by the scheduler instead');
+t_ok(strpos($fw, 'callable $produce') === false,
+    'and nothing can fall back to producing them mid-request');
 
 // The cheap database counts must not sit behind the shell commands.
 $gs = substr($fw, strpos($fw, 'public function getStats'), 1400);

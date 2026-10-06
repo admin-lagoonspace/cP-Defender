@@ -1465,6 +1465,29 @@ CPANELEOF
 
 fi  # end: if standalone / elif cpanel
 
+# ── Firewall measurements ─────────────────────────────────────────────────────
+# Taken once now so the firewall page has a reading immediately. The scheduler
+# refreshes them from then on; nothing is measured on a page load, because a
+# request that waits on the xtables lock stalls every other page with it.
+section "Firewall measurements"
+_SG_FWP="${TMP_DIR:-/tmp}/sg-fwprobe.php"
+cat > "$_SG_FWP" <<FWEOF
+<?php
+define('SG_API', true);
+require_once '${INSTALL_DIR}/backend/config/config.php';
+require_once '${INSTALL_DIR}/backend/lib/Database.php';
+require_once '${INSTALL_DIR}/backend/lib/Logger.php';
+require_once '${INSTALL_DIR}/backend/lib/Firewall.php';
+\$r = Firewall::refreshProbes();
+echo 'iptables rules: ' . \$r['iptables_rules'] . PHP_EOL;
+FWEOF
+if _SG_FWP_OUT="$(timeout 30 "$SG_PHP" "$_SG_FWP" 2>&1)"; then
+  ok "  ${_SG_FWP_OUT}"
+else
+  info "  Could not measure now; the scheduler will do it shortly"
+fi
+rm -f "$_SG_FWP"
+
 # ── Rootkit scanning tools ────────────────────────────────────────────────────
 # The Rootkit Scanner page offered rkhunter and chkrootkit and then reported
 # both "Not installed", leaving the operator to work out what to do about it.

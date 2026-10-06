@@ -55,6 +55,8 @@ require_once SG_ROOT . '/backend/lib/RealTimeMonitor.php';
 require_once SG_ROOT . '/backend/lib/WAF.php';
 // The bruteforce task reads auth logs and blocks repeat offenders.
 require_once SG_ROOT . '/backend/lib/BruteForce.php';
+// The fwprobe task measures iptables and CSF off the request path.
+require_once SG_ROOT . '/backend/lib/Firewall.php';
 
 $force  = null;
 $dryRun = false;
@@ -345,6 +347,22 @@ $tasks = [
     //
     // Every tick: an attack that lasts ten minutes is over before an hourly
     // task would notice, and reading is incremental so the cost is small.
+    // Measure the things the firewall page shows that cost a process spawn.
+    //
+    // Off the request path deliberately: iptables can sit on the xtables lock,
+    // and cpsrvd serialises requests, so one slow call stalls every page. The
+    // page now reads what this leaves behind.
+    'fwprobe' => [
+        'schedule' => setting('fw_probe_schedule', 'every'),
+        'time'     => '00:00',
+        'day'      => 0,
+        'run'      => function () {
+            $r = Firewall::refreshProbes();
+            slog('  firewall probes: iptables=' . $r['iptables_rules']
+               . ' csf=' . (($r['csf_status']['installed'] ?? false) ? 'installed' : 'absent'));
+        },
+    ],
+
     'bruteforce' => [
         'schedule' => setting('bf_schedule', 'every'),
         'time'     => '00:00',

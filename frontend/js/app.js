@@ -774,9 +774,15 @@ async function loadFirewall() {
     // "iptables active" was printed unconditionally -- including when the
     // count could not be taken at all, which reads as a working firewall.
     const csf = stats.data?.csf_status || {};
-    const ipt = stats.data?.iptables_unknown
-      ? 'iptables status unavailable (busy)'
-      : 'iptables: ' + fmtNum(stats.data?.iptables_rules || 0) + ' rule(s)';
+    // Three states, not two: measured, measured-and-failed, and not yet
+    // measured. The probe runs in the scheduler now, so a freshly installed
+    // server has no reading for the first few minutes -- saying "0 rules"
+    // there would read as "no firewall".
+    const ipt = stats.data?.probe_pending
+      ? 'iptables: not measured yet'
+      : (stats.data?.iptables_unknown
+          ? 'iptables status unavailable (busy)'
+          : 'iptables: ' + fmtNum(stats.data?.iptables_rules || 0) + ' rule(s)');
     document.getElementById('fw-status-line').textContent =
       `CSF ${csf.installed ? '✓ installed' : '✗ not found'}`
       + (csf.installed && csf.running === false ? ' (lfd not running)' : '')

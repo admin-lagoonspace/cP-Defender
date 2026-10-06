@@ -1,4 +1,7 @@
 <?php
+
+// Set before anything else so the timing covers the whole request.
+if (!defined('SG_REQ_START')) { define('SG_REQ_START', microtime(true)); }
 /**
  * Sentinel Gate — REST API Router
  * Endpoint: /sentinel-gate/api/{module}/{action}
@@ -197,6 +200,16 @@ try {
 
 $code = $response['code'] ?? 200;
 unset($response['code']);
+
+// How long this took, so "the page is slow" can be measured instead of
+// guessed at. Two attempts at the firewall page were spent reasoning about
+// which call was slow without ever timing one.
+$__ms = (int) round((microtime(true) - SG_REQ_START) * 1000);
+if (is_array($response)) { $response['ms'] = $__ms; }
+if ($__ms >= 1000) {
+    Logger::warn("Slow API request: {$module}/{$action} took {$__ms}ms");
+}
+
 http_response_code($code);
 echo json_encode($response);
 
