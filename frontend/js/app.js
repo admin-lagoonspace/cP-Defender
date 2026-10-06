@@ -130,9 +130,21 @@ function startMonitorPolling(name) {
 }
 
 // The markup every page shows while its data is on the way.
+// An image URL that changes when the release does.
+//
+// Cache-busting the markup is not enough: several images are referenced from
+// here, and a filename whose CONTENTS change between releases is cached by the
+// browser exactly as hard as one whose name never changes. icon-64.png held
+// the old crop in 4.0.0 and the new mark in 4.1.0, so updated servers kept
+// drawing the old logo with nothing to suggest why.
+function assetUrl(path) {
+  const v = (typeof window !== 'undefined' && window.SG_ASSET_V) || '';
+  return v ? path + '?v=' + encodeURIComponent(v) : path;
+}
+
 function loadingMark(caption) {
   return '<div class="ss-load" style="padding:28px 0">'
-       + '<img src="images/icon.png" alt="">'
+       + '<img src="' + assetUrl('images/icon.png') + '" alt="">'
        + '<span class="ss-cap">' + esc(caption || 'Loading…') + '</span>'
        + '</div>';
 }
@@ -1298,7 +1310,7 @@ async function loadOverview() {
     cards.innerHTML = d.cards.map(c => `
       <div class="card" style="position:relative;overflow:hidden">
         <div class="card-body" style="display:flex;align-items:center;gap:14px">
-          <img src="images/icon.png" alt="" aria-hidden="true"
+          <img src="${assetUrl('images/icon.png')}" alt="" aria-hidden="true"
                style="width:62px;height:62px;object-fit:contain;opacity:.13;flex:none">
           <div style="flex:1;min-width:0">
             <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">

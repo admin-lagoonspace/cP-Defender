@@ -53,7 +53,10 @@ if [[ -f "${REPO_DIR}/frontend/index.html" ]]; then
   # update: Charts was defined but had no donut() or bars(), the new dashboard
   # skipped those panels rather than throwing, and three sections were blank
   # with nothing in the console to say why.
-  sed -i -E "s#(src|href)=\"(css/[A-Za-z0-9_.-]+\.css|js/[A-Za-z0-9_.-]+\.js)(\?v=[^\"]*)?\"#\1=\"\2?v=${VERSION}\"#g" \
+  sed -i -E "s#(src|href)=\"(css/[A-Za-z0-9_.-]+\.css|js/[A-Za-z0-9_.-]+\.js|images/[A-Za-z0-9_.-]+\.(png|jpg|svg|webp|ico))(\?v=[^\"]*)?\"#\1=\"\2?v=${VERSION}\"#g" \
+      "${REPO_DIR}/frontend/index.html"
+  # The same version for images built in JavaScript.
+  sed -i -E "s#window\.SG_ASSET_V = \"[^\"]*\";#window.SG_ASSET_V = \"${VERSION}\";#" \
       "${REPO_DIR}/frontend/index.html"
 fi
 info "Building ServerScrub v${VERSION}"

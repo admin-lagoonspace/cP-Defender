@@ -76,3 +76,47 @@ t_contains($js, "typeof Charts !== 'undefined' && Charts.donut",
     'the donut guard checks the const binding');
 t_eq(0, substr_count($js, 'window.Charts'),
     'nothing checks window.Charts, which a const never populates');
+
+
+// ── Images too ──────────────────────────────────────────────────────────────
+// The second half of the same lesson. icon-64.png held the old cropped shield
+// in 4.0.0 and the new mark in 4.1.0 -- same filename, different picture -- so
+// browsers kept drawing the old logo on an updated server, with nothing to
+// suggest why. A filename whose CONTENTS change is cached exactly as hard as
+// one whose name never changes.
+preg_match_all('/(?:src|href)="(images\/[\w.\-]+\.(?:png|jpg|svg|webp|ico))(\?v=([^"]*))?"/',
+               $html, $im, PREG_SET_ORDER);
+t_ok(count($im) >= 3, 'the page references its images');
+
+$imgUnstamped = [];
+foreach ($im as $hit) {
+    if (!isset($hit[3]) || $hit[3] === '') { $imgUnstamped[] = $hit[1]; }
+    elseif ($hit[3] !== $version)          { $imgUnstamped[] = $hit[1] . ' (' . $hit[3] . ')'; }
+}
+t_eq(0, count($imgUnstamped),
+    'every image is cache-busted at the current version'
+    . ($imgUnstamped ? ' — ' . implode(', ', $imgUnstamped) : ''));
+
+// ── Images built in JavaScript get the same treatment ───────────────────────
+// Stamping the markup alone misses these, and the loading mark and the
+// dashboard cards both build their own <img>.
+t_contains($js, 'function assetUrl', 'JavaScript has a helper for versioned assets');
+t_contains($html, 'window.SG_ASSET_V', 'and a version it can read');
+t_contains($js, 'window.SG_ASSET_V', 'which the helper uses');
+
+preg_match_all('/<img src="images\/[^"]*"/', $js, $raw);
+t_eq(0, count($raw[0]),
+    'no image is built in JavaScript without going through the helper'
+    . ($raw[0] ? ' — ' . implode(', ', $raw[0]) : ''));
+
+// ── The brand mark uses the icon, with the name beside it ───────────────────
+$brand = substr($html, strpos($html, 'class="topbar-brand"'), 700);
+t_contains($brand, 'images/icon-64.png', 'the brand mark uses the product icon');
+t_ok(strpos($brand, '<svg') === false, 'and not a hand-drawn shield');
+t_contains($brand, 'class="brand-name"', 'with the product name kept beside it');
+t_contains($brand, 'class="brand-sub"', 'and its subtitle');
+
+// ── The release script stamps images as well ────────────────────────────────
+t_contains($rel, 'images/[A-Za-z0-9_.-]+',
+    'the release script stamps images by pattern');
+t_contains($rel, 'SG_ASSET_V', 'and keeps the JavaScript-visible version in step');
