@@ -146,6 +146,18 @@ function loadingRow(cols, caption) {
 // Drop the splash once the first page has actually drawn something. Hiding it
 // on a timer would either cover a ready page or uncover a blank one.
 let _splashGone = false;
+
+// Nothing may leave the user looking at a logo for ever.
+//
+// The splash is dismissed when a page renders, which is the right moment --
+// but it is also the only moment, and 4.1.0 shipped with that call landing
+// after a `return` in an unrelated function. The result was an app that was
+// running perfectly behind a cover that never lifted, with no error anywhere
+// to say so. A cover that can stick is worse than no cover, so these remove it
+// regardless of whether anything remembered to.
+window.addEventListener('load', () => setTimeout(dismissSplash, 1200));
+setTimeout(dismissSplash, 6000);
+
 function dismissSplash() {
   if (_splashGone) return;
   _splashGone = true;
@@ -188,6 +200,10 @@ function openPage(name) {
     case 'logs':      loadLogs();           break;
     case 'php':       loadPHPHardening();   break;
   }
+
+  // The page is on screen now, so the splash has done its job. Its loading
+  // marks cover the data still arriving.
+  dismissSplash();
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -197,8 +213,6 @@ function reltime(ts) {
   if (diff < 3600)  return `${Math.floor(diff/60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
   return `${Math.floor(diff/86400)}d ago`;
-  // The page is on screen now; the splash has done its job.
-  dismissSplash();
 }
 
 function fmtBytes(b) {
