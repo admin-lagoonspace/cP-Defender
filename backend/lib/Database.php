@@ -225,6 +225,10 @@ class Database {
                 -- so clamscan competed with rsync for the same disks while the
                 -- monitor sat idle.
                 ('scan_pause_on_backup',    '1'),
+                -- How long a dealt-with threat stays in the log. Active ones
+                -- are kept regardless of age: an unresolved threat is exactly
+                -- what the log is for.
+                ('threat_retention_days',   '7'),
                 -- Rootkit scanning runs nightly. It was unseeded, so it fell
                 -- back to the code default of weekly; a rootkit that lands on
                 -- Monday should not wait until Sunday to be noticed. 03:00 is

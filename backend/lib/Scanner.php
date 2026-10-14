@@ -612,12 +612,35 @@ class Scanner {
             $path,
             FilesystemIterator::SKIP_DOTS | FilesystemIterator::CURRENT_AS_FILEINFO
         );
-        $filter = new RecursiveCallbackFilterIterator($dirIt, function ($current) {
+        // The quarantine directory, resolved now rather than per entry.
+        //
+        // Quarantined files ARE malware, so a scan that walks into quarantine
+        // detects every one of them again, records a fresh threat for each,
+        // and then quarantines the quarantined file. The default location is
+        // under the install directory, but it is configurable -- and pointing
+        // it at /home/.serverscrub/quarantine, which is sensible for disk
+        // reasons, puts it directly inside the default scan path. The result
+        // is a log that fills with re-detections of files already dealt with
+        // and a quarantine that grows every night.
+        $quarReal = @realpath(Database::storagePath('quarantine'));
+
+        $filter = new RecursiveCallbackFilterIterator($dirIt, function ($current) use ($quarReal) {
             if ($current->isLink()) { return false; }   // symlink loops
             if ($current->isDir()) {
-                return !in_array(strtolower($current->getFilename()), self::SCAN_SKIP_DIRS, true);
+                if (in_array(strtolower($current->getFilename()), self::SCAN_SKIP_DIRS, true)) {
+                    return false;
+                }
+                // Compared by resolved path, not by name: the directory is
+                // configurable and may be called anything.
+                if ($quarReal !== false) {
+                    $here = @realpath($current->getPathname());
+                    if ($here !== false && $here === $quarReal) { return false; }
+                }
+                return true;
             }
-            return true;
+            // A .quarantine file outside the directory is still ours, and
+            // re-detecting it helps nobody.
+            return substr($current->getFilename(), -11) !== '.quarantine';
         });
 
         foreach (new RecursiveIteratorIterator($filter, RecursiveIteratorIterator::LEAVES_ONLY) as $file) {
@@ -1145,14 +1168,77 @@ This file was removed and not kept. Restore it from your backups
             );
         }
 
-        // 2. The backstop, by file age. pruneQuarantine already walks the tree
+        // 2. Rows quarantined before deadlines existed.
+        //
+        // sweepQuarantine's first pass only sees rows with an expiry, and
+        // nothing written before 3.37.0 has one -- so those rows sat at
+        // 'quarantined' for ever while the age-based prune quietly deleted
+        // their files underneath them. Give them a deadline derived from when
+        // they were detected, and the normal rules take over.
+        $noExpiry = Database::fetchAll(
+            "SELECT id, severity, detected_at FROM threats
+              WHERE status='quarantined'
+                AND (quarantine_expires_at IS NULL OR quarantine_expires_at = 0)"
+        );
+        foreach ($noExpiry as $r) {
+            $days = self::policyDaysFor((string) ($r['severity'] ?? 'low'));
+            $from = (int) ($r['detected_at'] ?? $now);
+            Database::query(
+                'UPDATE threats SET quarantine_expires_at=? WHERE id=?',
+                [$from + (max(1, $days) * 86400), (int) $r['id']]
+            );
+        }
+
+        // 3. Rows whose file is already gone.
+        //
+        // pruneQuarantine deletes files by age and never touched the database,
+        // so the log kept reporting "Quarantined" for files that had been
+        // removed days earlier. A status that outlives the thing it describes
+        // is worse than no status.
+        $stillSaysQuarantined = Database::fetchAll(
+            "SELECT id, quarantine_path FROM threats
+              WHERE status='quarantined' AND quarantine_path IS NOT NULL
+                AND quarantine_path != ''"
+        );
+        $reconciled = 0;
+        foreach ($stillSaysQuarantined as $r) {
+            if (is_file((string) $r['quarantine_path'])) { continue; }
+            Database::query(
+                "UPDATE threats SET status='deleted', action_taken='expired', resolved_at=?
+                  WHERE id=?",
+                [$now, (int) $r['id']]
+            );
+            $reconciled++;
+        }
+
+        // 4. The backstop, by file age. pruneQuarantine already walks the tree
         //    and removes anything past the retention period; it is what clears
         //    files that predate per-threat deadlines.
         $pruned = self::pruneQuarantine();
 
-        if ($deleted > 0 || (int) ($pruned['removed'] ?? 0) > 0) {
+        // 5. Retire records that have been dealt with.
+        //
+        // A threat log is a record, but a record of a file deleted three weeks
+        // ago is not what an operator opens the scanner to see -- and it was
+        // never pruned at all, so it only ever grew. Anything still ACTIVE is
+        // kept regardless of age: an unresolved threat is exactly what the log
+        // is for, however old it is.
+        $keepDays = max(1, min(365,
+            (int) (Database::setting('threat_retention_days', '7') ?? 7)));
+        $cut  = $now - ($keepDays * 86400);
+        $aged = Database::query(
+            "DELETE FROM threats
+              WHERE status != 'active'
+                AND COALESCE(NULLIF(resolved_at, 0), detected_at) < CAST(? AS INTEGER)",
+            [$cut]
+        )->rowCount();
+
+        if ($deleted > 0 || $reconciled > 0 || $aged > 0
+            || (int) ($pruned['removed'] ?? 0) > 0) {
             Logger::info('Quarantine sweep: ' . $deleted . ' expired by policy, '
-                       . (int) ($pruned['removed'] ?? 0) . ' by retention age');
+                       . (int) ($pruned['removed'] ?? 0) . ' files by age, '
+                       . $reconciled . ' record(s) reconciled, '
+                       . $aged . ' resolved record(s) retired');
         }
 
         return [
@@ -1161,6 +1247,8 @@ This file was removed and not kept. Restore it from your backups
             'aged_out'       => (int) ($pruned['removed'] ?? 0),
             'aged_bytes'     => (int) ($pruned['bytes'] ?? 0),
             'kept'           => (int) ($pruned['kept'] ?? 0),
+            'reconciled'     => $reconciled,
+            'records_retired'=> $aged,
         ];
     }
 
