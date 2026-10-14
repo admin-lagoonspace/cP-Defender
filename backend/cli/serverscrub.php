@@ -336,6 +336,9 @@ try {
             $r = Scanner::sweepQuarantine();
             echo 'Expired by policy:        ' . (int)$r['expired'] . PHP_EOL;
             echo 'Removed by age:           ' . (int)$r['aged_out'] . PHP_EOL;
+            if ((int)($r['legacy_removed'] ?? 0) > 0) {
+                echo '  from a previous location: ' . (int)$r['legacy_removed'] . PHP_EOL;
+            }
             echo 'Records reconciled:       ' . (int)($r['reconciled'] ?? 0) . PHP_EOL;
             echo 'Resolved records retired: ' . (int)($r['records_retired'] ?? 0) . PHP_EOL;
             echo 'Still quarantined:        ' . (int)$r['kept'] . PHP_EOL;
@@ -359,7 +362,7 @@ try {
         }
 
         default:
-            fail('usage: serverscrub quarantine [status|prune [days]|move <dir>]');
+            fail('usage: serverscrub quarantine [status|sweep|prune [days]|move <dir>]');
         }
         break;
     }
