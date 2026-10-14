@@ -34,7 +34,17 @@ foreach ($it as $f) {
     if (strpos(basename($path), 'test_rebrand') === 0) { continue; }
 
     $c = @file_get_contents($path);
-    if ($c !== false && preg_match('/sentinel[\s_-]?gate/i', $c)) {
+    if ($c === false) { continue; }
+
+    // Deliberate legacy references are allowed, and there are exactly two
+    // kinds. Servers installed before the rename still have a
+    // /home/.sentinel-gate directory holding their quarantine, and the scanner
+    // has to keep skipping it by name or it walks back into its own
+    // quarantine. Stripping those lines keeps the rest of the check strict.
+    $c = preg_replace("/^.*'\.sentinel-gate'.*$/m", '', $c);
+    $c = preg_replace('/^.*\.sentinel-gate.*(?:skip|legacy|quarantine).*$/mi', '', $c);
+
+    if (preg_match('/sentinel[\s_-]?gate/i', $c)) {
         $stale[] = str_replace($repo, '', $path);
     }
 }

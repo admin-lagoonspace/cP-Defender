@@ -329,6 +329,19 @@ try {
             out(Scanner::quarantineUsage());
             break;
 
+        // The full sweep: expiries, reconciliation and record retirement.
+        // 'prune' only deletes files by age and leaves the log untouched,
+        // which is why a backlog could survive it.
+        case 'sweep': {
+            $r = Scanner::sweepQuarantine();
+            echo 'Expired by policy:        ' . (int)$r['expired'] . PHP_EOL;
+            echo 'Removed by age:           ' . (int)$r['aged_out'] . PHP_EOL;
+            echo 'Records reconciled:       ' . (int)($r['reconciled'] ?? 0) . PHP_EOL;
+            echo 'Resolved records retired: ' . (int)($r['records_retired'] ?? 0) . PHP_EOL;
+            echo 'Still quarantined:        ' . (int)$r['kept'] . PHP_EOL;
+            break;
+        }
+
         case 'prune': {
             need_root();
             $days = isset($rest[1]) ? (int)$rest[1] : null;
@@ -448,7 +461,8 @@ Usage: serverscrub <command> [args] [--json]
   install-rootkit-tools        Install rkhunter and chkrootkit (retry of the installer step)
   waf-parse-test [n]           Show what the parser reads from the ModSecurity log
   waf-reingest [--clear]       Re-read the audit log from the beginning
-  quarantine status            Show where quarantine is and how big\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  license status               Show license state
+  quarantine status            Show where quarantine is and how big
+  quarantine sweep             Apply retention now: expire, reconcile and retire records\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  license status               Show license state
   license activate <key>       Store and verify a license key
   license refresh              Force a re-check against the server
   license identity             Show the domain/IP this server reports

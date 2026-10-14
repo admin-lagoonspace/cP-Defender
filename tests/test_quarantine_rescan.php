@@ -181,3 +181,56 @@ t_contains($api, 'FROM threats $sqlWhere ORDER BY detected_at DESC',
 
 $db = t_code($repo . '/backend/lib/Database.php');
 t_contains($db, "'threat_retention_days',   '7'", 'resolved records are kept for 7 days');
+
+
+// ── Our own folders are skipped by name, not only by configured path ────────
+// The resolved-path check is the precise one, but it trusts quarantine_dir to
+// still point where the files are. On the reporting server the setting said
+// /home/.sentinel-gate/quarantine while the product had been renamed, and a
+// setting left behind is exactly when the path check stops protecting
+// anything. The names cost nothing to skip: they are ours.
+Database::setSetting('quarantine_dir', $ctx['sandbox'] . '/somewhere-else');
+
+$legacy = $root . '/.sentinel-gate/quarantine/2026-09-27';
+@mkdir($legacy, 0777, true);
+file_put_contents($legacy . '/old_one.php', '<?php eval(base64_decode("aGk="));');
+
+$modern = $root . '/.serverscrub/cache';
+@mkdir($modern, 0777, true);
+file_put_contents($modern . '/temp.php', '<?php echo 1;');
+
+$found3 = [];
+foreach ($walk->invoke($scanner, $root) as $f) { $found3[] = str_replace(chr(92), '/', $f); }
+
+$sawLegacy = false; $sawModern = false;
+foreach ($found3 as $f) {
+    if (strpos($f, '.sentinel-gate') !== false) { $sawLegacy = true; }
+    if (strpos($f, '.serverscrub')   !== false) { $sawModern = true; }
+}
+t_ok(!$sawLegacy,
+    'the legacy .sentinel-gate directory is skipped even when quarantine_dir points elsewhere');
+t_ok(!$sawModern, 'and the current .serverscrub directory');
+
+// Customer files are still scanned -- the skip must be our folders, not a
+// blanket rule on dot-directories.
+$dotCustomer = $root . '/site/.well-known';
+@mkdir($dotCustomer, 0777, true);
+file_put_contents($dotCustomer . '/acme.php', '<?php echo 1;');
+$found4 = [];
+foreach ($walk->invoke($scanner, $root) as $f) { $found4[] = str_replace(chr(92), '/', $f); }
+$sawCustomerDot = false;
+foreach ($found4 as $f) { if (strpos($f, '.well-known/acme.php') !== false) { $sawCustomerDot = true; } }
+t_ok($sawCustomerDot, 'a customer dot-directory is still scanned');
+
+$sc = t_code($repo . '/backend/lib/Scanner.php');
+t_contains($sc, "'.serverscrub', '.sentinel-gate'",
+    'both our directory names are in the skip list');
+
+// ── The sweep is runnable on demand ─────────────────────────────────────────
+// It only ran from the nightly scheduler, so a backlog could not be cleared
+// without waiting -- and `quarantine prune` deletes files without touching the
+// records, which is why running that left the log untouched.
+$cli = t_code($repo . '/backend/cli/serverscrub.php');
+t_contains($cli, "case 'sweep':", 'there is a CLI for the full sweep');
+t_contains($cli, 'Scanner::sweepQuarantine()', 'which runs it');
+t_contains($cli, 'Records reconciled', 'and reports what it reconciled');

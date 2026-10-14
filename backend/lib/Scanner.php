@@ -593,6 +593,15 @@ class Scanner {
     /** Directories that are never worth scanning. */
     private const SCAN_SKIP_DIRS = [
         'node_modules', '.git', '.svn', 'cache', '.cache', 'proc', 'sys', 'dev',
+        // Our own working directories, by name as well as by resolved path.
+        //
+        // The path check below is the precise one, but it depends on the
+        // quarantine_dir setting still pointing where the files actually are.
+        // On a server that has been renamed, or had quarantine moved and the
+        // setting left behind, that assumption breaks and the scan walks
+        // straight back into its own quarantine. Skipping these names costs
+        // nothing -- they are ours -- and holds when the setting does not.
+        '.serverscrub', '.sentinel-gate',
     ];
 
     /**

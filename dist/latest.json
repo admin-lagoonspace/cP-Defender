@@ -1,7 +1,7 @@
 {
-  "version": "4.1.4",
-  "url": "https://defender.lws-s1.com/serverscrub/code/dist/serverscrub-4.1.4.zip",
-  "mirror": "https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/dist/serverscrub-4.1.4.zip",
-  "sha256": "647941d69a8e9486e991f762f3e572d537c8a3449012eb954bc3625c6d39ce5f",
-  "notes": "https://defender.lws-s1.com/serverscrub/code/v4.1.4/CHANGELOG.md"
+  "version": "4.1.5",
+  "url": "https://defender.lws-s1.com/serverscrub/code/dist/serverscrub-4.1.5.zip",
+  "mirror": "https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/dist/serverscrub-4.1.5.zip",
+  "sha256": "d4f655d462445c81186d73d927787e494c11439f5b6600d87ba236a4f880f28d",
+  "notes": "https://defender.lws-s1.com/serverscrub/code/v4.1.5/CHANGELOG.md"
 }
