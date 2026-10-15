@@ -101,10 +101,14 @@ t_contains($sched, "require_once SG_ROOT . '/backend/lib/RealTimeMonitor.php'",
 
 // The cadence must exist, or isDue() falls through to false and the task never
 // runs -- indistinguishable from being switched off.
-t_contains($sched, "case 'every':", "the 'every' cadence is implemented");
-$due = substr($sched, strpos($sched, 'function isDue'), 1400);
+// The decision moved to Schedule in 4.4.1 so it could be tested; the cadence
+// has to exist wherever it now lives.
+$schedLib = t_code($repo . '/backend/lib/Schedule.php');
+t_contains($schedLib, "case 'every':", "the 'every' cadence is implemented");
+$due = substr($schedLib, strpos($schedLib, 'function isDue'), 1400);
 t_contains($due, "case 'every':", 'inside isDue, where schedules are resolved');
 t_contains($due, '$elapsed >= 60', 'with a floor so a double cron fire does not double-run');
+t_contains($sched, 'Schedule::isDue(', 'and the scheduler uses it');
 
 // Cron fires the scheduler every 15 minutes, which is the requested cadence.
 $install = file_get_contents($repo . '/install.sh');

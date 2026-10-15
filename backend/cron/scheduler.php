@@ -54,6 +54,7 @@ require_once SG_ROOT . '/backend/lib/RealTimeMonitor.php';
 // The wafingest task reads ModSecurity events into waf_events.
 require_once SG_ROOT . '/backend/lib/WAF.php';
 // The bruteforce task reads auth logs and blocks repeat offenders.
+require_once SG_ROOT . '/backend/lib/Schedule.php';
 require_once SG_ROOT . '/backend/lib/BruteForce.php';
 // The fwprobe task measures iptables and CSF off the request path.
 require_once SG_ROOT . '/backend/lib/Firewall.php';
@@ -106,45 +107,9 @@ function markRun(string $task): void { Database::setSetting("last_run_$task", (s
  */
 function isDue(string $task, string $schedule, int $now,
                string $atTime = '02:00', int $onDay = 0): bool {
-    // 'disabled' is accepted as a synonym: the settings UI grew a select that
-    // used that word, and a schedule string the scheduler does not recognise
-    // falls through to `return false` below -- indistinguishable from off, but
-    // by accident rather than intent.
-    if ($schedule === 'off' || $schedule === 'disabled' || $schedule === '') { return false; }
-
-    $last = lastRun($task);
-    if ($last === 0) { return true; }          // never run — run now
-
-    $elapsed = $now - $last;
-
-    switch ($schedule) {
-        // Every scheduler tick, which cron fires at */15. For work that is
-        // cheap and wants to react promptly rather than on the hour -- the
-        // 60-second floor only guards against a double-fire.
-        case 'every':
-            return $elapsed >= 60;
-
-        case 'hourly':
-            return $elapsed >= 3600 - 300;      // 5 min slack for tick jitter
-
-        case 'daily':
-            if ($elapsed < 86400 - 300) { return false; }
-            return pastTimeOfDay($atTime, $now, $last);
-
-        case 'weekly':
-            if ($elapsed < 604800 - 300) { return false; }
-            if ((int)date('w', $now) !== $onDay) { return false; }
-            return pastTimeOfDay($atTime, $now, $last);
-    }
-    return false;
-}
-
-/** True once today has passed the configured time and we have not run since. */
-function pastTimeOfDay(string $hhmm, int $now, int $last): bool {
-    [$h, $m] = array_pad(explode(':', $hhmm, 2), 2, '0');
-    $target  = mktime((int)$h, (int)$m, 0, (int)date('n', $now), (int)date('j', $now), (int)date('Y', $now));
-    if ($now < $target) { return false; }
-    return $last < $target;
+    // The decision itself lives in Schedule, where it can be tested. This
+    // wrapper only supplies the task's last-run time.
+    return Schedule::isDue($schedule, lastRun($task), $now, $atTime, $onDay);
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
