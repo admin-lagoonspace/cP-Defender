@@ -286,6 +286,30 @@ try {
         break;
     }
 
+    /**
+     * What the scheduler is doing, and when each task last did it.
+     *
+     * Added because there was no way to answer "is my nightly scan actually
+     * running?". The scheduler logs to stdout, which cron redirects into
+     * logs/cron.log -- one file holding every task's output interleaved, and
+     * not where anyone would think to look.
+     *
+     * Delegated to the scheduler rather than reimplemented here: it owns the
+     * task table, and the first draft of this command kept its own copy that
+     * was wrong before it shipped.
+     */
+    case 'schedule': {
+        $php = Scanner::phpBinary();
+        $cmd = escapeshellarg($php) . ' '
+             . escapeshellarg(SG_ROOT . '/backend/cron/scheduler.php') . ' --status';
+        $out = [];
+        $code = 0;
+        @exec($cmd . ' 2>&1', $out, $code);
+        echo implode(PHP_EOL, $out) . PHP_EOL;
+        if ($code !== 0) { exit($code); }
+        break;
+    }
+
     case 'scan-stop-all': {
         $r = Scanner::stopAllScans();
         echo $r['message'] . PHP_EOL;
@@ -459,6 +483,7 @@ Usage: serverscrub <command> [args] [--json]
   reputation <ip>              Look up IP reputation
   update-sigs                  Update malware signatures
   user-reports                 Rebuild the per-user reports the cPanel plugin reads
+  schedule                     Show every scheduled task, when it last ran, and whether it is overdue
   scan-reap                    Clear dead scan jobs and orphaned clamscan processes
   scan-stop-all                Stop every running scan and kill its clamscan processes
   install-rootkit-tools        Install rkhunter and chkrootkit (retry of the installer step)

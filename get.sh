@@ -98,6 +98,23 @@ ensure_tool unzip unzip
 fetch() { # fetch <url> -> stdout
   if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 30 "$1"; else wget -qO- --timeout=30 "$1"; fi
 }
+
+# The manifest, fetched past any cache in front of it.
+#
+# raw.githubusercontent.com serves through a CDN with a short TTL, so for a few
+# minutes after a release it keeps handing out the PREVIOUS latest.json. An
+# install run in that window reports success and installs the old version,
+# which is exactly as confusing as it sounds: the command said 4.3.0 was
+# published and the server ended up on 4.2.0. A unique query string makes it a
+# different URL to the cache and costs nothing on an origin that ignores it.
+#
+# Only the manifest is cache-busted. The zip is content-addressed by the sha256
+# in the manifest, so a stale copy of THAT is caught by the checksum.
+fetch_manifest() { # fetch_manifest <url> -> stdout
+  local sep='?'
+  case "$1" in *\?*) sep='&' ;; esac
+  fetch "${1}${sep}_=$(date +%s)" 2>/dev/null || fetch "$1"
+}
 fetch_to() { # fetch_to <url> <dest>
   if command -v curl >/dev/null 2>&1; then curl -fL --max-time 300 -o "$2" "$1"
   else wget -q --timeout=300 -O "$2" "$1"; fi
@@ -130,7 +147,7 @@ if [[ -n "$PIN_VERSION" ]]; then
   info "Pinned version: v${VERSION}"
   # Still try for a version-pinned manifest so the checksum can be verified
   for BASE in "${MIRRORS[@]}"; do
-    VM="$(fetch "${BASE}/v${VERSION}/latest.json" 2>/dev/null)" || continue
+    VM="$(fetch_manifest "${BASE}/v${VERSION}/latest.json" 2>/dev/null)" || continue
     SHA="$(parse_manifest "$VM" sha256)"
     [[ -n "$SHA" ]] && { SRC_BASE="$BASE"; ok "Checksum found for v${VERSION}"; break; }
   done
@@ -147,7 +164,7 @@ else
     [[ -n "$LIVE_VER" ]] && info "  latest/ reports v${LIVE_VER}"
 
     # 1. Preferred: latest.json — authoritative and carries the checksum
-    MANIFEST="$(fetch "${BASE}/latest.json" 2>/dev/null)"
+    MANIFEST="$(fetch_manifest "${BASE}/latest.json" 2>/dev/null)"
     if [[ -n "$MANIFEST" ]]; then
       VERSION="$(parse_manifest "$MANIFEST" version)"
       URL="$(parse_manifest "$MANIFEST" url)"
@@ -170,7 +187,7 @@ else
       VERSION="$LIVE_VER"
       SRC_BASE="$BASE"
       ok "Latest version: v${VERSION}  (from latest/VERSION)"
-      VM="$(fetch "${BASE}/v${VERSION}/latest.json" 2>/dev/null)"
+      VM="$(fetch_manifest "${BASE}/v${VERSION}/latest.json" 2>/dev/null)"
       [[ -n "$VM" ]] && SHA="$(parse_manifest "$VM" sha256)"
       [[ -n "$SHA" ]] && ok "  Checksum published for v${VERSION}" \
                       || warn "  No checksum for v${VERSION} — integrity will NOT be verified."
@@ -186,7 +203,7 @@ else
       SRC_BASE="$BASE"
       ok "Latest version: v${VERSION}  (discovered from directory listing)"
       # Pick up the checksum from the version folder if one is published
-      VM="$(fetch "${BASE}/v${VERSION}/latest.json" 2>/dev/null)"
+      VM="$(fetch_manifest "${BASE}/v${VERSION}/latest.json" 2>/dev/null)"
       [[ -n "$VM" ]] && SHA="$(parse_manifest "$VM" sha256)"
       [[ -n "$SHA" ]] && ok "  Checksum published for v${VERSION}" \
                       || warn "  No checksum for v${VERSION} — integrity will NOT be verified."

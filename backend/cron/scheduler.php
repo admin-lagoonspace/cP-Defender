@@ -13,7 +13,7 @@
  * fixed and dumb, the settings are the single source of truth, and a change
  * takes effect on the next tick with nothing to keep in sync.
  *
- * Usage:  php backend/cron/scheduler.php [--force <task>] [--dry-run]
+ * Usage:  php backend/cron/scheduler.php [--force <task>] [--dry-run] [--status]
  *
  * Settings consumed (all have defaults, so an upgrade needs no migration):
  *   scan_schedule        off | hourly | daily | weekly     (default daily)
@@ -60,9 +60,11 @@ require_once SG_ROOT . '/backend/lib/Firewall.php';
 
 $force  = null;
 $dryRun = false;
+$status = false;
 for ($i = 1; $i < $argc; $i++) {
     if ($argv[$i] === '--force' && isset($argv[$i + 1])) { $force = $argv[++$i]; }
     elseif ($argv[$i] === '--dry-run') { $dryRun = true; }
+    elseif ($argv[$i] === '--status')  { $status = true; }
 }
 
 function slog(string $m): void {
@@ -73,7 +75,11 @@ function slog(string $m): void {
 // entry point, so it is the most reliable place to do it.
 License::publishFlag();
 
-if (!License::protectionAllowed()) {
+// --status is a read-only diagnostic, so it answers even on an unlicensed
+// server. "Is my nightly scan running?" is exactly the question an operator
+// asks when something is wrong, and refusing to say because of the licence
+// state would hide the licence state itself.
+if (!$status && !License::protectionAllowed()) {
     $s = License::status();
     slog("skipped: license {$s['status']} — {$s['message']}");
     exit(0);
@@ -454,6 +460,44 @@ $tasks = [
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 $ran = 0;
+// ---- --status: what is scheduled, and when it last ran ---------------------
+//
+// Built from $tasks itself rather than a second list kept somewhere else. A
+// copy of this table in the CLI was wrong within minutes of being written --
+// one setting key misspelled, one task that does not exist, five missing --
+// and a status report that lies is worse than no status report.
+if ($status) {
+    printf("%-12s %-9s %-7s %-22s %s\n", 'TASK', 'SCHEDULE', 'AT', 'LAST RUN', 'STATUS');
+    foreach ($tasks as $name => $t) {
+        $sched = (string) $t['schedule'];
+        $last  = lastRun($name);
+
+        if ($sched === 'off' || $sched === 'disabled' || $sched === '') {
+            $state = 'disabled';
+        } elseif ($last === 0) {
+            $state = 'NEVER RUN';
+        } else {
+            $limit = ['every' => 900, 'hourly' => 3600,
+                      'daily' => 86400, 'weekly' => 604800][$sched] ?? 86400;
+            // Twice its own period with no run means it is not happening,
+            // which is the question this command exists to answer.
+            $state = ($now - $last) > ($limit * 2) ? 'OVERDUE' : 'ok';
+        }
+
+        printf("%-12s %-9s %-7s %-22s %s\n",
+               $name, $sched, (string) ($t['time'] ?? '-'),
+               $last ? gmdate('Y-m-d H:i:s', $last) . 'Z' : '-',
+               $state);
+    }
+    echo PHP_EOL;
+    echo 'Scheduler output goes to: ' . SG_LOGS . '/cron.log' . PHP_EOL;
+    $live = Scanner::liveScans();
+    echo 'Scans running now:        ' . count($live)
+       . ($live ? ' (job ' . implode(', ', array_column($live, 'id')) . ')' : '')
+       . PHP_EOL;
+    exit(0);
+}
+
 foreach ($tasks as $name => $t) {
     $due = $force === $name
         ? true
