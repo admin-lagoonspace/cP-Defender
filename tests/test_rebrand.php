@@ -42,7 +42,10 @@ foreach ($it as $f) {
     // has to keep skipping it by name or it walks back into its own
     // quarantine. Stripping those lines keeps the rest of the check strict.
     $c = preg_replace("/^.*'\.sentinel-gate'.*$/m", '', $c);
-    $c = preg_replace('/^.*\.sentinel-gate.*(?:skip|legacy|quarantine).*$/mi', '', $c);
+    // No leading dot required: the pre-rename install directory is
+    // /usr/local/sentinel-gate, and the quarantine sweep has to know it to
+    // clear files left behind there.
+    $c = preg_replace('/^.*sentinel-gate.*(?:skip|legacy|quarantine|previous).*$/mi', '', $c);
 
     if (preg_match('/sentinel[\s_-]?gate/i', $c)) {
         $stale[] = str_replace($repo, '', $path);

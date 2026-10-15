@@ -251,10 +251,11 @@ class Database {
                 -- Brute-force detection. The dashboard has charted this since
                 -- it was written and nothing ever produced the data.
                 ('bf_enabled',              '1'),
-                ('bf_threshold',            '10'),
+                ('bf_threshold',            '5'),
+                ('bf_ladder',               '10800,21600,86400,0'),
+                ('bf_offence_memory_days',  '30'),
                 ('bf_window',               '600'),
                 ('bf_auto_block',           '1'),
-                ('bf_block_duration',       '3600'),
                 ('bf_retention_days',       '7'),
                 ('bf_schedule',             'every'),
                 ('bf_whitelist',            ''),
@@ -351,6 +352,26 @@ class Database {
                           AND CAST(value AS INTEGER) > 7");
             $db->exec("INSERT OR REPLACE INTO settings (key,value) "
                     . "VALUES ('sg_mig_quarantine_7d','1')");
+        }
+
+        // Brute force blocked at ten failures in ten minutes and, because
+        // nothing ever lifted a block, blocked each address at most once ever.
+        // The policy is five failures and an escalating term. Existing
+        // installs hold the old threshold, which the seed cannot change.
+        // Marked so an operator who afterwards chooses their own threshold
+        // keeps it.
+        $bfmig = $db->query(
+            "SELECT value FROM settings WHERE key='sg_mig_bf_ladder'"
+        )->fetchColumn();
+        if ($bfmig === false) {
+            $db->exec("UPDATE settings SET value='5'
+                        WHERE key='bf_threshold' AND CAST(value AS INTEGER) > 5");
+            // Auto-blocking off meant the ladder would never run at all. It
+            // is turned back on once: watching an attack without acting on it
+            // is what prompted this.
+            $db->exec("UPDATE settings SET value='1' WHERE key='bf_auto_block'");
+            $db->exec("INSERT OR REPLACE INTO settings (key,value) "
+                    . "VALUES ('sg_mig_bf_ladder','1')");
         }
 
         $migrated = $db->query(

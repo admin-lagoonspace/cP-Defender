@@ -47,6 +47,53 @@ class Firewall {
         return ['success' => $code === 0, 'output' => implode("\n", $out)];
     }
 
+    /**
+     * Lift blocks whose term has ended.
+     *
+     * blockIP has always written expires_at, and until 4.2.0 nothing ever read
+     * it: every "temporary" block was permanent at the firewall while the
+     * database cheerfully reported a deadline. That is the worse of the two
+     * failure modes -- an operator who believes a block is temporary does not
+     * go looking for the customer it is silently holding out -- and it also
+     * made escalation impossible, since an address that is never released can
+     * never re-offend.
+     *
+     * Permanent blocks (expires_at NULL) are never touched.
+     */
+    public static function expireBlocks(): array
+    {
+        $now  = time();
+        $due  = Database::fetchAll(
+            "SELECT ip_address FROM blocked_ips
+              WHERE permanent = 0
+                AND expires_at IS NOT NULL
+                AND expires_at > 0
+                AND expires_at <= CAST(? AS INTEGER)",
+            [$now]
+        );
+
+        $fw       = new self();
+        $released = 0;
+        $failed   = 0;
+        foreach ($due as $r) {
+            $ip = (string) $r['ip_address'];
+            $res = $fw->unblockIP($ip);
+            if (!empty($res['success'])) {
+                $released++;
+            } else {
+                // Left in place deliberately: the row still says blocked, so
+                // the next run tries again rather than the database claiming a
+                // release the firewall never performed.
+                $failed++;
+            }
+        }
+
+        if ($released > 0) {
+            Logger::info("Firewall: released {$released} expired block(s)");
+        }
+        return ['released' => $released, 'failed' => $failed, 'due' => count($due)];
+    }
+
     public function unblockIP(string $ip): array {
         $this->validateIP($ip);
 

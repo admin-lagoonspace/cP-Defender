@@ -98,6 +98,76 @@ class BruteForce
                 blocked_at   INTEGER
             );
         ");
+
+        // Added in 4.2.0, so existing installs need them bolted on. SQLite has
+        // no ADD COLUMN IF NOT EXISTS, and a failed ALTER inside exec() would
+        // abort the rest of the batch, so each is checked first.
+        $have = [];
+        foreach (Database::fetchAll('PRAGMA table_info(brute_force_offenders)') as $c) {
+            $have[(string) $c['name']] = true;
+        }
+        // How many times this address has earned a block. The ladder is keyed
+        // on this, not on attempts: an address that comes back after its term
+        // has expired is a repeat offender regardless of how hard it tried.
+        if (!isset($have['offences'])) {
+            Database::get()->exec(
+                'ALTER TABLE brute_force_offenders ADD COLUMN offences INTEGER NOT NULL DEFAULT 0');
+        }
+        // When the current block lifts. NULL while blocked means permanent.
+        if (!isset($have['blocked_until'])) {
+            Database::get()->exec(
+                'ALTER TABLE brute_force_offenders ADD COLUMN blocked_until INTEGER');
+        }
+        // When the last block was lifted. Attempts recorded before this are
+        // evidence that has already been punished; counting them again would
+        // re-block the address the moment its term ended.
+        if (!isset($have['cleared_at'])) {
+            Database::get()->exec(
+                'ALTER TABLE brute_force_offenders ADD COLUMN cleared_at INTEGER');
+        }
+
+        // An address blocked before the ladder existed has served no recorded
+        // strike, so its next offence would start again at three hours. One is
+        // the honest count: it has been blocked once.
+        Database::query(
+            'UPDATE brute_force_offenders SET offences=1 WHERE blocked=1 AND offences=0');
+    }
+
+    /**
+     * The escalation ladder, in seconds. 0 means permanent.
+     *
+     * Three hours, then six, then a day, then for good. Each term is served
+     * for one offence; coming back after it expires earns the next rung. The
+     * point of escalating rather than blocking permanently on the first
+     * offence is that addresses are reassigned and people mistype passwords,
+     * so a first offence should cost an afternoon, not a customer.
+     */
+    public static function ladder(): array
+    {
+        $raw = (string) (Database::setting('bf_ladder', '10800,21600,86400,0') ?? '');
+        $out = [];
+        foreach (explode(',', $raw) as $part) {
+            $v = trim($part);
+            if ($v === '') { continue; }
+            $out[] = max(0, min(2592000, (int) $v));
+            if ((int) $v === 0) { break; }    // permanent ends the ladder
+        }
+        return $out !== [] ? $out : [10800, 21600, 86400, 0];
+    }
+
+    /**
+     * How long the Nth offence is blocked for. 0 means permanent.
+     *
+     * Past the end of the ladder the last rung repeats, so a ladder that does
+     * not end in 0 never becomes permanent -- which is a legitimate choice for
+     * an operator who does not want permanent blocks, and must not silently
+     * turn into one.
+     */
+    public static function termFor(int $offence): int
+    {
+        $l = self::ladder();
+        $i = max(1, $offence) - 1;
+        return $l[min($i, count($l) - 1)];
     }
 
     // ── Settings ─────────────────────────────────────────────────────────────
@@ -110,7 +180,7 @@ class BruteForce
     /** Failures from one address within the window before it counts as an attack. */
     public static function threshold(): int
     {
-        return max(3, min(1000, (int) (Database::setting('bf_threshold', '10') ?? 10)));
+        return max(3, min(1000, (int) (Database::setting('bf_threshold', '5') ?? 5)));
     }
 
     /** The window, in seconds. */
@@ -122,12 +192,6 @@ class BruteForce
     public static function autoBlock(): bool
     {
         return (Database::setting('bf_auto_block', '1') ?? '1') === '1';
-    }
-
-    /** How long an automatic block lasts. 0 means permanent. */
-    public static function blockDuration(): int
-    {
-        return max(0, min(2592000, (int) (Database::setting('bf_block_duration', '3600') ?? 3600)));
     }
 
     /** Addresses never blocked, however they behave. */
@@ -223,6 +287,58 @@ class BruteForce
     }
 
     /**
+     * End blocks whose term has been served.
+     *
+     * Two things happen, and both matter. The firewall rule goes, which is
+     * what makes a three-hour block three hours rather than for ever. And the
+     * address's recorded attempts are discarded, because they are evidence it
+     * has already been punished for -- leaving them in place would push it
+     * straight back over the threshold the instant it was released, which
+     * would turn every first offence into a permanent block within minutes
+     * and make the ladder meaningless.
+     *
+     * The strike count is deliberately NOT reset. That is the whole ladder:
+     * an address that comes back is on its second offence.
+     */
+    public static function releaseExpired(): array
+    {
+        self::ensureSchema();
+        $now = time();
+
+        $due = Database::fetchAll(
+            "SELECT ip_address FROM brute_force_offenders
+              WHERE blocked = 1
+                AND blocked_until IS NOT NULL
+                AND blocked_until > 0
+                AND blocked_until <= CAST(? AS INTEGER)",
+            [$now]
+        );
+
+        $fw       = new Firewall();
+        $released = 0;
+        foreach ($due as $r) {
+            $ip  = (string) $r['ip_address'];
+            $res = $fw->unblockIP($ip);
+            if (empty($res['success'])) {
+                // Try again next run rather than record a release that did
+                // not happen.
+                continue;
+            }
+            Database::query(
+                'UPDATE brute_force_offenders
+                    SET blocked=0, blocked_until=NULL, cleared_at=?, attempts=0
+                  WHERE ip_address=?',
+                [$now, $ip]
+            );
+            Database::query('DELETE FROM brute_force_attempts WHERE ip_address=?', [$ip]);
+            $released++;
+            Logger::info("Brute force: {$ip} released, term served");
+        }
+
+        return ['released' => $released, 'due' => count($due)];
+    }
+
+    /**
      * Find addresses over the threshold, record them, and block if configured.
      *
      * @return array{checked:int,offenders:int,blocked:int}
@@ -309,22 +425,39 @@ class BruteForce
                 ]);
             }
 
+            // Escalate.
+            //
+            // Until 4.2.0 this blocked only when the address had never been
+            // blocked before, and nothing ever lifted a block -- so in
+            // practice an address was blocked once, for ever, or (far more
+            // often, since nothing expired anything) watched indefinitely
+            // while it kept trying. An operator looking at a list of addresses
+            // marked "Watching" after two hundred failures is right to ask
+            // what the product is for.
             if (self::autoBlock() && empty($existing['blocked'])) {
+                $offence = (int) ($existing['offences'] ?? 0) + 1;
+                $ttl     = self::termFor($offence);
+                $perm    = ($ttl === 0);
+
                 $fw  = new Firewall();
-                $ttl = self::blockDuration();
                 $res = $fw->blockIP(
                     $ip,
-                    'Brute force: ' . $r['attempts'] . ' failures against ' . $r['services'],
-                    $ttl === 0,
-                    $ttl === 0 ? 86400 : $ttl
+                    'Brute force: ' . $r['attempts'] . ' failures against ' . $r['services']
+                        . ' (offence ' . $offence . ')',
+                    $perm,
+                    $perm ? 86400 : $ttl
                 );
                 if (!empty($res['success'])) {
                     Database::query(
-                        'UPDATE brute_force_offenders SET blocked=1, blocked_at=? WHERE ip_address=?',
-                        [time(), $ip]
+                        'UPDATE brute_force_offenders
+                            SET blocked=1, blocked_at=?, blocked_until=?, offences=?
+                          WHERE ip_address=?',
+                        [time(), $perm ? null : time() + $ttl, $offence, $ip]
                     );
                     $blocked++;
-                    Logger::warn("Brute force: blocked {$ip} after {$r['attempts']} failures");
+                    Logger::warn("Brute force: blocked {$ip} after {$r['attempts']} failures"
+                        . ' — offence ' . $offence . ', '
+                        . ($perm ? 'permanent' : self::humanTerm($ttl)));
                 }
             }
         }
@@ -339,6 +472,19 @@ class BruteForce
             'skipped'   => $skipped,
             'blocked'   => $blocked,
         ];
+    }
+
+    /** A block term as an operator would say it. 0 is permanent. */
+    public static function humanTerm(int $secs): string
+    {
+        if ($secs <= 0) { return 'permanent'; }
+        // Days only past two of them: the policy is written in hours, and a
+        // ladder rung shown as "1d" next to "3h" and "6h" reads as a different
+        // kind of quantity rather than the next step up.
+        if ($secs >= 172800 && $secs % 86400 === 0) { return ($secs / 86400) . 'd'; }
+        if ($secs % 3600 === 0) { return ($secs / 3600) . 'h'; }
+        if ($secs % 60 === 0)    { return ($secs / 60) . 'm'; }
+        return $secs . 's';
     }
 
     /** Loopback and private ranges, which must never be auto-blocked. */
@@ -361,7 +507,14 @@ class BruteForce
             return ['enabled' => false, 'collected' => 0, 'offenders' => 0, 'blocked' => 0];
         }
         $collected = self::collect();
-        $r         = self::evaluate();
+
+        // Before evaluating, not after: an address whose term ended must be
+        // out of the blocked state by the time evaluate() looks at it, or its
+        // return visit is recorded against a block that has already been
+        // served and it never climbs the ladder.
+        $rel = self::releaseExpired();
+
+        $r = self::evaluate();
         self::prune();
 
         Database::setSetting('bf_last_run', (string) time());
@@ -370,6 +523,7 @@ class BruteForce
             'collected' => $collected,
             'offenders' => $r['offenders'],
             'blocked'   => $r['blocked'],
+            'released'  => $rel['released'],
         ];
     }
 
@@ -386,8 +540,26 @@ class BruteForce
         $n    = Database::query(
             'DELETE FROM brute_force_attempts WHERE attempted_at < CAST(? AS INTEGER)', [$cut]
         )->rowCount();
+        // An address that has served a term keeps its strike count for much
+        // longer than its attempts are kept.
+        //
+        // Attempts are evidence and expire in a week. The strike count is
+        // history, and pruning it on the same clock quietly reset the ladder:
+        // an address released after a three-hour block goes to blocked=0, and
+        // seven quiet days later its row was deleted along with the record
+        // that it had ever offended. An attacker returning every eighth day
+        // would have been blocked for three hours, for ever, which is the
+        // behaviour the ladder exists to prevent.
+        $memDays = max(1, min(365,
+            (int) (Database::setting('bf_offence_memory_days', '30') ?? 30)));
+        $memCut  = time() - ($memDays * 86400);
+
         Database::query(
-            'DELETE FROM brute_force_offenders WHERE last_seen < CAST(? AS INTEGER) AND blocked = 0', [$cut]
+            'DELETE FROM brute_force_offenders
+              WHERE blocked = 0
+                AND ((offences = 0 AND last_seen < CAST(? AS INTEGER))
+                  OR (offences > 0 AND last_seen < CAST(? AS INTEGER)))',
+            [$cut, $memCut]
         );
         return $n;
     }
@@ -418,7 +590,8 @@ class BruteForce
             'threshold'      => self::threshold(),
             'window'         => self::window(),
             'auto_block'     => self::autoBlock(),
-            'block_duration' => self::blockDuration(),
+            'ladder'         => array_map([self::class, 'humanTerm'], self::ladder()),
+            'ladder_secs'    => self::ladder(),
             'last_run'       => (int) (Database::setting('bf_last_run', '0') ?? 0),
             'attempts_24h'   => (int) (Database::fetchOne(
                 'SELECT COUNT(*) c FROM brute_force_attempts WHERE attempted_at >= ?',
@@ -458,9 +631,30 @@ class BruteForce
     public static function offenders(int $limit = 100): array
     {
         self::ensureSchema();
-        return Database::fetchAll(
+        $rows = Database::fetchAll(
             'SELECT * FROM brute_force_offenders ORDER BY last_seen DESC LIMIT ' . max(1, min(500, $limit))
         );
+
+        // Derived here rather than in the front end so the list, the API and
+        // the logs all describe a block the same way.
+        $now = time();
+        foreach ($rows as &$r) {
+            $off   = (int) ($r['offences'] ?? 0);
+            $until = $r['blocked_until'] === null ? null : (int) $r['blocked_until'];
+            $r['offences']      = $off;
+            $r['blocked_until'] = $until;
+            $r['permanent']     = (int) (!empty($r['blocked']) && $until === null);
+            $r['expires_in']    = ($until !== null && !empty($r['blocked']))
+                                    ? max(0, $until - $now) : null;
+            // What the next offence will cost, which is the part that makes
+            // the ladder visible instead of implied.
+            $r['next_term']     = self::humanTerm(self::termFor($off + 1));
+            $r['state']         = empty($r['blocked'])
+                ? 'watching'
+                : ($until === null ? 'permanent' : 'blocked');
+        }
+        unset($r);
+        return $rows;
     }
 
     /** Which usernames are being tried — a spray looks different from a target. */
@@ -484,6 +678,11 @@ class BruteForce
         }
         $fw = new Firewall();
         $fw->unblockIP($ip);
+        // The strike count goes too. A manual release is the operator saying
+        // this address is not an attacker, so starting it back at the first
+        // rung is the point rather than a side effect. An address that is
+        // merely serving its term is released by releaseExpired(), which
+        // deliberately keeps the count.
         Database::query('DELETE FROM brute_force_offenders WHERE ip_address=?', [$ip]);
         Database::query('DELETE FROM brute_force_attempts  WHERE ip_address=?', [$ip]);
         Logger::info('Brute force: released ' . $ip);

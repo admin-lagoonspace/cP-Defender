@@ -371,7 +371,19 @@ $tasks = [
             $r = BruteForce::run();
             if (!$r['enabled']) { slog('  brute force: disabled'); return; }
             slog('  brute force: ' . $r['collected'] . ' failure(s), '
-               . $r['offenders'] . ' offender(s), ' . $r['blocked'] . ' blocked');
+               . $r['offenders'] . ' offender(s), ' . $r['blocked'] . ' blocked, '
+               . (int) ($r['released'] ?? 0) . ' released');
+
+            // Blocks placed by anything else -- the operator, another module --
+            // carry a deadline too, and until 4.2.0 nothing anywhere acted on
+            // one. Swept here rather than in its own task: it is cheap, and a
+            // task that exists only to call one function is a task that gets
+            // forgotten when the schedule is edited.
+            $e = Firewall::expireBlocks();
+            if ($e['released'] > 0 || $e['failed'] > 0) {
+                slog('  firewall: ' . $e['released'] . ' expired block(s) released'
+                   . ($e['failed'] > 0 ? ', ' . $e['failed'] . ' failed' : ''));
+            }
         },
     ],
 

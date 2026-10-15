@@ -1256,6 +1256,7 @@ This file was removed and not kept. Restore it from your backups
             'aged_out'       => (int) ($pruned['removed'] ?? 0),
             'aged_bytes'     => (int) ($pruned['bytes'] ?? 0),
             'kept'           => (int) ($pruned['kept'] ?? 0),
+            'legacy_removed' => (int) ($pruned['legacy_removed'] ?? 0),
             'reconciled'     => $reconciled,
             'records_retired'=> $aged,
         ];
@@ -1614,6 +1615,41 @@ This file was removed and not kept. Restore it from your backups
         return $pids;
     }
 
+    /**
+     * Quarantine directories that are not the current one, but are ours.
+     *
+     * The default quarantine path is derived from the product name, so the
+     * rename moved where the product LOOKS without moving a single file: a
+     * server that had several hundred files in /home/.sentinel-gate/quarantine
+     * reported `files: 0` at /home/.serverscrub/quarantine while the threat
+     * rows still pointed at the old location. The sweep follows each row's
+     * recorded path and so still deals with those, but anything whose record
+     * has been retired is left on disk with nothing left to find it. The same
+     * happens whenever an operator relocates quarantine.
+     *
+     * Only directories that exist and carry one of our names are returned --
+     * never a path an operator configured, which is handled as the live one.
+     */
+    public static function legacyQuarantineDirs(): array {
+        $active = @realpath(Database::storagePath('quarantine'));
+
+        $candidates = [SG_ROOT . '/quarantine', '/usr/local/sentinel-gate/quarantine'];
+        foreach (['/home', '/var'] as $vol) {
+            foreach (['.serverscrub', '.sentinel-gate'] as $name) {
+                $candidates[] = $vol . '/' . $name . '/quarantine';
+            }
+        }
+
+        $out = [];
+        foreach ($candidates as $c) {
+            if (!is_dir($c)) { continue; }
+            $real = @realpath($c);
+            if ($real === false || $real === $active) { continue; }
+            $out[$real] = true;              // de-duplicated by resolved path
+        }
+        return array_keys($out);
+    }
+
     public static function pruneQuarantine(?int $days = null): array {
         $days = $days ?? (int) (Database::setting('quarantine_retention_days', '30') ?? 30);
         $dir  = Database::storagePath('quarantine');
@@ -1648,10 +1684,47 @@ This file was removed and not kept. Restore it from your backups
             }
         }
 
-        if ($removed > 0) {
-            Logger::info("Quarantine pruned: {$removed} file(s), " . self::human($freed) . " freed");
+        // The same sweep over directories quarantine used to live in.
+        //
+        // Deliberately narrower there: in the live directory every file is
+        // ours by construction, but a path we merely infer gets only files we
+        // can name as ours. Nothing else in it is touched, and the directory
+        // itself is left behind if it still holds anything.
+        $legacyRemoved = 0;
+        foreach (self::legacyQuarantineDirs() as $old) {
+            $lit = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($old, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::CHILD_FIRST
+            );
+            foreach ($lit as $entry) {
+                if ($entry->isDir()) { @rmdir($entry->getPathname()); continue; }
+                // Neither case counts towards 'kept': that number answers
+                // "how much is still quarantined", and a directory the
+                // product no longer uses is not quarantine. Inflating it here
+                // made an unrelated caller report four extra files.
+                if (substr($entry->getFilename(), -11) !== '.quarantine') { continue; }
+                if ($entry->getMTime() >= $cutoff) { continue; }
+                $size = $entry->getSize();
+                if (@unlink($entry->getPathname())) {
+                    $removed++;
+                    $legacyRemoved++;
+                    $freed += $size;
+                }
+            }
+            @rmdir($old);
         }
-        return ['removed' => $removed, 'bytes' => $freed, 'kept' => $kept];
+
+        if ($removed > 0) {
+            Logger::info("Quarantine pruned: {$removed} file(s), " . self::human($freed)
+                       . ' freed' . ($legacyRemoved > 0
+                            ? " ({$legacyRemoved} from a previous quarantine location)" : ''));
+        }
+        return [
+            'removed'        => $removed,
+            'bytes'          => $freed,
+            'kept'           => $kept,
+            'legacy_removed' => $legacyRemoved,
+        ];
     }
 
     /**
@@ -1778,9 +1851,38 @@ This file was removed and not kept. Restore it from your backups
             }
         }
 
+        // What is sitting in directories quarantine used to use.
+        //
+        // Without this, `quarantine status` answered "files: 0" on a server
+        // holding two hundred quarantined files: the rename had changed the
+        // default path, and the report described the new empty directory with
+        // no hint that the old one existed. A count of zero that is true of
+        // the wrong directory is worse than no count.
+        $legacy  = [];
+        $lFiles  = 0;
+        $lBytes  = 0;
+        foreach (self::legacyQuarantineDirs() as $old) {
+            $n = 0; $b = 0;
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($old, FilesystemIterator::SKIP_DOTS));
+            foreach ($it as $f) {
+                if ($f->isFile() && substr($f->getFilename(), -11) === '.quarantine') {
+                    $n++; $b += $f->getSize();
+                }
+            }
+            $legacy[] = ['dir' => $old, 'files' => $n, 'bytes' => $b,
+                         'human' => self::human($b)];
+            $lFiles += $n;
+            $lBytes += $b;
+        }
+
         $free  = @disk_free_space($dir);
         return [
             'dir'         => $dir,
+            'legacy_dirs'  => $legacy,
+            'legacy_files' => $lFiles,
+            'legacy_bytes' => $lBytes,
+            'legacy_human' => self::human($lBytes),
             'files'       => $files,
             'bytes'       => $bytes,
             'human'       => self::human($bytes),

@@ -234,3 +234,121 @@ $cli = t_code($repo . '/backend/cli/serverscrub.php');
 t_contains($cli, "case 'sweep':", 'there is a CLI for the full sweep');
 t_contains($cli, 'Scanner::sweepQuarantine()', 'which runs it');
 t_contains($cli, 'Records reconciled', 'and reports what it reconciled');
+
+
+// ── Quarantine directories the product used to use ──────────────────────────
+// The default quarantine path is derived from the product name, so the rename
+// changed where the product LOOKED without moving one file. The reporting
+// server showed `files: 0` at /home/.serverscrub/quarantine while holding two
+// hundred files at /home/.sentinel-gate/quarantine. The sweep follows each
+// row's recorded path and so still expires those, but a file whose record has
+// been retired has nothing left to find it, and pruneQuarantine walked only
+// the configured directory -- so the old location leaked for ever.
+Database::query('DELETE FROM threats');
+
+$legacyQ = $ctx['sandbox'] . '/legacy-vol/.sentinel-gate/quarantine/2026-09-27';
+@mkdir($legacyQ, 0777, true);
+
+$oldFile  = $legacyQ . '/orphan_7.quarantine';          // ours, and ancient
+$newFile  = $legacyQ . '/fresh_8.quarantine';           // ours, but recent
+$notOurs  = $legacyQ . '/operator-notes.txt';           // not ours at all
+file_put_contents($oldFile, 'x');
+file_put_contents($newFile, 'x');
+file_put_contents($notOurs, 'keep me');
+touch($oldFile, time() - (30 * 86400));
+touch($notOurs, time() - (30 * 86400));                 // old, but still not ours
+
+$activeQ = $ctx['sandbox'] . '/active-quarantine';
+@mkdir($activeQ, 0777, true);
+Database::setSetting('quarantine_dir', $activeQ);
+
+// The helper must find it by name without being told, and must never return
+// the live directory -- pruning that twice would double-count.
+$found = array_map(function ($p) { return str_replace(chr(92), '/', $p); },
+    Scanner::legacyQuarantineDirs());
+
+// The sandbox volume is not one of the real system candidates, so point the
+// search at it the way a real server's layout does: via the candidate list.
+// Here we assert the invariants that hold regardless of layout.
+$activeReal = str_replace(chr(92), '/', realpath($activeQ));
+t_ok(!in_array($activeReal, $found, true),
+    'the live quarantine directory is never reported as a previous one');
+t_eq(count($found), count(array_unique($found)),
+    'previous locations are de-duplicated by resolved path');
+// Asserted once rather than per directory: how many candidates exist depends
+// on the machine, and a loop of assertions made the suite's own count drift
+// between runs, which is the kind of noise that hides a real regression.
+$allExist = true;
+foreach ($found as $d) { if (!is_dir($d)) { $allExist = false; } }
+t_ok($allExist, 'every reported previous location exists on disk');
+
+// ── The prune reaches them, and only takes what is ours ─────────────────────
+// Driven directly, since the candidate list is absolute system paths.
+$prune = new ReflectionMethod('Scanner', 'pruneQuarantine');
+$legacyFn = new ReflectionMethod('Scanner', 'legacyQuarantineDirs');
+t_ok($legacyFn->isPublic(), 'legacyQuarantineDirs is callable by the CLI');
+
+// Simulate the real arrangement: make the legacy tree the one the product
+// would find, by making it the configured dir's predecessor.
+$sc = t_code($repo . '/backend/lib/Scanner.php');
+$pq = substr($sc, strpos($sc, 'function pruneQuarantine'), 3000);
+t_contains($pq, 'self::legacyQuarantineDirs()',
+    'pruneQuarantine also walks directories quarantine used to live in');
+t_contains($pq, "substr(\$entry->getFilename(), -11) !== '.quarantine'",
+    'and in those it removes only files it can name as ours');
+t_contains($pq, 'legacy_removed', 'reporting how many came from an old location');
+
+$lq = substr($sc, strpos($sc, 'function legacyQuarantineDirs'), 1600);
+t_contains($lq, "'.sentinel-gate'", 'the pre-rename name is among the candidates');
+t_contains($lq, "'/usr/local/sentinel-gate/quarantine'",
+    'as is the pre-rename install directory');
+t_contains($lq, '$real === $active', 'and the live directory is excluded');
+
+// ── Behaviour: the old location is actually swept ───────────────────────────
+// Driven through a real candidate rather than asserted structurally.
+// SG_ROOT . '/quarantine' is the pre-3.x default and is in the candidate list,
+// so creating it while quarantine_dir points elsewhere reproduces exactly the
+// reporting server's shape: files in a directory the product no longer uses.
+$rootQ = SG_ROOT . '/quarantine/2026-09-27';
+@mkdir($rootQ, 0777, true);
+$rOld     = $rootQ . '/stale_1.quarantine';
+$rFresh   = $rootQ . '/recent_2.quarantine';
+$rForeign = $rootQ . '/operator-notes.txt';
+file_put_contents($rOld, 'x');
+file_put_contents($rFresh, 'x');
+file_put_contents($rForeign, 'keep me');
+touch($rOld, time() - (30 * 86400));
+touch($rForeign, time() - (30 * 86400));   // old, but not ours
+
+Database::setSetting('quarantine_dir', $activeQ);
+Database::setSetting('quarantine_retention_days', '7');
+
+$res = Scanner::pruneQuarantine();
+
+t_ok(!is_file($rOld),
+    'a stale file in a directory quarantine no longer uses is removed, '
+  . 'which is what leaked for ever before');
+t_ok(is_file($rFresh), 'a recent one there is kept');
+t_ok(is_file($rForeign),
+    'a file that is not ours is left alone, however old -- an inferred '
+  . 'directory gets only files we can name');
+t_ok((int) ($res['legacy_removed'] ?? 0) >= 1,
+    'and the result says the removal came from a previous location');
+
+// The age rule on the live directory, unchanged.
+Database::setSetting('quarantine_dir', $legacyQ);
+Scanner::pruneQuarantine();
+t_ok(!is_file($oldFile), 'a quarantined file past the retention period is removed');
+t_ok(is_file($newFile),  'one still inside it is kept');
+
+// ── status must not describe the wrong directory ────────────────────────────
+Database::setSetting('quarantine_dir', $activeQ);
+$usage = Scanner::quarantineUsage();
+t_eq(0, $usage['files'], 'the live directory is empty, as it was on the server');
+t_ok(array_key_exists('legacy_dirs', $usage),
+    'and status reports previous locations alongside it, so "files: 0" cannot mislead');
+t_ok(array_key_exists('legacy_files', $usage), 'with a file count');
+
+$cli = t_code($repo . '/backend/cli/serverscrub.php');
+t_contains($cli, 'legacy_removed', 'the sweep CLI reports what it took from an old location');
+t_contains($cli, 'status|sweep|prune', 'and the usage string lists sweep, which it omitted');

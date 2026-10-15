@@ -298,7 +298,7 @@ t_contains($js, "setText('dash-bf-24h'", 'and fills them in');
 
 // Settings an operator can actually reach.
 foreach (['bf-set-enabled', 'bf-set-block', 'bf-set-threshold',
-          'bf-set-window', 'bf-set-duration', 'bf-set-whitelist'] as $id) {
+          'bf-set-window', 'bf-set-ladder', 'bf-set-whitelist'] as $id) {
     t_contains($html, 'id="' . $id . '"', "the {$id} control exists");
 }
 t_contains($js, 'bf_threshold:', 'and the settings are saved');

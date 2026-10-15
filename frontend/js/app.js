@@ -1482,9 +1482,16 @@ async function loadBruteForce() {
     const val = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
     chk('bf-set-enabled', d.enabled);
     chk('bf-set-block',   d.auto_block);
-    val('bf-set-threshold', d.threshold || 10);
+    val('bf-set-threshold', d.threshold || 5);
     val('bf-set-window',    Math.round((d.window || 600) / 60));
-    val('bf-set-duration',  Math.round((d.block_duration || 3600) / 60));
+    // The ladder, in hours, which is how the policy is written.
+    val('bf-set-ladder', (d.ladder_secs || [10800, 21600, 86400, 0])
+          .map(x => x === 0 ? '0' : String(x / 3600)).join(', '));
+    const prev = g('bf-ladder-preview');
+    if (prev) {
+      prev.textContent = (d.ladder || []).length
+        ? ' Currently: ' + d.ladder.join(' → ') : '';
+    }
 
     // Which logs are actually being read. An empty table means "nothing is
     // attacking you" or "we are reading nothing", and those look identical.
@@ -1528,9 +1535,7 @@ async function loadBruteForce() {
           <td class="dim" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
               title="${esc(r.usernames || '')}">${esc(r.usernames || '—')}</td>
           <td class="dim">${esc(reltime(r.last_seen))}</td>
-          <td>${Number(r.blocked)
-                ? '<span class="badge badge-red">Blocked</span>'
-                : '<span class="badge badge-amber">Watching</span>'}</td>
+          <td>${bfStatusBadge(r)}</td>
           <td><button class="btn btn-ghost btn-xs"
                       onclick="bfRelease('${esc(r.ip_address)}')">Release</button></td>
         </tr>`).join('');
@@ -1561,6 +1566,39 @@ async function bfScanNow() {
   loadBruteForce();
 }
 
+// How an offender's state reads in the table.
+//
+// "Watching" against two hundred failures was the complaint that prompted the
+// escalation ladder: a status that never changes tells an operator the product
+// is doing nothing. Each row now says which term is being served, how long is
+// left, and -- while only watching -- what the next offence will cost, so the
+// policy is visible from the list rather than buried in settings.
+function bfTermLeft(secs) {
+  if (secs === null || secs === undefined) return '';
+  if (secs <= 0) return 'expiring';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (h >= 24) return Math.floor(h / 24) + 'd ' + (h % 24) + 'h left';
+  if (h > 0)   return h + 'h ' + m + 'm left';
+  return m + 'm left';
+}
+
+function bfStatusBadge(r) {
+  const strike = Number(r.offences || 0);
+  const nth = strike > 0 ? ` &middot; offence ${strike}` : '';
+  if (!Number(r.blocked)) {
+    const next = r.next_term ? ` &middot; next: ${esc(String(r.next_term))}` : '';
+    return `<span class="badge badge-amber">Watching</span>`
+         + `<span class="dim" style="font-size:.72rem">${nth}${next}</span>`;
+  }
+  if (Number(r.permanent)) {
+    return `<span class="badge badge-red">Blocked &middot; permanent</span>`
+         + `<span class="dim" style="font-size:.72rem">${nth}</span>`;
+  }
+  return `<span class="badge badge-red">Blocked</span>`
+       + `<span class="dim" style="font-size:.72rem"> ${esc(bfTermLeft(r.expires_in))}${nth}</span>`;
+}
+
 async function bfRelease(ip) {
   const res = await API.bfRelease(ip);
   if (res?.success) { toast('Released ' + ip, 'success'); loadBruteForce(); }
@@ -1578,7 +1616,15 @@ async function bfSave() {
     bf_auto_block:     g('bf-set-block')?.checked   ? '1' : '0',
     bf_threshold:      String(g('bf-set-threshold')?.value || '10'),
     bf_window:         String((parseInt(g('bf-set-window')?.value, 10)   || 10) * 60),
-    bf_block_duration: String((parseInt(g('bf-set-duration')?.value, 10) || 60) * 60),
+    // Hours in, seconds out. A rung of 0 means permanent and ends the ladder;
+    // anything unparseable is dropped rather than silently becoming 0, which
+    // would turn a typo into a permanent block.
+    bf_ladder: (g('bf-set-ladder')?.value || '3, 6, 24, 0')
+                 .split(',')
+                 .map(x => x.trim())
+                 .filter(x => x !== '' && !isNaN(Number(x)))
+                 .map(x => String(Math.max(0, Math.round(Number(x) * 3600))))
+                 .join(',') || '10800,21600,86400,0',
     bf_retention_days: String(g('bf-set-retention')?.value || '7'),
     bf_whitelist:      (g('bf-set-whitelist')?.value || '').trim(),
   };
