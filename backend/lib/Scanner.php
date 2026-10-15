@@ -411,7 +411,151 @@ class Scanner {
      * the same database and six processes competing for the same disks, which
      * is strictly worse than one scan that finishes sooner.
      */
+    /**
+     * The accounts on this server.
+     *
+     * cPanel keeps one file per account in /var/cpanel/users, which is the
+     * authoritative list. Without cPanel -- a plain Linux box, or a container
+     * -- fall back to home directories that look like user accounts. Either
+     * way the result is what an operator recognises as "an account", which is
+     * what a custom scan has to be able to offer them.
+     */
+    public static function listAccounts(): array
+    {
+        $out = [];
+
+        $cpUsers = '/var/cpanel/users';
+        if (is_dir($cpUsers)) {
+            foreach ((array) @scandir($cpUsers) as $f) {
+                if ($f === '.' || $f === '..' || $f === 'root') { continue; }
+                if (!is_file($cpUsers . '/' . $f)) { continue; }
+                $home = self::homeFor($f);
+                if ($home !== null) { $out[$f] = $home; }
+            }
+        }
+
+        if (!$out) {
+            // No cPanel. Home directories one level under the configured scan
+            // roots, skipping our own and anything that is not a real user.
+            foreach (self::scanRoots() as $root) {
+                foreach ((array) @scandir($root) as $f) {
+                    if ($f === '.' || $f === '..') { continue; }
+                    if (strpos($f, '.') === 0) { continue; }   // .serverscrub and friends
+                    $dir = $root . '/' . $f;
+                    if (!is_dir($dir) || is_link($dir)) { continue; }
+                    $out[$f] = $dir;
+                }
+            }
+        }
+
+        ksort($out);
+
+        $rows = [];
+        foreach ($out as $user => $home) {
+            $docroot = $home . '/public_html';
+            $rows[] = [
+                'user'    => (string) $user,
+                'home'    => $home,
+                'docroot' => is_dir($docroot) ? $docroot : null,
+                'has_web' => is_dir($docroot),
+            ];
+        }
+        return $rows;
+    }
+
+    /** Where an account's files live, if that directory exists. */
+    private static function homeFor(string $user): ?string
+    {
+        foreach (self::scanRoots() as $root) {
+            if (is_dir($root . '/' . $user)) { return $root . '/' . $user; }
+        }
+        $pw = function_exists('posix_getpwnam') ? @posix_getpwnam($user) : false;
+        if (is_array($pw) && !empty($pw['dir']) && is_dir($pw['dir'])) {
+            return rtrim($pw['dir'], '/');
+        }
+        return null;
+    }
+
+    /** The configured scan roots, which is where accounts are looked for. */
+    private static function scanRoots(): array
+    {
+        $raw = (string) (Database::setting('scan_paths', '/home') ?? '/home');
+        $out = [];
+        foreach (explode(',', $raw) as $p) {
+            $p = rtrim(trim($p), '/');
+            if ($p !== '' && is_dir($p)) { $out[] = $p; }
+        }
+        return $out ?: ['/home'];
+    }
+
+    /**
+     * Turn a scan type into the paths the scan will actually walk.
+     *
+     * Until 4.2.1 the type was written to the database and never read again:
+     * Quick, Full and Custom walked byte-for-byte the same tree and took the
+     * same time. Three options that do the same thing are worse than one
+     * option, because the operator believes they chose something.
+     *
+     *   quick  - every account's web root. Where public code runs and where
+     *            almost everything gets in, at a fraction of the files.
+     *   full   - the configured roots, entire.
+     *   custom - the accounts the operator picked.
+     *
+     * Quick falls back to the full roots when no web root can be found, and
+     * says so. Scanning nothing would be the worst possible answer to "scan my
+     * server"; silently scanning everything under the word "quick" is the
+     * second worst.
+     */
+    public static function resolveScanPaths(string $type, string $path = ''): array
+    {
+        $given = array_values(array_filter(array_map(
+            function ($p) { return rtrim(trim($p), '/'); },
+            explode(',', $path)
+        ), function ($p) { return $p !== ''; }));
+
+        switch ($type) {
+            case 'quick': {
+                $webs = [];
+                foreach (self::listAccounts() as $a) {
+                    if (!empty($a['docroot'])) { $webs[] = $a['docroot']; }
+                }
+                if ($webs) {
+                    return ['paths' => $webs, 'note' => count($webs) . ' web root(s)'];
+                }
+                $fall = $given ?: self::scanRoots();
+                return ['paths' => $fall,
+                        'note'  => 'no web roots found, scanning in full'];
+            }
+
+            case 'custom': {
+                // The caller passes account homes it got from listAccounts().
+                // Anything that is not a real directory is dropped here rather
+                // than handed to the worker to fail on later.
+                $ok = array_values(array_filter($given, 'is_dir'));
+                if (!$ok) {
+                    return ['paths' => [], 'note' => 'no valid accounts selected'];
+                }
+                return ['paths' => $ok, 'note' => count($ok) . ' account(s)'];
+            }
+
+            case 'full':
+            default: {
+                $fall = $given ?: self::scanRoots();
+                return ['paths' => $fall, 'note' => 'full'];
+            }
+        }
+    }
+
     public function startScan(string $path = '/home', string $type = 'quick'): int {
+        // The type decides what gets walked. Resolved here, at the one place
+        // every caller goes through -- the GUI, the scheduler and the CLI --
+        // so all three mean the same thing by "quick".
+        $res = self::resolveScanPaths($type, $path);
+        if (!$res['paths']) {
+            throw new RuntimeException('Nothing to scan: ' . $res['note']);
+        }
+        $path = implode(',', $res['paths']);
+
         $live = self::liveScans();
         $max  = self::maxConcurrent();
         if (count($live) >= $max) {
@@ -446,6 +590,7 @@ class Scanner {
             'started_at' => time(),
             'scan_path'  => $path,
         ]);
+        Logger::info("Scan job {$jobId}: {$type} ({$res['note']}) on " . $path);
 
         // Write job file so cron can pick it up
         if (!is_dir(SG_TMP)) mkdir(SG_TMP, 0750, true);

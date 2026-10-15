@@ -198,7 +198,7 @@ function openPage(name) {
   // Trigger page-specific data load
   switch (name) {
     case 'dashboard': refreshDashboard();   break;
-    case 'scanner':   loadThreats();        break;
+    case 'scanner':   loadThreats(); adoptRunningScan(); onScanTypeChange(); break;
     case 'firewall':  loadFirewall();       break;
     case 'waf':       loadWAF(); loadWafEngine();            break;
     case 'iprep':     loadTopAttackers(); loadServerIpForBlocklist();   break;
@@ -536,16 +536,28 @@ async function resolveAllEvents() {
 // ── Scanner ───────────────────────────────────────────────────────────────────
 async function startScan() {
   openPage('scanner');
-  const type  = document.getElementById('scan-type-sel')?.value || 'quick';
-  const path  = type === 'custom'
-    ? (document.getElementById('scan-path-input')?.value || '/home')
-    : '/home';
+  const type = document.getElementById('scan-type-sel')?.value || 'quick';
+
+  // A custom scan names accounts. Refusing to start with none selected is
+  // better than quietly scanning everything, which is what a path default
+  // would do.
+  let accounts = [];
+  if (type === 'custom') {
+    accounts = scanAccountsSelected();
+    if (!accounts.length) {
+      toast('Select at least one account to scan', 'error');
+      return;
+    }
+  }
 
   const res = Demo.active
     ? { success: true, job_id: 999 }
-    : await API.startScan(path, type);
+    : await API.startScan('/home', type, accounts);
 
-  if (!res?.success) { toast('Failed to start scan', 'error'); return; }
+  if (!res?.success) {
+    toast(res?.error || 'Failed to start scan', 'error');
+    return;
+  }
 
   State.scanJobId = res.job_id;
   document.getElementById('scan-progress-card').style.display = '';
@@ -557,7 +569,13 @@ async function startScan() {
     return;
   }
 
-  // Poll for status
+  followScan(State.scanJobId);
+}
+
+// Follow a running scan to completion, updating the progress card.
+function followScan(jobId) {
+  State.scanJobId = jobId;
+  if (State.scanInterval) clearInterval(State.scanInterval);
   State.scanInterval = setInterval(async () => {
     const st = await API.scanStatus(State.scanJobId);
     if (!st?.success) return;
@@ -650,6 +668,85 @@ function simulateDemoScan() {
 // speed with clamscan running flat out, while the UI reported that it had been
 // stopped. Reported as "the stop button is not stopping clamscan"; it was not
 // stopping anything.
+// Adopt a scan that is already running.
+//
+// Called on every visit to the Scanner page. A scan started by the nightly
+// cron, by another admin, or before a reload is now shown with its Stop
+// button, instead of the page pretending nothing is happening.
+async function adoptRunningScan() {
+  if (Demo.active) return;
+  let res;
+  try { res = await API.scanActive(); } catch (e) { return; }
+  const job = res?.data;
+  if (!job || !job.id) return;
+  if (State.scanJobId === job.id && State.scanInterval) return;   // already following
+
+  State.scanJobId = job.id;
+  const card = g('scan-progress-card');
+  if (card) card.style.display = '';
+  const btn = g('scan-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '\u23F3 Scanning\u2026'; }
+  const st = g('scan-live-status');
+  if (st) st.textContent = job.status === 'cancelling' ? 'Stopping\u2026' : 'Running';
+  followScan(job.id);
+}
+
+// ---- Custom scan: which accounts ------------------------------------------
+// "Custom Path" was a free-text box for a directory, which is not how an
+// operator thinks about a shared server: they think in accounts. The list is
+// fetched once per visit and cached for the page.
+let _scanAccounts = null;
+
+async function loadScanAccounts() {
+  const list = g('scan-accounts-list');
+  if (!list) return;
+  if (_scanAccounts === null) {
+    list.innerHTML = loadingRow ? loadingRow('Loading accounts') : '';
+    try {
+      const res = await API.scanAccounts();
+      _scanAccounts = res?.data || [];
+    } catch (e) {
+      _scanAccounts = [];
+    }
+  }
+  if (!_scanAccounts.length) {
+    list.innerHTML = '<div class="dim">No accounts found under the configured scan paths.</div>';
+    return;
+  }
+  list.innerHTML = _scanAccounts.map(a => `
+    <label style="display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--border);border-radius:7px;cursor:pointer">
+      <input type="checkbox" class="scan-acct" value="${esc(a.user)}" onchange="scanAccountsCount()">
+      <span style="min-width:0">
+        <span class="mono" style="display:block;overflow:hidden;text-overflow:ellipsis">${esc(a.user)}</span>
+        <span class="dim" style="font-size:.7rem">${a.has_web ? 'has public_html' : 'no web root'}</span>
+      </span>
+    </label>`).join('');
+  scanAccountsCount();
+}
+
+function scanAccountsSelected() {
+  return Array.from(document.querySelectorAll('.scan-acct:checked')).map(c => c.value);
+}
+
+function scanAccountsCount() {
+  const n = scanAccountsSelected().length;
+  const el = g('scan-accounts-count');
+  if (el) el.textContent = n + ' selected';
+}
+
+function scanAccountsAll(on) {
+  document.querySelectorAll('.scan-acct').forEach(c => { c.checked = !!on; });
+  scanAccountsCount();
+}
+
+// Show the picker only for a custom scan.
+function onScanTypeChange() {
+  const type = g('scan-type-sel')?.value || 'quick';
+  const card = g('scan-accounts-card');
+  if (card) card.style.display = (type === 'custom') ? '' : 'none';
+  if (type === 'custom') loadScanAccounts();
+}
+
 async function stopScan(jobId) {
   const btn = document.querySelector('#scan-progress-card button');
   if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }

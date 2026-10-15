@@ -158,14 +158,20 @@ $tasks = [
             $busy = Scanner::backupRunning();
             if ($busy) {
                 slog('  backup in progress (' . implode(', ', $busy) . ') - scan deferred');
-                return;
+                return false;      // still due: try again on the next tick
             }
 
             $usable = array_values(array_filter($paths, 'is_dir'));
             foreach (array_diff($paths, $usable) as $missing) {
                 slog("  skip missing path: $missing");
             }
-            if (!$usable) { slog('  no usable scan paths'); return; }
+            if (!$usable) {
+                // Marked as run deliberately: this is a misconfiguration that
+                // will not fix itself, and retrying every fifteen minutes
+                // would bury the log line that says so.
+                slog('  no usable scan paths — check scan_paths');
+                return true;
+            }
 
             // ONE job covering every path. This loop used to call startScan()
             // per path, and startScan() spawns a detached worker immediately --
@@ -176,9 +182,13 @@ $tasks = [
                 slog("  started $type scan of " . implode(', ', $usable) . " (job $job)");
             } catch (Throwable $e) {
                 // Declining to stack a second scan is the correct outcome, not
-                // a failure worth alarming about.
+                // a failure worth alarming about -- but it is also not a run,
+                // so the nightly scan stays due rather than being skipped for
+                // a day because one was already in progress at 02:00.
                 slog('  ' . $e->getMessage());
+                return false;
             }
+            return true;
         },
     ],
 
@@ -455,7 +465,21 @@ foreach ($tasks as $name => $t) {
 
     slog("running: $name [{$t['schedule']}]");
     try {
-        $t['run']();
+        // A task that returns false did NOT do its work and must stay due.
+        //
+        // This is what stopped the nightly malware scan from ever running. The
+        // scan task defers while a backup is in progress -- correctly, since
+        // two processes reading the whole filesystem at once is the problem it
+        // exists to avoid -- and then returned normally, so markRun() recorded
+        // it as having run. A 'daily' task is not due again for 24 hours, so
+        // on a server whose JetBackup window covers 02:00 the scan was
+        // deferred and marked done every single night, for ever. The deferral
+        // was right; counting it as a run was not.
+        $outcome = $t['run']();
+        if ($outcome === false) {
+            slog("  deferred: $name stays due");
+            continue;
+        }
         markRun($name);
         $ran++;
     } catch (Throwable $e) {

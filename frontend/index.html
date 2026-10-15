@@ -579,10 +579,10 @@
           <div class="page-sub">ClamAV + pattern-based detection · <span id="scanner-quar-state">auto-quarantine off</span></div>
         </div>
         <div style="display:flex;gap:8px">
-          <select class="form-input btn-sm" id="scan-type-sel" style="width:140px">
+          <select class="form-input btn-sm" id="scan-type-sel" style="width:180px" onchange="onScanTypeChange()">
             <option value="quick">Quick Scan</option>
             <option value="full">Full Scan</option>
-            <option value="custom">Custom Path</option>
+            <option value="custom">Custom (choose accounts)</option>
           </select>
           <input class="form-input btn-sm hidden" id="scan-path-input" placeholder="/home/user" style="width:180px">
           <button class="btn btn-primary btn-sm" id="scan-btn" onclick="startScan()">▶ Start Scan</button>
@@ -608,6 +608,23 @@
             <span>Files: <b id="scan-live-files" style="color:var(--txt)">0</b></span>
             <span>Threats: <b id="scan-live-threats" style="color:var(--red)">0</b></span>
             <span>Status: <b id="scan-live-status" style="color:var(--txt)">Starting…</b></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Custom scan: which accounts -->
+      <div class="card" id="scan-accounts-card" style="display:none;margin-bottom:16px">
+        <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span>CHOOSE ACCOUNTS TO SCAN</span>
+          <span class="dim" style="font-size:.72rem" id="scan-accounts-count">0 selected</span>
+          <div style="margin-left:auto;display:flex;gap:8px">
+            <button class="btn btn-ghost btn-xs" onclick="scanAccountsAll(true)">Select all</button>
+            <button class="btn btn-ghost btn-xs" onclick="scanAccountsAll(false)">Clear</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div id="scan-accounts-list"
+               style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;max-height:320px;overflow:auto">
           </div>
         </div>
       </div>

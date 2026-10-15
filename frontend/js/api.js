@@ -242,7 +242,10 @@ const API = (() => {
     dashStats: ()  => req('GET', 'dashboard/stats'),
 
     // Scanner
-    startScan:        (path, type)  => req('POST',   'scanner/start', { path, type }),
+    startScan:        (path, type, accounts) =>
+                          req('POST', 'scanner/start', { path, type, accounts }),
+    scanAccounts:     ()            => req('GET',    'scanner/accounts'),
+    scanActive:       ()            => req('GET',    'scanner/active'),
     scanStatus:       (jobId)       => req('GET',    `scanner/status/${jobId}`),
     scanStats:        ()            => req('GET',    'scanner/stats'),
     threats:          (status)      => req('GET',    `scanner/threats${status ? '?status='+status : ''}`),

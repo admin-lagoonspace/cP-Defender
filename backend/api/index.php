@@ -409,6 +409,17 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
         // Refusing a second scan is a normal outcome, not a server error, so
         // it is checked here and answered with 409 rather than left to the
         // exception handler's "Internal server error".
+        // GET scanner/accounts - who is on this server, for the custom scan.
+        'accounts' => ['success' => true, 'data' => Scanner::listAccounts()],
+
+        // GET scanner/active - the scan in progress, if any.
+        //
+        // The Stop button used to live behind a progress card that only
+        // appeared for a scan THIS browser tab had started. A scan started by
+        // cron, or by another admin, or before a page reload, ran with no way
+        // to stop it from the interface at all.
+        'active' => ['success' => true, 'data' => Scanner::activeScan()],
+
         'start'  => $method === 'POST'
             ? (function () use ($scanner, $body) {
                 $live = Scanner::liveScans();
@@ -420,9 +431,26 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
                             'running' => count($live), 'max' => $max,
                             'job_id' => (int) $live[count($live) - 1]['id']];
                 }
-                return ['success' => true,
-                        'job_id' => $scanner->startScan($body['path'] ?? '/home',
-                                                        $body['type'] ?? 'quick')];
+                $type = (string) ($body['type'] ?? 'quick');
+                // A custom scan names accounts, not paths. Resolving usernames
+                // against the real account list here means a path typed into
+                // the request cannot send the scanner somewhere of its own
+                // choosing.
+                if ($type === 'custom' && !empty($body['accounts']) && is_array($body['accounts'])) {
+                    $want  = array_map('strval', $body['accounts']);
+                    $homes = [];
+                    foreach (Scanner::listAccounts() as $a) {
+                        if (in_array($a['user'], $want, true)) { $homes[] = $a['home']; }
+                    }
+                    if (!$homes) {
+                        return ['success' => false, 'code' => 400,
+                                'error' => 'None of those accounts exist on this server'];
+                    }
+                    $path = implode(',', $homes);
+                } else {
+                    $path = (string) ($body['path'] ?? '/home');
+                }
+                return ['success' => true, 'job_id' => $scanner->startScan($path, $type)];
               })()
             : ['success' => false, 'error' => 'POST required', 'code' => 405],
 
