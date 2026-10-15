@@ -209,6 +209,23 @@ def main():
     else:
         ok("front-end JavaScript is bracket-balanced")
 
+    # 2c-js2. a helper called outside the function that declares it
+    # Bracket balance and handler resolution both passed while three shipped
+    # features did nothing at all: g() -- the element lookup nearly every
+    # handler uses -- was declared only INSIDE two functions, so module-scope
+    # callers threw ReferenceError the moment they ran, silently, inside an
+    # event handler.
+    r = subprocess.run([sys.executable,
+                        os.path.join(REPO, "scripts", "check-js-scope.py")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        for line in (r.stdout + r.stderr).strip().splitlines():
+            if line.strip():
+                fail(line.strip())
+        problems += 1
+    else:
+        ok("no JS helper is called outside the function that declares it")
+
     # 2c-py. the daemon must run on the oldest Python we support
     # cPanel runs on RHEL-family hosts shipping Python 3.6. The suite runs on
     # the developer's Python, which is far newer, so it proved nothing about the

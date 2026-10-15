@@ -198,7 +198,7 @@ function openPage(name) {
   // Trigger page-specific data load
   switch (name) {
     case 'dashboard': refreshDashboard();   break;
-    case 'scanner':   loadThreats(); adoptRunningScan(); onScanTypeChange(); break;
+    case 'scanner':   loadThreats(); adoptRunningScan(); break;
     case 'firewall':  loadFirewall();       break;
     case 'waf':       loadWAF(); loadWafEngine();            break;
     case 'iprep':     loadTopAttackers(); loadServerIpForBlocklist();   break;
@@ -240,6 +240,15 @@ function fmtNum(n) {
 function sevBadge(sev) {
   return `<span class="sev sev-${sev}">${sev.toUpperCase()}</span>`;
 }
+
+// The element lookup every handler uses.
+//
+// This existed only as a `const g` inside two functions, so any module-scope
+// code calling g() threw ReferenceError the moment it ran -- silently, inside
+// an event handler. Three shipped features did nothing at all because of it:
+// the custom-scan account picker, adopting an already-running scan, and the
+// brute-force ladder preview. Defined once, here, where everything can see it.
+function g(id) { return document.getElementById(id); }
 
 function openModal(id)  { document.getElementById(id)?.classList.remove('hidden'); }
 function closeModal(id) { document.getElementById(id)?.classList.add('hidden'); }
@@ -544,8 +553,10 @@ async function startScan() {
   let accounts = [];
   if (type === 'custom') {
     accounts = scanAccountsSelected();
+    // Pressing Start Scan with Custom chosen and nothing ticked reopens the
+    // dialog rather than failing: the operator plainly meant to pick.
     if (!accounts.length) {
-      toast('Select at least one account to scan', 'error');
+      openScanAccounts();
       return;
     }
   }
@@ -692,16 +703,18 @@ async function adoptRunningScan() {
 }
 
 // ---- Custom scan: which accounts ------------------------------------------
-// "Custom Path" was a free-text box for a directory, which is not how an
-// operator thinks about a shared server: they think in accounts. The list is
-// fetched once per visit and cached for the page.
+// "Custom Path" was a free-text directory box, which is not how an operator
+// thinks about a shared server: they think in accounts. Choosing Custom opens
+// a dialog listing every account with a checkbox.
 let _scanAccounts = null;
 
-async function loadScanAccounts() {
+async function openScanAccounts() {
+  openModal('scan-accounts-modal');
   const list = g('scan-accounts-list');
   if (!list) return;
+
   if (_scanAccounts === null) {
-    list.innerHTML = loadingRow ? loadingRow('Loading accounts') : '';
+    list.innerHTML = '<div class="dim">Loading accounts\u2026</div>';
     try {
       const res = await API.scanAccounts();
       _scanAccounts = res?.data || [];
@@ -709,13 +722,36 @@ async function loadScanAccounts() {
       _scanAccounts = [];
     }
   }
-  if (!_scanAccounts.length) {
+  renderScanAccounts();
+}
+
+function renderScanAccounts() {
+  const list = g('scan-accounts-list');
+  if (!list) return;
+
+  const accounts = _scanAccounts || [];
+  if (!accounts.length) {
     list.innerHTML = '<div class="dim">No accounts found under the configured scan paths.</div>';
+    scanAccountsCount();
     return;
   }
-  list.innerHTML = _scanAccounts.map(a => `
+
+  // Keep what is already ticked across a filter change, or filtering would
+  // quietly discard a selection the operator had already made.
+  const picked = new Set(scanAccountsSelected());
+  const q = (g('scan-accounts-filter')?.value || '').trim().toLowerCase();
+  const shown = q ? accounts.filter(a => a.user.toLowerCase().includes(q)) : accounts;
+
+  if (!shown.length) {
+    list.innerHTML = '<div class="dim">No account matches that filter.</div>';
+    scanAccountsCount();
+    return;
+  }
+
+  list.innerHTML = shown.map(a => `
     <label style="display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--border);border-radius:7px;cursor:pointer">
-      <input type="checkbox" class="scan-acct" value="${esc(a.user)}" onchange="scanAccountsCount()">
+      <input type="checkbox" class="scan-acct" value="${esc(a.user)}"
+             ${picked.has(a.user) ? 'checked' : ''} onchange="scanAccountsCount()">
       <span style="min-width:0">
         <span class="mono" style="display:block;overflow:hidden;text-overflow:ellipsis">${esc(a.user)}</span>
         <span class="dim" style="font-size:.7rem">${a.has_web ? 'has public_html' : 'no web root'}</span>
@@ -732,6 +768,8 @@ function scanAccountsCount() {
   const n = scanAccountsSelected().length;
   const el = g('scan-accounts-count');
   if (el) el.textContent = n + ' selected';
+  const go = g('scan-accounts-go');
+  if (go) go.disabled = (n === 0);      // nothing selected is not a scan
 }
 
 function scanAccountsAll(on) {
@@ -739,12 +777,20 @@ function scanAccountsAll(on) {
   scanAccountsCount();
 }
 
-// Show the picker only for a custom scan.
+// Start the scan from inside the dialog, which is where the selection is.
+function startScanFromPicker() {
+  if (!scanAccountsSelected().length) {
+    toast('Select at least one account to scan', 'error');
+    return;
+  }
+  closeModal('scan-accounts-modal');
+  startScan();
+}
+
+// Choosing Custom opens the dialog; choosing anything else is a plain scan.
 function onScanTypeChange() {
   const type = g('scan-type-sel')?.value || 'quick';
-  const card = g('scan-accounts-card');
-  if (card) card.style.display = (type === 'custom') ? '' : 'none';
-  if (type === 'custom') loadScanAccounts();
+  if (type === 'custom') openScanAccounts();
 }
 
 async function stopScan(jobId) {

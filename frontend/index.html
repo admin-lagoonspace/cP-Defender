@@ -612,23 +612,6 @@
         </div>
       </div>
 
-      <!-- Custom scan: which accounts -->
-      <div class="card" id="scan-accounts-card" style="display:none;margin-bottom:16px">
-        <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <span>CHOOSE ACCOUNTS TO SCAN</span>
-          <span class="dim" style="font-size:.72rem" id="scan-accounts-count">0 selected</span>
-          <div style="margin-left:auto;display:flex;gap:8px">
-            <button class="btn btn-ghost btn-xs" onclick="scanAccountsAll(true)">Select all</button>
-            <button class="btn btn-ghost btn-xs" onclick="scanAccountsAll(false)">Clear</button>
-          </div>
-        </div>
-        <div class="card-body">
-          <div id="scan-accounts-list"
-               style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;max-height:320px;overflow:auto">
-          </div>
-        </div>
-      </div>
-
       <!-- Threats Table -->
       <div class="card">
         <div class="card-header">
@@ -2583,13 +2566,16 @@ document.addEventListener('DOMContentLoaded', async () => {
      actually tell you what was attempted -- so a row could be read but not
      understood, and there was no way to see the rest. -->
 <style>
+  #scan-accounts-modal,
   #waf-event-modal {
     position: fixed; inset: 0; z-index: 9000;
     display: flex; align-items: center; justify-content: center;
     background: rgba(0,0,0,.55);
     padding: 20px;
   }
+  #scan-accounts-modal.hidden,
   #waf-event-modal.hidden { display: none; }
+  #scan-accounts-modal .wem-box,
   #waf-event-modal .wem-box {
     background: var(--card, #1b1f23);
     border: 1px solid var(--line, #2d333a);
@@ -2598,11 +2584,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     max-height: 86vh; display: flex; flex-direction: column;
     box-shadow: 0 18px 60px rgba(0,0,0,.5);
   }
+  #scan-accounts-modal .wem-head,
   #waf-event-modal .wem-head {
     display: flex; align-items: center; gap: 10px;
     padding: 14px 18px; border-bottom: 1px solid var(--line, #2d333a);
   }
+  #scan-accounts-modal .wem-body,
   #waf-event-modal .wem-body { padding: 16px 18px; overflow: auto; }
+  #scan-accounts-modal .wem-foot,
   #waf-event-modal .wem-foot {
     display: flex; gap: 8px; justify-content: flex-end;
     padding: 12px 18px; border-top: 1px solid var(--line, #2d333a);
@@ -2623,6 +2612,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     #waf-event-modal dt { margin-top: 8px; }
   }
 </style>
+<div id="scan-accounts-modal" class="hidden" role="dialog" aria-modal="true"
+     aria-labelledby="sam-title" onclick="if(event.target===this)closeModal('scan-accounts-modal')">
+  <div class="wem-box">
+    <div class="wem-head">
+      <div style="font-weight:700;font-size:.92rem" id="sam-title">Choose accounts to scan</div>
+      <button class="btn btn-ghost btn-xs" style="margin-left:auto"
+              onclick="closeModal('scan-accounts-modal')" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="wem-body">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+        <input type="text" id="scan-accounts-filter" class="form-input" placeholder="Filter accounts"
+               style="flex:1;min-width:160px" oninput="renderScanAccounts()">
+        <button class="btn btn-ghost btn-xs" onclick="scanAccountsAll(true)">Select all</button>
+        <button class="btn btn-ghost btn-xs" onclick="scanAccountsAll(false)">Clear</button>
+      </div>
+      <div id="scan-accounts-list"
+           style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px"></div>
+    </div>
+    <div class="wem-foot">
+      <span class="dim" style="font-size:.75rem" id="scan-accounts-count">0 selected</span>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto"
+              onclick="closeModal('scan-accounts-modal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="scan-accounts-go"
+              onclick="startScanFromPicker()">Scan selected</button>
+    </div>
+  </div>
+</div>
+
 <div id="waf-event-modal" class="hidden" role="dialog" aria-modal="true"
      aria-labelledby="wem-title" onclick="if(event.target===this)closeModal('waf-event-modal')">
   <div class="wem-box">

@@ -141,7 +141,11 @@ t_ok($threw, 'starting a custom scan with nothing selected is refused');
 $html = file_get_contents($repo . '/frontend/index.html');
 $js   = file_get_contents($repo . '/frontend/js/app.js');
 
-t_contains($html, 'id="scan-accounts-card"', 'there is an account picker');
+// A dialog, not an inline card. The first attempt put the picker in a panel
+// below the toolbar; it also never appeared, because every function that would
+// have shown it called g() at module scope and threw.
+t_contains($html, 'id="scan-accounts-modal"', 'the account picker is a dialog');
+t_contains($html, 'role="dialog"', 'marked up as one');
 t_contains($html, 'id="scan-accounts-list"', 'with a list to fill');
 t_contains($html, 'Custom (choose accounts)',
     'and the dropdown no longer offers a free-text path');
@@ -187,3 +191,45 @@ t_contains($adopt, "card.style.display = ''",
 t_contains($adopt, 'followScan(job.id)', 'and the scan is followed to completion');
 
 t_contains($html, 'onclick="stopScan(State.scanJobId)"', 'the Stop button is wired');
+
+
+// -- The picker is a dialog, and it actually opens ----------------------------
+// It shipped as an inline card and never appeared at all: onScanTypeChange(),
+// loadScanAccounts() and adoptRunningScan() all called g() at module scope,
+// where g() did not exist -- it was declared as a `const g` inside two other
+// functions. Each call threw ReferenceError inside an event handler, with
+// nothing logged and nothing shown. Bracket balance passed, handler resolution
+// passed, and three features did nothing.
+t_contains($js, 'function g(id)', 'g() is defined at module scope');
+$gPos = strpos($js, 'function g(id)');
+t_ok($gPos !== false && substr($js, $gPos - 1, 1) === "\n",
+    'at column zero, not nested inside another function');
+
+t_contains($js, 'function openScanAccounts', 'choosing Custom opens the dialog');
+$onChange = substr($js, strpos($js, 'function onScanTypeChange'), 260);
+t_contains($onChange, 'openScanAccounts()',
+    'the type dropdown opens it rather than toggling a hidden panel');
+
+t_contains($js, "openModal('scan-accounts-modal')", 'the dialog is opened');
+t_contains($js, "closeModal('scan-accounts-modal')", 'and closed');
+
+// Selecting nothing must not be startable from the dialog.
+t_contains($js, 'function startScanFromPicker', 'the dialog starts the scan itself');
+t_contains($js, 'go.disabled = (n === 0)',
+    'and its button is disabled until something is ticked');
+
+// Pressing Start Scan with Custom chosen but nothing picked reopens the
+// dialog: the operator plainly meant to choose.
+$ss = substr($js, strpos($js, 'async function startScan()'), 1200);
+t_contains($ss, 'openScanAccounts()',
+    'Start Scan with nothing selected reopens the picker instead of failing');
+
+// Filtering must not silently discard an existing selection.
+t_contains($js, 'const picked = new Set(scanAccountsSelected())',
+    'the current selection survives a filter change');
+t_contains($js, "picked.has(a.user) ? 'checked' : ''", 'by re-checking those boxes');
+
+// The modal must be styled, or it renders as an unpositioned block.
+t_contains($html, '#scan-accounts-modal .wem-box',
+    'the dialog reuses the existing modal styling');
+t_contains($html, '#scan-accounts-modal.hidden', 'and is hidden by default');
