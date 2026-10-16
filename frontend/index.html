@@ -585,7 +585,7 @@
             <option value="custom">Custom (choose accounts)</option>
           </select>
           <input class="form-input btn-sm hidden" id="scan-path-input" placeholder="/home/user" style="width:180px">
-          <button class="btn btn-primary btn-sm" id="scan-btn" onclick="startScan()">▶ Start Scan</button>
+          <button class="btn btn-primary btn-sm" id="scan-btn" onclick="onScanButton()">▶ Start Scan</button>
           <button class="btn btn-ghost btn-sm" onclick="updateSignatures()">↑ Update Sigs</button>
         </div>
       </div>
@@ -602,7 +602,7 @@
               </div>
               <div class="progress-bar"><div class="progress-fill" id="scan-progress-bar" style="background:var(--blue);width:0%;transition:width .5s"></div></div>
             </div>
-            <button class="btn btn-ghost btn-xs" onclick="stopScan(State.scanJobId)">Stop</button>
+            <button class="btn btn-danger btn-sm" id="scan-stop-btn" onclick="stopScan(State.scanJobId)">&#9632; Stop Scan</button>
           </div>
           <div style="display:flex;gap:20px;margin-top:12px;font-size:.78rem;color:var(--txt3)" id="scan-live-stats">
             <span>Files: <b id="scan-live-files" style="color:var(--txt)">0</b></span>

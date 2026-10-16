@@ -233,3 +233,51 @@ t_contains($js, "picked.has(a.user) ? 'checked' : ''", 'by re-checking those box
 t_contains($html, '#scan-accounts-modal .wem-box',
     'the dialog reuses the existing modal styling');
 t_contains($html, '#scan-accounts-modal.hidden', 'and is hidden by default');
+
+
+// -- Stopping a scan must be obvious -----------------------------------------
+// The Stop control existed but was `btn-ghost btn-xs` at the far right of the
+// progress row -- the least visible element on the page, for the one action an
+// operator urgently wants while a scan is loading the server. Meanwhile the
+// toolbar button, the thing they are actually looking at, read "Scanning..."
+// and was disabled.
+t_contains($html, 'id="scan-stop-btn"', 'the in-progress Stop control has an id');
+t_contains($html, 'btn btn-danger btn-sm" id="scan-stop-btn"',
+    'and is a full-size danger button, not a ghost extra-small one');
+t_ok(strpos($html, 'btn-ghost btn-xs" onclick="stopScan') === false,
+    'the near-invisible ghost Stop is gone');
+t_contains($html, 'Stop Scan', 'and it says what it stops');
+
+// The toolbar button becomes the stop control while a scan runs.
+t_contains($html, 'id="scan-btn" onclick="onScanButton()"',
+    'the toolbar button dispatches on its current state');
+t_contains($js, 'function onScanButton', 'that dispatcher exists');
+$dispatch = substr($js, strpos($js, 'function onScanButton'), 220);
+t_contains($dispatch, 'stopScan(State.scanJobId)', 'stopping while a scan is being followed');
+t_contains($dispatch, 'startScan()', 'and starting otherwise');
+
+t_contains($js, 'function setScanButton', 'one function owns the button');
+$setBtn = substr($js, strpos($js, 'function setScanButton'), 700);
+t_contains($setBtn, "'\u25A0 Stop Scan'", 'which says Stop Scan while running');
+t_contains($setBtn, "classList.add('btn-danger')", 'styled as a danger action');
+t_contains($setBtn, "'\u25B6 Start Scan'", 'and Start Scan when idle');
+t_contains($setBtn, 'btn.disabled = false',
+    'never disabled -- a disabled button during a scan is what removed the '
+  . 'only obvious way to stop one');
+
+// The five hand-rolled mutations are what let the label disagree with itself.
+t_ok(strpos($js, "scanBtn.textContent = '▶ Start Scan'") === false,
+    'no hand-rolled Start Scan label remains');
+t_ok(strpos($js, "textContent = '⏳ Scanning…'") === false,
+    'and no hand-rolled Scanning label');
+t_eq(1, substr_count($js, "'\u25B6 Start Scan'"),
+    'the idle label is written in exactly one place');
+
+// After a scan ends or is stopped, the button must go back to starting one.
+// Leaving scanJobId set would make the toolbar button try to stop a dead job.
+$stop = substr($js, strpos($js, 'async function stopScan'), 1400);
+t_contains($stop, 'State.scanJobId = null', 'stopping clears the followed job');
+t_contains($stop, 'State.scanInterval = null', 'and the poll handle');
+$follow = substr($js, strpos($js, 'function followScan'), 3000);
+t_contains($follow, 'State.scanJobId = null',
+    'and a scan that finishes on its own clears it too');

@@ -572,8 +572,7 @@ async function startScan() {
 
   State.scanJobId = res.job_id;
   document.getElementById('scan-progress-card').style.display = '';
-  document.getElementById('scan-btn').disabled = true;
-  document.getElementById('scan-btn').textContent = '⏳ Scanning…';
+  setScanButton(true);
 
   if (Demo.active) {
     simulateDemoScan();
@@ -640,8 +639,9 @@ function followScan(jobId) {
 
     if (job.status === 'done' || job.status === 'error') {
       clearInterval(State.scanInterval);
-      document.getElementById('scan-btn').disabled = false;
-      document.getElementById('scan-btn').textContent = '▶ Start Scan';
+      State.scanInterval = null;
+      State.scanJobId = null;
+      setScanButton(false);
       document.getElementById('scan-spinner').textContent = job.status === 'done' ? '✅' : '❌';
       document.getElementById('scan-progress-text').textContent =
         `Scan complete — ${job.threats_found || 0} threats found`;
@@ -662,8 +662,7 @@ function simulateDemoScan() {
     document.getElementById('scan-live-status').textContent = pct < 100 ? 'Running…' : 'Done';
     if (pct >= 100) {
       clearInterval(interval);
-      document.getElementById('scan-btn').disabled = false;
-      document.getElementById('scan-btn').textContent = '▶ Start Scan';
+      setScanButton(false);
       document.getElementById('scan-spinner').textContent = '✅';
       document.getElementById('scan-progress-text').textContent = 'Scan complete — 5 threats found';
       loadThreats();
@@ -695,8 +694,7 @@ async function adoptRunningScan() {
   State.scanJobId = job.id;
   const card = g('scan-progress-card');
   if (card) card.style.display = '';
-  const btn = g('scan-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '\u23F3 Scanning\u2026'; }
+  setScanButton(true);
   const st = g('scan-live-status');
   if (st) st.textContent = job.status === 'cancelling' ? 'Stopping\u2026' : 'Running';
   followScan(job.id);
@@ -793,15 +791,48 @@ function onScanTypeChange() {
   if (type === 'custom') openScanAccounts();
 }
 
+// The toolbar button, in whichever of its two states applies.
+//
+// While a scan runs it IS the stop control. It previously read "Scanning..."
+// and was disabled, which left the only way to stop a scan as a ghost button
+// at the far right of the progress row -- the least visible element on the
+// page, for the one action an operator urgently wants during a scan that is
+// loading the server.
+//
+// Five separate places set this button's label and disabled state by hand,
+// which is how it came to disagree with itself. They all call this now.
+function setScanButton(running) {
+  const btn = g('scan-btn');
+  if (!btn) return;
+  btn.disabled = false;
+  if (running) {
+    btn.textContent = '\u25A0 Stop Scan';
+    btn.classList.remove('btn-primary');
+    btn.classList.add('btn-danger');
+    btn.title = 'Stop the scan in progress';
+  } else {
+    btn.textContent = '\u25B6 Start Scan';
+    btn.classList.remove('btn-danger');
+    btn.classList.add('btn-primary');
+    btn.title = '';
+  }
+}
+
+// What the toolbar button does depends on what it currently says.
+function onScanButton() {
+  if (State.scanJobId && State.scanInterval) { stopScan(State.scanJobId); return; }
+  startScan();
+}
+
 async function stopScan(jobId) {
-  const btn = document.querySelector('#scan-progress-card button');
+  const btn = g('scan-stop-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }
 
   const res = Demo.active
     ? { success: true, message: 'Scan stopped.' }
     : await API.post('scanner/stop', jobId ? { job_id: jobId } : {});
 
-  if (btn) { btn.disabled = false; btn.textContent = 'Stop'; }
+  if (btn) { btn.disabled = false; btn.textContent = '\u25A0 Stop Scan'; }
 
   if (!res?.success) {
     // Leave the progress card up on failure: hiding it would imply the scan
@@ -811,8 +842,9 @@ async function stopScan(jobId) {
   }
 
   clearInterval(State.scanInterval);
-  const scanBtn = document.getElementById('scan-btn');
-  if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = '▶ Start Scan'; }
+  State.scanInterval = null;
+  State.scanJobId = null;
+  setScanButton(false);
   const card = document.getElementById('scan-progress-card');
   if (card) card.style.display = 'none';
 
