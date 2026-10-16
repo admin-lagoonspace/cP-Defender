@@ -2236,6 +2236,59 @@ This file was removed and not kept. Restore it from your backups
         ];
     }
 
+    /**
+     * What a scan is actually covering, in the operator's terms.
+     *
+     * The job row has always carried scan_path, and the progress card has
+     * always ignored it: a custom scan of three accounts looked exactly like a
+     * full scan of the server, so the one thing worth knowing while a scan
+     * runs -- what it is working on -- was the one thing not shown.
+     *
+     * Paths are mapped back to account names where they correspond to an
+     * account's home or document root, because "alice" is what the operator
+     * picked, not /home/alice/public_html.
+     */
+    public static function describeTarget(string $type, string $path): array
+    {
+        $paths = array_values(array_filter(array_map('trim', explode(',', $path))));
+
+        $byPath = [];
+        foreach (self::listAccounts() as $a) {
+            $byPath[rtrim($a['home'], '/')] = $a['user'];
+            if (!empty($a['docroot'])) { $byPath[rtrim($a['docroot'], '/')] = $a['user']; }
+        }
+
+        $names = [];
+        foreach ($paths as $one) {
+            $key = rtrim($one, '/');
+            $names[] = $byPath[$key] ?? $key;
+        }
+        $names = array_values(array_unique($names));
+
+        $n = count($names);
+        if ($n === 0) {
+            $label = 'nothing';
+        } elseif ($type === 'quick') {
+            // Naming forty web roots individually is noise; the count is the
+            // useful part, and the full list is still returned for a tooltip.
+            $label = $n === 1 ? ('web root of ' . $names[0])
+                              : ($n . ' web roots');
+        } elseif ($n <= 3) {
+            $label = implode(', ', $names);
+        } else {
+            $label = implode(', ', array_slice($names, 0, 3))
+                   . ' and ' . ($n - 3) . ' more';
+        }
+
+        return [
+            'type'    => $type,
+            'label'   => $label,
+            'names'   => $names,
+            'count'   => $n,
+            'paths'   => $paths,
+        ];
+    }
+
     public function getScanStatus(int $jobId): array {
         $job = Database::fetchOne("SELECT * FROM scan_jobs WHERE id = ?", [$jobId]);
         if (!$job) return ['error' => 'Job not found'];
@@ -2245,7 +2298,19 @@ This file was removed and not kept. Restore it from your backups
             [$jobId]
         );
 
-        return ['job' => $job, 'threats' => $threats];
+        return [
+            'job'     => $job,
+            'threats' => $threats,
+            // Described server-side so the progress card, the log line and
+            // anything else all name the target the same way.
+            'target'  => self::describeTarget(
+                (string) ($job['scan_type'] ?? ''), (string) ($job['scan_path'] ?? '')),
+            // The worker's own output, named exactly. A message telling an
+            // operator to check logs/scanner.log sent them to a file that has
+            // never existed: startScan() redirects each worker to
+            // logs/scan_<job>.log.
+            'log'     => 'logs/scan_' . (int) $jobId . '.log',
+        ];
     }
 
     public function getStats(): array {

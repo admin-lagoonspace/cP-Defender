@@ -574,6 +574,26 @@ async function startScan() {
   document.getElementById('scan-progress-card').style.display = '';
   setScanButton(true);
 
+  // Name the target straight away rather than waiting for the first poll two
+  // seconds later: the moment an operator most wants to know what they just
+  // launched is the moment they launched it. The poll then replaces this with
+  // the server's own description of the job.
+  const tw = g('scan-live-target-wrap');
+  const te = g('scan-live-target');
+  if (tw && te) {
+    const label = type === 'custom'
+      ? (accounts.length <= 3
+          ? accounts.join(', ')
+          : accounts.slice(0, 3).join(', ') + ' and ' + (accounts.length - 3) + ' more')
+      : (type === 'quick' ? 'web roots' : 'the whole server');
+    te.textContent = label;
+    te.title = accounts.join(', ');
+    tw.style.display = '';
+  }
+  const txt0 = g('scan-progress-text');
+  if (txt0) txt0.textContent = 'Scanning…';
+  State._scanStallTicks = 0;
+
   if (Demo.active) {
     simulateDemoScan();
     return;
@@ -619,6 +639,19 @@ function followScan(jobId) {
     document.getElementById('scan-live-threats').textContent = job.threats_found || 0;
     document.getElementById('scan-live-status').textContent = job.status;
 
+    // What this scan is actually working on. A custom scan of three accounts
+    // used to look identical to a full scan of the whole server: the job row
+    // has always carried the path, and the card simply never showed it.
+    const tgt  = st.data?.target;
+    const wrap = g('scan-live-target-wrap');
+    const tEl  = g('scan-live-target');
+    if (wrap && tEl && tgt?.label) {
+      tEl.textContent = tgt.label;
+      // The full list on hover, since the label is abbreviated past three.
+      tEl.title = (tgt.paths || []).join('\n');
+      wrap.style.display = '';
+    }
+
     // A running job whose file count never moves is stuck, not working. Say so
     // rather than animating a bar forever: the scan runs detached, so the UI
     // cannot see it die.
@@ -630,10 +663,25 @@ function followScan(jobId) {
       }
       State._lastScanFiles = job.files_scanned || 0;
 
+      // The warning has to come back down again.
+      //
+      // This was set once and never cleared, so a scan that paused briefly --
+      // loading the ClamAV signature database, or working through one large
+      // file -- displayed "the scan process may not be running" for the rest
+      // of its life, while the counter beside it climbed past five thousand
+      // files. A warning that contradicts the number next to it trains an
+      // operator to ignore both.
+      //
+      // The log file is named exactly, too: logs/scanner.log has never
+      // existed. Each worker writes to logs/scan_<job>.log.
       const txt = document.getElementById('scan-progress-text');
-      if (State._scanStallTicks >= 15 && txt) {          // ~30s of no movement
-        txt.textContent = 'No files scanned yet — the scan process may not be running. '
-                        + 'Check logs/scanner.log.';
+      if (txt) {
+        if (State._scanStallTicks >= 15) {               // ~30s of no movement
+          txt.textContent = 'No new files scanned for 30s \u2014 the scan process may '
+                          + 'have stopped. Check ' + (st.data?.log || 'the scan log') + '.';
+        } else {
+          txt.textContent = 'Scanning\u2026';
+        }
       }
     }
 

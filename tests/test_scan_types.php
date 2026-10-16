@@ -278,6 +278,85 @@ t_eq(1, substr_count($js, "'\u25B6 Start Scan'"),
 $stop = substr($js, strpos($js, 'async function stopScan'), 1400);
 t_contains($stop, 'State.scanJobId = null', 'stopping clears the followed job');
 t_contains($stop, 'State.scanInterval = null', 'and the poll handle');
-$follow = substr($js, strpos($js, 'function followScan'), 3000);
+$follow = substr($js, strpos($js, 'function followScan'), 6000);
 t_contains($follow, 'State.scanJobId = null',
     'and a scan that finishes on its own clears it too');
+
+
+// -- A running scan must say what it is working on ---------------------------
+// The job row has always carried scan_path and the progress card always
+// ignored it, so a custom scan of three accounts looked exactly like a full
+// scan of the whole server. The one thing worth knowing during a scan was the
+// one thing not shown.
+Database::setSetting('scan_paths', $home);
+
+$d = Scanner::describeTarget('custom', $home . '/alice,' . $home . '/bob');
+t_eq('alice, bob', $d['label'], 'a custom scan names the accounts it is scanning');
+t_eq(['alice', 'bob'], $d['names'], 'resolved from their home directories');
+t_eq(2, $d['count'], 'with a count');
+
+// Document roots map back to the account too -- the operator picked "alice",
+// not /home/alice/public_html.
+$d = Scanner::describeTarget('quick', $home . '/alice/public_html');
+t_eq('web root of alice', $d['label'], 'a single web root names its account');
+
+$d = Scanner::describeTarget('quick',
+    $home . '/alice/public_html,' . $home . '/bob/public_html');
+t_eq('2 web roots', $d['label'],
+    'but many web roots are counted, not listed -- forty names is noise');
+
+// Past three accounts the label is abbreviated, with the full list kept for a
+// tooltip rather than discarded.
+$many = [];
+foreach (['alice', 'bob', 'carol'] as $u) { $many[] = $home . '/' . $u; }
+$many[] = $home . '/dave';
+$d = Scanner::describeTarget('custom', implode(',', $many));
+t_contains($d['label'], 'and 1 more', 'a long selection is abbreviated');
+t_eq(4, count($d['paths']), 'while every path is still returned');
+
+// A path that is not an account is shown as itself rather than dropped.
+$d = Scanner::describeTarget('full', $home);
+t_eq($home, $d['label'], 'a plain path is reported as the path');
+
+// -- The status payload carries it, and names the real log file --------------
+$job = Database::insert('scan_jobs', [
+    'scan_type' => 'custom', 'status' => 'running',
+    'started_at' => time(), 'scan_path' => $home . '/alice',
+]);
+$st = (new Scanner())->getScanStatus((int) $job);
+t_ok(isset($st['target']), 'the scan status describes its target');
+t_eq('alice', $st['target']['label'], 'by account name');
+t_eq('logs/scan_' . (int) $job . '.log', $st['log'],
+    'and names the log file the worker actually writes');
+
+// logs/scanner.log was told to an operator and has never existed anywhere.
+$sc = file_get_contents($repo . '/backend/lib/Scanner.php');
+$js2 = file_get_contents($repo . '/frontend/js/app.js');
+// The quoted form, not the bare words: the comment explaining this fix names
+// the old path deliberately, and an assertion that cannot tell a comment from
+// a string literal could only be satisfied by deleting the explanation.
+t_ok(strpos($js2, "'logs/scanner.log'") === false
+     && strpos($js2, 'Check logs/scanner.log') === false,
+    'no code points an operator at logs/scanner.log, which does not exist');
+t_contains($sc, "'logs/scan_'", 'the real per-job log name is used');
+
+// -- The UI shows it ---------------------------------------------------------
+t_contains($html, 'id="scan-live-target"', 'the progress card has a target field');
+t_contains($html, 'id="scan-live-target-wrap"', 'hidden until there is one');
+t_contains($js2, 'st.data?.target', 'the poll reads the described target');
+$ss2 = substr($js2, strpos($js2, 'async function startScan()'), 2200);
+t_contains($ss2, "g('scan-live-target')",
+    'and it is filled the moment the scan starts, not two seconds later');
+
+// -- The stall warning must come back down -----------------------------------
+// It was set once and never cleared, so a scan that paused briefly showed
+// "the scan process may not be running" for the rest of its life -- while the
+// counter beside it climbed past five thousand files. That is what the
+// reporting screenshot showed, and a warning that contradicts the number next
+// to it teaches an operator to ignore both.
+$stallBlock = substr($js2, strpos($js2, '_scanStallTicks >= 15'), 700);
+t_contains($stallBlock, "txt.textContent = 'Scanning",
+    'the warning is replaced once files start moving again');
+t_ok(strpos($stallBlock, 'else') !== false,
+    'via an else branch, rather than being set and left');
+t_contains($js2, "State._scanStallTicks = 0;", 'and the counter resets');
