@@ -2265,18 +2265,22 @@ This file was removed and not kept. Restore it from your backups
         }
         $names = array_values(array_unique($names));
 
-        $n = count($names);
+        // Labelled with the paths themselves, not the account names.
+        //
+        // An earlier version showed "alice", on the reasoning that an account
+        // name is what the operator picked. The operator asked for the path:
+        // /home/alice/public_html says which account AND which part of it is
+        // being walked, and on a server where quick and full scans cover
+        // different trees that second half is the information that matters.
+        $n = count($paths);
         if ($n === 0) {
             $label = 'nothing';
-        } elseif ($type === 'quick') {
-            // Naming forty web roots individually is noise; the count is the
-            // useful part, and the full list is still returned for a tooltip.
-            $label = $n === 1 ? ('web root of ' . $names[0])
-                              : ($n . ' web roots');
         } elseif ($n <= 3) {
-            $label = implode(', ', $names);
+            $label = implode(', ', $paths);
         } else {
-            $label = implode(', ', array_slice($names, 0, 3))
+            // Past three, paths are long enough to swamp the card. The count
+            // carries the rest and the full list stays in the tooltip.
+            $label = implode(', ', array_slice($paths, 0, 3))
                    . ' and ' . ($n - 3) . ' more';
         }
 

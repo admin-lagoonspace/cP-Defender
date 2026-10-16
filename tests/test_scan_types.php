@@ -291,30 +291,38 @@ t_contains($follow, 'State.scanJobId = null',
 Database::setSetting('scan_paths', $home);
 
 $d = Scanner::describeTarget('custom', $home . '/alice,' . $home . '/bob');
-t_eq('alice, bob', $d['label'], 'a custom scan names the accounts it is scanning');
-t_eq(['alice', 'bob'], $d['names'], 'resolved from their home directories');
+t_eq($home . '/alice, ' . $home . '/bob', $d['label'],
+    'a custom scan names the paths it is walking');
 t_eq(2, $d['count'], 'with a count');
 
-// Document roots map back to the account too -- the operator picked "alice",
-// not /home/alice/public_html.
+// The path, not the account name. An earlier version showed "alice" on the
+// reasoning that the account is what the operator picked; they asked for the
+// path, because /home/alice/public_html says which account AND which part of
+// it, and quick and full scans cover different trees.
 $d = Scanner::describeTarget('quick', $home . '/alice/public_html');
-t_eq('web root of alice', $d['label'], 'a single web root names its account');
+t_eq($home . '/alice/public_html', $d['label'],
+    'a web root is shown as its full path');
+t_ok(strpos($d['label'], 'web root of') === false,
+    'not reworded into an account name');
 
-$d = Scanner::describeTarget('quick',
-    $home . '/alice/public_html,' . $home . '/bob/public_html');
-t_eq('2 web roots', $d['label'],
-    'but many web roots are counted, not listed -- forty names is noise');
+// Many web roots are still listed as paths, abbreviated past three rather than
+// collapsed into a bare count: the first few paths say more than "12".
+$webs = [];
+foreach (['alice', 'bob'] as $u) { $webs[] = $home . '/' . $u . '/public_html'; }
+$d = Scanner::describeTarget('quick', implode(',', $webs));
+t_contains($d['label'], '/alice/public_html', 'several web roots are named');
+t_contains($d['label'], '/bob/public_html', 'each of them');
 
-// Past three accounts the label is abbreviated, with the full list kept for a
-// tooltip rather than discarded.
+// Past three the label abbreviates, with every path kept for the tooltip.
 $many = [];
 foreach (['alice', 'bob', 'carol'] as $u) { $many[] = $home . '/' . $u; }
 $many[] = $home . '/dave';
 $d = Scanner::describeTarget('custom', implode(',', $many));
 t_contains($d['label'], 'and 1 more', 'a long selection is abbreviated');
+t_contains($d['label'], $home . '/alice', 'showing the first paths in full');
 t_eq(4, count($d['paths']), 'while every path is still returned');
 
-// A path that is not an account is shown as itself rather than dropped.
+// A path that is not an account is shown as itself.
 $d = Scanner::describeTarget('full', $home);
 t_eq($home, $d['label'], 'a plain path is reported as the path');
 
@@ -325,7 +333,7 @@ $job = Database::insert('scan_jobs', [
 ]);
 $st = (new Scanner())->getScanStatus((int) $job);
 t_ok(isset($st['target']), 'the scan status describes its target');
-t_eq('alice', $st['target']['label'], 'by account name');
+t_eq($home . '/alice', $st['target']['label'], 'by path');
 t_eq('logs/scan_' . (int) $job . '.log', $st['log'],
     'and names the log file the worker actually writes');
 
@@ -347,6 +355,9 @@ t_contains($js2, 'st.data?.target', 'the poll reads the described target');
 $ss2 = substr($js2, strpos($js2, 'async function startScan()'), 2200);
 t_contains($ss2, "g('scan-live-target')",
     'and it is filled the moment the scan starts, not two seconds later');
+t_contains($ss2, '.map(a => a.home)',
+    'with the same paths the server will report, so the label does not change '
+  . 'from "alice" to "/home/alice" when the first poll lands');
 
 // -- The stall warning must come back down -----------------------------------
 // It was set once and never cleared, so a scan that paused briefly showed

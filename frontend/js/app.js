@@ -581,13 +581,19 @@ async function startScan() {
   const tw = g('scan-live-target-wrap');
   const te = g('scan-live-target');
   if (tw && te) {
+    // Paths, matching what the server reports two seconds later. The picker
+    // already holds each account's home directory, so the label does not have
+    // to say "alice" now and "/home/alice" the moment the first poll lands.
+    const homes = (_scanAccounts || [])
+      .filter(a => accounts.includes(a.user))
+      .map(a => a.home);
     const label = type === 'custom'
-      ? (accounts.length <= 3
-          ? accounts.join(', ')
-          : accounts.slice(0, 3).join(', ') + ' and ' + (accounts.length - 3) + ' more')
+      ? (homes.length <= 3
+          ? homes.join(', ')
+          : homes.slice(0, 3).join(', ') + ' and ' + (homes.length - 3) + ' more')
       : (type === 'quick' ? 'web roots' : 'the whole server');
     te.textContent = label;
-    te.title = accounts.join(', ');
+    te.title = homes.join(', ');
     tw.style.display = '';
   }
   const txt0 = g('scan-progress-text');
