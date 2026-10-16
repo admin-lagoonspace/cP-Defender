@@ -11,6 +11,19 @@ Bumping Y for a fix inflates the version and hides what actually changed.
 `scripts/check-version-bump.sh` enforces this and `publish.sh` will refuse a
 release where the bump and the commits disagree.
 
+## [4.5.1] - 2026-10-16
+
+### Changed
+- The running-scan label shows **paths** rather than account names:
+  `/home/alice/public_html` instead of `alice`. The path says which account
+  and which part of it is being walked, and since quick and full scans cover
+  different trees that second half is the half worth knowing. Many web roots
+  are listed as paths too, abbreviated past three rather than collapsed into a
+  bare count, with the full list still on hover.
+- The label shown the instant a scan starts now uses the same paths the server
+  reports on the first poll, so it no longer changes from `alice` to
+  `/home/alice` two seconds later.
+
 ## [4.5.0] - 2026-10-16
 
 ### Added
