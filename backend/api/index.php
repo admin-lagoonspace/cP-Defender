@@ -52,6 +52,7 @@ require_once __DIR__ . '/../lib/BotShield.php';
 require_once __DIR__ . '/../lib/CMSGuard.php';
 require_once __DIR__ . '/../lib/WPDatabaseScanner.php';
 require_once __DIR__ . '/../lib/Updater.php';
+require_once __DIR__ . '/../lib/NetworkGuard.php';
 require_once __DIR__ . '/../lib/RootkitScanner.php';
 require_once __DIR__ . '/../lib/FileIntegrity.php';
 require_once __DIR__ . '/../lib/PHPHardening.php';
@@ -178,6 +179,7 @@ try {
         'botshield'  => routeBotShield($action, $method, $body, $query, $user),
         'cmsguard'   => routeCMSGuard($action, $method, $body, $query, $user),
         'wpscan'     => routeWPScan($action, $method, $body, $query, $user),
+        'netguard'   => routeNetGuard($action, $method, $body, $query, $user),
         'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
         'bruteforce' => routeBruteForce($action, $method, $body, $query, $user),
         'overview'   => routeOverview($action, $method, $query, $user),
@@ -1315,6 +1317,70 @@ function routeCMSGuard(string $action, string $method, array $body, array $q, ?a
             ? ['success' => true, 'data' => $cg->checkInstall((int)($body['id'] ?? 0))]
             : ['success' => false, 'code' => 405],
         default    => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Network guards — port scans, connection floods, egress policy
+// ════════════════════════════════════════════════════════════════════════════
+//
+// There is no "block this IP" route here, deliberately. These detectors record
+// into the brute-force table and BruteForce escalates through the ladder that
+// already exists, with the same whitelist and the same release. Adding a second
+// blocking path would mean a second set of rules about who must never be
+// blocked, and the addresses that must never be blocked include the operator's
+// own and the backup servers.
+function routeNetGuard(string $action, string $method, array $body, array $q, ?array $user): array {
+    return match($action) {
+        'status' => ['success' => true, 'data' => NetworkGuard::status()],
+
+        // Run both detectors now. Safe to call: they only record.
+        'scan'   => $method === 'POST'
+            ? (function () use ($user) {
+                  Auth::requireRole('admin', $user);
+                  return ['success' => true, 'data' => NetworkGuard::run()];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        // Outbound policy. DRY RUN unless explicitly told otherwise, because
+        // getting this wrong breaks the server's own DNS, updates and backups
+        // rather than blocking an attacker.
+        'egress-preview' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  $ports = array_map('intval', (array)($body['ports'] ?? []));
+                  return ['success' => true,
+                          'data' => NetworkGuard::applyEgress($ports, true)];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        'egress-apply' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  // The caller has to say so in as many words. A missing flag
+                  // is treated as "no", never as "probably yes".
+                  if (empty($body['confirm'])) {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'Outbound filtering must be confirmed '
+                                       . 'explicitly. Preview it first.'];
+                  }
+                  $ports = array_map('intval', (array)($body['ports'] ?? []));
+                  return ['success' => true,
+                          'data' => NetworkGuard::applyEgress($ports, false)];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        'egress-clear' => $method === 'POST'
+            ? (function () use ($user) {
+                  Auth::requireRole('admin', $user);
+                  return ['success' => true, 'data' => NetworkGuard::clearEgress()];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        'egress-defaults' => ['success' => true,
+                              'data' => NetworkGuard::defaultEgressPorts()],
+
+        default  => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }
 

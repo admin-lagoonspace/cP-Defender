@@ -60,6 +60,7 @@ require_once SG_ROOT . '/backend/lib/WAF.php';
 // The bruteforce task reads auth logs and blocks repeat offenders.
 require_once SG_ROOT . '/backend/lib/Schedule.php';
 require_once SG_ROOT . '/backend/lib/BruteForce.php';
+require_once SG_ROOT . '/backend/lib/NetworkGuard.php';
 // The fwprobe task measures iptables and CSF off the request path.
 require_once SG_ROOT . '/backend/lib/Firewall.php';
 
@@ -336,6 +337,46 @@ $tasks = [
                 ? '  updater launched (pid ' . ($r['pid'] ?? 0) . '); '
                   . 'result recorded on the next run'
                 : '  ! could not launch: ' . ($r['error'] ?? 'unknown'));
+        },
+    ],
+
+    // Port scans and connection floods.
+    //
+    // Every 15 minutes, which is the scheduler's own tick -- a scan is over in
+    // seconds, so this samples rather than watches. That is a deliberate
+    // trade: a continuous watcher means a daemon reading /proc/net in a loop
+    // on a shared host, and an unbounded read of kernel connection state is
+    // itself a performance incident. This server has already had one of those
+    // this month.
+    //
+    // A sample is enough: a scanner that touches enough closed ports to matter
+    // is still mid-scan or still in TIME_WAIT when the sample lands, and a
+    // flood by definition persists.
+    //
+    // It records; BruteForce escalates and releases. One blocking path.
+    'netguard' => [
+        'schedule' => setting('netguard_schedule', 'every'),
+        'time'     => setting('netguard_time', '00:00'),
+        'day'      => (int)setting('netguard_day', '0'),
+        'run'      => function () {
+            $r = NetworkGuard::run();
+            foreach (['scan' => 'port-scan', 'flood' => 'flood'] as $k => $label) {
+                if (!empty($r[$k]['skipped'])) {
+                    slog("  $label: " . $r[$k]['skipped']);
+                }
+            }
+            if (!empty($r['scan']['scanners'])) {
+                slog(sprintf('  port scans: %d address(es) probing closed ports',
+                     $r['scan']['scanners']));
+            }
+            if (!empty($r['flood']['offenders'])) {
+                slog(sprintf('  connection floods: %d address(es) over %d concurrent',
+                     $r['flood']['offenders'], NetworkGuard::floodLimit()));
+            }
+            if (!empty($r['blocked'])) {
+                slog(sprintf('  %d address(es) blocked through the brute-force ladder',
+                     $r['blocked']));
+            }
         },
     ],
 

@@ -331,6 +331,30 @@ class Database {
             $db->exec("ALTER TABLE threats ADD COLUMN quarantine_expires_at INTEGER");
         }
 
+        // Network-layer guards. Scan detection and flood limits are ON: both
+        // only ever record, and the escalation they feed into is the
+        // brute-force ladder that was already running.
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('ng_scan_enabled', '1')");
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('ng_scan_ports', '10')");
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('ng_flood_enabled', '1')");
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('ng_flood_limit', '150')");
+        // 80 and 443 exempt by default. A browser opens six connections per
+        // page, a corporate NAT or CDN presents hundreds of real users as one
+        // address, and this product's own dashboard is served over 443 -- a
+        // flood limit there blocks the operator out of the page they would
+        // need to turn it off.
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('ng_flood_exempt_ports', '80,443')");
+        // Egress filtering OFF, with no automatic enable anywhere. A wrong
+        // inbound rule blocks visitors and you hear about it; a wrong OUTBOUND
+        // rule breaks updates, DNS, mail, licensing and backups quietly.
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('ng_egress_enabled', '0')");
+
         // Unattended updating, on by default.
         //
         // Defaulting this ON is a real decision and not a neutral one: it

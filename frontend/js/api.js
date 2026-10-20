@@ -334,6 +334,15 @@ const API = (() => {
 
     // WordPress database scanner. 'sweep' is the only one of these that costs
     // anything: one connection and six queries per install.
+    // Network guards. 'egressPreview' applies nothing -- see the route.
+    ngStatus:         ()        => req('GET',  'netguard/status'),
+    ngScan:           ()        => req('POST', 'netguard/scan', {}),
+    ngEgressDefaults: ()        => req('GET',  'netguard/egress-defaults'),
+    ngEgressPreview:  (ports)   => req('POST', 'netguard/egress-preview', { ports: ports }),
+    ngEgressApply:    (ports)   => req('POST', 'netguard/egress-apply',
+                                       { ports: ports, confirm: true }),
+    ngEgressClear:    ()        => req('POST', 'netguard/egress-clear', {}),
+
     wpdbStats:    ()        => req('GET',  'wpscan/stats'),
     wpdbFindings: (limit)   => req('GET',  'wpscan/findings?limit=' + (limit || 200)),
     wpdbSweep:    (budget)  => req('POST', 'wpscan/sweep',   { budget: budget || 240 }),
