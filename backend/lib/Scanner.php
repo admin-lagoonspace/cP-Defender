@@ -998,10 +998,9 @@ class Scanner {
      */
     public function runPatternScan(string $path, int $jobId): array {
         $threats = [];
-        $files   = $this->getPhpFiles($path);
         $scanned = 0;
 
-        foreach ($files as $file) {
+        foreach ($this->getPhpFiles($path) as $file) {
             // Counted before the size check: the file WAS examined and skipped,
             // and a progress counter that stalls on a directory of large files
             // looks identical to a dead scan.
@@ -1014,6 +1013,52 @@ class Scanner {
 
             $content = @file_get_contents($file);
             if ($content === false) continue;
+
+            // Heuristics run FIRST, and a hit ends this file.
+            //
+            // The flat patterns below ask one question per rule: "does this
+            // regex appear?" Every file that mattered during the October 2026
+            // incident answered no to all of them -- an upload shell whose
+            // only tell was hash_equals() sitting next to move_uploaded_file,
+            // a 456-byte mu-plugin of entirely ordinary WordPress calls that
+            // logged anyone in from a query string, and a persistence loader
+            // living in wp-content/db.php. Those need a conjunction of
+            // conditions and a path, which is what Heuristics evaluates.
+            //
+            // First, not last, because when both fire the heuristic says
+            // something the operator can act on ("an authenticated
+            // arbitrary-file-upload shell") where the flat pattern says
+            // "long_base64".
+            $h = Heuristics::evaluate($file, $content);
+            if ($h !== null) {
+                $threatId = Database::insert('threats', [
+                    'scan_job_id' => $jobId,
+                    'file_path'   => $file,
+                    'threat_name' => 'SG.WP.' . $h['name'],
+                    'threat_type' => 'backdoor',
+                    'severity'    => $h['severity'],
+                    'hash'        => hash_file('sha256', $file),
+                    'size'        => filesize($file),
+                    'status'      => 'active',
+                    'cpanel_user' => self::getCpanelUser($file),
+                    // Why, in words, stored with the finding. A threat row
+                    // reading "SG.WP.auth_cookie_in_dropin" tells an operator
+                    // nothing they can act on; the sentence tells them what
+                    // the file does and why its location condemns it.
+                    'detail'      => $h['why'],
+                ]);
+                $threats[] = [
+                    'id'   => $threatId,
+                    'file' => $file,
+                    'name' => $h['name'],
+                    'why'  => $h['why'],
+                    'also' => $h['also'],
+                ];
+                Logger::warn(sprintf('Heuristic %s (%s) on %s -- %s',
+                    $h['name'], $h['severity'], $file, $h['why']));
+                $this->applyThreatPolicy($file, $threatId, $h['severity']);
+                continue;
+            }
 
             foreach ($this->phpPatterns as $sigName => $pattern) {
                 if (preg_match($pattern, $content)) {
@@ -1060,23 +1105,59 @@ class Scanner {
         return $threats;
     }
 
-    private function getPhpFiles(string $path): array {
-        $files = [];
-        $ext   = ['php', 'php3', 'php4', 'php5', 'phtml', 'php7', 'phps'];
+    /**
+     * Files worth reading under $path.
+     *
+     * A GENERATOR, not an array. The old version collected every path before
+     * examining any of them; on a server with 503 WordPress installs under one
+     * /home that is hundreds of thousands of strings held in memory before the
+     * first file is read, and the scan looks hung while the list is built.
+     *
+     * TWO CHANGES OF SUBSTANCE:
+     *
+     * 1. The hardcoded PHP-extension filter is gone. It meant a file was only
+     *    ever examined if it was named *.php, and the persistence framework
+     *    found on this server in October 2026 stashed an encrypted copy of
+     *    itself at wp-content/uploads/.<64 hex>.cache -- no PHP extension, so
+     *    invisible to every scan this product had ever run. What gets read is
+     *    now decided by Heuristics::shouldInspect(), which still takes PHP by
+     *    extension but also allows the three WordPress drop-in names wherever
+     *    they appear and hidden hex-named blobs under wp-content. It stays
+     *    bounded: this does not become "read every file on the server".
+     *
+     * 2. /home/virtfs is pruned. cPanel jailshell bind-mounts a copy of the
+     *    filesystem there for EVERY account, so walking it makes the cost
+     *    multiplicative -- on this server, 118 times over. An unbounded walk
+     *    of /home pushed load past 35 during the incident. Snapshot and
+     *    CageFS trees are pruned for the same reason, and symlinks are never
+     *    followed, because one link into / turns a per-account scan into a
+     *    whole-filesystem scan.
+     */
+    private function getPhpFiles(string $path): Generator {
+        $prune = '#(?:^|/)(?:virtfs|\.snapshot|\.zfs|\.trash|\.cagefs|'
+               . 'node_modules|\.git)(?:/|$)#';
         try {
             $it = new RecursiveIteratorIterator(
-                new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
-                RecursiveIteratorIterator::SELF_FIRST
+                new RecursiveDirectoryIterator(
+                    $path,
+                    FilesystemIterator::SKIP_DOTS | FilesystemIterator::CURRENT_AS_FILEINFO
+                ),
+                RecursiveIteratorIterator::LEAVES_ONLY,
+                RecursiveIteratorIterator::CATCH_GET_CHILD
             );
             foreach ($it as $file) {
-                if ($file->isFile() && in_array(strtolower($file->getExtension()), $ext)) {
-                    $files[] = $file->getPathname();
+                $p = str_replace(DIRECTORY_SEPARATOR, '/', $file->getPathname());
+                if (preg_match($prune, $p)) continue;
+                if ($file->isLink())  continue;
+                if (!$file->isFile()) continue;
+
+                if (Heuristics::shouldInspect($p, (int)$file->getSize())) {
+                    yield $p;
                 }
             }
         } catch (Exception $e) {
-            Logger::error("Scanner: cannot read $path — " . $e->getMessage());
+            Logger::error("Scanner: cannot read $path - " . $e->getMessage());
         }
-        return $files;
     }
 
     /**

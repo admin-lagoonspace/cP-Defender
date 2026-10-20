@@ -599,6 +599,190 @@ SEV = {'c99_shell':'critical','rev_shell':'critical','fsock_bd':'critical',
 PHP_EXTS = {'.php','.php3','.php4','.php5','.php7','.phtml','.phps'}
 MAX_SZ   = 52_428_800
 
+# ── Conjunction rules ───────────────────────────────────────────────────────
+#
+# PATTERNS above asks one question per rule: "does this regex appear?" Every
+# file that mattered during the October 2026 incident response answered no to
+# all of them. Three of them, and why a single regex could never have worked:
+#
+#   - An upload backdoor whose only tell was hash_equals() against a 32-hex
+#     constant sitting next to move_uploaded_file(). Each of those three
+#     things appears in ordinary code; together they are a shell.
+#
+#   - A 456-byte mu-plugin, health-monitor.php, made entirely of documented
+#     WordPress calls: read a query parameter, look up a token in usermeta,
+#     call wp_set_auth_cookie(). No obfuscation to find. What condemns it is
+#     where it lives and what it does together.
+#
+#   - A persistence loader in wp-content/db.php, a WordPress drop-in, which
+#     loads before every plugin on every request.
+#
+# Mirrors backend/lib/Heuristics.php. The two must agree: an operator who sees
+# a real-time alert and then runs a scan that finds nothing stops trusting
+# both. When a rule changes in one, change it in the other.
+HEUR = [
+    # name, severity, all(), any(), none(), path or None
+    ('upload_backdoor_hashkey', 'critical',
+     [re.compile(rb'hash_equals\s*\(', re.I),
+      re.compile(rb'[\'"][0-9a-fA-F]{32}[\'"]')],
+     [re.compile(rb'move_uploaded_file\s*\(', re.I),
+      re.compile(rb'file_put_contents\s*\(.{0,120}base64_decode', re.I | re.S)],
+     [re.compile(rb'wp_verify_nonce\s*\(|check_admin_referer\s*\(', re.I),
+      re.compile(rb'current_user_can\s*\(', re.I)],
+     None),
+
+    ('upload_backdoor_gifmask', 'critical',
+     [re.compile(rb'\\x47\\x49\\x46\\x38\\x39\\x61')],
+     [], [], None),
+
+    ('auth_cookie_from_request', 'critical',
+     [re.compile(rb'wp_set_auth_cookie\s*\(', re.I),
+      re.compile(rb'\$_(?:GET|POST|REQUEST|COOKIE)\s*\['),
+      re.compile(rb'usermeta|get_user_meta\s*\(|update_user_meta\s*\(', re.I)],
+     [],
+     [re.compile(rb'wp_verify_nonce\s*\(|check_admin_referer\s*\(', re.I)],
+     None),
+
+    ('auth_cookie_in_dropin', 'critical',
+     [re.compile(rb'wp_set_auth_cookie\s*\(|wp_set_current_user\s*\(', re.I)],
+     [], [],
+     re.compile(r'/wp-content/mu-plugins/|'
+                r'/wp-content/(?:db|object-cache|advanced-cache)\.php$')),
+
+    ('admin_creator', 'critical',
+     [re.compile(rb'wp_insert_user\s*\(|wp_create_user\s*\(', re.I),
+      re.compile(rb'[\'"]administrator[\'"]', re.I)],
+     [],
+     [re.compile(rb'current_user_can\s*\(\s*[\'"](?:create_users|promote_users'
+                 rb'|manage_options)', re.I)],
+     None),
+
+    ('self_deleting_script', 'critical',
+     [re.compile(rb'@?unlink\s*\(\s*__FILE__\s*\)', re.I)],
+     [], [], None),
+
+    ('self_healing_dropper', 'critical',
+     [re.compile(rb'get_option\s*\(|get_post_meta\s*\(|get_transient\s*\(', re.I),
+      re.compile(rb'file_put_contents\s*\(|fwrite\s*\(', re.I)],
+     [re.compile(rb'[\'"]<\?php'),
+      re.compile(rb'base64_decode\s*\(', re.I),
+      re.compile(rb'gzinflate\s*\(|gzuncompress\s*\(', re.I),
+      re.compile(rb'openssl_decrypt\s*\(', re.I)],
+     [re.compile(r'/wp-content/plugins/(?:w3-total-cache|wp-super-cache'
+                 r'|litespeed-cache|wp-rocket|autoptimize|wp-optimize)/')],
+     re.compile(r'/wp-content/(?:mu-plugins|plugins|themes)/|'
+                r'/wp-content/(?:db|object-cache|advanced-cache)\.php$')),
+
+    ('session_cookie_harvest', 'critical',
+     [re.compile(rb'curl_exec\s*\(|fsockopen\s*\(|wp_remote_post\s*\(', re.I)],
+     [re.compile(rb'SECURE_AUTH_COOKIE|LOGGED_IN_COOKIE|AUTH_COOKIE'),
+      re.compile(rb'[\'"]session_tokens[\'"]')],
+     [], None),
+
+    ('payment_key_harvest', 'critical',
+     [re.compile(rb'curl_exec\s*\(|fsockopen\s*\(|wp_remote_post\s*\(', re.I)],
+     [re.compile(rb'STRIPE_(?:SECRET|KEY|API)', re.I),
+      re.compile(rb'AWS_SECRET_ACCESS_KEY'),
+      re.compile(rb'BRAINTREE_PRIVATE_KEY'),
+      re.compile(rb'AUTHORIZE_NET_TRANSACTION_KEY')],
+     [], None),
+
+    ('php_in_uploads', 'high',
+     [],
+     [re.compile(rb'\$_(?:GET|POST|REQUEST|COOKIE|FILES|SERVER)\s*\['),
+      re.compile(rb'\b(?:eval|assert|system|exec|passthru|shell_exec)\s*\(', re.I),
+      re.compile(rb'base64_decode\s*\(', re.I),
+      re.compile(rb'move_uploaded_file\s*\(', re.I)],
+     [],
+     re.compile(r'/wp-content/uploads/.*\.(?:php|phtml|php[3-7])$')),
+]
+
+# ── Sentinel paths ──────────────────────────────────────────────────────────
+#
+# THE MOST USEFUL THING IN THIS FILE.
+#
+# These positions in a WordPress install should not change without somebody
+# knowing. A scanner cannot tell you a file is new -- it sees a filesystem,
+# not a history. A daemon watching inotify can, and that is the one detection
+# no amount of signature work replaces: health-monitor.php was 456 bytes of
+# textbook WordPress code and no rule above would ever have fired on it, but
+# a mu-plugin APPEARING on a site that had none is reportable on its own.
+#
+# wp-content/{db,object-cache,advanced-cache}.php load before every plugin on
+# every request, including wp-login.php. Legitimate ones exist -- Redis and
+# Memcached object caches, Query Monitor's db.php -- so this is reported, not
+# acted on. "A drop-in appeared on this site twenty minutes ago" is something
+# the operator can check in one look.
+SENTINELS = [
+    (re.compile(r'/wp-content/(?:db|object-cache|advanced-cache)\.php$'),
+     'A WordPress drop-in appeared or changed. These load before every plugin '
+     'on every request. If you did not install a Redis/Memcached cache or '
+     'Query Monitor, read this file now.'),
+    (re.compile(r'/wp-content/mu-plugins/[^/]+\.php$'),
+     'A must-use plugin appeared or changed. mu-plugins load automatically and '
+     'cannot be deactivated from the admin UI.'),
+    (re.compile(r'/wp-config\.php$'),
+     'wp-config.php changed. It loads before everything else, which makes it '
+     'the most valuable injection point on a WordPress site.'),
+    (re.compile(r'/wp-content/themes/[^/]+/functions\.php$'),
+     'A theme functions.php changed. Expected after a theme update or an edit '
+     'in the admin UI; otherwise worth reading.'),
+]
+
+# Files worth reading even though they are not named *.php. The persistence
+# framework stashed an encrypted copy of itself at
+# wp-content/uploads/.<64 hex>.cache -- hidden, no PHP extension, and so
+# invisible to this daemon, which filtered on suffix before doing anything.
+STASH = re.compile(r'/wp-content/(?:uploads|upgrade|cache)/'
+                   r'.*/?\.[0-9a-f]{16,}(?:\.(?:cache|tmp|dat|bin))?$')
+
+
+def interesting(path):
+    """Is this path worth opening?
+
+    Replaces a bare `suffix in PHP_EXTS` check. Still a string comparison --
+    no syscall -- because it runs on every inotify event on the server.
+    """
+    low = path.replace('\\', '/')
+    if os.path.splitext(low)[1].lower() in PHP_EXTS:
+        return True
+    if os.path.basename(low) in ('db.php', 'object-cache.php', 'advanced-cache.php'):
+        return True
+    return bool(STASH.search(low))
+
+
+def heuristic(path, data):
+    """Highest-severity conjunction rule matching this file, or None."""
+    low = path.replace('\\', '/')
+    best = None
+    order = {'low': 0, 'medium': 1, 'high': 2, 'critical': 3}
+    for name, sev, alls, anys, nones, pathre in HEUR:
+        if pathre is not None and not pathre.search(low):
+            continue
+        if not alls and not anys:
+            continue
+        if any(not r.search(low if isinstance(r.pattern, str) else data)
+               for r in alls):
+            continue
+        if anys and not any(r.search(low if isinstance(r.pattern, str) else data)
+                            for r in anys):
+            continue
+        if any(r.search(low if isinstance(r.pattern, str) else data)
+               for r in nones):
+            continue
+        if best is None or order[sev] > order[best[1]]:
+            best = (name, sev)
+    return best
+
+
+def sentinel(path):
+    """Why this path's appearance is worth telling the operator about."""
+    low = path.replace('\\', '/')
+    for rx, why in SENTINELS:
+        if rx.search(low):
+            return why
+    return None
+
 def scan(path, max_size=None):
     try:
         sz = os.path.getsize(path)
@@ -607,8 +791,13 @@ def scan(path, max_size=None):
         # worth; the size ceiling is a user-visible resource control now.
         if sz == 0 or sz > limit: return None
         data = open(path,'rb').read()
+        # Conjunction rules first. When both fire, the heuristic names
+        # something the operator can act on ("an authenticated upload shell")
+        # where the flat pattern says "long_b64".
+        h = heuristic(path, data)
+        if h: return ('SG.WP.' + h[0], h[1])
         for n, p in PATTERNS:
-            if p.search(data): return 'SG.RT.' + n
+            if p.search(data): return ('SG.RT.' + n, SEV.get(n, 'medium'))
     except (PermissionError, OSError): pass
     return None
 
@@ -623,15 +812,71 @@ def handle(conn, path, limits=None, limiter=None, debouncer=None):
         limiter.take()
 
     _chk += 1
-    t = scan(path, limits['max_file_size'] if limits else None)
-    if not t: return
+    hit = scan(path, limits['max_file_size'] if limits else None)
+
+    # A sentinel position changed. Reported whether or not anything matched,
+    # because the detection IS the change: a mu-plugin or a drop-in appearing
+    # is worth a look even when the file is clean, and the worst backdoor found
+    # on this server in October 2026 was clean by every test we had.
+    #
+    # Never auto-quarantined. Redis object caches and theme edits land here
+    # too, and deleting a customer's object-cache.php because it was written to
+    # is worse than the thing this is watching for.
+    why = sentinel(path)
+    if why and not _seen_before(path):
+        db_event(conn, 'wp_sentinel', '%s: %s' % (path, why))
+        log.warning('SENTINEL %s -- %s', path, why)
+
+    if not hit: return
+    t, sev = hit
     _thr += 1
-    sev = SEV.get(t.replace('SG.RT.',''),'medium')
+
+    # Has this exact path been dealt with before? If so the file has COME BACK,
+    # and that is a different and worse finding: something else on the site
+    # rebuilt it. On this server a mu-plugin was deleted and returned twice,
+    # because wp-config.php and two drop-ins were each able to recreate it, and
+    # each round of deletion was reported as a success.
+    if _seen_before(path):
+        sev = 'critical'
+        t = t + '.recurring'
+        log.error('RECURRENCE %s -- previously removed and has returned; '
+                  'an executor elsewhere on this site is rebuilding it', path)
+        db_event(conn, 'wp_recurrence',
+                 '%s was removed before and has returned. Deleting it again '
+                 'will not help: find what recreated it -- check wp-config.php, '
+                 'wp-content/db.php, object-cache.php and advanced-cache.php.'
+                 % path)
+
     tid = db_threat(conn, path, t, sev)
-    log.warning('THREAT %s -> %s (id=%d sev=%s)', path, t, tid, sev)
-    db_event(conn, 'realtime_threat', f'{t} in {path}')
+    log.warning('THREAT %s -> %s (id=%s sev=%s)', path, t, tid, sev)
+    db_event(conn, 'realtime_threat', '%s in %s' % (t, path))
     if db_get(conn,'auto_quarantine') == '1' and tid:
         quarantine(conn, path, tid)
+
+
+def _seen_before(path):
+    """Was a threat already recorded at this exact path and acted on?
+
+    Opens its own short-lived connection rather than taking one as an
+    argument, so the call sites stay readable; the query is indexed and runs
+    only when something has already matched or a sentinel fired, not on every
+    event.
+    """
+    try:
+        c = db_connect()
+        if c is None:
+            return False
+        row = c.execute(
+            "SELECT 1 FROM threats WHERE file_path = ? "
+            "AND status IN ('quarantined','deleted','resolved') LIMIT 1",
+            (path,)).fetchone()
+        c.close()
+        return row is not None
+    except Exception:
+        # A failed lookup must not be read as "never seen". Treating it as
+        # not-seen only loses the escalation; treating it as seen would mark
+        # every first detection a recurrence.
+        return False
 
 def quarantine(conn, path, tid):
     day  = datetime.date.today().strftime('%Y-%m-%d')
@@ -778,10 +1023,14 @@ def run_inotify(conn, paths, limits):
             last_reload = time.time()
 
         for ev in evts:
-            if not ev.name or Path(ev.name).suffix.lower() not in PHP_EXTS: continue
+            if not ev.name: continue
             dp = wds.get(ev.wd,'')
-            if dp:
-                handle(conn, os.path.join(dp, ev.name), limits, limiter, debouncer)
+            if not dp: continue
+            fp = os.path.join(dp, ev.name)
+            # interesting() replaces the bare suffix check: drop-ins and the
+            # hidden hex-named payload stash have to get through it.
+            if not interesting(fp): continue
+            handle(conn, fp, limits, limiter, debouncer)
             tick += 1
             if tick >= 50: flush(conn); tick = 0
     ino.close()
@@ -815,7 +1064,7 @@ def run_polling(conn, paths, limits):
                     # Filter BEFORE stat(): the extension check is a string
                     # comparison, the stat is a syscall. The old order paid the
                     # syscall for every file on the server.
-                    if Path(f).suffix.lower() not in PHP_EXTS:
+                    if not interesting(os.path.join(r, f)):
                         continue
                     if len(out) >= max_tracked:
                         truncated = True

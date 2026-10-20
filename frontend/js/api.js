@@ -331,6 +331,15 @@ const API = (() => {
 
     // CMS Guard
     cmsStats:    ()   => req('GET',  'cmsguard/stats'),
+
+    // WordPress database scanner. 'sweep' is the only one of these that costs
+    // anything: one connection and six queries per install.
+    wpdbStats:    ()        => req('GET',  'wpscan/stats'),
+    wpdbFindings: (limit)   => req('GET',  'wpscan/findings?limit=' + (limit || 200)),
+    wpdbSweep:    (budget)  => req('POST', 'wpscan/sweep',   { budget: budget || 240 }),
+    wpdbResolve:  (id, st)  => req('POST', 'wpscan/resolve', { id: id, status: st }),
+    wpdbInstall:  (path)    => req('POST', 'wpscan/install', { path: path }),
+    wpDropins:    (path)    => req('GET',  'wpscan/dropins?path=' + encodeURIComponent(path)),
     cmsInstalls: ()   => req('GET',  'cmsguard/installs'),
     cmsScan:     ()   => req('POST', 'cmsguard/scan',  {}),
     cmsCheck:    (id) => req('POST', 'cmsguard/check', { id }),

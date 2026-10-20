@@ -52,8 +52,9 @@ $scanner = t_code($repo . '/backend/lib/Scanner.php');
 // -- so the gate is asserted in one place and the three call sites separately.
 t_eq(1, substr_count($scanner, "Database::setting('auto_quarantine', '0')"),
     'the setting is checked once, in the policy');
-t_eq(3, substr_count($scanner, '$this->applyThreatPolicy('),
-    'and all three detection paths go through it');
+t_eq(4, substr_count($scanner, '$this->applyThreatPolicy('),
+    'and every detection path goes through it -- four since the heuristic '
+  . 'engine was added in 4.6.0');
 
 $daemon = file_get_contents($repo . '/backend/daemon/monitor.py');
 t_contains($daemon, "db_get(conn,'auto_quarantine') == '1'",

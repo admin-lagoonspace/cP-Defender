@@ -31,6 +31,7 @@ if (PHP_SAPI !== 'cli') { fwrite(STDERR, "scheduler: CLI only\n"); exit(2); }
 require_once __DIR__ . '/../config/config.php';
 require_once SG_ROOT . '/backend/lib/Database.php';
 require_once SG_ROOT . '/backend/lib/Logger.php';
+require_once SG_ROOT . '/backend/lib/Heuristics.php';
 require_once SG_ROOT . '/backend/lib/Scanner.php';
 require_once SG_ROOT . '/backend/lib/IPReputation.php';
 // Used by the iprep task to check this server's own addresses. Calling a
@@ -41,6 +42,7 @@ require_once SG_ROOT . '/backend/lib/License.php';
 // Newly scheduled modules. Omitting these is a fatal on the first cron run,
 // which nothing would have reported until a panel stayed empty for a week.
 require_once SG_ROOT . '/backend/lib/CMSGuard.php';
+require_once SG_ROOT . '/backend/lib/WPDatabaseScanner.php';
 require_once SG_ROOT . '/backend/lib/BotShield.php';
 require_once SG_ROOT . '/backend/lib/RootkitScanner.php';
 require_once SG_ROOT . '/backend/lib/RootkitEngine.php';
@@ -239,6 +241,41 @@ $tasks = [
         'run'      => function () {
             $found = (new CMSGuard())->scanInstalls();
             slog('  CMS discovery found ' . count($found) . ' install(s)');
+        },
+    ],
+
+    // The database half of a WordPress compromise.
+    //
+    // Scheduled at 03:30, half an hour before CMS discovery, so a nightly run
+    // reads the install list that discovery left and the two never contend for
+    // the disk. Weekly, not daily: it opens a database connection per install
+    // and this is the most expensive task in the file, so it runs often enough
+    // to catch a new compromise within days and rarely enough not to be a
+    // standing load on a shared server.
+    //
+    // The sweep carries its own wall-clock budget and resumes where it
+    // stopped, so an install count that grows past what fits in one night
+    // degrades into "every site every few nights" rather than "the first 200
+    // sites every night and the rest never".
+    'wpdbscan' => [
+        'schedule' => setting('wpdbscan_schedule', 'weekly'),
+        'time'     => setting('wpdbscan_time', '03:30'),
+        'day'      => (int)setting('wpdbscan_day', '0'),
+        'run'      => function () {
+            $r = WPDatabaseScanner::sweep(null, (int)setting('wpdbscan_budget', '1800'));
+            slog(sprintf('  WordPress database sweep: %d of %d installs, '
+                       . '%d new findings%s',
+                         $r['scanned'], $r['installs'], $r['findings'],
+                         $r['complete'] ? '' : ' (budget reached, resumes next run)'));
+            // Errors are logged, not swallowed. A sweep that could not read
+            // half the installs and a server with nothing wrong produce the
+            // same finding count.
+            foreach (array_slice($r['errors'], 0, 10) as $e) {
+                slog('  ! ' . $e);
+            }
+            if (count($r['errors']) > 10) {
+                slog(sprintf('  ! and %d more', count($r['errors']) - 10));
+            }
         },
     ],
 

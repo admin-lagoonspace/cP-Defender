@@ -331,6 +331,51 @@ class Database {
             $db->exec("ALTER TABLE threats ADD COLUMN quarantine_expires_at INTEGER");
         }
 
+        // Why a heuristic fired, in a sentence.
+        //
+        // Added with the heuristic rule engine. The old flat signatures were
+        // self-describing -- "eval_base64" says what it found -- but a rule
+        // that fires on a CONJUNCTION cannot be read off its name. An operator
+        // deciding whether to delete a customer's file needs to be told that
+        // the file checks a 32-hex password with hash_equals() and then calls
+        // move_uploaded_file(), not just that rule 'upload_backdoor_hashkey'
+        // matched.
+        if (!in_array('detail', $thCols)) {
+            $db->exec("ALTER TABLE threats ADD COLUMN detail TEXT");
+        }
+
+        // Findings that are not files.
+        //
+        // Everything this product recorded until now was a path. During the
+        // October 2026 incident most of what mattered was a database row: 148
+        // administrator accounts inserted by SQL, a payload mirrored across
+        // wp_options and a draft post, a login token in usermeta, and a
+        // contact form whose autoresponder relayed 92,954 spam messages
+        // without a single file being modified. None of those fit in `threats`
+        // -- there is no file to quarantine and nothing to delete on disk --
+        // so they get their own table, and the actions column says what a
+        // human should do rather than implying the software already did it.
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS wp_findings (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_job_id  INTEGER REFERENCES scan_jobs(id),
+                install_path TEXT    NOT NULL,
+                db_name      TEXT,
+                cpanel_user  TEXT,
+                finding_type TEXT    NOT NULL,
+                severity     TEXT    DEFAULT 'medium',
+                what         TEXT,
+                action       TEXT,
+                status       TEXT    DEFAULT 'open',
+                detected_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                resolved_at  INTEGER
+            );
+        ");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_wpf_open
+                     ON wp_findings(status, severity)");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_wpf_install
+                     ON wp_findings(install_path)");
+
         // 3.30.4 shipped scan_max_concurrent defaulting to 2; the intended
         // number is 1. The seed above is INSERT OR IGNORE, so it cannot change
         // a row that already exists -- an upgrade would silently keep 2.

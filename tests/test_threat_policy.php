@@ -192,9 +192,15 @@ Database::setSetting('policy_high_action', 'delete');
 // ── Every detection path uses the policy ────────────────────────────────────
 // There were three copies of "if auto_quarantine is on, quarantine it", which
 // is how a webshell and a suspicious comment came to be treated alike.
+//
+// Four paths as of 4.6.0: ClamAV, the flat patterns, the custom signature file
+// and the heuristic rule engine. The heuristic path matters most here, because
+// it is the one that produces critical findings on files with no signature at
+// all -- so it is also the one most able to delete a customer's file without a
+// copy if it bypassed the policy.
 $sc = t_code($repo . '/backend/lib/Scanner.php');
-t_eq(3, substr_count($sc, '$this->applyThreatPolicy('),
-    'all three detection paths apply the policy');
+t_eq(4, substr_count($sc, '$this->applyThreatPolicy('),
+    'every detection path applies the policy, the heuristic one included');
 t_ok(strpos($sc, "Database::setting('auto_quarantine') === '1'") === false,
     'and none of them still quarantines regardless of severity');
 

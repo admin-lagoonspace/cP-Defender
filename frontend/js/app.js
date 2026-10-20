@@ -207,6 +207,7 @@ function openPage(name) {
     case 'settings':  loadSettings();       break;
     case 'botshield': loadBotShield();      break;
     case 'cms':       loadCMSGuard();       break;
+    case 'wpscan':    loadWPScan();         break;
     case 'rootkit':   loadRootkit();        break;
     case 'integrity': loadIntegrity();      break;
     case 'logs':      loadLogs();           break;
@@ -4498,4 +4499,117 @@ async function viewThreatFile(id) {
 function closeFileView() {
   const overlay = document.getElementById('file-view-overlay');
   if (overlay) { overlay.classList.add('hidden'); }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// WordPress Database Scanner
+// ════════════════════════════════════════════════════════════════════════════
+//
+// NO REMEDIATION BUTTON, BY DESIGN. Nothing on this page deletes a row. The
+// findings are judgements about a customer's users, options and posts, and
+// they are wrong often enough to matter: on the server this module was built
+// from, an account matching three of the rogue-admin signals turned out to be
+// the client's real administrator logging in through a VPN. So the operator is
+// shown what was found, what it means and what to do, and marks it done once
+// they have acted.
+
+function wpSevBadge(sev) {
+  const cls = { critical: 'badge-red', high: 'badge-amber',
+                medium: 'badge-blue' }[sev] || 'badge-gray';
+  return '<span class="badge ' + cls + '">' + esc(sev || 'low') + '</span>';
+}
+
+async function loadWPScan() {
+  const st = await API.wpdbStats();
+  const d  = (st && st.data) || {};
+
+  setText('wpscan-stat-critical', d.critical ?? 0);
+  setText('wpscan-stat-high',     d.high     ?? 0);
+  setText('wpscan-stat-medium',   d.medium   ?? 0);
+  // "Never", not a dash. A sweep that has never run and a sweep that found
+  // nothing look identical on this page otherwise, and the whole point of this
+  // module is to stop reporting silence as health.
+  setText('wpscan-stat-last',
+          d.last_run ? new Date(d.last_run * 1000).toLocaleString() : 'Never');
+
+  const res  = await API.wpdbFindings(200);
+  const rows = (res && res.data) || [];
+  const body = g('wpscan-findings-body');
+  if (!body) return;
+
+  const badge = g('wpscan-count-badge');
+  if (badge) badge.textContent = rows.length + ' open';
+
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;'
+      + 'color:var(--txt3);padding:28px">'
+      + (d.last_run
+          ? 'No open findings. Last swept '
+            + esc(new Date(d.last_run * 1000).toLocaleString()) + '.'
+          : 'Not swept yet \u2014 click "Scan Databases".')
+      + '</td></tr>';
+    return;
+  }
+
+  body.innerHTML = rows.map(r =>
+      '<tr>'
+    + '<td>' + wpSevBadge(r.severity) + '</td>'
+    + '<td><code>' + esc(r.finding_type || '') + '</code></td>'
+    + '<td>' + esc(r.cpanel_user || '\u2014') + '</td>'
+    + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="'
+      + esc(r.install_path || '') + '">' + esc(r.install_path || '') + '</td>'
+    + '<td style="max-width:300px">' + esc(r.what || '') + '</td>'
+    + '<td style="max-width:300px;color:var(--txt2)">' + esc(r.action || '') + '</td>'
+    + '<td style="white-space:nowrap">'
+    + '<button class="btn btn-ghost btn-sm" onclick="resolveWPFinding('
+      + Number(r.id) + ', \'resolved\')">Done</button> '
+    + '<button class="btn btn-ghost btn-sm" onclick="resolveWPFinding('
+      + Number(r.id) + ', \'accepted\')" '
+      + 'title="Expected on this site \u2014 stop reporting it">Accept</button>'
+    + '</td></tr>').join('');
+}
+
+async function runWPScan() {
+  const btn = g('wpscan-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning...'; }
+
+  // The budget is sent, and it is why the result can say "incomplete". One
+  // connection and six queries per install; a server with 503 installs will
+  // not finish inside an HTTP request, so the sweep stops at the budget and
+  // the next run resumes where it stopped. Saying so is the point -- a partial
+  // sweep reported as a finished one reads as "your server is clean".
+  try {
+    const r = await API.wpdbSweep(240);
+    const d = (r && r.data) || {};
+    if (!r || r.success === false) {
+      toast(r && r.error ? r.error : 'Sweep failed', 'error');
+    } else {
+      let msg = 'Read ' + (d.scanned || 0) + ' of ' + (d.installs || 0)
+              + ' installs \u2014 ' + (d.findings || 0) + ' new finding(s)';
+      if (d.complete === false) {
+        msg += '; budget reached, resumes where it stopped';
+      }
+      // Errors are surfaced, never folded into the finding count. A sweep that
+      // could not read half the installs and a server with nothing wrong both
+      // report zero findings.
+      const errs = (d.errors && d.errors.length) || 0;
+      if (errs) msg += '; ' + errs + ' install(s) could not be read';
+      toast(msg, (d.complete === false || errs) ? 'warning' : 'success');
+    }
+    await loadWPScan();
+  } catch (e) {
+    toast('Sweep failed: ' + (e && e.message ? e.message : e), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Scan Databases'; }
+  }
+}
+
+async function resolveWPFinding(id, status) {
+  const r = await API.wpdbResolve(id, status);
+  if (r && r.success) {
+    toast(status === 'accepted' ? 'Accepted for this site' : 'Marked done', 'success');
+    await loadWPScan();
+  } else {
+    toast((r && r.error) || 'Could not update the finding', 'error');
+  }
 }

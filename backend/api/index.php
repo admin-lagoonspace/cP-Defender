@@ -41,6 +41,7 @@ require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../lib/Database.php';
 require_once __DIR__ . '/../lib/Auth.php';
 require_once __DIR__ . '/../lib/Logger.php';
+require_once __DIR__ . '/../lib/Heuristics.php';
 require_once __DIR__ . '/../lib/Scanner.php';
 require_once __DIR__ . '/../lib/Firewall.php';
 require_once __DIR__ . '/../lib/WAF.php';
@@ -49,6 +50,7 @@ require_once __DIR__ . '/../lib/IPReputation.php';
 require_once __DIR__ . '/../lib/RealTimeMonitor.php';
 require_once __DIR__ . '/../lib/BotShield.php';
 require_once __DIR__ . '/../lib/CMSGuard.php';
+require_once __DIR__ . '/../lib/WPDatabaseScanner.php';
 require_once __DIR__ . '/../lib/RootkitScanner.php';
 require_once __DIR__ . '/../lib/FileIntegrity.php';
 require_once __DIR__ . '/../lib/PHPHardening.php';
@@ -174,6 +176,7 @@ try {
         'storage'    => routeStorage($action, $method, $body, $user),
         'botshield'  => routeBotShield($action, $method, $body, $query, $user),
         'cmsguard'   => routeCMSGuard($action, $method, $body, $query, $user),
+        'wpscan'     => routeWPScan($action, $method, $body, $query, $user),
         'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
         'bruteforce' => routeBruteForce($action, $method, $body, $query, $user),
         'overview'   => routeOverview($action, $method, $query, $user),
@@ -1310,6 +1313,85 @@ function routeCMSGuard(string $action, string $method, array $body, array $q, ?a
         'check'    => $method === 'POST'
             ? ['success' => true, 'data' => $cg->checkInstall((int)($body['id'] ?? 0))]
             : ['success' => false, 'code' => 405],
+        default    => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// WordPress Database Scanner
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Everything else in this API reports on files. This reports on database rows,
+// because that is where most of what mattered during the October 2026 incident
+// actually lived: administrator accounts inserted by SQL, a payload mirrored
+// across wp_options and a draft post, a login token in usermeta, and a contact
+// form relaying 92,954 spam messages without a single file being modified.
+//
+// Note what is NOT here: there is no delete route. Every finding needs a human
+// to look at the account or the row, and on this server an account matching
+// three of the rogue-admin signals turned out to be the client's real
+// administrator logging in through a VPN. The operator resolves a finding
+// after acting on it; the software does not act for them.
+function routeWPScan(string $action, string $method, array $body, array $q, ?array $user): array {
+    return match($action) {
+        'stats'    => ['success' => true, 'data' => WPDatabaseScanner::stats()],
+        'findings' => ['success' => true,
+                       'data' => WPDatabaseScanner::openFindings((int)($q['limit'] ?? 200))],
+
+        // Synchronous, with a budget. One connection and six queries per
+        // install and this server has 503 of them, so the sweep stops when the
+        // budget runs out and the next run resumes where it stopped. A request
+        // that ran to completion over 503 installs would time out and leave
+        // the operator with nothing.
+        'sweep'    => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  $budget = max(30, min(900, (int)($body['budget'] ?? 240)));
+                  $r = WPDatabaseScanner::sweep(null, $budget);
+                  Logger::info(sprintf('WP database sweep via API: %d/%d installs, '
+                                     . '%d findings', $r['scanned'], $r['installs'],
+                                       $r['findings']));
+                  return ['success' => true, 'data' => $r];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        // One install, on demand. Returns the findings without recording them,
+        // so an operator can check a site they are working on without adding
+        // rows to the list they are working through.
+        'install'  => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  $path = (string)($body['path'] ?? '');
+                  if ($path === '' || !is_dir($path)) {
+                      return ['success' => false, 'error' => 'No such install', 'code' => 400];
+                  }
+                  return ['success' => true,
+                          'data' => (new WPDatabaseScanner())->scanInstall($path)];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        // Which drop-ins an install carries. Reported, not judged: real Redis
+        // and Memcached caches exist. What the operator needs to know is that
+        // the file is there at all, because it runs before every plugin on
+        // every request including wp-login.php.
+        'dropins'  => (function () use ($q) {
+                  $path = (string)($q['path'] ?? '');
+                  if ($path === '' || !is_dir($path)) {
+                      return ['success' => false, 'error' => 'No such install', 'code' => 400];
+                  }
+                  return ['success' => true, 'data' => Heuristics::auditDropins($path)];
+              })(),
+
+        'resolve'  => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  $ok = WPDatabaseScanner::resolve((int)($body['id'] ?? 0),
+                                                   (string)($body['status'] ?? 'resolved'));
+                  return ['success' => $ok,
+                          'error' => $ok ? null : 'Unknown status'];
+              })()
+            : ['success' => false, 'code' => 405],
+
         default    => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }

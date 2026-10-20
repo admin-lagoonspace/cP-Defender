@@ -34,6 +34,7 @@ foreach ([
     'RealTimeMonitor', 'BotShield', 'CMSGuard', 'RootkitScanner', 'FileIntegrity',
     'PHPHardening', 'UpdateChecker', 'License', 'FirewallEngine', 'RootkitEngine',
     'BlocklistRegistry', 'WAFInstaller', 'UserReport', 'BruteForce', 'Schedule',
+    'Heuristics', 'WPDatabaseScanner',
 ] as $lib) {
     require_once $repo . '/backend/lib/' . $lib . '.php';
 }
