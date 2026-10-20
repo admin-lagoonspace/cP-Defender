@@ -150,3 +150,70 @@ t_eq($shItems, $buildItems,
 // to copy and the Security menu entry is a blank page for every customer.
 t_ok(in_array('cpanel', $buildItems, true), 'build.py packages cpanel/');
 t_ok(in_array('upgrade.sh', $buildItems, true), 'build.py packages upgrade.sh');
+
+// ── All THREE lists must agree ──────────────────────────────────────────────
+//
+// Three independent places decide what this product consists of:
+//
+//   1. scripts/build.py          ITEMS                -- what the dev build packages
+//   2. scripts/make-release.sh   its allowlist        -- what the release packages
+//   3. update.sh                 UPDATE_DIRS + FILES  -- what an UPDATE delivers
+//
+// All three disagreed, and the third one was the expensive one. update.sh
+// copied only backend/, frontend/, whm/ and four files, so:
+//
+//   - cpanel/ was never delivered by an update. That directory holds the page
+//     every CUSTOMER opens from their own cPanel. A server updated at any
+//     point after cpanel/ was introduced showed an empty menu entry to every
+//     user on it, and said so only as two lines in an installer log.
+//   - test.sh was never delivered, so every update finished with "test.sh not
+//     found -- skipping verification". The post-install check silently had not
+//     run in months.
+//   - upgrade.sh was never delivered, so the script whose whole job is to
+//     fetch a newer updater could not arrive by update.
+//
+// The zip was correct the whole time. Only the copy list was wrong, which is
+// the hardest version of this bug to see: nothing is missing from the release,
+// and a fresh install is perfect.
+$updateSh = t_code(dirname(__DIR__) . '/update.sh');
+
+t_ok(preg_match('/^UPDATE_DIRS=\(([^)]*)\)/m', $updateSh, $m3) === 1,
+     'update.sh declares UPDATE_DIRS');
+$updDirs = preg_split('/\s+/', trim($m3[1] ?? ''), -1, PREG_SPLIT_NO_EMPTY);
+
+t_ok(preg_match('/^UPDATE_FILES=\(([^)]*)\)/m', $updateSh, $m4) === 1,
+     'update.sh declares UPDATE_FILES');
+$updFiles = preg_split('/\s+/', trim($m4[1] ?? ''), -1, PREG_SPLIT_NO_EMPTY);
+
+$delivered = array_merge($updDirs, $updFiles);
+sort($delivered);
+
+// $shItems is make-release.sh's allowlist, read above.
+t_eq($shItems, $delivered,
+     'update.sh delivers exactly what make-release.sh packages — anything '
+   . 'packaged but not copied reaches fresh installs only, and never the '
+   . 'servers that update');
+
+// Named individually, because these three are the ones that were missing and
+// each one has a distinct user-visible consequence.
+t_ok(in_array('cpanel', $updDirs, true),
+     'an update delivers cpanel/ — the page every cPanel user opens');
+t_ok(in_array('test.sh', $updFiles, true),
+     'an update delivers test.sh, so post-install verification actually runs');
+t_ok(in_array('upgrade.sh', $updFiles, true),
+     'an update delivers upgrade.sh, so the next manual upgrade has it');
+
+// ── An optional directory must not be able to roll back a good update ───────
+//
+// update.sh ran `chmod -R 700 "${INSTALL_DIR}/quarantine"` unconditionally.
+// Quarantine is configurable and commonly lives outside the install directory
+// -- on the server this was found, /home/.serverscrub/quarantine, because
+// /home is the big volume. So the path did not exist, chmod exited non-zero,
+// `set -e` declared the update failed, and a server that had ALREADY applied
+// the new version in full was rolled all the way back.
+t_ok(!preg_match('/^\s*chmod -R 700 "\$\{INSTALL_DIR\}\/quarantine"\s*$/m', $updateSh),
+     'update.sh no longer chmods the quarantine path unconditionally');
+t_contains($updateSh, 'for _SG_D in database quarantine logs; do',
+     'the optional directories are tightened only when present');
+t_contains($updateSh, "Database::setting('quarantine_dir'",
+     'and the real quarantine path is read from settings, not assumed');

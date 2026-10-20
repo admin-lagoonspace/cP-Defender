@@ -561,8 +561,25 @@ fi
 section "Applying update"
 
 # Directories to update (code only — never user data)
-UPDATE_DIRS=( backend frontend whm )
-UPDATE_FILES=( VERSION install.sh uninstall.sh update.sh )
+# MUST cover everything make-release.sh packages, or an update silently fails
+# to deliver it. This list is checked against that one by
+# tests/test_packaging.php, because it was wrong and nothing noticed:
+#
+#   - `cpanel` was missing, so wp-content of the cPanel user plugin -- the page
+#     every CUSTOMER opens from their own control panel -- was never delivered
+#     by an update, only by a fresh install. A server updated since that
+#     directory was introduced showed an empty menu entry to every cPanel user
+#     on it, and the only visible symptom was two lines in the installer log
+#     saying "cPanel user page missing from the package".
+#   - `test.sh` was missing, so every update ended with "test.sh not found --
+#     skipping verification". The post-install check had not run in months.
+#   - `upgrade.sh` was missing, so the one script whose entire purpose is to
+#     fetch a newer updater could never arrive by update.
+#
+# Three independent lists described this product: build.py's ITEMS,
+# make-release.sh's allowlist, and this. All three disagreed.
+UPDATE_DIRS=( backend frontend whm cpanel )
+UPDATE_FILES=( VERSION install.sh uninstall.sh update.sh upgrade.sh test.sh )
 
 # ── Snapshot the current code so a failure can be undone ─────────────────────
 # The existing backup covers USER DATA only. Without a code copy a half-applied
@@ -712,9 +729,34 @@ fi
 section "Fixing permissions"
 chown -R root:nobody "$INSTALL_DIR" 2>/dev/null || chown -R root:root "$INSTALL_DIR"
 chmod -R 750 "$INSTALL_DIR"
-chmod -R 700 "${INSTALL_DIR}/database"
-chmod -R 700 "${INSTALL_DIR}/quarantine"
-chmod -R 700 "${INSTALL_DIR}/logs"
+
+# Each of these is chmod'ed ONLY IF PRESENT.
+#
+# quarantine is configurable and routinely lives outside the install directory
+# -- the installer on this server put it at /home/.serverscrub/quarantine,
+# because /home is the big volume. So ${INSTALL_DIR}/quarantine did not exist,
+# chmod exited non-zero, `set -e` called that a failed update, and a v4.4.2
+# server that had ALREADY successfully applied v4.7.1 -- files copied, data
+# restored, migrations run, plugin re-registered -- was rolled all the way
+# back. The update worked. Tightening permissions on an optional directory
+# undid it.
+#
+# A missing directory here is not an error worth reverting an update over. If
+# it is absent there is nothing to tighten.
+for _SG_D in database quarantine logs; do
+    [[ -d "${INSTALL_DIR}/${_SG_D}" ]] || continue
+    chmod -R 700 "${INSTALL_DIR}/${_SG_D}" \
+        || warn "Could not tighten permissions on ${_SG_D}/ -- check it by hand"
+done
+
+# The configured quarantine, wherever it actually is. Read from the database
+# rather than assumed, and only touched when it is a real directory we own.
+_SG_QDIR="$(php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; echo Database::setting('quarantine_dir', '');" 2>/dev/null || true)"
+if [[ -n "$_SG_QDIR" && -d "$_SG_QDIR" && "$_SG_QDIR" != "/" ]]; then
+    chmod -R 700 "$_SG_QDIR" 2>/dev/null \
+        && ok "Quarantine permissions applied: ${_SG_QDIR}" \
+        || warn "Could not tighten ${_SG_QDIR} -- check it by hand"
+fi
 ok "Permissions applied"
 
 # ── Regenerate systemd service file (paths may have changed) ─────────────────

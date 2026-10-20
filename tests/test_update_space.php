@@ -19,10 +19,30 @@ $repo = $ctx['repo'];
 $up = file_get_contents($repo . '/update.sh');
 
 // ── Only back up what the update can destroy ─────────────────────────────────
-// UPDATE_DIRS is backend/frontend/whm; nothing else is touched, so nothing else
-// needs copying.
-t_contains($up, 'UPDATE_DIRS=( backend frontend whm )',
-    'the update only replaces the code directories');
+//
+// The point is that the snapshot copies CODE and not the two directories that
+// grow without bound -- quarantine, which holds whole infected files, and
+// logs. Both the snapshot and the rollback iterate UPDATE_DIRS, so the test is
+// that UPDATE_DIRS contains no bulk data directory.
+//
+// This assertion used to pin the literal string
+// 'UPDATE_DIRS=( backend frontend whm )'. That made a necessary fix look like
+// a regression: the list was MISSING cpanel/, so updates never delivered the
+// page every cPanel user opens, and adding it failed this test. Pinning a
+// literal list in two places is how the lists drifted apart to begin with --
+// assert the property, not the spelling.
+t_ok(preg_match('/^UPDATE_DIRS=\(([^)]*)\)/m', $up, $m) === 1,
+    'update.sh declares UPDATE_DIRS');
+$dirs = preg_split('/\s+/', trim($m[1]), -1, PREG_SPLIT_NO_EMPTY);
+
+foreach (['quarantine', 'logs', 'database'] as $bulk) {
+    t_ok(!in_array($bulk, $dirs, true),
+        "$bulk/ is not in UPDATE_DIRS — the update never replaces it, so the "
+      . "snapshot must not copy it either");
+}
+t_contains($up, 'backend', 'the code directories are what gets replaced');
+t_ok(count($dirs) > 0 && count($dirs) < 8,
+    'UPDATE_DIRS stays a short list of code directories');
 
 $preserveStart = strpos($up, 'PRESERVE=(');
 $preserveEnd   = strpos($up, ')', $preserveStart);
