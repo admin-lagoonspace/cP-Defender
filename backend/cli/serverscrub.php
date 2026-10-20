@@ -27,6 +27,7 @@ $BASE = dirname(__DIR__);                       // .../backend
 require_once $BASE . '/config/config.php';
 require_once $BASE . '/lib/Database.php';
 require_once $BASE . '/lib/Logger.php';
+require_once $BASE . '/lib/Heuristics.php';
 require_once $BASE . '/lib/Scanner.php';
 require_once $BASE . '/lib/Firewall.php';
 require_once $BASE . '/lib/IPReputation.php';
