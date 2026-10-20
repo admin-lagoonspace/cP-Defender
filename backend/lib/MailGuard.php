@@ -533,6 +533,131 @@ class MailGuard
                 'error' => $json['metadata']['reason'] ?? trim(substr($raw, 0, 200))];
     }
 
+
+    // -- Settings, written through validation --------------------------------
+
+    /**
+     * Save the operator's settings.
+     *
+     * Every numeric value goes back out through the same getter that clamps it,
+     * so what the panel shows afterwards is what will actually be used. Writing
+     * a raw value and letting the getter silently clamp it later would mean the
+     * panel reports a threshold the detector is not using -- and an operator
+     * who sets 10/hour and sees 10/hour would reasonably expect an alert that
+     * never comes.
+     *
+     * @param array<string,mixed> $in
+     * @return array{success:bool,saved:array<string,string>,rejected:array<string,string>}
+     */
+    public static function saveSettings(array $in): array
+    {
+        $saved    = [];
+        $rejected = [];
+
+        if (array_key_exists('enabled', $in)) {
+            $v = !empty($in['enabled']) ? '1' : '0';
+            Database::setSetting('mg_enabled', $v);
+            $saved['enabled'] = $v;
+        }
+
+        // key => [setting, getter] -- the getter is the authority on range.
+        $nums = [
+            'hourly'       => ['mg_hourly',       'hourlyThreshold'],
+            'queue'        => ['mg_queue',        'queueThreshold'],
+            'frozen'       => ['mg_frozen',       'frozenThreshold'],
+            'retain_days'  => ['mg_retain_days',  null],
+        ];
+
+        foreach ($nums as $key => [$setting, $getter]) {
+            if (!array_key_exists($key, $in)) continue;
+
+            $raw = $in[$key];
+            if (!is_numeric($raw)) {
+                $rejected[$key] = 'not a number';
+                continue;
+            }
+            $asked = (int)$raw;
+            Database::setSetting($setting, (string)$asked);
+
+            if ($getter !== null) {
+                $effective = self::$getter();
+                $saved[$key] = (string)$effective;
+                // Told plainly when a value was clamped, rather than quietly
+                // storing one number and using another.
+                if ($effective !== $asked) {
+                    $rejected[$key] = sprintf(
+                        'adjusted from %d to %d, which is the usable range',
+                        $asked, $effective);
+                    Database::setSetting($setting, (string)$effective);
+                }
+            } else {
+                $clamped = max(7, min(365, $asked));
+                Database::setSetting($setting, (string)$clamped);
+                $saved[$key] = (string)$clamped;
+                if ($clamped !== $asked) {
+                    $rejected[$key] = sprintf('adjusted from %d to %d days',
+                                              $asked, $clamped);
+                }
+            }
+        }
+
+        if (array_key_exists('exempt', $in)) {
+            // Account names only. An unchecked string here would end up in the
+            // exemption list, and an exemption that matches more than intended
+            // silently stops reporting the thing this module exists for.
+            $clean = [];
+            // Split on COMMAS and newlines only, never on spaces. Splitting on
+            // whitespace turns "bad name!" into "bad" plus "name!" -- the
+            // second is rejected and the first, which looks like a perfectly
+            // valid account, is silently exempted. An exemption added by
+            // accident stops the alerts this whole module exists for, without
+            // anything appearing to go wrong.
+            foreach (preg_split('/[,
+]+/', (string)$in['exempt']) as $a) {
+                $a = trim($a);
+                if ($a === '') continue;
+                if (preg_match('/^[a-z0-9][a-z0-9_-]{0,31}$/i', $a)) {
+                    $clean[] = $a;
+                } else {
+                    $rejected['exempt'] = 'ignored "' . substr($a, 0, 24)
+                                        . '" — not a valid account name';
+                }
+            }
+            $v = implode(',', array_unique($clean));
+            Database::setSetting('mg_exempt', $v);
+            $saved['exempt'] = $v;
+        }
+
+        if ($saved !== []) {
+            Logger::info('Outbound mail settings changed: '
+                . implode(', ', array_map(
+                    fn($k, $v) => "$k=$v", array_keys($saved), $saved)));
+        }
+
+        return ['success' => true, 'saved' => $saved, 'rejected' => $rejected];
+    }
+
+    /** Current settings and the range each one accepts, for the panel. */
+    public static function settings(): array
+    {
+        return [
+            'enabled'     => self::enabled(),
+            'hourly'      => self::hourlyThreshold(),
+            'queue'       => self::queueThreshold(),
+            'frozen'      => self::frozenThreshold(),
+            'exempt'      => implode(', ', self::exemptAccounts()),
+            'retain_days' => max(7, min(365, (int)Database::setting('mg_retain_days', '60'))),
+            // Shown next to each field so the clamps are visible BEFORE a value
+            // is rejected, not after.
+            'ranges'      => [
+                'hourly'      => [50, 100000],
+                'queue'       => [100, 1000000],
+                'frozen'      => [10, 100000],
+                'retain_days' => [7, 365],
+            ],
+        ];
+    }
+
     // ── Reporting ───────────────────────────────────────────────────────────
 
     public static function topSenders(int $hours = 24, int $limit = 25): array

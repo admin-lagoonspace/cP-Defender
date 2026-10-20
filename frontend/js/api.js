@@ -340,6 +340,8 @@ const API = (() => {
     mgSenders:  (h, l)        => req('GET',  'mailguard/senders?hours=' + (h || 24)
                                              + '&limit=' + (l || 25)),
     mgScan:     ()            => req('POST', 'mailguard/scan', {}),
+    mgSettings:     ()        => req('GET',  'mailguard/settings'),
+    mgSaveSettings: (o)       => req('POST', 'mailguard/save-settings', o),
     mgThrottle: (acct, perHr) => req('POST', 'mailguard/throttle',
                                      { account: acct, per_hour: perHr }),
 

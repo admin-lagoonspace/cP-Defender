@@ -1339,6 +1339,19 @@ function routeMailGuard(string $action, string $method, array $body, array $q, ?
                       'data' => MailGuard::topSenders((int)($q['hours'] ?? 24),
                                                       (int)($q['limit'] ?? 25))],
 
+        'settings' => ['success' => true, 'data' => MailGuard::settings()],
+
+        // Saves through MailGuard's own clamps and reports anything it had to
+        // adjust, so the panel never displays a threshold the detector is not
+        // actually using.
+        'save-settings' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  return ['success' => true,
+                          'data' => MailGuard::saveSettings($body)];
+              })()
+            : ['success' => false, 'code' => 405],
+
         // Read the log and judge it now. Safe: it only records.
         'scan' => $method === 'POST'
             ? (function () use ($user) {

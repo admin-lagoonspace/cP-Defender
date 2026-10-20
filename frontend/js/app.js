@@ -208,7 +208,7 @@ function openPage(name) {
     case 'botshield': loadBotShield();      break;
     case 'cms':       loadCMSGuard();       break;
     case 'wpscan':    loadWPScan();         break;
-    case 'mailguard': loadMailGuard();      break;
+    case 'mailguard': loadMailGuard(); loadMailSettings(); break;
     case 'rootkit':   loadRootkit();        break;
     case 'integrity': loadIntegrity();      break;
     case 'logs':      loadLogs();           break;
@@ -4917,4 +4917,86 @@ async function throttleAccount(account) {
   } else {
     toast(d.error || (r && r.error) || 'Could not set the limit', 'error', 9000);
   }
+}
+
+// ── Spam Monitor settings ───────────────────────────────────────────────────
+//
+// The ranges come FROM THE SERVER and are shown next to each field, because the
+// server clamps these values and a panel that lets someone type 10 and then
+// silently uses 50 is worse than one that refuses. If a value is adjusted on
+// save, the reason is shown and the field is corrected to what will actually
+// be used.
+
+async function loadMailSettings() {
+  const r = await API.mgSettings();
+  const d = (r && r.data) || {};
+  const ranges = d.ranges || {};
+
+  const on = g('mg-set-enabled');
+  if (on) on.checked = !!d.enabled;
+
+  const put = (id, val) => { const el = g(id); if (el) el.value = val ?? ''; };
+  put('mg-set-hourly', d.hourly);
+  put('mg-set-queue',  d.queue);
+  put('mg-set-frozen', d.frozen);
+  put('mg-set-retain', d.retain_days);
+  put('mg-set-exempt', d.exempt);
+
+  const hint = (id, key, suffix) => {
+    const el = g(id);
+    const rg = ranges[key];
+    if (el && rg) {
+      el.textContent = 'Between ' + fmtNum(rg[0]) + ' and ' + fmtNum(rg[1])
+                     + (suffix ? ' ' + suffix : '');
+    }
+  };
+  hint('mg-hint-hourly', 'hourly',
+       '\u2014 the relay that prompted this ran at about 1,690/hour');
+  hint('mg-hint-queue',  'queue',  '\u2014 93,255 queued is not a busy day');
+  hint('mg-hint-frozen', 'frozen',
+       '\u2014 a spike usually means deliveries are being refused');
+  hint('mg-hint-retain', 'retain_days', '');
+}
+
+async function saveMailSettings() {
+  const num = id => {
+    const el = g(id);
+    if (!el || el.value === '') return undefined;
+    const n = parseInt(el.value, 10);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
+  const payload = {
+    enabled:     g('mg-set-enabled') ? g('mg-set-enabled').checked : true,
+    hourly:      num('mg-set-hourly'),
+    queue:       num('mg-set-queue'),
+    frozen:      num('mg-set-frozen'),
+    retain_days: num('mg-set-retain'),
+    exempt:      g('mg-set-exempt') ? g('mg-set-exempt').value : '',
+  };
+  Object.keys(payload).forEach(k => {
+    if (payload[k] === undefined) delete payload[k];
+  });
+
+  const r = await API.mgSaveSettings(payload);
+  const d = (r && r.data) || {};
+  if (!r || r.success === false) {
+    toast((r && r.error) || 'Could not save settings', 'error');
+    return;
+  }
+
+  // Anything the server adjusted is reported, not hidden. Otherwise the field
+  // would show one number while the detector used another.
+  const adj = d.rejected || {};
+  const keys = Object.keys(adj);
+  if (keys.length) {
+    toast('Saved, with changes: '
+        + keys.map(k => k + ' ' + adj[k]).join('; '), 'warning', 12000);
+  } else {
+    toast('Settings saved', 'success');
+  }
+
+  // Reload from the server so the form shows the EFFECTIVE values.
+  await loadMailSettings();
+  await loadMailGuard();
 }

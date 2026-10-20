@@ -254,3 +254,118 @@ t_eq('every', $m[1],
      'running every tick — mail reputation is lost in hours, not days');
 t_contains($sched, "require_once SG_ROOT . '/backend/lib/MailGuard.php';",
      'and the class is required');
+
+// ── Settings the operator sets ──────────────────────────────────────────────
+//
+// The rule throughout: what the panel shows afterwards must be what the
+// detector actually uses. Storing a raw value and letting the getter clamp it
+// later means the panel displays a threshold that is not in force — and an
+// operator who sets 10/hour, sees 10/hour, and never gets an alert has been
+// misled by their own security tool.
+
+$r = MailGuard::saveSettings(['enabled' => 1, 'hourly' => 750, 'queue' => 5000,
+                              'frozen' => 300, 'retain_days' => 30]);
+t_eq(true, $r['success'], 'sane settings save');
+t_eq([], $r['rejected'], 'with nothing adjusted');
+$s = MailGuard::settings();
+t_eq(750,  $s['hourly'],      'the hourly threshold is stored');
+t_eq(5000, $s['queue'],       'and the queue threshold');
+t_eq(300,  $s['frozen'],      'and the frozen threshold');
+t_eq(30,   $s['retain_days'], 'and the retention');
+t_eq(true, $s['enabled'],     'and the on switch');
+
+// Out-of-range values are clamped AND the operator is told, rather than the
+// panel quietly disagreeing with the detector.
+$r = MailGuard::saveSettings(['hourly' => 10, 'queue' => 5, 'frozen' => 1,
+                              'retain_days' => 2]);
+t_eq(50,  MailGuard::hourlyThreshold(), 'a too-low hourly threshold is raised');
+t_eq(100, MailGuard::queueThreshold(),  'and a too-low queue threshold');
+t_eq(10,  MailGuard::frozenThreshold(), 'and a too-low frozen threshold');
+foreach (['hourly', 'queue', 'frozen', 'retain_days'] as $k) {
+    t_ok(isset($r['rejected'][$k]), "the adjustment to $k is reported");
+    t_contains($r['rejected'][$k], 'adjusted', 'in as many words');
+}
+// And what is stored equals what is used, so a later read cannot disagree.
+t_eq((string)MailGuard::hourlyThreshold(), Database::setting('mg_hourly', ''),
+     'the stored value IS the effective value — not a raw number clamped later');
+
+$r = MailGuard::saveSettings(['hourly' => 'not a number']);
+t_contains($r['rejected']['hourly'] ?? '', 'not a number',
+     'a non-numeric threshold is refused rather than cast to zero');
+
+// Exempt accounts. THE DANGEROUS FIELD: an exemption silently stops reporting
+// for that account, so anything that lands in it by accident disables the
+// alert this module exists for.
+$r = MailGuard::saveSettings(['exempt' => 'newsletter, bulkmail']);
+t_eq('newsletter,bulkmail', $r['saved']['exempt'], 'valid account names are kept');
+
+// Split on commas, never on spaces. Splitting on whitespace turned
+// "bad name!" into "bad" plus "name!" — the second was rejected and the first,
+// which looks like a valid account, was silently exempted.
+$r = MailGuard::saveSettings(['exempt' => 'newsletter, bad name!, ok2']);
+t_eq('newsletter,ok2', $r['saved']['exempt'],
+     'an invalid entry is rejected WHOLE, not split into a valid-looking half');
+t_ok(!in_array('bad', explode(',', $r['saved']['exempt']), true),
+     'so "bad name!" cannot exempt an account called "bad"');
+t_contains($r['rejected']['exempt'], 'bad name!',
+     'and the whole rejected entry is named back');
+
+$r = MailGuard::saveSettings(['exempt' => '']);
+t_eq('', $r['saved']['exempt'], 'the exemption list can be cleared');
+t_eq([], MailGuard::exemptAccounts(), 'leaving nothing exempt');
+
+// Ranges are published so the panel can show them BEFORE a value is rejected.
+$s = MailGuard::settings();
+t_ok(isset($s['ranges']['hourly'], $s['ranges']['queue'],
+           $s['ranges']['frozen'], $s['ranges']['retain_days']),
+     'every numeric setting publishes its range');
+foreach ($s['ranges'] as $k => $rg) {
+    t_ok(is_array($rg) && count($rg) === 2 && $rg[0] < $rg[1],
+         "the $k range is a sane low/high pair");
+}
+
+// Only the keys sent are touched: saving one field must not reset the others.
+MailGuard::saveSettings(['hourly' => 900, 'exempt' => 'keepme']);
+MailGuard::saveSettings(['queue' => 7000]);
+t_eq(900, MailGuard::hourlyThreshold(),
+     'saving one field leaves the others alone');
+t_eq('keepme', implode(',', MailGuard::exemptAccounts()),
+     'including the exemption list');
+
+// Turning it off is honoured.
+MailGuard::saveSettings(['enabled' => 0]);
+t_eq(false, MailGuard::enabled(), 'the monitor can be switched off');
+MailGuard::saveSettings(['enabled' => 1]);
+
+// Restore the defaults this suite assumed earlier.
+MailGuard::saveSettings(['hourly' => 500, 'queue' => 2000, 'frozen' => 250,
+                         'retain_days' => 60, 'exempt' => '']);
+
+// ── The page is reachable and wired ─────────────────────────────────────────
+
+$html = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+t_contains($html, 'data-page="mailguard"',
+     'Spam Monitor has its own left-navigation entry');
+t_contains($html, 'Spam Monitor', 'labelled as such');
+t_contains($html, 'id="page-mailguard"', 'and its own page');
+// The direction has to be unmistakable: this server runs a separate product
+// for incoming mail, and an operator must not have to guess which this is.
+t_contains($html, 'Outgoing mail', 'which says plainly that it is outgoing');
+
+foreach (['mg-set-enabled', 'mg-set-hourly', 'mg-set-queue', 'mg-set-frozen',
+          'mg-set-retain', 'mg-set-exempt'] as $id) {
+    t_contains($html, 'id="' . $id . '"', "the settings form has $id");
+}
+t_contains($html, 'saveMailSettings()', 'with a save button wired to a handler');
+
+$app = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+t_contains($app, "case 'mailguard': loadMailGuard(); loadMailSettings();",
+     'opening the page loads both the data and the settings form');
+t_contains($app, 'async function loadMailSettings',
+     'the settings loader exists');
+t_contains($app, 'async function saveMailSettings',
+     'and the saver');
+// The form is refilled from the server after saving, so a clamped value is
+// visibly corrected instead of leaving the typed number on screen.
+t_contains($app, 'await loadMailSettings();',
+     'and the form is reloaded from the server after a save');
