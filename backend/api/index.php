@@ -1339,6 +1339,42 @@ function routeMailGuard(string $action, string $method, array $body, array $q, ?
                       'data' => MailGuard::topSenders((int)($q['hours'] ?? 24),
                                                       (int)($q['limit'] ?? 25))],
 
+        // Looking in the queue. Read-only and bounded: the panel shows a
+        // page, never the whole queue -- `exim -bp` on 93,000 messages is
+        // megabytes of text on a server that is already struggling.
+        'queue' => ['success' => true,
+                    'data' => MailGuard::queueList(
+                        !empty($q['frozen']),
+                        (int)($q['limit'] ?? 200),
+                        (string)($q['search'] ?? ''))],
+
+        // Headers only, never the body. The body is a customer's private mail
+        // and nothing here needs it to tell a relay from a receipt.
+        'message' => ['success' => true,
+                      'data' => MailGuard::messageHeaders((string)($q['id'] ?? ''))],
+
+        // The only destructive route in this module. Per-message, confirmed,
+        // capped, and logged with what was destroyed BEFORE destroying it --
+        // afterwards there is nothing left to log.
+        'delete' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  if (empty($body['confirm'])) {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'Deleting queued mail must be confirmed '
+                                       . 'explicitly — the queue holds real customer '
+                                       . 'mail alongside anything else'];
+                  }
+                  $ids = (array)($body['ids'] ?? []);
+                  if ($ids === []) {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'Select the messages to delete. There is no '
+                                       . '"empty the queue" action by design.'];
+                  }
+                  return ['success' => true, 'data' => MailGuard::deleteMessages($ids)];
+              })()
+            : ['success' => false, 'code' => 405],
+
         'settings' => ['success' => true, 'data' => MailGuard::settings()],
 
         // Saves through MailGuard's own clamps and reports anything it had to

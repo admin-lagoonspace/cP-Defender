@@ -5000,3 +5000,155 @@ async function saveMailSettings() {
   await loadMailSettings();
   await loadMailGuard();
 }
+
+// ── Mail queue viewer ───────────────────────────────────────────────────────
+//
+// There is no "empty the queue" button and there will not be one. During the
+// incident this page was built after, 92,954 of 93,255 queued messages were a
+// relay -- which still left 301 that a real customer was waiting for. So
+// messages are listed, inspected, selected, and deleted by id.
+//
+// The list is a PAGE, not the queue: `exim -bp` on 93,000 messages is megabytes
+// of text, and rendering all of it would hang the browser on exactly the server
+// that needs this most.
+
+let mgQueueFrozen = false;
+
+function openMailQueue(frozen) {
+  mgQueueFrozen = !!frozen;
+  const card = g('mg-queue-card');
+  if (card) card.style.display = '';
+  setText('mg-queue-title', frozen ? 'Frozen messages' : 'Queued messages');
+  const all = g('mg-queue-all');
+  if (all) all.checked = false;
+  reloadMailQueue();
+  if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closeMailQueue() {
+  const card = g('mg-queue-card');
+  if (card) card.style.display = 'none';
+}
+
+async function reloadMailQueue() {
+  const body = g('mg-queue-body');
+  if (body) {
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;'
+      + 'color:var(--txt3);padding:24px">Reading the queue\u2026</td></tr>';
+  }
+  const search = g('mg-queue-search') ? g('mg-queue-search').value : '';
+
+  let d;
+  try {
+    const r = await API.mgQueue(mgQueueFrozen, search);
+    d = (r && r.data) || {};
+  } catch (e) {
+    if (body) {
+      body.innerHTML = '<tr><td colspan="8" style="text-align:center;'
+        + 'color:var(--red);padding:24px">Could not read the queue: '
+        + esc(e && e.message ? e.message : String(e)) + '</td></tr>';
+    }
+    return;
+  }
+
+  if (d.error) {
+    if (body) {
+      body.innerHTML = '<tr><td colspan="8" style="text-align:center;'
+        + 'color:var(--amber);padding:24px">' + esc(d.error) + '</td></tr>';
+    }
+    return;
+  }
+
+  const rows = d.messages || [];
+  // Says plainly when the list is a page of a larger queue. A table showing
+  // 200 of 93,000 with nothing saying so invites "delete selected" on the
+  // assumption it covers everything.
+  setText('mg-queue-note', d.truncated
+    ? 'Showing ' + fmtNum(d.shown) + ' of ' + fmtNum(d.total)
+      + ' matching \u2014 narrow the filter to reach the rest'
+    : fmtNum(d.total) + ' message(s)');
+
+  if (!body) return;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;'
+      + 'color:var(--txt3);padding:24px">Nothing '
+      + (mgQueueFrozen ? 'frozen' : 'queued') + ' matches.</td></tr>';
+    return;
+  }
+
+  body.innerHTML = rows.map(m => {
+    const rcpt = (m.recipients || []);
+    const shown = rcpt.slice(0, 3).map(esc).join('<br>');
+    const more = rcpt.length > 3
+      ? '<br><span style="color:var(--txt3)">+' + (rcpt.length - 3) + ' more</span>'
+      : '';
+    return '<tr>'
+      + '<td><input type="checkbox" class="mg-q-pick" value="' + esc(m.id) + '"></td>'
+      + '<td>' + esc(m.age || '') + '</td>'
+      + '<td>' + esc(m.size || '') + '</td>'
+      + '<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis" title="'
+        + esc(m.sender || '') + '">' + esc(m.sender || '&lt;&gt;') + '</td>'
+      + '<td>' + esc(m.account || '\u2014') + '</td>'
+      + '<td style="max-width:260px;font-size:.8rem">' + shown + more + '</td>'
+      + '<td>' + (m.frozen
+          ? '<span class="badge badge-amber">frozen</span>'
+          : '<span class="badge badge-blue">queued</span>') + '</td>'
+      + '<td><button class="btn btn-ghost btn-sm" onclick="inspectMessage(\''
+        + esc(m.id) + '\')">Headers</button></td>'
+      + '</tr>';
+  }).join('');
+}
+
+function toggleAllQueue(on) {
+  document.querySelectorAll('.mg-q-pick').forEach(c => { c.checked = !!on; });
+}
+
+// Headers only. The body is a customer's private mail and nothing here needs
+// it to tell a relay from a receipt.
+async function inspectMessage(id) {
+  const r = await API.mgMessage(id);
+  const d = (r && r.data) || {};
+  if (!d.success) {
+    toast(d.error || 'Could not read that message', 'error');
+    return;
+  }
+  // cPanel stamps locally generated mail with X-Source headers naming the
+  // script. That is the same answer cwd= gives in the log, from the other
+  // side -- and where the log does not carry cwd=, this is the only place the
+  // script name exists.
+  let src = '';
+  Object.keys(d.source || {}).forEach(k => { src += k + ': ' + d.source[k] + '\n'; });
+
+  alert((src ? 'WHAT SENT IT\n' + src + '\n' : '')
+      + 'HEADERS\n' + (d.headers || '').slice(0, 4000));
+}
+
+async function deleteSelectedQueue() {
+  const ids = Array.from(document.querySelectorAll('.mg-q-pick:checked'))
+                   .map(c => c.value);
+  if (!ids.length) {
+    toast('Select the messages to delete first', 'info');
+    return;
+  }
+  // Spelled out, because this cannot be undone and the queue holds real mail.
+  if (!confirm('Permanently delete ' + ids.length + ' message(s) from the mail '
+             + 'queue?\n\nThis cannot be undone. Check the senders and '
+             + 'recipients above first \u2014 a queue that filled up with spam '
+             + 'usually still contains real customer mail.')) {
+    return;
+  }
+
+  const r = await API.mgDelete(ids);
+  const d = (r && r.data) || {};
+  if (!r || r.success === false) {
+    toast((r && r.error) || 'Delete refused', 'error', 9000);
+    return;
+  }
+  const failed = (d.failed || []).length;
+  toast('Deleted ' + fmtNum(d.deleted) + ' message(s)'
+      + (failed ? '; ' + failed + ' could not be removed' : ''),
+        failed ? 'warning' : 'success', 8000);
+
+  await reloadMailQueue();
+  await loadMailGuard();
+}

@@ -369,3 +369,128 @@ t_contains($app, 'async function saveMailSettings',
 // visibly corrected instead of leaving the typed number on screen.
 t_contains($app, 'await loadMailSettings();',
      'and the form is reloaded from the server after a save');
+
+// ── System accounts are not customers ───────────────────────────────────────
+//
+// FROM A LIVE SERVER. This module reported `mailnull` as the top sender at
+// 3,114 messages an hour and labelled it CRITICAL, above a real customer
+// account — and offered a "Cap rate" button beside it. mailnull is the user
+// exim itself runs as: that traffic is exim processing mail, overwhelmingly
+// bounces. The finding was wrong, it buried the real one, and capping it would
+// have run whmapi1 against a user that is not a cPanel account.
+
+foreach (['mailnull', 'magicspam', 'nobody', 'root', 'cpanel', 'dovecot',
+          '(unattributed)', ''] as $sys) {
+    t_ok(MailGuard::isSystemAccount($sys), "\"$sys\" is a system account");
+}
+foreach (['inditdel', 'blubuys', 'alice', 'shop1'] as $cust) {
+    t_ok(!MailGuard::isSystemAccount($cust), "\"$cust\" is a customer account");
+}
+t_ok(MailGuard::isSystemAccount('MailNull'),
+     'the check is case-insensitive — MailNull is the same user');
+
+// The live numbers from that screenshot, replayed.
+Database::query("DELETE FROM mail_activity");
+$bk = (int)(floor(time() / 3600) * 3600);
+$ins = Database::get()->prepare(
+    "INSERT INTO mail_activity
+       (bucket, account, source, script, sent, recipients, failed, frozen, bytes)
+     VALUES (?,?,?,?,?,?,?,?,?)");
+$ins->execute([$bk, 'mailnull', 'script', null, 3114, 3114, 0, 0, 1000]);
+$ins->execute([$bk, 'inditdel', 'script', null, 1273, 1273, 0, 0, 1000]);
+$ins->execute([$bk, 'magicspam', 'script', null, 900, 900, 0, 0, 1000]);
+
+$f = MailGuard::evaluate();
+$bursts = array_values(array_filter($f, fn($x) => $x['type'] === 'account_send_burst'));
+t_eq(1, count($bursts),
+     'only the real customer account is reported as a sending burst');
+t_contains($bursts[0]['what'], 'inditdel', 'and it is the right one');
+t_ok(!str_contains($bursts[0]['what'], 'mailnull'),
+     'mailnull is NOT reported as an account sending spam');
+
+// But its volume is not thrown away: 3,114/hour through exim's own user is
+// almost always bounces, which means spam has already left and is being
+// rejected elsewhere. That is a real signal, pointing somewhere else.
+$sysf = array_values(array_filter($f, fn($x) => $x['type'] === 'system_mail_volume'));
+t_ok(count($sysf) >= 1, 'system-account volume is still reported');
+$all = implode(' || ', array_column($sysf, 'what'));
+t_contains($all, 'mailnull', 'naming the account');
+t_contains($all, '3,114', 'with the volume');
+$mn = array_values(array_filter($sysf, fn($x) => str_contains($x['what'], 'mailnull')));
+t_eq('medium', $mn[0]['severity'],
+     'at medium — it is a pointer, not the thing to act on');
+t_contains($mn[0]['action'], 'bounces',
+     'and the advice explains it is usually bounces');
+t_contains($mn[0]['action'], 'not an account to cap',
+     'and says plainly not to cap it');
+
+Database::query("DELETE FROM mail_activity");
+
+// ── Message ids: these reach a root command ─────────────────────────────────
+
+foreach (['1aBcDe-0001AB-XY', '1abcde-0000000000aB-1234'] as $ok) {
+    t_ok(MailGuard::isMessageId($ok), "a real exim id is accepted: $ok");
+}
+foreach (['../../etc/passwd', '1aBcDe-0001AB-XY; rm -rf /', 'short', '',
+          '$(whoami)-000000-00', '1aBcDe-0001AB-XY/../x'] as $bad) {
+    t_ok(!MailGuard::isMessageId($bad),
+         'a malformed or hostile id is rejected: ' . substr($bad, 0, 24));
+}
+
+// Nothing hostile may reach the shell even if it gets as far as delete.
+$r = MailGuard::deleteMessages(['1aBcDe-0001AB-XY; rm -rf /', '../../x']);
+t_eq(false, $r['success'], 'a delete of only-invalid ids fails');
+t_eq(0, $r['deleted'], 'and deletes nothing');
+t_eq(2, count($r['failed']), 'reporting each rejected id');
+
+t_eq(false, MailGuard::deleteMessages([])['success'],
+     'an empty id list deletes nothing');
+
+// Capped per call, so one click cannot clear a queue of 93,000.
+$many = [];
+for ($i = 0; $i < 501; $i++) { $many[] = sprintf('1aBcD%01d-0001AB-XY', $i % 10); }
+$r = MailGuard::deleteMessages($many);
+t_eq(false, $r['success'], 'more than 500 messages in one call is refused');
+t_contains($r['error'], 'batches',
+     'and the operator is told to work in batches so the action stays reviewable');
+
+// ── There is no "empty the queue" ───────────────────────────────────────────
+//
+// 92,954 of 93,255 queued messages were the relay. That still left 301 a real
+// customer was waiting for, and a flush button destroys those with no record.
+
+$mg  = t_code(dirname(__DIR__) . '/backend/lib/MailGuard.php');
+$api = t_code(dirname(__DIR__) . '/backend/api/index.php');
+$app = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+
+t_ok(strpos($mg, 'exim -bpru') === false && strpos($mg, "-Mrm '*'") === false,
+     'no wildcard queue flush exists');
+t_contains($api, 'empty the queue',
+     'and the API says there is no such action when asked to delete nothing');
+t_contains($mg, 'deleteMessages', 'deletion is per message id');
+t_contains($app, 'cannot be undone',
+     'and the operator is warned before it happens');
+
+// Deletion is logged BEFORE it happens, because afterwards there is nothing
+// left to log.
+$pos  = strpos($mg, 'Deleting %d queued message');
+$exec = strpos($mg, '-Mrm');
+t_ok($pos !== false && $exec !== false && $pos < $exec,
+     'what is being destroyed is recorded before it is destroyed');
+
+// Headers only — never the body.
+t_contains($mg, '-Mvh', 'message inspection reads headers');
+t_ok(strpos($mg, '-Mvb') === false,
+     "and never the body, which is a customer's private mail");
+
+// ── The cards open the viewer ───────────────────────────────────────────────
+
+$html = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+t_contains($html, 'onclick="openMailQueue(false)"', 'the Queue card is clickable');
+t_contains($html, 'onclick="openMailQueue(true)"',  'and the Frozen card');
+t_contains($html, 'id="mg-queue-body"', 'with a table to list into');
+t_contains($html, 'deleteSelectedQueue()', 'and a delete action');
+t_contains($app, 'function openMailQueue', 'the viewer opens');
+t_contains($app, 'Showing ',
+     'and says when the list is only a page of a larger queue — a table showing '
+   . '200 of 93,000 with nothing saying so invites a delete that looks complete');

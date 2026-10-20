@@ -340,6 +340,13 @@ const API = (() => {
     mgSenders:  (h, l)        => req('GET',  'mailguard/senders?hours=' + (h || 24)
                                              + '&limit=' + (l || 25)),
     mgScan:     ()            => req('POST', 'mailguard/scan', {}),
+    mgQueue:   (frozen, search) => req('GET', 'mailguard/queue?frozen='
+                                  + (frozen ? 1 : 0) + '&limit=200&search='
+                                  + encodeURIComponent(search || '')),
+    mgMessage: (id)        => req('GET',  'mailguard/message?id='
+                                  + encodeURIComponent(id)),
+    mgDelete:  (ids)       => req('POST', 'mailguard/delete',
+                                  { ids: ids, confirm: true }),
     mgSettings:     ()        => req('GET',  'mailguard/settings'),
     mgSaveSettings: (o)       => req('POST', 'mailguard/save-settings', o),
     mgThrottle: (acct, perHr) => req('POST', 'mailguard/throttle',

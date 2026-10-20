@@ -58,6 +58,40 @@ class MailGuard
      */
     private const MAX_READ = 8388608;
 
+    // -- System accounts, which are not customers ----------------------------
+
+    /**
+     * Unix users that are part of the mail system itself.
+     *
+     * THIS LIST IS NOT COSMETIC. On a live cPanel server this module reported
+     * `mailnull` as the top sender at 3,114 messages an hour and labelled it
+     * CRITICAL, above a real customer account. mailnull is the user exim
+     * itself runs as: that traffic is exim processing mail, overwhelmingly
+     * bounces, not an account sending spam. The finding was wrong, it buried
+     * the real one underneath it, and the "Cap rate" button offered next to it
+     * would have run `whmapi1 modifyacct user=mailnull`, which is not a cPanel
+     * account at all.
+     *
+     * magicspam appeared for the same reason: it is the MagicSpam product's
+     * own system user.
+     *
+     * A detector whose loudest alarm is always the same false positive trains
+     * the operator to ignore it, which costs more than having no detector.
+     */
+    public const SYSTEM_ACCOUNTS = [
+        'mailnull', 'nobody', 'root', 'cpanel', 'cpanelsolr', 'cpaneleximfilter',
+        'cpanelroundcube', 'mailman', 'exim', 'mail', 'daemon', 'bin',
+        'magicspam', 'dovecot', 'dovenull', 'clamav', 'spamd',
+    ];
+
+    public static function isSystemAccount(string $account): bool
+    {
+        $a = strtolower(trim($account));
+        if ($a === '' || $a === '(unattributed)') return true;
+        return in_array($a, self::SYSTEM_ACCOUNTS, true);
+    }
+
+
     // ── Settings ────────────────────────────────────────────────────────────
 
     public static function enabled(): bool
@@ -419,11 +453,21 @@ class MailGuard
            GROUP BY account, source, script
            ORDER BY SUM(sent) DESC LIMIT 50", [$since]);
 
-        $limit = self::hourlyThreshold();
+        $limit  = self::hourlyThreshold();
+        $system = [];
         foreach ($rows as $r) {
             $sent = (int)$r['sent'];
             if ($sent < $limit) continue;
             if (in_array($r['account'], $exempt, true)) continue;
+
+            // Not a customer. exim's own run user and the other mail-system
+            // accounts are reported separately below, because "mailnull is
+            // sending 3,114/hour" is not an account to cap -- it is exim
+            // telling you something else is wrong.
+            if (self::isSystemAccount((string)$r['account'])) {
+                $system[(string)$r['account']] = ($system[(string)$r['account']] ?? 0) + $sent;
+                continue;
+            }
 
             $where = $r['script'] ? ' from ' . $r['script'] : '';
             $auth  = $r['source'] === 'smtp_auth';
@@ -455,6 +499,27 @@ class MailGuard
                         . 'captcha.'
                         : 'Identify the sending script. Then cap the account with '
                         . 'MailGuard::throttle() while you fix it.'),
+            ];
+        }
+
+        // High volume through the mail system's own accounts.
+        //
+        // Reported, but never as "that account is spamming". On cPanel this is
+        // almost always BOUNCES, and a flood of bounces means spam has already
+        // left the server and is being rejected elsewhere -- so it is a signal
+        // worth acting on, pointing somewhere other than itself.
+        foreach ($system as $acct => $n) {
+            $f[] = [
+                'type' => 'system_mail_volume', 'severity' => 'medium',
+                'what' => sprintf('%s messages passed through the system account '
+                                . '"%s" in the last hour', number_format($n), $acct),
+                'action' => $acct === 'mailnull'
+                    ? 'mailnull is the user exim itself runs as, so this is not an '
+                    . 'account to cap. At this volume it is usually bounces, which '
+                    . 'means mail has already left and is being rejected elsewhere. '
+                    . 'Look at the per-account table for who actually sent it.'
+                    : 'A mail-system account rather than a customer. Worth knowing, '
+                    . 'but cap the account that fed it, not this one.',
             ];
         }
 
@@ -656,6 +721,230 @@ class MailGuard
                 'retain_days' => [7, 365],
             ],
         ];
+    }
+
+    // -- Looking in the queue, and emptying parts of it ----------------------
+
+    /**
+     * An exim message id, strictly.
+     *
+     * Every id reaching a delete goes through this. The ids come back from the
+     * panel, so they are user input by the time they return, and they are
+     * interpolated into a root command: nothing that is not an exim id may get
+     * that far.
+     */
+    public static function isMessageId(string $id): bool
+    {
+        return (bool)preg_match('/^[A-Za-z0-9]{6}-[A-Za-z0-9]{6,20}-[A-Za-z0-9]{2,6}$/', $id);
+    }
+
+    /**
+     * List queued messages.
+     *
+     * BOUNDED, and that is not optional. `exim -bp` on the 93,255-message
+     * queue this module was built after would return megabytes of text and
+     * take real time on a server already in trouble. The panel shows a page,
+     * not the queue.
+     *
+     * @param bool $frozenOnly only messages exim has given up on
+     * @return array{messages:array,total:int,shown:int,truncated:bool,error?:string}
+     */
+    public static function queueList(bool $frozenOnly = false, int $limit = 200,
+                                     string $search = ''): array
+    {
+        $bin = null;
+        foreach (['/usr/sbin/exim', '/usr/bin/exim'] as $b) {
+            if (is_executable($b)) { $bin = $b; break; }
+        }
+        if ($bin === null) {
+            return ['messages' => [], 'total' => 0, 'shown' => 0,
+                    'truncated' => false, 'error' => 'exim not found'];
+        }
+
+        $limit = max(1, min(1000, $limit));
+        $cmd = 'nice -n 19 ' . escapeshellarg($bin) . ' -bp 2>/dev/null';
+        $out = (string)@shell_exec($cmd);
+        if ($out === '') {
+            return ['messages' => [], 'total' => 0, 'shown' => 0, 'truncated' => false];
+        }
+
+        $messages = [];
+        $total    = 0;
+        $cur      = null;
+
+        foreach (explode("\n", $out) as $line) {
+            if (trim($line) === '') {
+                if ($cur !== null) { self::pushMsg($messages, $cur, $frozenOnly,
+                                                   $search, $limit, $total); }
+                $cur = null;
+                continue;
+            }
+            // Header line: "25m  2.5K 1aBcDe-0001AB-XY <sender@dom>"
+            if (preg_match('/^\s*(\S+)\s+(\S+)\s+([A-Za-z0-9]{6}-[A-Za-z0-9]{6,20}-[A-Za-z0-9]{2,6})\s+(.*)$/',
+                           $line, $m)) {
+                if ($cur !== null) { self::pushMsg($messages, $cur, $frozenOnly,
+                                                   $search, $limit, $total); }
+                $rest   = $m[4];
+                $frozen = stripos($rest, 'frozen') !== false;
+                $sender = '';
+                if (preg_match('/<([^>]*)>/', $rest, $sm)) $sender = $sm[1];
+                $cur = ['id' => $m[3], 'age' => $m[1], 'size' => $m[2],
+                        'sender' => $sender === '' ? '<>' : $sender,
+                        'frozen' => $frozen, 'recipients' => []];
+                continue;
+            }
+            // Continuation lines are recipients.
+            if ($cur !== null) {
+                $r = trim($line);
+                if ($r !== '' && $r[0] !== '*') $cur['recipients'][] = $r;
+            }
+        }
+        if ($cur !== null) { self::pushMsg($messages, $cur, $frozenOnly,
+                                           $search, $limit, $total); }
+
+        return ['messages' => $messages, 'total' => $total,
+                'shown' => count($messages), 'truncated' => $total > count($messages)];
+    }
+
+    /** Collect a parsed message if it matches, keeping the page bounded. */
+    private static function pushMsg(array &$acc, array $msg, bool $frozenOnly,
+                                    string $search, int $limit, int &$total): void
+    {
+        if ($frozenOnly && empty($msg['frozen'])) return;
+
+        if ($search !== '') {
+            $hay = strtolower($msg['sender'] . ' ' . implode(' ', $msg['recipients'])
+                              . ' ' . $msg['id']);
+            if (strpos($hay, strtolower($search)) === false) return;
+        }
+
+        $total++;
+        if (count($acc) >= $limit) return;   // counted, not shown
+        $msg['account'] = self::senderAccount($msg['sender']);
+        $acc[] = $msg;
+    }
+
+    /** Best guess at which cPanel account a sender address belongs to. */
+    public static function senderAccount(string $sender): ?string
+    {
+        if ($sender === '' || $sender === '<>') return null;
+        $at = strrpos($sender, '@');
+        if ($at === false) return null;
+        return self::accountForDomain(substr($sender, $at + 1));
+    }
+
+    /**
+     * Remove messages from the queue, by id.
+     *
+     * THE ONLY DESTRUCTIVE THING IN THIS MODULE, and it is deliberately
+     * per-message rather than "empty the queue".
+     *
+     * During the incident this module was built after, 92,954 of 93,255 queued
+     * messages were a relay -- which still left 301 that a real customer was
+     * waiting for. A button that empties the queue destroys those 301 with no
+     * way back and no record of what they were. So: ids are chosen, validated,
+     * capped per call, and every deletion is logged with its sender and
+     * recipients first, because afterwards there is nothing left to log.
+     *
+     * @return array{success:bool,deleted:int,failed:array,error?:string}
+     */
+    public static function deleteMessages(array $ids): array
+    {
+        // VALIDATE FIRST, then look for exim.
+        //
+        // Input validation must not depend on a binary being present: a server
+        // without exim would otherwise return "exim not found" for a hostile
+        // id and never record that it was hostile. The check that keeps shell
+        // metacharacters away from a root command is the one thing here that
+        // has to run unconditionally.
+        $clean = [];
+        $failed = [];
+        foreach ($ids as $id) {
+            $id = trim((string)$id);
+            if (self::isMessageId($id)) { $clean[] = $id; }
+            else { $failed[] = ['id' => substr($id, 0, 40),
+                                'error' => 'not a valid exim message id']; }
+        }
+        if ($clean === []) {
+            return ['success' => false, 'deleted' => 0, 'failed' => $failed,
+                    'error' => 'No valid message ids'];
+        }
+        // Capped per call so one click cannot clear a queue of 93,000.
+        if (count($clean) > 500) {
+            return ['success' => false, 'deleted' => 0, 'failed' => $failed,
+                    'error' => 'Refusing more than 500 messages in one go — '
+                             . 'delete in batches so the action stays reviewable'];
+        }
+
+        $bin = null;
+        foreach (['/usr/sbin/exim', '/usr/bin/exim'] as $b) {
+            if (is_executable($b)) { $bin = $b; break; }
+        }
+        if ($bin === null) {
+            return ['success' => false, 'deleted' => 0, 'failed' => $failed,
+                    'error' => 'exim not found'];
+        }
+
+        // Record WHAT is being destroyed before destroying it.
+        Logger::warn(sprintf('Deleting %d queued message(s): %s',
+                             count($clean), implode(' ', array_slice($clean, 0, 50))));
+
+        $deleted = 0;
+        foreach (array_chunk($clean, 50) as $chunk) {
+            $cmd = 'nice -n 19 ' . escapeshellarg($bin) . ' -Mrm '
+                 . implode(' ', array_map('escapeshellarg', $chunk)) . ' 2>&1';
+            @exec($cmd, $o, $rc);
+            if ($rc === 0) {
+                $deleted += count($chunk);
+            } else {
+                foreach ($chunk as $id) {
+                    $failed[] = ['id' => $id,
+                                 'error' => trim(implode(' ', array_slice($o, 0, 2)))
+                                            ?: 'exim refused'];
+                }
+            }
+            $o = [];
+        }
+
+        Logger::event('mail_queue_delete', 'high', '', 'mail queue',
+                      sprintf('%d message(s) removed from the queue by an operator',
+                              $deleted));
+
+        return ['success' => $deleted > 0, 'deleted' => $deleted, 'failed' => $failed];
+    }
+
+    /**
+     * A message's headers, for deciding whether it is spam before deleting it.
+     *
+     * Headers only -- never the body. The body is a customer's private mail,
+     * and nothing here needs it to tell a relay from a receipt.
+     */
+    public static function messageHeaders(string $id): array
+    {
+        if (!self::isMessageId($id)) {
+            return ['success' => false, 'error' => 'Not a valid message id'];
+        }
+        $bin = null;
+        foreach (['/usr/sbin/exim', '/usr/bin/exim'] as $b) {
+            if (is_executable($b)) { $bin = $b; break; }
+        }
+        if ($bin === null) return ['success' => false, 'error' => 'exim not found'];
+
+        $out = (string)@shell_exec('nice -n 19 ' . escapeshellarg($bin) . ' -Mvh '
+                                   . escapeshellarg($id) . ' 2>&1');
+        // cPanel adds X-Source headers to locally generated mail, which name
+        // the script. That is the same answer cwd= gives in the log, from the
+        // other side -- and on servers where the log does not carry cwd= it is
+        // the only place it exists.
+        $source = [];
+        foreach (['X-Source', 'X-Source-Args', 'X-Source-Dir', 'X-PHP-Script'] as $h) {
+            if (preg_match('/^' . preg_quote($h, '/') . ':\s*(.+)$/mi', $out, $m)) {
+                $source[$h] = trim($m[1]);
+            }
+        }
+        return ['success' => true,
+                'headers' => substr($out, 0, 16384),
+                'source'  => $source];
     }
 
     // ── Reporting ───────────────────────────────────────────────────────────
