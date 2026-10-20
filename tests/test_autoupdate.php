@@ -261,7 +261,7 @@ t_contains($uc, 'latest.json',
 t_ok(strpos($uc, 'api.github.com') === false,
      'and does NOT consult the GitHub Releases API, which can lag behind it');
 
-$up = t_code(dirname(__DIR__) . '/update.sh');
+$up = t_shell(dirname(__DIR__) . '/update.sh');
 t_contains($up, 'latest.json',
      'update.sh reads the same manifest');
 

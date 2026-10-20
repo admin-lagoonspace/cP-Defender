@@ -128,8 +128,8 @@ t_ok(strpos((string)$cfg, "'" . $version . "'") !== false,
 //
 // Compared as sets, because the order each script lists them in does not
 // matter and should not make this test fail.
-$buildPy = t_code(dirname(__DIR__) . '/scripts/build.py');
-$makeSh  = t_code(dirname(__DIR__) . '/scripts/make-release.sh');
+$buildPy = t_shell(dirname(__DIR__) . '/scripts/build.py');
+$makeSh  = t_shell(dirname(__DIR__) . '/scripts/make-release.sh');
 
 t_ok(preg_match('/^ITEMS\s*=\s*\[(.*?)\]/ms', $buildPy, $m) === 1,
      'build.py declares an ITEMS allowlist');
@@ -175,7 +175,7 @@ t_ok(in_array('upgrade.sh', $buildItems, true), 'build.py packages upgrade.sh');
 // The zip was correct the whole time. Only the copy list was wrong, which is
 // the hardest version of this bug to see: nothing is missing from the release,
 // and a fresh install is perfect.
-$updateSh = t_code(dirname(__DIR__) . '/update.sh');
+$updateSh = t_shell(dirname(__DIR__) . '/update.sh');
 
 t_ok(preg_match('/^UPDATE_DIRS=\(([^)]*)\)/m', $updateSh, $m3) === 1,
      'update.sh declares UPDATE_DIRS');

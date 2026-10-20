@@ -33,6 +33,11 @@ SKIP_DEPS=false
 # operators will not have EPEL on a cPanel box at any price. The built-in
 # engine covers the same ground without them, so declining is supported.
 SKIP_ROOTKIT_TOOLS=false
+# ModSecurity and CSF. Both are installed from the OS package manager when
+# missing, never downloaded -- see backend/lib/Dependencies.php for why that is
+# a security decision and not a convenience one. Declining is supported.
+SKIP_WAF_PKG=false
+SKIP_CSF=false
 ADMIN_USER=""
 ADMIN_PASS=""
 GENERATED_PASS=false
@@ -41,6 +46,8 @@ while [[ $# -gt 0 ]]; do
     --register-only) REGISTER_ONLY=true ;;
     --no-deps)       SKIP_DEPS=true ;;
     --no-rootkit-tools) SKIP_ROOTKIT_TOOLS=true ;;
+    --no-waf-pkg)       SKIP_WAF_PKG=true ;;
+    --no-csf)           SKIP_CSF=true ;;
     --mode)          shift; INSTALL_MODE="${1:-}" ;;
     --mode=*)        INSTALL_MODE="${1#--mode=}" ;;
     --admin-user)    shift; ADMIN_USER="${1:-}" ;;
@@ -1609,6 +1616,158 @@ else
   info "  Could not measure now; the scheduler will do it shortly"
 fi
 rm -f "$_SG_FWP"
+
+# ── Web application firewall engine ───────────────────────────────────────────
+#
+# ModSecurity comes from the PACKAGE MANAGER, always. On EasyApache 4 it has to
+# be cPanel's own build: the module is compiled against the Apache cPanel
+# ships, and a generic binary or a source build against the wrong headers means
+# httpd does not start -- on a shared host, every site down at once.
+#
+# The module is installed but the WAF is NOT switched to blocking. Rules are
+# left for the operator to review on the WAF page, because a rule that matches
+# ordinary traffic blocks paying customers. Installing the engine is what makes
+# this a complete package; deciding what to block is not ours to assume.
+if ! $REGISTER_ONLY && ! $SKIP_DEPS && ! $SKIP_WAF_PKG; then
+  section "Web application firewall engine"
+
+  _MS_SO=""
+  for _c in /etc/apache2/modules/mod_security2.so \
+            /usr/lib64/httpd/modules/mod_security2.so \
+            /usr/lib/apache2/modules/mod_security2.so; do
+    [[ -f "$_c" ]] && { _MS_SO="$_c"; break; }
+  done
+
+  if [[ -n "$_MS_SO" ]]; then
+    ok "  ModSecurity already present: ${_MS_SO}"
+  else
+    # EA4 first: if this is a cPanel box the EA4 package is the only correct one.
+    if [[ -d /usr/local/cpanel ]] && [[ -d /etc/apache2/conf.d ]]; then
+      _MS_PKG="ea-apache24-mod_security2"
+    elif command -v apt-get >/dev/null 2>&1; then
+      _MS_PKG="libapache2-mod-security2"
+    else
+      _MS_PKG="mod_security"
+    fi
+
+    info "  Installing ${_MS_PKG}…"
+    if   command -v dnf     >/dev/null 2>&1; then dnf install -y -q "$_MS_PKG" >/dev/null 2>&1 || true
+    elif command -v yum     >/dev/null 2>&1; then yum install -y -q "$_MS_PKG" >/dev/null 2>&1 || true
+    elif command -v apt-get >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$_MS_PKG" >/dev/null 2>&1 || true
+      a2enmod security2 >/dev/null 2>&1 || true
+    fi
+
+    for _c in /etc/apache2/modules/mod_security2.so \
+              /usr/lib64/httpd/modules/mod_security2.so \
+              /usr/lib/apache2/modules/mod_security2.so; do
+      [[ -f "$_c" ]] && { _MS_SO="$_c"; break; }
+    done
+
+    if [[ -n "$_MS_SO" ]]; then
+      ok "  ModSecurity installed: ${_MS_SO}"
+      info "  Rules are NOT active yet. Enable them from the WAF page; it starts"
+      info "  in detection-only so you can review before anything is blocked."
+      echo "MODSEC_INSTALLED=1" >> "${MANIFEST}"
+    else
+      warn "  Could not install ${_MS_PKG} — the WAF page can retry later"
+    fi
+  fi
+fi
+
+# ── CSF ───────────────────────────────────────────────────────────────────────
+#
+# READ THIS BEFORE CHANGING IT.
+#
+# CSF is NOT downloaded from its original vendor, and must never be. Way to the
+# Web Ltd closed on 2025-08-31 and download.configserver.com no longer resolves.
+# CSF's updater runs AS ROOT. An expired domain that thousands of servers still
+# contact is worth money to somebody; the day it is re-registered, every server
+# pointed at it fetches code from it and runs it as root.
+#
+# cPanel maintains a fork, published as the `cpanel-csf` package and sourced at
+# github.com/cpanel/cpanel-csf. Their README states the RPM is for cPanel & WHM
+# only and fails installation when cPanel is not detected -- so off cPanel
+# there is nothing to install, and ServerScrub's own nftables/iptables engine
+# is used instead. That is a supported configuration, not a degraded one.
+#
+# CSF is also GPL. Installing it as a separate OS package is aggregation and
+# carries no licence obligation onto this product. Bundling it would.
+if ! $REGISTER_ONLY && ! $SKIP_DEPS && ! $SKIP_CSF; then
+  section "CSF firewall"
+
+  if [[ -x /usr/sbin/csf ]]; then
+    ok "  CSF is already installed — ServerScrub will use it as its firewall backend"
+
+    # Is it still the retired vendor's build, with its root-run updater armed?
+    if ! rpm -q cpanel-csf >/dev/null 2>&1; then
+      _CSF_AUTO="$(grep -oP '^\s*AUTO_UPDATES\s*=\s*"?\K[01]' /etc/csf/csf.conf 2>/dev/null | head -1 || true)"
+      if [[ "$_CSF_AUTO" == "1" ]]; then
+        warn "  This CSF is not cPanel's maintained fork and AUTO_UPDATES is ON."
+        warn "  Its updater runs as root and its vendor's domain is unregistered."
+        warn "  Migrate:  dnf install cpanel-csf     (keeps your rules and config)"
+        warn "  Or set AUTO_UPDATES = \"0\" in /etc/csf/csf.conf and update it yourself."
+      else
+        info "  Not cPanel's fork, so it receives no security fixes."
+        info "  Migrate when convenient:  dnf install cpanel-csf"
+      fi
+    fi
+
+  elif [[ ! -d /usr/local/cpanel ]]; then
+    info "  Not installed, and cpanel-csf only installs on cPanel servers."
+    info "  ServerScrub will manage nftables/iptables directly — fully supported."
+
+  else
+    info "  Installing cpanel-csf (cPanel's maintained fork)…"
+    _CSF_PM=""
+    if   command -v dnf >/dev/null 2>&1; then _CSF_PM=dnf
+    elif command -v yum >/dev/null 2>&1; then _CSF_PM=yum
+    fi
+
+    if [[ -z "$_CSF_PM" ]]; then
+      warn "  No dnf/yum — skipping. ServerScrub's own firewall engine will be used."
+    else
+      # The SSH port goes in FIRST, before anything can start filtering.
+      # Installing a firewall on a live server and locking the operator out of
+      # SSH is the one failure here that cannot be undone remotely. sshd's
+      # configured port is read rather than assumed to be 22.
+      _SSH_PORT="$(grep -oP '^\s*Port\s+\K[0-9]+' /etc/ssh/sshd_config 2>/dev/null | head -1 || true)"
+      [[ -z "$_SSH_PORT" ]] && _SSH_PORT=22
+      info "  Detected SSH port: ${_SSH_PORT}"
+
+      if $_CSF_PM install -y -q cpanel-csf >/dev/null 2>&1 && [[ -x /usr/sbin/csf ]]; then
+        ok "  cpanel-csf installed"
+        echo "CSF_INSTALLED_BY_US=1" >> "${MANIFEST}"
+
+        if [[ -f /etc/csf/csf.conf ]]; then
+          cp -a /etc/csf/csf.conf "/etc/csf/csf.conf.pre-serverscrub" 2>/dev/null || true
+
+          # TESTING=1 is CSF's own safety catch: lfd stays down and the rules
+          # are flushed by cron shortly after they are applied, so a mistake
+          # cannot lock anyone out permanently. It is left ON deliberately --
+          # turning a brand-new firewall live on a production server without
+          # the operator looking at it is not a decision an installer should
+          # make.
+          sed -i 's/^TESTING *=.*/TESTING = "1"/' /etc/csf/csf.conf 2>/dev/null || true
+
+          # Make sure the real SSH port survives, whatever the defaults say.
+          if ! grep -oP '^\s*TCP_IN\s*=\s*"\K[^"]*' /etc/csf/csf.conf 2>/dev/null \
+               | tr ',' '\n' | grep -qx "$_SSH_PORT"; then
+            sed -i "s/^\(TCP_IN *= *\"\)/\1${_SSH_PORT},/" /etc/csf/csf.conf 2>/dev/null || true
+            ok "  Added port ${_SSH_PORT} to TCP_IN so SSH cannot be locked out"
+          fi
+        fi
+
+        warn "  CSF is in TESTING mode: rules are NOT enforced yet and lfd is down."
+        warn "  Review WHM → ConfigServer Security & Firewall, confirm your ports,"
+        warn "  then set TESTING = \"0\" to make it live."
+      else
+        warn "  cpanel-csf did not install — ServerScrub's own firewall engine"
+        warn "  will be used instead. Nothing is degraded; see: serverscrub deps"
+      fi
+    fi
+  fi
+fi
 
 # ── Rootkit scanning tools ────────────────────────────────────────────────────
 # The Rootkit Scanner page offered rkhunter and chkrootkit and then reported

@@ -31,6 +31,12 @@ foreach ($it as $f) {
     // install.sh and the uninstaller must still know the old names: that is
     // what the migration is for.
     if (basename($path) === 'install.sh' || basename($path) === 'uninstall.sh') { continue; }
+    // Customer documentation has to name the old product once, to tell someone
+    // upgrading from it that their install is migrated rather than replaced.
+    // Silently dropping the old name from the docs would leave exactly the
+    // people with the most to lose unable to tell whether this is their
+    // product at all.
+    if (preg_match('#/docs/#', $path)) { continue; }
     if (strpos(basename($path), 'test_rebrand') === 0) { continue; }
 
     $c = @file_get_contents($path);

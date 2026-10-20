@@ -189,6 +189,57 @@ try {
     // The installer does this, so this is the retry path: a host with no
     // network at install time, or one where the operator declined with
     // --no-rootkit-tools and later changed their mind.
+    // What third-party tools are present, where they came from, and what is
+    // degraded without each one. Exists so the "complete package" claim is
+    // auditable on a real server instead of taken on trust.
+    case 'deps': {
+        require_once $BASE . '/lib/Dependencies.php';
+        $s = Dependencies::summary();
+
+        echo 'Third-party security stack' . PHP_EOL . PHP_EOL;
+        foreach ($s['detail'] as $d) {
+            $mark = $d['installed'] ? '[ok]  ' : ($d['recommended'] ? '[MISS]' : '[--]  ');
+            printf("%s %-14s %s%s", $mark, $d['name'],
+                   $d['installed'] ? ($d['path'] ?: 'installed') : 'not installed',
+                   PHP_EOL);
+            if (!$d['installed']) {
+                echo '         for:     ' . $d['what_for'] . PHP_EOL;
+                echo '         without: ' . $d['without_it'] . PHP_EOL;
+                if (empty($d['installable']) && isset($d['installable'])) {
+                    echo '         note:    ' . $d['source'] . PHP_EOL;
+                } else {
+                    echo '         install: ' . $d['package'] . PHP_EOL;
+                    echo '         from:    ' . $d['source'] . PHP_EOL;
+                }
+            }
+        }
+
+        if (!empty($s['csf_warning'])) {
+            $w = $s['csf_warning'];
+            echo PHP_EOL . 'WARNING (' . $w['severity'] . '): ' . $w['what'] . PHP_EOL;
+            echo '  ' . $w['action'] . PHP_EOL;
+        }
+
+        echo PHP_EOL;
+        if ($s['recommended_missing']) {
+            echo 'Missing and recommended: '
+               . implode(', ', $s['recommended_missing']) . PHP_EOL;
+            echo 'Install them with:  bash ' . SG_ROOT . '/install.sh --register-only'
+               . PHP_EOL;
+            echo '  (or the package names above, through your package manager)'
+               . PHP_EOL;
+        } else {
+            echo 'Nothing recommended is missing.' . PHP_EOL;
+        }
+        // Never downloaded, always packaged -- stated here because it is the
+        // question everyone asks and the answer is load-bearing.
+        echo PHP_EOL . 'All of these install from the OS package manager, never by '
+           . 'download:' . PHP_EOL
+           . '  a tarball fetched once is pinned forever and never patched again.'
+           . PHP_EOL;
+        break;
+    }
+
     case 'install-rootkit-tools': {
         $have = static function (string $bin): bool {
             @exec('command -v ' . escapeshellarg($bin) . ' 2>/dev/null', $o, $rc);
@@ -496,7 +547,7 @@ Usage: serverscrub <command> [args] [--json]
   license refresh              Force a re-check against the server
   license identity             Show the domain/IP this server reports
   license secret <value>       Set the WHMCS licensing addon secret
-  license probe                Show exactly what the licence server returns
+  license probe                Show exactly what the licence server returns\n  deps                         Third-party tools: what is present and where it came from
   license try-secret <value>   Test a candidate secret WITHOUT storing it
   license diagnose-hash        Identify how the licence server signs replies
 
