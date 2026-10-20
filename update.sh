@@ -16,6 +16,31 @@
 
 set -euo pipefail
 
+# ── WHY EVERY PIPELINE ASSIGNMENT BELOW ENDS IN `|| true` ─────────────────────
+#
+# Under `set -e` a plain assignment takes the exit status of its command
+# substitution, and under `pipefail` a pipeline fails if ANY stage fails. So
+#
+#     VAR="$(curl -fsSL "$URL" 2>/dev/null | tr -d '[:space:]')"
+#
+# does not leave VAR empty when the URL 404s. It terminates the script, and
+# because stderr went to /dev/null it does so with NO MESSAGE AT ALL.
+#
+# This is not hypothetical. On 2026-10-20 a production server on v4.4.2 ran the
+# updater twice and both times it printed "Checking releases channel for latest
+# version…" and returned to the prompt. Exit 22, curl's code for HTTP 404,
+# from an INFORMATIONAL cross-check of <channel>/latest/VERSION — a line whose
+# only job is to print a nicer message. The CDN had never been populated, so
+# that file was missing, and the updater died on the first channel before ever
+# trying the GitHub mirror that was working perfectly.
+#
+# Every one of these assignments is followed by an `[[ -z ... ]]` check or a
+# fallback: the code was written expecting an empty value on failure. `|| true`
+# is what restores that intent. Where a value is genuinely required, the
+# existing emptiness check reports it properly instead of dying mute.
+#
+# scripts/check-shell-pipefail.py fails preflight on any new one of these.
+
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -190,7 +215,7 @@ _download() {
 
 # ── Detect current version ────────────────────────────────────────────────────
 section "Version check"
-CURRENT_VERSION="$(cat "${INSTALL_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]')"
+CURRENT_VERSION="$(cat "${INSTALL_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
 [[ -z "$CURRENT_VERSION" ]] && CURRENT_VERSION="unknown"
 info "Current version: ${BOLD}v${CURRENT_VERSION}${NC}"
 
@@ -224,7 +249,11 @@ else
         # latest/VERSION is the extracted build the channel is actually serving.
         # Six bytes, and it cannot disagree with what is on disk there, so it is
         # used to cross-check the manifest below.
-        LIVE_VER="$(curl -fsSL --max-time 10 "${BASE}/latest/VERSION" 2>/dev/null | tr -d '[:space:]')"
+        # Informational only: a nicer message and a cross-check against the
+        # manifest below. A missing latest/VERSION is normal on a channel that
+        # serves only dist/, and must never stop the update. THIS LINE, without
+        # its `|| true`, is what silently killed the updater on a live server.
+        LIVE_VER="$(curl -fsSL --max-time 10 "${BASE}/latest/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
         [[ -n "$LIVE_VER" ]] && info "  ${BASE}/latest/ reports v${LIVE_VER}"
 
         info "  Trying: ${BASE}/latest.json"
@@ -237,7 +266,7 @@ else
                 break
             else
                 CURL_EXIT=$?
-                CURL_ERR="$(cat "$CURL_ERR_FILE" 2>/dev/null)"
+                CURL_ERR="$(cat "$CURL_ERR_FILE" 2>/dev/null || true)"
                 warn "  curl exit ${CURL_EXIT}: ${CURL_ERR}"
                 MANIFEST_JSON=""
             fi
@@ -282,11 +311,11 @@ else
     fi
 
     # Parse manifest (tolerant of whitespace; values are simple strings)
-    LATEST_VERSION="$(echo "$MANIFEST_JSON" | grep -oP '"version"\s*:\s*"\K[^"]+' | head -1)"
-    DOWNLOAD_URL="$(echo "$MANIFEST_JSON"   | grep -oP '"url"\s*:\s*"\K[^"]+' | head -1)"
-    MIRROR_URL="$(echo "$MANIFEST_JSON"     | grep -oP '"mirror"\s*:\s*"\K[^"]+' | head -1)"
-    EXPECTED_SHA256="$(echo "$MANIFEST_JSON" | grep -oP '"sha256"\s*:\s*"\K[0-9a-fA-F]+' | head -1)"
-    RELEASE_URL="$(echo "$MANIFEST_JSON"    | grep -oP '"notes"\s*:\s*"\K[^"]+' | head -1)"
+    LATEST_VERSION="$(echo "$MANIFEST_JSON" | grep -oP '"version"\s*:\s*"\K[^"]+' | head -1 || true)"
+    DOWNLOAD_URL="$(echo "$MANIFEST_JSON"   | grep -oP '"url"\s*:\s*"\K[^"]+' | head -1 || true)"
+    MIRROR_URL="$(echo "$MANIFEST_JSON"     | grep -oP '"mirror"\s*:\s*"\K[^"]+' | head -1 || true)"
+    EXPECTED_SHA256="$(echo "$MANIFEST_JSON" | grep -oP '"sha256"\s*:\s*"\K[0-9a-fA-F]+' | head -1 || true)"
+    RELEASE_URL="$(echo "$MANIFEST_JSON"    | grep -oP '"notes"\s*:\s*"\K[^"]+' | head -1 || true)"
 
     # Fall back to the extracted tree if the manifest was unparseable
     if [[ -z "$LATEST_VERSION" && -n "${LIVE_VER:-}" ]]; then
@@ -357,7 +386,10 @@ fi
 # An update that runs out of space halfway leaves the install in a state nobody
 # asked for. Checking first costs nothing, and the message names the two
 # directories that actually fill up.
-_SG_FREE_KB=$(df -Pk "$INSTALL_DIR" 2>/dev/null | awk 'NR==2 {print $4}')
+# `|| true` because the check below is written for an empty value: a df that
+# cannot stat the directory must skip the space check, not kill the updater
+# one step before it starts.
+_SG_FREE_KB=$(df -Pk "$INSTALL_DIR" 2>/dev/null | awk 'NR==2 {print $4}' || true)
 _SG_NEED_KB=$(( 200 * 1024 ))        # 200MB: download, unpack, backup, rsync
 
 if [[ -n "$_SG_FREE_KB" && "$_SG_FREE_KB" -lt "$_SG_NEED_KB" ]]; then
@@ -411,9 +443,13 @@ ok "Backup created at: ${BACKUP_DIR}"
 # unbounded growth that quarantine had, in a second place.
 _SG_KEEP=${SG_KEEP_BACKUPS:-3}
 if [[ -d "$BACKUP_ROOT" ]]; then
-    _SG_OLD=$(ls -1dt "${BACKUP_ROOT}"/*/ 2>/dev/null | tail -n +$((_SG_KEEP + 1)))
+    # `|| true` matters here: when BACKUP_ROOT exists but holds no directories
+    # the glob matches nothing, ls exits non-zero, and under pipefail that
+    # killed the updater mid-prune on exactly the second update a server ever
+    # ran. The `[[ -n ]]` below is what was meant to handle it.
+    _SG_OLD=$(ls -1dt "${BACKUP_ROOT}"/*/ 2>/dev/null | tail -n +$((_SG_KEEP + 1)) || true)
     if [[ -n "$_SG_OLD" ]]; then
-        _SG_N=$(printf '%s\n' "$_SG_OLD" | wc -l)
+        _SG_N=$(printf '%s\n' "$_SG_OLD" | wc -l || true)
         printf '%s\n' "$_SG_OLD" | xargs -r rm -rf
         info "Pruned ${_SG_N} old backup(s), keeping the most recent ${_SG_KEEP}"
     fi
@@ -494,7 +530,7 @@ if [[ -n "$EXPECTED_SHA256" ]]; then
     if [[ -z "$_SHA_TOOL" ]]; then
         die "No sha256 tool (sha256sum/shasum) available — cannot verify download. Install coreutils and retry."
     fi
-    ACTUAL_SHA256="$($_SHA_TOOL "$RELEASE_ZIP" | awk '{print $1}')"
+    ACTUAL_SHA256="$($_SHA_TOOL "$RELEASE_ZIP" | awk '{print $1}' || true)"
     if [[ "${ACTUAL_SHA256,,}" != "${EXPECTED_SHA256,,}" ]]; then
         err "Checksum MISMATCH — refusing to install."
         info "  expected: ${EXPECTED_SHA256}"
@@ -511,7 +547,7 @@ section "Extracting update"
 unzip -q "${TMP_DIR}/release.zip" -d "${TMP_DIR}/extracted"
 
 # Find the root of the extracted content (may be in a subdirectory)
-EXTRACTED_ROOT="$(find "${TMP_DIR}/extracted" -maxdepth 1 -mindepth 1 -type d | head -1)"
+EXTRACTED_ROOT="$(find "${TMP_DIR}/extracted" -maxdepth 1 -mindepth 1 -type d | head -1 || true)"
 [[ -z "$EXTRACTED_ROOT" ]] && EXTRACTED_ROOT="${TMP_DIR}/extracted"
 ok "Extracted to: $EXTRACTED_ROOT"
 
@@ -718,7 +754,7 @@ fi
 section "Finalising"
 php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; Database::setSetting('update_available', '0'); Database::setSetting('update_latest_ver', '${LATEST_VERSION}'); echo 'Update state cleared.' . PHP_EOL;" 2>/dev/null || true
 
-NEW_VERSION="$(cat "${INSTALL_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]')"
+NEW_VERSION="$(cat "${INSTALL_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
 echo ""
 echo -e "${BOLD}${GREEN}╔═══════════════════════════════════════╗"
 echo -e "║  ✔  Update complete!                  ║"

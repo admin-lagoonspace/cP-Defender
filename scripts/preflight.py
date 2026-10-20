@@ -226,6 +226,27 @@ def main():
     else:
         ok("no JS helper is called outside the function that declares it")
 
+    # 2c-sh. a shipped shell script must not be able to abort in silence
+    # Under `set -e` + `pipefail`, `VAR="$(cmd | cmd)"` terminates the script
+    # when any stage fails instead of leaving VAR empty. update.sh had eleven of
+    # these. One was an informational curl of <channel>/latest/VERSION, which
+    # 404s on a channel serving only dist/ -- so on 2026-10-20 a production
+    # server ran the updater twice and both times it printed "Checking releases
+    # channel..." and returned to the prompt, having changed nothing and said
+    # nothing. Every one of those assignments was followed by an emptiness
+    # check: the code was written for an empty value and the shell options
+    # silently defeated it.
+    r = subprocess.run([sys.executable,
+                        os.path.join(REPO, "scripts", "check-shell-pipefail.py")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        for line in (r.stdout + r.stderr).strip().splitlines():
+            if line.strip():
+                fail(line.strip())
+        problems += 1
+    else:
+        ok("no shipped shell script can abort silently (set -e + pipefail)")
+
     # 2c-py. the daemon must run on the oldest Python we support
     # cPanel runs on RHEL-family hosts shipping Python 3.6. The suite runs on
     # the developer's Python, which is far newer, so it proved nothing about the

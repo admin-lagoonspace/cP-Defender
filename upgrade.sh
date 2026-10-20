@@ -123,7 +123,7 @@ if [[ "$CURRENT" == "$LATEST" ]]; then
     ok "Already on v${LATEST} — nothing to do."
     exit 0
 fi
-NEWER="$(printf '%s\n%s\n' "$CURRENT" "$LATEST" | sort -V | tail -1)"
+NEWER="$(printf '%s\n%s\n' "$CURRENT" "$LATEST" | sort -V | tail -1 || true)"
 if [[ "$NEWER" == "$CURRENT" && "$CURRENT" != "unknown" ]]; then
     warn "The channel offers v${LATEST}, which is OLDER than the installed v${CURRENT}."
     warn "Refusing to downgrade. Use --version ${LATEST} if you really mean it."
