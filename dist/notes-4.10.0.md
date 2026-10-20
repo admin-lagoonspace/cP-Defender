@@ -2,7 +2,7 @@
 
 [4.10.0] - 2026-10-20
 
-Outbound mail monitoring â€” the gap that had already cost this server its mail
+Outbound mail monitoring — the gap that had already cost this server its mail
 reputation once.
 
 ### Added
@@ -21,9 +21,9 @@ reputation once.
   - **Send rate** per account per hour, default 500.
   - **The sending script.** exim's `cwd=` on a locally injected message names
     the directory that sent it. This is the signal that turns *"inditdel is
-    sending a lot"* into *"this form on this site is the relay"* â€” the part
+    sending a lot"* into *"this form on this site is the relay"* — the part
     that took hours to establish manually.
-  - **Authenticated sends** (`A=dovecot_login:â€¦`), which are a *different*
+  - **Authenticated sends** (`A=dovecot_login:…`), which are a *different*
     incident: a real mailbox password is in use, so credentials leaked rather
     than a script being exploited. Reported separately, with different advice,
     because changing a password fixes one and does nothing for the other.
@@ -31,7 +31,7 @@ reputation once.
     outside sign of a relay, because the spam is being refused by its targets.
 
 - **`serverscrub`-side throttling** through cPanel's own per-account hourly
-  limit â€” the mechanism cPanel already enforces and reports on, rather than a
+  limit — the mechanism cPanel already enforces and reports on, rather than a
   second one exim would not consult.
 
 ### Notes
@@ -39,7 +39,7 @@ reputation once.
 - **Outbound only.** Inbound filtering belongs to whatever handles it on the
   server (MagicSpam here), and two tools fighting over inbound policy is worse
   than one. Nothing in this module reads a message body or makes a spam/ham
-  judgement â€” it counts and attributes.
+  judgement — it counts and attributes.
 
 - **It does not clear the queue and does not suspend accounts.** 92,954 of
   93,255 queued messages were the relay, which still left **301 that a customer
@@ -49,8 +49,8 @@ reputation once.
 
 - **Nothing was adopted from the projects suggested for this.** `spamscanner`
   is under the **Business Source License**, whose Additional Use Grant forbids
-  using it for "a commercial offering that allows third partiesâ€¦ to access the
-  functionality" â€” which is precisely this product. GitHub reports it as
+  using it for "a commercial offering that allows third parties… to access the
+  functionality" — which is precisely this product. GitHub reports it as
   `NOASSERTION`, so the LICENSE file has to be opened to see that.
   `smtp-monitor` (MIT) watches outbound SMTP *connections*, but on cPanel PHP
   `mail()` hands off to local exim, so it would attribute sends to exim rather
@@ -67,8 +67,8 @@ reputation once.
   things, and "0 queued" on a server whose exim cannot be reached is the most
   misleading thing the panel could say.
 
-- 3Ã— the configured threshold is critical, not 4Ã—. The relay ran at 3.4Ã— the
-  default and sustained it for a day â€” at 4Ã— the one incident this was built
+- 3× the configured threshold is critical, not 4×. The relay ran at 3.4× the
+  default and sustained it for a day — at 4× the one incident this was built
   from would have been reported merely as "high".
 
 ### Fixed
