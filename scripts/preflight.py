@@ -226,6 +226,23 @@ def main():
     else:
         ok("no JS helper is called outside the function that declares it")
 
+    # 2c-dup. two top-level JS functions of the same name
+    # JavaScript allows it and the later one silently replaces the earlier for
+    # every caller in the file. A helper named fmtNum() was added to app.js
+    # without noticing one existed 4,600 lines earlier, and the two behaved
+    # differently -- every number on every other page would have changed
+    # output, with no error anywhere.
+    r = subprocess.run([sys.executable,
+                        os.path.join(REPO, "scripts", "check-js-duplicates.py")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        for line in (r.stdout + r.stderr).strip().splitlines():
+            if line.strip():
+                fail(line.strip())
+        problems += 1
+    else:
+        ok("no JS function is declared twice at top level")
+
     # 2c-sh. a shipped shell script must not be able to abort in silence
     # Under `set -e` + `pipefail`, `VAR="$(cmd | cmd)"` terminates the script
     # when any stage fails instead of leaving VAR empty. update.sh had eleven of

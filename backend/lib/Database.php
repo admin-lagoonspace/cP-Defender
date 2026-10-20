@@ -331,6 +331,25 @@ class Database {
             $db->exec("ALTER TABLE threats ADD COLUMN quarantine_expires_at INTEGER");
         }
 
+        // Outbound mail monitoring, on by default.
+        //
+        // OUTBOUND ONLY. Inbound filtering is MagicSpam's job on this server
+        // and two tools fighting over inbound policy is worse than one. Nothing
+        // here reads a message body or scores spam; it counts and attributes.
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('mg_enabled', '1')");
+        // 500/hour per account. The relay that prompted this ran at ~1,690/hour
+        // for a day, so this catches that shape inside the first hour while
+        // staying well above what a busy shop or a small newsletter sends.
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('mg_hourly', '500')");
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('mg_queue', '2000')");
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('mg_frozen', '250')");
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('mg_retain_days', '60')");
+
         // Network-layer guards. Scan detection and flood limits are ON: both
         // only ever record, and the escalation they feed into is the
         // brute-force ladder that was already running.

@@ -335,6 +335,14 @@ const API = (() => {
     // WordPress database scanner. 'sweep' is the only one of these that costs
     // anything: one connection and six queries per install.
     // Network guards. 'egressPreview' applies nothing -- see the route.
+    // Outbound mail. No queue-clearing or suspend call exists by design.
+    mgStatus:   ()            => req('GET',  'mailguard/status'),
+    mgSenders:  (h, l)        => req('GET',  'mailguard/senders?hours=' + (h || 24)
+                                             + '&limit=' + (l || 25)),
+    mgScan:     ()            => req('POST', 'mailguard/scan', {}),
+    mgThrottle: (acct, perHr) => req('POST', 'mailguard/throttle',
+                                     { account: acct, per_hour: perHr }),
+
     ngStatus:         ()        => req('GET',  'netguard/status'),
     ngScan:           ()        => req('POST', 'netguard/scan', {}),
     ngEgressDefaults: ()        => req('GET',  'netguard/egress-defaults'),

@@ -53,6 +53,7 @@ require_once __DIR__ . '/../lib/CMSGuard.php';
 require_once __DIR__ . '/../lib/WPDatabaseScanner.php';
 require_once __DIR__ . '/../lib/Updater.php';
 require_once __DIR__ . '/../lib/NetworkGuard.php';
+require_once __DIR__ . '/../lib/MailGuard.php';
 require_once __DIR__ . '/../lib/RootkitScanner.php';
 require_once __DIR__ . '/../lib/FileIntegrity.php';
 require_once __DIR__ . '/../lib/PHPHardening.php';
@@ -180,6 +181,7 @@ try {
         'cmsguard'   => routeCMSGuard($action, $method, $body, $query, $user),
         'wpscan'     => routeWPScan($action, $method, $body, $query, $user),
         'netguard'   => routeNetGuard($action, $method, $body, $query, $user),
+        'mailguard'  => routeMailGuard($action, $method, $body, $query, $user),
         'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
         'bruteforce' => routeBruteForce($action, $method, $body, $query, $user),
         'overview'   => routeOverview($action, $method, $query, $user),
@@ -1317,6 +1319,54 @@ function routeCMSGuard(string $action, string $method, array $body, array $q, ?a
             ? ['success' => true, 'data' => $cg->checkInstall((int)($body['id'] ?? 0))]
             : ['success' => false, 'code' => 405],
         default    => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Outbound mail
+// ════════════════════════════════════════════════════════════════════════════
+//
+// OUTBOUND ONLY, and there is no route here that clears the queue or suspends
+// an account. During the incident this was built for, 92,954 of 93,255 queued
+// messages were a relay -- which still leaves 301 that a customer was waiting
+// for. Throttling exists, takes an explicit limit, and is reversible by setting
+// it back.
+function routeMailGuard(string $action, string $method, array $body, array $q, ?array $user): array {
+    return match($action) {
+        'status' => ['success' => true, 'data' => MailGuard::status()],
+
+        'senders' => ['success' => true,
+                      'data' => MailGuard::topSenders((int)($q['hours'] ?? 24),
+                                                      (int)($q['limit'] ?? 25))],
+
+        // Read the log and judge it now. Safe: it only records.
+        'scan' => $method === 'POST'
+            ? (function () use ($user) {
+                  Auth::requireRole('admin', $user);
+                  return ['success' => true, 'data' => MailGuard::run()];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        // Cap an account through cPanel's own per-account hourly limit, which
+        // is the mechanism cPanel already enforces -- rather than a second one
+        // exim would not consult. The caller must name the number: there is no
+        // default, because the right cap for a newsletter is not the right cap
+        // for a contact form.
+        'throttle' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  $acct = (string)($body['account'] ?? '');
+                  if (!isset($body['per_hour'])) {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'per_hour is required — pick a limit '
+                                       . 'deliberately rather than accepting a default'];
+                  }
+                  return ['success' => true,
+                          'data' => MailGuard::throttle($acct, (int)$body['per_hour'])];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }
 

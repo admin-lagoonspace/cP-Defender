@@ -208,6 +208,7 @@ function openPage(name) {
     case 'botshield': loadBotShield();      break;
     case 'cms':       loadCMSGuard();       break;
     case 'wpscan':    loadWPScan();         break;
+    case 'mailguard': loadMailGuard();      break;
     case 'rootkit':   loadRootkit();        break;
     case 'integrity': loadIntegrity();      break;
     case 'logs':      loadLogs();           break;
@@ -4780,5 +4781,140 @@ async function resolveWPFinding(id, status) {
     await loadWPScan();
   } else {
     toast((r && r.error) || 'Could not update the finding', 'error');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Outbound Mail
+// ════════════════════════════════════════════════════════════════════════════
+//
+// There is no "clear the queue" button here and there will not be one. During
+// the incident this page was built for, 92,954 of 93,255 queued messages were
+// a relay -- which still left 301 that a customer was waiting for. Emptying a
+// queue is the operator's call, made with exim, after they know whose mail is
+// in it.
+
+function mgSev(sev) {
+  const cls = { critical: 'badge-red', high: 'badge-amber',
+                medium: 'badge-blue' }[sev] || 'badge-gray';
+  return '<span class="badge ' + cls + '">' + esc(sev || 'low') + '</span>';
+}
+
+async function loadMailGuard() {
+  const r = await API.mgStatus();
+  const d = (r && r.data) || {};
+
+  // A queue that could not be read shows as "unknown", never as 0. Those mean
+  // opposite things, and a panel reading "0 queued" on a server whose exim
+  // cannot be reached is the most misleading thing this page could say.
+  if (d.queue_readable) {
+    setText('mg-stat-queue', fmtNum(d.queue));
+    setText('mg-stat-queue-sub', 'threshold ' + fmtNum(d.queue_threshold));
+  } else {
+    setText('mg-stat-queue', 'unknown');
+    setText('mg-stat-queue-sub', 'could not read exim');
+  }
+  setText('mg-stat-frozen', (d.frozen >= 0) ? fmtNum(d.frozen) : 'unknown');
+  setText('mg-stat-limit', fmtNum(d.hourly_threshold) + '/hr');
+
+  const f = d.findings || [];
+  setText('mg-stat-findings', f.length);
+
+  const card = g('mg-findings-card');
+  const fbody = g('mg-findings-body');
+  if (card) card.style.display = f.length ? '' : 'none';
+  if (fbody) {
+    fbody.innerHTML = f.map(x =>
+        '<tr><td>' + mgSev(x.severity) + '</td>'
+      + '<td style="max-width:360px">' + esc(x.what || '') + '</td>'
+      + '<td style="max-width:360px;color:var(--txt2)">' + esc(x.action || '') + '</td>'
+      + '</tr>').join('');
+  }
+
+  const rows = d.top || [];
+  const badge = g('mg-count-badge');
+  if (badge) badge.textContent = rows.length;
+
+  const body = g('mg-senders-body');
+  if (!body) return;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;'
+      + 'color:var(--txt3);padding:28px">Nothing recorded in the last 24 hours.'
+      + '</td></tr>';
+    return;
+  }
+
+  body.innerHTML = rows.map(r => {
+    // "How" matters more than the count: a script burst and an authenticated
+    // burst need completely different fixes.
+    const how = r.source === 'smtp_auth'
+      ? '<span class="badge badge-amber" title="A real mailbox password was '
+        + 'used, so the credentials leaked">password</span>'
+      : (r.source === 'script'
+          ? '<span class="badge badge-blue" title="Injected locally by a script '
+            + 'on the server">script</span>'
+          : '<span class="badge badge-gray">' + esc(r.source || '?') + '</span>');
+    const acct = esc(r.account || '');
+    return '<tr>'
+      + '<td>' + acct + '</td>'
+      + '<td>' + how + '</td>'
+      + '<td style="max-width:260px;overflow:hidden;text-overflow:ellipsis" title="'
+        + esc(r.script || '') + '">' + esc(r.script || '\u2014') + '</td>'
+      + '<td>' + fmtNum(r.sent) + '</td>'
+      + '<td>' + fmtNum(r.recipients) + '</td>'
+      + '<td>' + fmtNum(r.failed) + '</td>'
+      + '<td style="white-space:nowrap">'
+      + (r.account && r.account !== '(unattributed)'
+          ? '<button class="btn btn-ghost btn-sm" onclick="throttleAccount(\''
+            + acct + '\')">Cap rate</button>'
+          : '')
+      + '</td></tr>';
+  }).join('');
+}
+
+async function runMailScan() {
+  const btn = g('mg-scan-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Reading...'; }
+  try {
+    const r = await API.mgScan();
+    const d = (r && r.data) || {};
+    if (d.skipped) {
+      toast(d.skipped, 'warning', 9000);
+    } else {
+      toast('Read ' + fmtNum(d.read) + ' bytes of mail log, '
+          + fmtNum(d.arrivals) + ' message(s), '
+          + fmtNum(d.findings) + ' finding(s)',
+            d.findings ? 'warning' : 'success', 8000);
+    }
+    await loadMailGuard();
+  } catch (e) {
+    toast('Could not read the mail log: ' + (e && e.message ? e.message : e), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Read mail log now'; }
+  }
+}
+
+// The limit is ASKED FOR, never defaulted. The right cap for a newsletter is
+// not the right cap for a contact form, and this caps a real business's mail.
+async function throttleAccount(account) {
+  const v = prompt('Cap ' + account + ' to how many messages per hour?\n\n'
+    + 'This sets cPanel\'s own per-account limit, so cPanel enforces and '
+    + 'reports it. Reversible: set it higher again.\n\n'
+    + 'Mail over the cap is rejected, so pick a number this account can live '
+    + 'with while you fix the cause.', '1000');
+  if (v === null) return;
+
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    toast('Enter a number of messages per hour', 'error');
+    return;
+  }
+  const r = await API.mgThrottle(account, n);
+  const d = (r && r.data) || {};
+  if (d.success) {
+    toast(account + ' capped at ' + fmtNum(n) + ' messages/hour', 'success', 7000);
+    await loadMailGuard();
+  } else {
+    toast(d.error || (r && r.error) || 'Could not set the limit', 'error', 9000);
   }
 }

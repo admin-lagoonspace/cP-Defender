@@ -61,6 +61,7 @@ require_once SG_ROOT . '/backend/lib/WAF.php';
 require_once SG_ROOT . '/backend/lib/Schedule.php';
 require_once SG_ROOT . '/backend/lib/BruteForce.php';
 require_once SG_ROOT . '/backend/lib/NetworkGuard.php';
+require_once SG_ROOT . '/backend/lib/MailGuard.php';
 // The fwprobe task measures iptables and CSF off the request path.
 require_once SG_ROOT . '/backend/lib/Firewall.php';
 
@@ -376,6 +377,42 @@ $tasks = [
             if (!empty($r['blocked'])) {
                 slog(sprintf('  %d address(es) blocked through the brute-force ladder',
                      $r['blocked']));
+            }
+        },
+    ],
+
+    // Outbound mail.
+    //
+    // THE GAP THIS CLOSES: on 2026-10-18 one Contact Form 7 autoresponder
+    // relayed 92,954 messages off this server in about a day. No file was
+    // modified, so the scanner had nothing to find, and no tool noticed -- it
+    // was discovered by hand afterwards by reading exim_mainlog. Every signal
+    // needed was already on the server.
+    //
+    // Every tick, because mail reputation is lost in hours. Reading the log is
+    // incremental and capped at 8 MB a pass, so keeping up costs almost
+    // nothing while a runaway log cannot turn the monitor into a second
+    // incident.
+    //
+    // It reports. It does not clear the queue or suspend accounts: 92,954 of
+    // 93,255 queued messages were the relay, which still left 301 somebody was
+    // waiting for.
+    'mailguard' => [
+        'schedule' => setting('mailguard_schedule', 'every'),
+        'time'     => setting('mailguard_time', '00:00'),
+        'day'      => (int)setting('mailguard_day', '0'),
+        'run'      => function () {
+            $r = MailGuard::run();
+            if (!empty($r['skipped'])) { slog('  ' . $r['skipped']); return; }
+            slog(sprintf('  read %s bytes, %d arrival(s)',
+                 number_format((int)$r['read']), (int)$r['arrivals']));
+            $q = MailGuard::queueDepth();
+            // -1 is reported as unreadable, never as an empty queue: those
+            // are very different and must not look the same in a log.
+            slog('  queue: ' . ($q >= 0 ? number_format($q) : 'could not read exim'));
+            if (!empty($r['findings'])) {
+                slog(sprintf('  %d outbound mail finding(s) — see Events',
+                     (int)$r['findings']));
             }
         },
     ],
