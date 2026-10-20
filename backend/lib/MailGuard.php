@@ -166,6 +166,50 @@ class MailGuard
     }
 
     /**
+     * The hour bucket a log line belongs to, from ITS OWN timestamp.
+     *
+     * THE BUG THIS FIXES. collect() used to compute one bucket from time() and
+     * file every line it read into it. On a first run the offset is 0, so it
+     * reads up to 8 MB of HISTORICAL log -- days of mail on a busy server --
+     * and attributed all of it to the current hour.
+     *
+     * On a live server that reported a customer account as sending 5,036
+     * messages in the last hour, at CRITICAL, and another 19,862 through
+     * exim's own user. The real figure was 22 messages across 300,000 log
+     * lines: a normal multi-site reseller doing nothing wrong. The operator
+     * went looking for a backdoor and capped a 25-domain account to 100
+     * messages an hour, which broke that customer's password resets and
+     * contact forms, because of a number this module invented.
+     *
+     * A monitor that cannot say WHEN something happened cannot say how fast it
+     * is happening, and a rate is the only thing this module reports.
+     *
+     * Returns null when the line carries no usable timestamp, so the caller
+     * can decide rather than silently guessing "now".
+     */
+    public static function lineBucket(string $line): ?int
+    {
+        // exim writes "2026-10-20 15:38:37" at the start of every line, and
+        // optionally a timezone offset after it.
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):/', $line, $m)) {
+            return null;
+        }
+        // Hour precision is all a bucket needs, so the minute and second are
+        // read only to confirm the shape.
+        $ts = @mktime((int)$m[4], 0, 0, (int)$m[2], (int)$m[3], (int)$m[1]);
+        if ($ts === false) return null;
+
+        // Refuse a timestamp from the future or from before this product could
+        // plausibly have been running. A corrupt or mis-parsed line must not
+        // create a bucket that then reads as "the last hour" for ever.
+        $now = time();
+        if ($ts > $now + 86400) return null;
+        if ($ts < $now - 86400 * 400) return null;
+
+        return (int)(floor($ts / 3600) * 3600);
+    }
+
+    /**
      * Parse one exim log line into an activity record.
      *
      * Public and pure so it can be tested against real log lines without a mail
@@ -282,10 +326,17 @@ class MailGuard
         }
         if ($offset > 0) @fseek($fh, $offset);
 
-        $bucket   = (int)(floor(time() / 3600) * 3600);
-        $agg      = [];
-        $arrivals = 0;
-        $read     = 0;
+        // The CURRENT hour is only a fallback for a line with no readable
+        // timestamp. Every line that has one is bucketed by its own.
+        $nowBucket = (int)(floor(time() / 3600) * 3600);
+        $agg       = [];
+        $arrivals  = 0;
+        $read      = 0;
+        $undated   = 0;
+        // Consecutive lines usually share a timestamp, so the last conversion
+        // is reused rather than re-parsed for every line of an 8 MB read.
+        $lastStamp = '';
+        $lastBucket = $nowBucket;
 
         while (($line = fgets($fh)) !== false) {
             $read += strlen($line);
@@ -293,6 +344,18 @@ class MailGuard
 
             $p = self::parseLine($line);
             if ($p === null) continue;
+
+            $stamp = substr($line, 0, 13);          // "2026-10-20 15"
+            if ($stamp !== $lastStamp) {
+                $b = self::lineBucket($line);
+                if ($b === null) {
+                    $undated++;
+                    $b = $nowBucket;
+                }
+                $lastStamp  = $stamp;
+                $lastBucket = $b;
+            }
+            $bucket = $lastBucket;
 
             $acct   = $p['account'] ?? '(unattributed)';
             $script = $p['script'];
@@ -322,7 +385,17 @@ class MailGuard
 
         self::flush($agg);
 
-        return ['read' => $read, 'arrivals' => $arrivals, 'buckets' => count($agg)];
+        // Reported, not swallowed. A log whose lines cannot be dated means
+        // every rate this module publishes is a guess, and the operator needs
+        // to know that before acting on one.
+        if ($undated > 0) {
+            Logger::warn(sprintf('MailGuard: %d log line(s) had no readable '
+                               . 'timestamp and were counted in the current hour',
+                                 $undated));
+        }
+
+        return ['read' => $read, 'arrivals' => $arrivals, 'buckets' => count($agg),
+                'undated' => $undated];
     }
 
     /** Merge aggregated counts into the hour buckets. */

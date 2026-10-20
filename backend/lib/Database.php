@@ -331,6 +331,33 @@ class Database {
             $db->exec("ALTER TABLE threats ADD COLUMN quarantine_expires_at INTEGER");
         }
 
+        // One-time repair of mail_activity written before 4.11.1.
+        //
+        // collect() used to file every log line it read into the CURRENT hour,
+        // so a first run -- which reads up to 8 MB of HISTORY -- recorded days
+        // of mail as though it had all happened in the last sixty minutes. On
+        // a live server that produced a CRITICAL finding of "5,036 messages in
+        // the last hour" against an account whose real figure was 22 messages
+        // across 300,000 log lines.
+        //
+        // Those rows cannot be corrected, only discarded: the hour they
+        // belonged to was never recorded. The offset is reset too, so the log
+        // is re-read and rebuilt with correct timestamps.
+        $row = $db->query("SELECT value FROM settings WHERE key = 'mg_bucket_repair'")
+                  ->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            // mail_activity is created lazily by MailGuard::ensureSchema(), so
+            // it may not exist yet on a fresh install. Checked rather than
+            // assumed: an exception here aborts every migration after it.
+            $has = $db->query("SELECT name FROM sqlite_master
+                                WHERE type='table' AND name='mail_activity'")
+                      ->fetch(PDO::FETCH_ASSOC);
+            if ($has) { $db->exec("DELETE FROM mail_activity"); }
+            $db->exec("DELETE FROM settings WHERE key = 'mg_offset'");
+            $db->exec("INSERT OR REPLACE INTO settings (key, value)
+                       VALUES ('mg_bucket_repair', '1')");
+        }
+
         // Outbound mail monitoring, on by default.
         //
         // OUTBOUND ONLY. Inbound filtering is MagicSpam's job on this server

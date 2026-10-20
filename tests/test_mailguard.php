@@ -494,3 +494,52 @@ t_contains($app, 'function openMailQueue', 'the viewer opens');
 t_contains($app, 'Showing ',
      'and says when the list is only a page of a larger queue — a table showing '
    . '200 of 93,000 with nothing saying so invites a delete that looks complete');
+
+// ── Lines are dated by THEMSELVES, not by the clock ─────────────────────────
+//
+// FROM A LIVE SERVER. collect() computed one hour bucket from time() and filed
+// every line it read into it. A first run reads up to 8 MB of HISTORY, so days
+// of mail were recorded as having happened in the last sixty minutes. The panel
+// reported a customer account at 5,036 messages in the last hour, CRITICAL, and
+// 19,862 through exim's own user. The real figure was 22 messages across
+// 300,000 log lines -- a normal multi-site reseller doing nothing wrong.
+//
+// The operator went hunting for a backdoor and capped a 25-domain account to
+// 100 messages an hour, which broke that customer's password resets and contact
+// forms. All of it caused by a number this module invented.
+//
+// A monitor that cannot say WHEN something happened cannot say how fast it is
+// happening, and a rate is the only thing this module reports.
+
+$nowB = (int)(floor(time() / 3600) * 3600);
+
+$old  = date('Y-m-d H:i:s', time() - 86400 * 3)
+      . ' 1xJFfR-00000008NEJ-2fc1 <= a@b U=inditdel P=local S=1208 for c@d.com';
+$b = MailGuard::lineBucket($old);
+t_ok($b !== null, 'a dated log line yields a bucket');
+t_ok($b < $nowB - 3600,
+     'a line from three days ago is NOT bucketed into the current hour');
+t_eq((int)(floor((time() - 86400 * 3) / 3600) * 3600), $b,
+     'it is bucketed into its own hour');
+
+$recent = date('Y-m-d H:i:s') . ' 1x-00000000000-01 <= a@b U=x P=local S=1 for c@d';
+t_eq($nowB, MailGuard::lineBucket($recent),
+     'and a line from this hour lands in this hour');
+
+// Unusable timestamps return null so the caller decides, rather than the
+// parser silently guessing "now" -- which is the mistake that caused all this.
+t_eq(null, MailGuard::lineBucket('no timestamp here at all'),
+     'a line with no timestamp yields null, not a guess');
+t_eq(null, MailGuard::lineBucket('2099-01-01 00:00:00 x <= y'),
+     'and a timestamp from the future is refused');
+t_eq(null, MailGuard::lineBucket(''), 'and an empty line');
+
+// The bucket must come from the line inside the read loop, never from a single
+// value computed once before it.
+$mgRaw = (string)file_get_contents(dirname(__DIR__) . '/backend/lib/MailGuard.php');
+t_contains($mgRaw, 'self::lineBucket($line)',
+     'collect() dates each line from the line itself');
+t_ok(substr_count($mgRaw, 'floor(time() / 3600)') <= 2,
+     'and time() survives only as the fallback for an undated line');
+t_contains($mgRaw, '$undated',
+     'undated lines are counted so the operator can be told the rates are soft');
