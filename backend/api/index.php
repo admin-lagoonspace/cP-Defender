@@ -51,6 +51,7 @@ require_once __DIR__ . '/../lib/RealTimeMonitor.php';
 require_once __DIR__ . '/../lib/BotShield.php';
 require_once __DIR__ . '/../lib/CMSGuard.php';
 require_once __DIR__ . '/../lib/WPDatabaseScanner.php';
+require_once __DIR__ . '/../lib/Updater.php';
 require_once __DIR__ . '/../lib/RootkitScanner.php';
 require_once __DIR__ . '/../lib/FileIntegrity.php';
 require_once __DIR__ . '/../lib/PHPHardening.php';
@@ -182,7 +183,7 @@ try {
         'overview'   => routeOverview($action, $method, $query, $user),
         'integrity'  => routeIntegrity($action, $method, $body, $query, $id, $user),
         'phphard'    => routePHPHard($action, $method, $body, $query, $user),
-        'update'     => routeUpdate($action, $method, $user),
+        'update'     => routeUpdate($action, $method, $body, $user),
         default      => ['success' => false, 'error' => "Unknown module: $module", 'code' => 404],
     };
 } catch (InvalidArgumentException $e) {
@@ -1469,11 +1470,42 @@ function routePHPHard(string $action, string $method, array $body, array $q, ?ar
     };
 }
 
-function routeUpdate(string $action, string $method, ?array $user): array {
+function routeUpdate(string $action, string $method, array $body, ?array $user): array {
     Auth::requireRole('admin', $user);
     return match($action) {
         // Return cached update status (no network call — fast)
         'status' => ['success' => true, 'data' => UpdateChecker::getCachedStatus()],
+
+        // Everything the Updates panel needs: the version comparison, whether
+        // unattended updating is on, any live run, and -- when it will not
+        // update -- the reason in words. "Will not update" with no reason is
+        // what this field exists to prevent.
+        'auto'   => ['success' => true, 'data' => Updater::status()],
+
+        'set-auto' => $method === 'POST' ? (function () use ($body) {
+            foreach (['auto_update', 'auto_update_major'] as $k) {
+                if (array_key_exists($k, $body)) {
+                    Database::setSetting($k, !empty($body[$k]) ? '1' : '0');
+                }
+            }
+            if (!empty($body['autoupdate_time'])
+                && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string)$body['autoupdate_time'])) {
+                Database::setSetting('autoupdate_time', (string)$body['autoupdate_time']);
+            }
+            Logger::info('Automatic update settings changed: auto='
+                . Database::setting('auto_update', '1')
+                . ' major=' . Database::setting('auto_update_major', '0')
+                . ' at ' . Database::setting('autoupdate_time', '04:30'));
+            return ['success' => true, 'data' => Updater::status()];
+        })() : ['success' => false, 'code' => 405],
+
+        // Resume automatic updates after three failures paused them. Separate
+        // from the toggle on purpose: clearing the counter is an assertion that
+        // somebody has looked at update.log, which flipping a switch is not.
+        'clear-failures' => $method === 'POST' ? (function () {
+            Updater::clearFailures();
+            return ['success' => true, 'data' => Updater::status()];
+        })() : ['success' => false, 'code' => 405],
 
         // Force an immediate live check against GitHub
         'check'  => $method === 'POST'

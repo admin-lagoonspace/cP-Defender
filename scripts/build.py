@@ -27,8 +27,15 @@ import time
 import zipfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ITEMS = ["backend", "frontend", "whm", "install.sh", "uninstall.sh",
-         "update.sh", "test.sh", "VERSION"]
+# MUST match the allowlist in make-release.sh. Both scripts write the SAME
+# filename, dist/serverscrub-<version>.zip, so whichever ran last wins -- and
+# this list was missing "cpanel", the directory holding the page every cPanel
+# user opens, and "upgrade.sh". Running build.py after publish.sh would have
+# replaced a correct release with one missing the customer-facing page, while
+# latest.json went on advertising the old SHA-256.
+# tests/test_packaging.php asserts the two lists agree.
+ITEMS = ["backend", "frontend", "whm", "cpanel", "install.sh", "uninstall.sh",
+         "update.sh", "upgrade.sh", "test.sh", "VERSION"]
 # Development tooling must never reach a customer server. ITEMS already omits
 # these, but naming them makes the intent explicit and survives someone adding a
 # directory to ITEMS later.

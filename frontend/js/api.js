@@ -377,6 +377,10 @@ const API = (() => {
     // Update checker
     updateStatus: ()  => req('GET',  'update/status'),
     updateCheck:  ()  => req('POST', 'update/check', {}),
+    updateAuto:       ()    => req('GET',  'update/auto'),
+    updateSetAuto:    (o)   => req('POST', 'update/set-auto', o),
+    updateRun:        ()    => req('POST', 'update/run', {}),
+    updateClearFails: ()    => req('POST', 'update/clear-failures', {}),
   };
 })();
 

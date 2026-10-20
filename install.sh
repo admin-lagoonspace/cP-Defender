@@ -824,8 +824,14 @@ MAILTO=""
 # 15 min; exits silently when nothing is due. Schedules are changed in the UI,
 # NOT by editing this file.
 */15 * * * * root ${SG_PHP} ${INSTALL_DIR}/backend/cron/scheduler.php >> ${LOG_DIR}/cron.log 2>&1
-# Daily update check at 8am
-0 8 * * * root SG_ROOT=${INSTALL_DIR} ${SG_PHP} ${INSTALL_DIR}/backend/cron/update-check.php >> ${LOG_DIR}/cron.log 2>&1
+#
+# There is deliberately NO separate update-check entry here any more. There used
+# to be one at 08:00 that only cached a notice, while the scheduler's
+# 'autoupdate' task both checks and installs -- so the two disagreed about who
+# owned updating, and the one that actually ran first did nothing. Updating is
+# configured in the UI like every other schedule.
+# backend/cron/update-check.php is kept for manual use and for anyone with the
+# old line still in place.
 CRONEOF
 chmod 644 "${CRON_FILE}"
 ok "Cron jobs installed to ${CRON_FILE}"

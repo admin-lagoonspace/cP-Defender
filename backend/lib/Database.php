@@ -331,6 +331,28 @@ class Database {
             $db->exec("ALTER TABLE threats ADD COLUMN quarantine_expires_at INTEGER");
         }
 
+        // Unattended updating, on by default.
+        //
+        // Defaulting this ON is a real decision and not a neutral one: it
+        // replaces the security software on a production server without anyone
+        // watching. It is the right default anyway, because the alternative
+        // observed in the field is a server running a version from months ago
+        // with an "update available" badge nobody reads. The risk is bounded
+        // instead by what Updater::shouldApply() refuses -- major versions, a
+        // running scan, a running backup, and anything after three failures.
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('auto_update', '1')");
+        // Major versions are NOT automatic. X is reserved in this product's
+        // versioning for a breaking change.
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('auto_update_major', '0')");
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('autoupdate_schedule', 'daily')");
+        // 04:30: after the 03:30 database sweep and the 04:00 CMS discovery,
+        // so a restart does not land on top of either.
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('autoupdate_time', '04:30')");
+
         // Why a heuristic fired, in a sentence.
         //
         // Added with the heuristic rule engine. The old flat signatures were

@@ -575,6 +575,24 @@ chmod +x "${INSTALL_DIR}/backend/daemon/monitor.py" 2>/dev/null || true
 chmod +x "${INSTALL_DIR}/backend/cron/scan.php"     2>/dev/null || true
 chmod +x "${INSTALL_DIR}/backend/cron/update-check.php" 2>/dev/null || true
 
+# ── Retire the duplicate update-check cron entry ──────────────────────────────
+#
+# Installs from before 4.7.0 carry a second cron line that runs update-check.php
+# at 08:00. The scheduler's 'autoupdate' task now checks AND installs, so that
+# line is a second owner of the same job which only ever cached a notice.
+#
+# Only the exact line this project wrote is removed, matched on the script name,
+# and only from the cron file this project owns. Anything an administrator added
+# by hand is left alone.
+CRON_FILE="/etc/cron.d/serverscrub"
+if [[ -f "$CRON_FILE" ]] && grep -q 'cron/update-check\.php' "$CRON_FILE"; then
+    cp -a "$CRON_FILE" "${CRON_FILE}.pre-${CURRENT_VERSION:-update}" 2>/dev/null || true
+    sed -i -e '/^# Daily update check at 8am$/d' \
+           -e '\#cron/update-check\.php#d' "$CRON_FILE" 2>/dev/null \
+      && ok "Removed the duplicate update-check cron entry (the scheduler owns updating now)" \
+      || warn "Could not tidy ${CRON_FILE} — harmless, it just checks twice"
+fi
+
 # ── Restore user data over the fresh install ──────────────────────────────────
 state "restore" 75 "Restoring your settings and data"
 section "Restoring user data"

@@ -77,7 +77,7 @@ find dist -maxdepth 1 -name 'serverscrub-*.zip' -size 0 -delete 2>/dev/null || t
 # ── 3. Stage exactly the release files ─────────────────────────────────────────
 info "Staging files…"
 STAGE_LIST=(
-  VERSION CHANGELOG.md install.sh uninstall.sh update.sh get.sh
+  VERSION CHANGELOG.md install.sh uninstall.sh update.sh upgrade.sh get.sh
   backend/config/config.php backend/cli/serverscrub.php
   frontend/index.html whm/serverscrub.conf whm/serverscrub.png
   scripts/make-release.sh scripts/publish.sh scripts/extract-notes.sh

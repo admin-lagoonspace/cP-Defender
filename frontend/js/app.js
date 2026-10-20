@@ -204,7 +204,7 @@ function openPage(name) {
     case 'iprep':     loadTopAttackers(); loadServerIpForBlocklist();   break;
     case 'events':    loadEvents();         break;
     case 'bruteforce': loadBruteForce();     break;
-    case 'settings':  loadSettings();       break;
+    case 'settings':  loadSettings(); loadUpdateSettings(); break;
     case 'botshield': loadBotShield();      break;
     case 'cms':       loadCMSGuard();       break;
     case 'wpscan':    loadWPScan();         break;
@@ -284,11 +284,180 @@ async function checkForUpdates(forceLive = false) {
       if (banner)  banner.style.display  = 'none';
       if (dot)     dot.style.display     = 'none';
     }
+
+    // An unreachable release channel is NOT "up to date". Without this the
+    // dashboard shows a clean dot on a server that has not been able to ask
+    // about updates for weeks -- which is the state an unpatched install sits
+    // in, looking healthy the whole time.
+    const chk = g('dash-update-error');
+    if (chk) {
+      chk.style.display = d.check_error ? 'block' : 'none';
+      chk.textContent   = d.check_error || '';
+    }
   } catch (_) {}
 }
 
+// ── Updating ────────────────────────────────────────────────────────────────
+//
+// This used to be a toast telling the operator to SSH in and run update.sh,
+// while POST update/run -- which starts exactly that script, detached, with
+// locking -- already existed in the API and was called by nothing. So the
+// product shipped a working one-click updater that no button reached.
+//
+// It is started DETACHED on the server side: the update rsyncs over the PHP
+// serving the request, so a synchronous call is killed partway through and
+// leaves a half-applied install with nothing to report it. That means the
+// response here says "started", not "finished", and the progress comes from
+// polling a state file update.sh writes outside the install directory.
+
+let updatePoll = null;
+
 async function runUpdate() {
-  toast('To update: SSH into your server and run:  bash /usr/local/serverscrub/update.sh', 'info', 8000);
+  const st = await API.updateAuto();
+  const d  = (st && st.data) || {};
+
+  if (d.can_launch === false) {
+    // shell_exec is disabled -- possibly by this product's own PHP hardening.
+    // Say so and give the command, rather than reporting a launch that cannot
+    // have happened.
+    toast('This server\'s PHP cannot start background processes. Run: '
+        + 'bash /usr/local/serverscrub/update.sh --yes', 'warning', 12000);
+    return;
+  }
+
+  const to = d.latest_version ? 'v' + d.latest_version : 'the latest version';
+  if (!confirm('Update ServerScrub to ' + to + ' now?\n\n'
+             + 'The dashboard and API restart during the update. Scans and the '
+             + 'real-time monitor are stopped and started again. If the new '
+             + 'version fails to answer, the updater rolls back by itself.')) {
+    return;
+  }
+
+  const r = await API.updateRun();
+  if (!r || r.success === false) {
+    toast((r && r.error) || 'Could not start the update', 'error', 8000);
+    return;
+  }
+  toast('Update started. This page will reconnect when it finishes.', 'info', 8000);
+  pollUpdate();
+}
+
+// Poll the state file until the run ends.
+//
+// The API goes away mid-update, so a failed request here is EXPECTED and must
+// not be reported as a failed update. Only the state file decides the outcome.
+function pollUpdate() {
+  if (updatePoll) clearInterval(updatePoll);
+  let misses = 0;
+
+  updatePoll = setInterval(async () => {
+    let d = null;
+    try {
+      const r = await API.updateAuto();
+      d = (r && r.data) || null;
+    } catch (_) { d = null; }
+
+    if (!d) {
+      // The services are restarting. Keep waiting; two minutes of silence is
+      // the point at which something has actually gone wrong.
+      if (++misses > 40) {
+        clearInterval(updatePoll); updatePoll = null;
+        toast('Lost contact with the API during the update. Check '
+            + 'logs/update.log on the server.', 'warning', 12000);
+      }
+      return;
+    }
+    misses = 0;
+
+    const run = d.run || {};
+    setText('upd-phase', run.phase || '');
+    setText('upd-message', run.message || '');
+
+    if (run.running) return;
+
+    clearInterval(updatePoll); updatePoll = null;
+
+    if (run.status === 'success') {
+      toast('Updated to v' + (run.to_version || d.current_version)
+          + '. Reloading…', 'success', 6000);
+      setTimeout(() => location.reload(), 2500);
+    } else if (run.status === 'rolled_back') {
+      toast('The update failed and was rolled back to v'
+          + (run.from_version || '?') + '. Nothing was lost. See '
+          + 'logs/update.log.', 'warning', 15000);
+      loadUpdateSettings();
+    } else if (run.status === 'failed' || run.status === 'stalled') {
+      toast('Update ' + run.status + ': ' + (run.message || 'see logs/update.log'),
+            'error', 15000);
+      loadUpdateSettings();
+    }
+  }, 3000);
+}
+
+// ── Automatic updates ───────────────────────────────────────────────────────
+
+async function loadUpdateSettings() {
+  const r = await API.updateAuto();
+  const d = (r && r.data) || {};
+
+  const on = g('au-enabled');
+  if (on) on.checked = !!d.auto_enabled;
+  const maj = g('au-major');
+  if (maj) maj.checked = !!d.auto_major;
+  const t = g('au-time');
+  if (t) t.value = d.auto_time || '04:30';
+
+  setText('au-current', d.current_version ? 'v' + d.current_version : '—');
+  setText('au-latest',  d.latest_version  ? 'v' + d.latest_version  : '—');
+  setText('au-checked', d.checked_at
+      ? new Date(d.checked_at * 1000).toLocaleString()
+      : 'never');
+  // The reason it will or will not act, verbatim from the server. A panel that
+  // says "automatic updates: on" while something is quietly blocking every
+  // attempt is the failure this line exists to prevent.
+  setText('au-next', d.next_action || '');
+
+  setText('au-last-ok', d.last_ok
+      ? new Date(d.last_ok * 1000).toLocaleString() : 'never');
+
+  const warn = g('au-paused');
+  if (warn) {
+    warn.style.display = d.paused ? 'flex' : 'none';
+    setText('au-paused-text', d.paused
+      ? d.failures + ' consecutive failures — automatic updates are paused. '
+        + 'Read logs/update.log, then resume.'
+      : '');
+  }
+
+  const err = g('au-error');
+  if (err) {
+    err.style.display = d.check_error ? 'block' : 'none';
+    setText('au-error-text', d.check_error || '');
+  }
+}
+
+async function saveUpdateSettings() {
+  const r = await API.updateSetAuto({
+    auto_update:       g('au-enabled') ? g('au-enabled').checked : true,
+    auto_update_major: g('au-major')   ? g('au-major').checked   : false,
+    autoupdate_time:   g('au-time')    ? g('au-time').value      : '04:30',
+  });
+  if (r && r.success) {
+    toast('Saved', 'success');
+    await loadUpdateSettings();
+  } else {
+    toast((r && r.error) || 'Could not save', 'error');
+  }
+}
+
+async function resumeAutoUpdates() {
+  const r = await API.updateClearFails();
+  if (r && r.success) {
+    toast('Automatic updates resumed', 'success');
+    await loadUpdateSettings();
+  } else {
+    toast((r && r.error) || 'Could not resume', 'error');
+  }
 }
 
 async function refreshDashboard() {

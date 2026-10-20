@@ -4,18 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ServerScrub — Security Dashboard</title>
-<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.6.0">
-<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.6.0">
-<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.6.0">
+<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.7.0">
+<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.7.0">
+<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.7.0">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=4.6.0">
+<link rel="stylesheet" href="css/app.css?v=4.7.0">
 </head>
 <body>
 <!-- First-load splash. The full lockup, because this is the one moment the
      product introduces itself; everywhere else uses the icon alone. -->
 <div id="ss-splash">
-  <img src="images/logo.png?v=4.6.0" alt="ServerScrub">
+  <img src="images/logo.png?v=4.7.0" alt="ServerScrub">
   <div class="ss-cap">Loading…</div>
 </div>
 
@@ -62,7 +62,7 @@
 
     <!-- Logo -->
     <div class="login-logo" style="margin-bottom:20px">
-      <img src="images/logo.png?v=4.6.0" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
+      <img src="images/logo.png?v=4.7.0" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
       <div id="login-mode-sub" style="font-size:.75rem;color:var(--blue2);margin-top:5px;font-weight:600;letter-spacing:.03em">cPanel Security Suite</div>
     </div>
 
@@ -103,7 +103,7 @@
 <div id="activate-screen" class="hidden">
   <div class="activate-card">
     <div class="activate-mark">
-      <img src="images/icon-180.png?v=4.6.0" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
+      <img src="images/icon-180.png?v=4.7.0" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
     </div>
 
     <div class="activate-title">Activate ServerScrub</div>
@@ -149,7 +149,7 @@
   <div class="topbar-brand">
     <!-- Shield icon mark — inline SVG so it renders crisp at any size with no background bleed -->
     <div class="brand-icon">
-      <img src="images/icon-64.png?v=4.6.0" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
+      <img src="images/icon-64.png?v=4.7.0" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
     </div>
     <div>
       <div class="brand-name">ServerScrub</div>
@@ -274,7 +274,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.6.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.7.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -1132,7 +1132,70 @@
     <div id="page-settings" class="page hidden">
       <div class="page-header">
         <div><div class="page-title">Settings</div><div class="page-sub">Configure ServerScrub modules</div></div>
+
         <button class="btn btn-primary btn-sm" onclick="saveSettings()">Save Changes</button>
+      </div>
+
+      <!-- Automatic updates.
+           ON by default. That is a real decision: it replaces the security
+           software on a production server with nobody watching. It is still
+           the right default, because the observed alternative is a server
+           months behind with an "update available" badge nobody reads. The
+           risk is bounded by what the server refuses -- major versions, a
+           running scan, a running backup, and anything after three failures --
+           and the reason it will or will not act is printed below, so "on"
+           can never quietly mean "blocked". -->
+      <div class="card mb-5">
+        <div class="card-header">
+          <div class="card-title">Updates</div>
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadUpdateSettings)">&#8634; Refresh</button>
+        </div>
+        <div class="card-body">
+          <div id="au-paused" style="display:none;align-items:center;gap:10px;padding:10px 14px;margin-bottom:14px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35);border-radius:10px">
+            <span style="color:var(--red);font-weight:600">Paused</span>
+            <span id="au-paused-text" style="flex:1;font-size:.85rem"></span>
+            <button class="btn btn-ghost btn-sm" onclick="resumeAutoUpdates()">Resume</button>
+          </div>
+          <div id="au-error" style="display:none;padding:10px 14px;margin-bottom:14px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);border-radius:10px;font-size:.85rem">
+            <strong>Cannot reach the update channel.</strong>
+            <span id="au-error-text"></span>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:18px">
+            <div><div class="stat-label">Installed</div><div id="au-current" style="font-size:1.1rem;font-weight:600">&mdash;</div></div>
+            <div><div class="stat-label">Available</div><div id="au-latest" style="font-size:1.1rem;font-weight:600">&mdash;</div></div>
+            <div><div class="stat-label">Last checked</div><div id="au-checked" style="font-size:.85rem">&mdash;</div></div>
+            <div><div class="stat-label">Last successful update</div><div id="au-last-ok" style="font-size:.85rem">&mdash;</div></div>
+          </div>
+
+          <div style="padding:10px 14px;margin-bottom:18px;background:var(--bg2);border-radius:10px;font-size:.85rem">
+            <span style="color:var(--txt3)">Next action:</span>
+            <span id="au-next"></span>
+            <div style="margin-top:4px"><span id="upd-phase" style="color:var(--txt3)"></span>
+            <span id="upd-message" style="color:var(--txt2)"></span></div>
+          </div>
+
+          <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer">
+            <input type="checkbox" id="au-enabled" checked>
+            <span>Install updates automatically</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer">
+            <input type="checkbox" id="au-major">
+            <span>Include major versions
+              <span style="color:var(--txt3);font-size:.8rem">&mdash; off by default; a major version can change behaviour, so it waits for you</span>
+            </span>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;margin-bottom:18px">
+            <span style="min-width:110px">Check daily at</span>
+            <input type="time" id="au-time" value="04:30" style="max-width:130px">
+          </label>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" onclick="saveUpdateSettings()">Save</button>
+            <button class="btn btn-ghost btn-sm" onclick="checkForUpdates(true)">Check now</button>
+            <button class="btn btn-ghost btn-sm" onclick="runUpdate()">Update now</button>
+          </div>
+        </div>
       </div>
 
       <!-- ── License ─────────────────────────────────────────────────────── -->
@@ -2470,11 +2533,11 @@
      as hard as one whose name never changes. icon-64.png held the
      old crop in 4.0.0 and the new mark in 4.1.0, so an updated
      server kept showing the old logo. -->
-<script>window.SG_ASSET_V = "4.6.0";</script>
+<script>window.SG_ASSET_V = "4.7.0";</script>
 <script src="config.js"></script>
-<script src="js/api.js?v=4.6.0"></script>
-<script src="js/charts.js?v=4.6.0"></script>
-<script src="js/app.js?v=4.6.0"></script>
+<script src="js/api.js?v=4.7.0"></script>
+<script src="js/charts.js?v=4.7.0"></script>
+<script src="js/app.js?v=4.7.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2625,7 +2688,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 <div id="sg-busy" role="status" aria-live="polite" aria-hidden="true">
   <div class="sg-busy-box">
     <div class="ss-load sm">
-      <img src="images/icon.png?v=4.6.0" alt="">
+      <img src="images/icon.png?v=4.7.0" alt="">
       <span class="ss-cap" id="sg-busy-text">Working…</span>
     </div>
   </div>

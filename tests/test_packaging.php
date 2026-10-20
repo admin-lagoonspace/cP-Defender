@@ -75,6 +75,12 @@ foreach ([
     'serverscrub/install.sh',
     'serverscrub/uninstall.sh',
     'serverscrub/update.sh',
+    // The upgrade bootstrap. It fetches the CURRENT update.sh before handing
+    // over, which is the only way a server benefits from a fix to the updater
+    // itself -- the copy on disk is always the one that shipped with the
+    // version already installed. Dropping it from the archive would leave
+    // every server upgrading with its own stale updater.
+    'serverscrub/upgrade.sh',
     'serverscrub/VERSION',
     // The page every cPanel user opens. If this is missing from the archive the
     // installer has nothing to copy, and the Security menu entry leads to a
@@ -109,3 +115,38 @@ $zip->close();
 t_eq($version, trim((string)$ver), 'packaged VERSION matches the filename');
 t_ok(strpos((string)$cfg, "'" . $version . "'") !== false,
     'packaged config.php carries the same version');
+
+// ── The two packagers must agree ────────────────────────────────────────────
+//
+// scripts/build.py and scripts/make-release.sh both produce
+// dist/serverscrub-<version>.zip -- the same path -- from their own
+// independent allowlists. So whichever ran last wins, and for a while they
+// disagreed: build.py omitted "cpanel", the directory holding the page every
+// cPanel user opens, and "upgrade.sh". Running build.py after publish.sh would
+// have overwritten a correct release with an incomplete one while latest.json
+// kept advertising the SHA-256 of the good zip.
+//
+// Compared as sets, because the order each script lists them in does not
+// matter and should not make this test fail.
+$buildPy = t_code(dirname(__DIR__) . '/scripts/build.py');
+$makeSh  = t_code(dirname(__DIR__) . '/scripts/make-release.sh');
+
+t_ok(preg_match('/^ITEMS\s*=\s*\[(.*?)\]/ms', $buildPy, $m) === 1,
+     'build.py declares an ITEMS allowlist');
+preg_match_all('/"([^"]+)"/', $m[1] ?? '', $bm);
+$buildItems = $bm[1] ?? [];
+
+t_ok(preg_match('/for item in ([^;]+?); do/', $makeSh, $m2) === 1,
+     'make-release.sh declares an allowlist');
+$shItems = preg_split('/\s+/', trim($m2[1] ?? ''), -1, PREG_SPLIT_NO_EMPTY);
+
+sort($buildItems);
+sort($shItems);
+t_eq($shItems, $buildItems,
+     'build.py and make-release.sh package exactly the same things — '
+   . 'they write the same zip path, so a difference is a silent bad release');
+
+// Both must carry the cPanel user page. Without it the installer has nothing
+// to copy and the Security menu entry is a blank page for every customer.
+t_ok(in_array('cpanel', $buildItems, true), 'build.py packages cpanel/');
+t_ok(in_array('upgrade.sh', $buildItems, true), 'build.py packages upgrade.sh');

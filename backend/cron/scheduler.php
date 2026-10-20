@@ -32,6 +32,8 @@ require_once __DIR__ . '/../config/config.php';
 require_once SG_ROOT . '/backend/lib/Database.php';
 require_once SG_ROOT . '/backend/lib/Logger.php';
 require_once SG_ROOT . '/backend/lib/Heuristics.php';
+require_once SG_ROOT . '/backend/lib/UpdateChecker.php';
+require_once SG_ROOT . '/backend/lib/Updater.php';
 require_once SG_ROOT . '/backend/lib/Scanner.php';
 require_once SG_ROOT . '/backend/lib/IPReputation.php';
 // Used by the iprep task to check this server's own addresses. Calling a
@@ -276,6 +278,64 @@ $tasks = [
             if (count($r['errors']) > 10) {
                 slog(sprintf('  ! and %d more', count($r['errors']) - 10));
             }
+        },
+    ],
+
+    // Check for a new version, and install it.
+    //
+    // There was already a daily update CHECK, installed by install.sh as its
+    // own cron entry, which cached a notice and did nothing else. So a server
+    // sat on a known-vulnerable version indefinitely while the dashboard
+    // displayed a tidy "update available" badge that nobody was looking at.
+    // For a security product that is the wrong default: the thing most likely
+    // to be out of date is the thing supposed to be watching everything else.
+    //
+    // Two steps, in this order, and the order matters:
+    //
+    //   1. reconcile() reads the state file the LAST run left behind and
+    //      records whether it worked. It has to happen here rather than in the
+    //      updater, because the updater rsyncs over its own code and cannot be
+    //      relied on to write its own obituary.
+    //   2. shouldApply() decides, and refuses with a stated reason -- not
+    //      while a scan or backup is running, not a major version, not after
+    //      repeated failures.
+    'autoupdate' => [
+        'schedule' => setting('autoupdate_schedule', 'daily'),
+        'time'     => setting('autoupdate_time', '04:30'),
+        'day'      => (int)setting('autoupdate_day', '0'),
+        'run'      => function () {
+            $rec = Updater::reconcile();
+            if (!empty($rec['changed'])) {
+                slog('  previous update finished: ' . $rec['status']
+                     . (isset($rec['failures'])
+                        ? ' (consecutive failures: ' . $rec['failures'] . ')' : ''));
+            }
+
+            $st = UpdateChecker::checkForUpdates();
+            slog(sprintf('  current v%s, latest v%s',
+                 $st['current_version'] ?? '?', $st['latest_version'] ?? '?'));
+
+            // A channel that cannot be reached is reported, never treated as
+            // "up to date". An unreachable update server and a patched server
+            // look identical otherwise, and only one of them is safe.
+            $err = Database::setting('update_check_error', '');
+            if ($err !== '') {
+                slog('  ! ' . $err);
+                return;
+            }
+
+            $d = Updater::shouldApply($st);
+            if (!$d['go']) {
+                slog('  not updating: ' . $d['reason']);
+                return;
+            }
+
+            slog('  ' . $d['reason']);
+            $r = Updater::launch(true);
+            slog($r['success']
+                ? '  updater launched (pid ' . ($r['pid'] ?? 0) . '); '
+                  . 'result recorded on the next run'
+                : '  ! could not launch: ' . ($r['error'] ?? 'unknown'));
         },
     ],
 
