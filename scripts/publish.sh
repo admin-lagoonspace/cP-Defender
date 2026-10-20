@@ -179,7 +179,16 @@ fi
 # scripts/cdn-sync.sh on a cron and PULLS this release from GitHub, so there is
 # nothing to upload and no credential to hold. See scripts/cdn-sync.sh.
 info "CDN mirrors automatically (server-side pull, every 10 min)."
-info "  Force an immediate sync on the server with:  ~/bin/cdn-sync.sh"
+# The real path, not ~/bin. This message said "~/bin/cdn-sync.sh", which
+# resolves to /root/bin on the server and does not exist -- the script is
+# installed under the CDN account, per the header of scripts/cdn-sync.sh.
+# Being told to run a path that is not there costs the operator a round trip
+# and leaves them unsure whether the sync happened.
+info "  Force an immediate sync on the server with:"
+info "    /home/lwss1/bin/cdn-sync.sh     (as the lwss1 user)"
+info "  If that path does not exist the CDN has never been set up: every"
+info "  defender.lws-s1.com URL 404s and installs fall back to the GitHub"
+info "  mirror. Install it per the header of scripts/cdn-sync.sh."
 
 echo ""
 ok "Published ${TAG}. CDN will pick it up within ~10 min."
