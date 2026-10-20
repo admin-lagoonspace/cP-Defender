@@ -91,6 +91,27 @@ STAGE_LIST=(
 for f in "${STAGE_LIST[@]}"; do [[ -e "$f" ]] && git add "$f"; done
 git add -u install.sh uninstall.sh update.sh 2>/dev/null || true
 
+# ── Stage the source the zip was actually built from ──────────────────────────
+#
+# The list above is the release METADATA. It does not include backend/lib,
+# backend/daemon, frontend/js or tests, so for v4.6.0 this script built a zip
+# containing two new library modules, pushed it, and committed a repository
+# that did not contain them. The shipped product and the source of record
+# disagreed, and nothing said so.
+#
+# make-release.sh packages from the WORKING TREE, so whatever is on disk is
+# what customers get. The commit therefore has to cover the same trees, or the
+# tag is a lie about what shipped. Untracked files are included deliberately:
+# a brand-new module is exactly the thing that went missing.
+SRC_TREES=(backend frontend whm scripts tests)
+for d in "${SRC_TREES[@]}"; do [[ -d "$d" ]] && git add -A -- "$d"; done
+
+SRC_STAGED=$(git diff --cached --name-only -- "${SRC_TREES[@]}" | wc -l | tr -d ' ')
+if [[ "$SRC_STAGED" -gt 0 ]]; then
+    info "Staging ${SRC_STAGED} source file(s) the zip was built from:"
+    git diff --cached --name-only -- "${SRC_TREES[@]}" | sed 's/^/      /'
+fi
+
 if git diff --cached --quiet; then
     warn "Nothing new to commit — proceeding to push/release with existing HEAD"
 else
