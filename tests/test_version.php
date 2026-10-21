@@ -92,3 +92,45 @@ t_ok(substr_count($migration, 'sed -i') === 1,
 $html = file_get_contents($repo . '/frontend/index.html');
 t_contains($html, 'v' . $file . ' · cPanel Plugin',
     'index.html is stamped with the current version at build time');
+
+// ── The version-sync sed must actually match config.php ────────────────────
+//
+// install.sh keeps SG_VERSION in config.php in step with the VERSION file. The
+// pattern had TWO spaces after the comma:
+//
+//     s/define('SG_VERSION',  '[0-9.]*')/.../
+//
+// while config.php has one. It matched nothing, and `|| true` swallowed the
+// result. So the one mechanism meant to rescue a config.php that is out of
+// step with VERSION was a no-op for its entire life -- which is how a server
+// came to run 4.10.0 code while its VERSION file and the updater both said
+// 4.13.x.
+//
+// This is a CROSS-FILE assumption: a regex in a shell script about the exact
+// text of a PHP file. Nothing links them, so the test has to.
+
+$inst = (string)file_get_contents($repo . '/install.sh');
+$cfg  = (string)file_get_contents($repo . '/backend/config/config.php');
+
+t_ok(preg_match("/^define\('SG_VERSION',\s*'([0-9][0-9.]*)'\);/m", $cfg, $cm) === 1,
+     'config.php declares SG_VERSION in the expected shape');
+$cfgLine = $cm[0];
+
+// Whitespace-tolerant, not a literal run of spaces.
+t_contains($inst, "define\('SG_VERSION',[[:space:]]*",
+     'the sync pattern tolerates any spacing after the comma');
+t_ok(strpos($inst, "define('SG_VERSION',  '[0-9.]*')") === false,
+     'and no longer hardcodes two spaces, which matched nothing');
+
+// Functional: the ERE install.sh uses, as PCRE, must match the real line.
+$ere  = "define\('SG_VERSION',[[:space:]]*'[0-9][0-9.]*'\)";
+$pcre = '/' . str_replace('[[:space:]]', '\s', $ere) . '/';
+t_ok(preg_match($pcre, $cfgLine) === 1,
+     'and that pattern genuinely matches the line in config.php — the check '
+   . 'that was missing when the two-space version shipped');
+
+// A sed that silently matches nothing is what caused this, so it verifies.
+t_contains($inst, 'config.php still reports',
+     'install.sh checks the result instead of assuming the sed worked');
+t_contains($inst, 'config.php reports v',
+     'and confirms it when it did');

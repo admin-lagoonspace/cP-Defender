@@ -502,8 +502,27 @@ cp    "${SCRIPT_DIR}/VERSION"  "$INSTALL_DIR/"
 [[ -f "${SCRIPT_DIR}/update.sh"   ]] && cp "${SCRIPT_DIR}/update.sh"   "$INSTALL_DIR/"
 [[ -f "${SCRIPT_DIR}/uninstall.sh" ]] && cp "${SCRIPT_DIR}/uninstall.sh" "$INSTALL_DIR/"
 # The WHM appconfig is generated below, not copied from the tree.
-# Keep SG_VERSION constant in config.php in sync with VERSION file
-sed -i "s/define('SG_VERSION',  '[0-9.]*')/define('SG_VERSION',  '${SG_VERSION}')/" "${INSTALL_DIR}/backend/config/config.php" 2>/dev/null || true
+# Keep SG_VERSION constant in config.php in sync with the VERSION file.
+#
+# THIS NEVER WORKED. The pattern had TWO spaces after the comma while the file
+# has one, so the sed matched nothing -- and `|| true` swallowed it. The one
+# mechanism meant to rescue a config.php that is out of step with VERSION has
+# been a no-op since it was written, which is why a stale version could survive
+# an update and still report success.
+#
+# Now whitespace-tolerant, and it VERIFIES rather than assuming: a sed that
+# silently matches nothing is what caused this.
+if [[ -f "${INSTALL_DIR}/backend/config/config.php" && "$SG_VERSION" != "unknown" ]]; then
+  sed -i -E "s/define\('SG_VERSION',[[:space:]]*'[0-9][0-9.]*'\)/define('SG_VERSION', '${SG_VERSION}')/"       "${INSTALL_DIR}/backend/config/config.php" 2>/dev/null || true
+
+  _CFG_VER="$(grep -oE "define\('SG_VERSION',[[:space:]]*'[0-9][0-9.]*'\)"               "${INSTALL_DIR}/backend/config/config.php" 2>/dev/null               | grep -oE "[0-9][0-9.]*" | head -1 || true)"
+  if [[ "$_CFG_VER" == "$SG_VERSION" ]]; then
+    ok "config.php reports v${SG_VERSION}"
+  else
+    warn "config.php still reports v${_CFG_VER:-unknown}, expected v${SG_VERSION}"
+    warn "  The panel reads this value, so it would show the wrong version."
+  fi
+fi
 ok "Files installed to $INSTALL_DIR"
 
 # ── Set permissions ────────────────────────────────────────────────────────────
