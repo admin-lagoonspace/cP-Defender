@@ -100,7 +100,7 @@ else
   [[ -z "$SG_PY" ]] && { echo "Neither zip nor python available to build the archive" >&2; exit 1; }
   info "zip not found — building the archive with ${SG_PY}"
   "$SG_PY" - "$STAGE" "$ZIP_PATH" <<'PYZIP'
-import os, sys, zipfile
+import os, sys, time, zipfile
 
 stage, out = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -109,7 +109,20 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
         for name in sorted(files):
             full = os.path.join(root, name)
             rel = os.path.relpath(full, stage).replace(os.sep, '/')
-            zi = zipfile.ZipInfo(rel, date_time=(1980, 1, 1, 0, 0, 0))
+            # The file's REAL mtime, not a fixed epoch.
+            #
+            # This pinned every entry to (1980, 1, 1) -- presumably for a
+            # reproducible archive. The cost was severe: rsync's default quick
+            # check is size + mtime, so on the receiving server any file whose
+            # size had not changed looked identical to the one already there
+            # and was never transferred. config.php sat at 4.10.0 through five
+            # updates because the version string stayed six characters long.
+            #
+            # update.sh now passes --checksum and no longer depends on this,
+            # but a timestamp that is a lie breaks every other tool that
+            # compares files too.
+            st = os.stat(full)
+            zi = zipfile.ZipInfo(rel, date_time=time.localtime(st.st_mtime)[:6])
             zi.compress_type = zipfile.ZIP_DEFLATED
             # 0755 for scripts, 0644 for everything else
             mode = 0o755 if rel.endswith('.sh') or rel.endswith('.py') else 0o644

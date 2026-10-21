@@ -103,7 +103,10 @@ rollback() {
     # database and quarantine survive regardless of what the snapshot contains.
     for dir in "${UPDATE_DIRS[@]}"; do
         [[ -d "${CODE_SNAPSHOT}/${dir}" ]] || continue
-        rsync -a --delete "${CODE_SNAPSHOT}/${dir}/" "${INSTALL_DIR}/${dir}/" 2>/dev/null             && ok "Restored code: ${dir}/"
+        # --checksum here too. A rollback that silently keeps a same-size file
+        # from the failed version leaves a half-reverted install, which is
+        # worse than either version on its own.
+        rsync -a --checksum --delete "${CODE_SNAPSHOT}/${dir}/" "${INSTALL_DIR}/${dir}/" 2>/dev/null             && ok "Restored code: ${dir}/"
     done
     for file in "${UPDATE_FILES[@]}"; do
         [[ -f "${CODE_SNAPSHOT}/${file}" ]] || continue
@@ -606,7 +609,24 @@ for dir in "${UPDATE_DIRS[@]}"; do
     [[ -d "$src" ]] || continue
     dst="${INSTALL_DIR}/${dir}"
     # Use rsync to overlay: --delete removes old files, but we exclude user-data
-    rsync -a --delete \
+    # --checksum, and it is NOT optional.
+    #
+    # rsync's default quick check is SIZE + MTIME. Every file in the release
+    # archive carried the same timestamp (the ZIP epoch, 1980-01-01), so any
+    # file whose size had not changed was judged identical and never
+    # transferred.
+    #
+    # On a live server that left backend/config/config.php at 4.10.0 through
+    # five consecutive updates, because '4.10.0' and '4.13.3' are both six
+    # characters and the file size never moved. frontend/index.html was stuck
+    # the same way. The rsync reported success for the directory every time --
+    # it had genuinely finished, having decided there was nothing to do -- and
+    # the panel reported 4.10.0 while VERSION, the updater and the upgrade
+    # script all said otherwise.
+    #
+    # Comparing checksums costs a hash of ~1 MB of code. Trusting a timestamp
+    # we do not control costs a silent non-update.
+    rsync -a --checksum --delete \
         --exclude='backend/config/mode.php' \
         --exclude='backend/signatures/custom.sig' \
         "$src/" "$dst/" \

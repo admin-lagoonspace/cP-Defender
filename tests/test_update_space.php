@@ -105,3 +105,41 @@ $posCheck  = strpos($upd, 'PARTIAL UPDATE');
 $posBanner = strpos($upd, 'Update complete!');
 t_ok($posCheck !== false && $posBanner !== false && $posCheck < $posBanner,
      'and it runs before the "Update complete" banner, not after it');
+
+// ── rsync must compare CONTENT, not timestamps ─────────────────────────────
+//
+// THE ROOT CAUSE OF FIVE FAILED UPDATES ON A LIVE SERVER.
+//
+// rsync's default quick check is SIZE + MTIME. make-release.sh pinned every
+// entry in the archive to the ZIP epoch (1980-01-01), so after extraction
+// every file carried the same timestamp. Any file whose SIZE had not changed
+// was therefore judged identical to the one already installed and never
+// transferred.
+//
+// backend/config/config.php sat at 4.10.0 through five consecutive updates,
+// because '4.10.0' and '4.13.3' are both six characters and the file size
+// never moved. frontend/index.html was stuck the same way. The rsync reported
+// success every time -- it had genuinely finished, having decided there was
+// nothing to do -- so the updater printed "Update complete" while the panel
+// correctly reported 4.10.0.
+//
+// Three separate symptoms, one cause: the stale sidebar version, the stale
+// SG_VERSION, and every feature shipped since 4.10.0 being absent.
+
+$up2 = (string)file_get_contents($repo . '/update.sh');
+
+preg_match_all('/^\s*rsync\s+(.*)$/m', $up2, $rs);
+t_ok(count($rs[1]) >= 2, 'update.sh uses rsync to apply and to roll back');
+foreach ($rs[1] as $args) {
+    t_contains($args, '--checksum',
+         'every rsync compares checksums, not size+mtime: ' . trim(substr($args, 0, 44)));
+}
+
+// The archive must not pin every file to a fixed timestamp either. update.sh
+// no longer depends on it, but a timestamp that is a lie breaks any other tool
+// that compares files.
+$mk = (string)file_get_contents($repo . '/scripts/make-release.sh');
+t_ok(strpos($mk, 'date_time=(1980, 1, 1, 0, 0, 0)') === false,
+     'the archive no longer pins every file to the ZIP epoch');
+t_contains($mk, 'st.st_mtime',
+     "and carries each file's real modification time");
