@@ -4831,6 +4831,26 @@ async function loadMailGuard() {
       + '</tr>').join('');
   }
 
+  // Why mail is not going out. Rendered before the senders table because a
+  // stuck queue is more urgent than who filled it.
+  const dely = d.delivery || [];
+  const dcard = g('mg-delivery-card');
+  if (dcard) dcard.style.display = dely.length ? '' : 'none';
+  const dbadge = g('mg-delivery-badge');
+  if (dbadge) dbadge.textContent = dely.length;
+  const dbody = g('mg-delivery-body');
+  if (dbody) {
+    dbody.innerHTML = dely.map(x =>
+        '<tr>'
+      + '<td>' + fmtNum(x.n) + '</td>'
+      + '<td>' + (x.code ? '<code>' + esc(x.code) + '</code>' : '\u2014') + '</td>'
+      + '<td>' + esc(x.meaning || esc(x.kind || '')) + '</td>'
+      + '<td style="max-width:320px;font-size:.8rem;color:var(--txt2)">'
+        + esc(x.reason || '') + '</td>'
+      + '<td style="max-width:300px;font-size:.8rem">' + esc(x.advice || '') + '</td>'
+      + '</tr>').join('');
+  }
+
   const rows = d.top || [];
   const badge = g('mg-count-badge');
   if (badge) badge.textContent = rows.length;

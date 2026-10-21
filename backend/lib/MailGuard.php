@@ -153,6 +153,28 @@ class MailGuard
                      ON mail_activity(bucket, account, source, script)");
         $db->exec("CREATE INDEX IF NOT EXISTS idx_mail_recent
                      ON mail_activity(bucket DESC)");
+
+        // Why mail is NOT going out.
+        //
+        // Counted server-wide rather than per account, deliberately. A
+        // delivery line carries the message id but not the sending user, so
+        // attributing it would mean holding a message-id-to-account map across
+        // log passes -- state that goes wrong quietly. The reason is what the
+        // operator needs ("the IP is rate-limited" vs "one mailbox is full"),
+        // and that is not per-account anyway.
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS mail_delivery (
+                id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                bucket  INTEGER NOT NULL,
+                kind    TEXT    NOT NULL,
+                code    TEXT    NOT NULL DEFAULT '',
+                reason  TEXT    NOT NULL DEFAULT '',
+                n       INTEGER NOT NULL DEFAULT 0
+            )");
+        $db->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_maildel
+                     ON mail_delivery(bucket, kind, code, reason)");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_maildel_recent
+                     ON mail_delivery(bucket DESC)");
     }
 
     // ── Reading exim's log ──────────────────────────────────────────────────
@@ -277,15 +299,71 @@ class MailGuard
         // Permanent failure. "**" is exim's own marker.
         if (strpos($line, ' ** ') !== false) {
             return ['kind' => 'failed', 'account' => null, 'source' => 'unknown',
-                    'script' => null, 'recipients' => 1, 'bytes' => 0];
+                    'script' => null, 'recipients' => 1, 'bytes' => 0]
+                 + self::failureReason($line);
+        }
+
+        // Temporary failure. "==" lines were ignored entirely, and they are
+        // where the answer lives.
+        //
+        // On a live server the whole queue sat undelivered for four days and
+        // the panel said nothing at all, because it only ever counted
+        // ARRIVALS. The reason was in these lines the whole time:
+        // "421-4.7.0 Gmail has detected..." (the IP being rate-limited) and
+        // "452-4.2.2 The recipient..." (one mailbox full). Three different
+        // problems -- a rate limit, a full mailbox and a routing defer -- look
+        // identical as "mail is stuck", and need completely different fixes.
+        if (strpos($line, ' == ') !== false) {
+            return ['kind' => 'deferred', 'account' => null, 'source' => 'unknown',
+                    'script' => null, 'recipients' => 1, 'bytes' => 0]
+                 + self::failureReason($line);
         }
 
         if (stripos($line, 'Frozen') !== false) {
             return ['kind' => 'frozen', 'account' => null, 'source' => 'unknown',
-                    'script' => null, 'recipients' => 0, 'bytes' => 0];
+                    'script' => null, 'recipients' => 0, 'bytes' => 0]
+                 + self::failureReason($line);
         }
 
         return null;
+    }
+
+    /**
+     * The SMTP code and a normalised reason from a delivery-outcome line.
+     *
+     * NORMALISED so it can be counted. Raw reasons carry the remote IP, the
+     * message id and a timestamp, so a thousand identical rate-limit refusals
+     * would otherwise be a thousand distinct strings and aggregate to nothing.
+     * Digits, addresses and ids are collapsed; the sentence that identifies the
+     * problem survives.
+     *
+     * @return array{code:string,reason:string}
+     */
+    public static function failureReason(string $line): array
+    {
+        // Everything after the recipient is the explanation.
+        $tail = $line;
+        foreach ([' ** ', ' == ', ' <= '] as $mark) {
+            $at = strpos($tail, $mark);
+            if ($at !== false) { $tail = substr($tail, $at + strlen($mark)); break; }
+        }
+
+        $code = '';
+        if (preg_match('/\b([45]\d{2})(?:[-\s]|$)/', $tail, $m)) {
+            $code = $m[1];
+        }
+
+        // Keep the human sentence, drop everything that varies per message.
+        $r = $tail;
+        $r = preg_replace('/\b\d{1,3}(?:\.\d{1,3}){3}\b/', 'IP', $r);
+        $r = preg_replace('/[A-Za-z0-9]{6}-[A-Za-z0-9]{6,20}-[A-Za-z0-9]{2,6}/', 'ID', $r);
+        $r = preg_replace('/<[^>]*>/', '', $r);
+        $r = preg_replace('/\S+@\S+/', 'ADDR', $r);
+        $r = preg_replace('/\b\d+\b/', 'N', $r);
+        $r = preg_replace('/\s+/', ' ', (string)$r);
+        $r = trim((string)$r);
+
+        return ['code' => $code, 'reason' => substr($r, 0, 160)];
     }
 
     /**
@@ -330,6 +408,7 @@ class MailGuard
         // timestamp. Every line that has one is bucketed by its own.
         $nowBucket = (int)(floor(time() / 3600) * 3600);
         $agg       = [];
+        $del       = [];
         $arrivals  = 0;
         $read      = 0;
         $undated   = 0;
@@ -374,8 +453,21 @@ class MailGuard
                     $agg[$key]['bytes']      += $p['bytes'];
                     $arrivals++;
                     break;
-                case 'failed': $agg[$key]['failed']++; break;
-                case 'frozen': $agg[$key]['frozen']++; break;
+                case 'failed':   $agg[$key]['failed']++; break;
+                case 'frozen':   $agg[$key]['frozen']++; break;
+                case 'deferred': break;   // counted below, not against an account
+            }
+
+            // Why mail is not going out, counted by reason.
+            if (in_array($p['kind'], ['failed', 'deferred', 'frozen'], true)) {
+                $dk = $bucket . "\0" . $p['kind'] . "\0" . ($p['code'] ?? '')
+                    . "\0" . ($p['reason'] ?? '');
+                if (!isset($del[$dk])) {
+                    $del[$dk] = ['bucket' => $bucket, 'kind' => $p['kind'],
+                                 'code' => (string)($p['code'] ?? ''),
+                                 'reason' => (string)($p['reason'] ?? ''), 'n' => 0];
+                }
+                $del[$dk]['n']++;
             }
         }
 
@@ -384,6 +476,7 @@ class MailGuard
         Database::setSetting('mg_offset', (string)$newOffset);
 
         self::flush($agg);
+        self::flushDelivery($del);
 
         // Reported, not swallowed. A log whose lines cannot be dated means
         // every rate this module publishes is a guess, and the operator needs
@@ -436,6 +529,100 @@ class MailGuard
             $db->rollBack();
             Logger::error('MailGuard: could not record activity — ' . $e->getMessage());
         }
+    }
+
+
+    /** Merge delivery outcomes into their hour buckets. */
+    private static function flushDelivery(array $del): void
+    {
+        if ($del === []) return;
+        $db = Database::get();
+        $db->beginTransaction();
+        try {
+            $sel = $db->prepare(
+                "SELECT id FROM mail_delivery
+                  WHERE bucket = ? AND kind = ? AND code = ? AND reason = ? LIMIT 1");
+            $ins = $db->prepare(
+                "INSERT INTO mail_delivery (bucket, kind, code, reason, n)
+                 VALUES (?,?,?,?,?)");
+            $upd = $db->prepare("UPDATE mail_delivery SET n = n + ? WHERE id = ?");
+
+            foreach ($del as $d) {
+                $sel->execute([$d['bucket'], $d['kind'], $d['code'], $d['reason']]);
+                $row = $sel->fetch(PDO::FETCH_ASSOC);
+                if ($row) { $upd->execute([$d['n'], $row['id']]); }
+                else { $ins->execute([$d['bucket'], $d['kind'], $d['code'],
+                                      $d['reason'], $d['n']]); }
+            }
+            $db->commit();
+        } catch (Throwable $e) {
+            $db->rollBack();
+            Logger::error('MailGuard: could not record delivery outcomes -- '
+                          . $e->getMessage());
+        }
+    }
+
+    /**
+     * Why mail is not going out, worst first.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public static function deliveryFailures(int $hours = 24, int $limit = 20): array
+    {
+        self::ensureSchema();
+        $since = time() - max(1, $hours) * 3600;
+        return Database::fetchAll(
+            "SELECT kind, code, reason, SUM(n) AS n, MAX(bucket) AS last_seen
+               FROM mail_delivery
+              WHERE bucket >= CAST(? AS INTEGER)
+           GROUP BY kind, code, reason
+           ORDER BY SUM(n) DESC
+              LIMIT " . max(1, min(100, $limit)), [$since]);
+    }
+
+    /**
+     * What a given SMTP code actually means for the operator.
+     *
+     * Three failures that all present as "mail is stuck" need three different
+     * responses, and the panel showed none of this. These are the ones seen in
+     * the field.
+     */
+    public static function explainCode(string $code, string $reason): ?array
+    {
+        $r = strtolower($reason);
+
+        if ($code === '421' || str_contains($r, 'unusual rate')
+            || str_contains($r, 'rate-limit') || str_contains($r, 'rate limit')) {
+            return ['severity' => 'high',
+                    'what' => 'A receiving provider is rate-limiting this server',
+                    'action' => 'The IP\'s sending reputation is damaged -- usually '
+                              . 'after spam has left the server. Do NOT force the '
+                              . 'queue (exim -qff): that sends the provider exactly '
+                              . 'the burst it is objecting to. Stop any unwanted '
+                              . 'sending, confirm SPF/DKIM/DMARC, and let it '
+                              . 'recover.'];
+        }
+        if ($code === '452' || str_contains($r, 'out of storage')
+            || str_contains($r, 'quota') || str_contains($r, 'mailbox full')) {
+            return ['severity' => 'medium',
+                    'what' => 'A recipient mailbox is full',
+                    'action' => 'Nothing is wrong with this server. Tell whoever '
+                              . 'owns that address -- their mail is bouncing and '
+                              . 'they do not know.'];
+        }
+        if (str_contains($r, 'routing defer') || str_contains($r, 'retry time')) {
+            return ['severity' => 'low',
+                    'what' => 'Exim is backing off after an earlier failure',
+                    'action' => 'A symptom, not a cause. The real error is in the '
+                              . 'retry database: run  exinext <address>'];
+        }
+        if ($code !== '' && $code[0] === '5') {
+            return ['severity' => 'medium',
+                    'what' => 'Permanent rejection by the receiving server',
+                    'action' => 'The address is wrong, or this server is blocked. '
+                              . 'The reason text says which.'];
+        }
+        return null;
     }
 
     // ── The queue ───────────────────────────────────────────────────────────
@@ -593,6 +780,30 @@ class MailGuard
                     . 'Look at the per-account table for who actually sent it.'
                     : 'A mail-system account rather than a customer. Worth knowing, '
                     . 'but cap the account that fed it, not this one.',
+            ];
+        }
+
+        // Why mail is NOT going out.
+        //
+        // This is the half the panel was missing. On a live server the whole
+        // queue sat undelivered for four days while the dashboard reported
+        // nothing, because it only counted arrivals. The reasons were in the
+        // log the entire time, and they were three different problems with
+        // three different fixes.
+        foreach (self::deliveryFailures(6, 10) as $d) {
+            $n = (int)$d['n'];
+            if ($n < 20) continue;             // noise: every server defers some
+            $e = self::explainCode((string)$d['code'], (string)$d['reason']);
+            if ($e === null) continue;
+            if ($e['severity'] === 'low') continue;   // symptoms, not causes
+
+            $f[] = [
+                'type'     => 'delivery_failure',
+                'severity' => $e['severity'],
+                'what'     => sprintf('%s: %s delivery failure(s) in the last 6 '
+                                    . 'hours%s', $e['what'], number_format($n),
+                                      $d['code'] !== '' ? ' (SMTP ' . $d['code'] . ')' : ''),
+                'action'   => $e['action'],
             ];
         }
 
@@ -903,7 +1114,57 @@ class MailGuard
         if ($sender === '' || $sender === '<>') return null;
         $at = strrpos($sender, '@');
         if ($at === false) return null;
-        return self::accountForDomain(substr($sender, $at + 1));
+
+        $local  = substr($sender, 0, $at);
+        $domain = substr($sender, $at + 1);
+
+        // bgkgvs@host.lws-s1.com -> bgkgvs, NOT lwss1.
+        //
+        // WordPress sends as <account>@<server hostname> when a site has no
+        // From address configured, which is most of them. Resolving the
+        // DOMAIN then gives whoever owns the server's own hostname -- on this
+        // server, lwss1 -- so every such row in the queue viewer was labelled
+        // with the same wrong account. Technically correct ownership,
+        // materially useless: it pointed the operator at the wrong customer.
+        //
+        // When the domain is the server itself the local part is the account,
+        // so it is checked first and only trusted if that account exists.
+        if ($local !== '' && self::isServerHostname($domain)
+            && self::accountExists($local)) {
+            return $local;
+        }
+
+        $byDomain = self::accountForDomain($domain);
+        if ($byDomain !== null) return $byDomain;
+
+        // Last resort: a local part that names a real account. Covers hosts
+        // whose mail is sent as <account>@<something-else-local>.
+        return self::accountExists($local) ? $local : null;
+    }
+
+    /** Is this the server's own hostname rather than a customer domain? */
+    public static function isServerHostname(string $domain): bool
+    {
+        $d = strtolower(rtrim($domain, '.'));
+        if ($d === '') return false;
+        foreach ([gethostname(), php_uname('n')] as $h) {
+            if (is_string($h) && $h !== '' && strtolower(rtrim($h, '.')) === $d) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Does a cPanel account of this name exist? */
+    public static function accountExists(string $name): bool
+    {
+        if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,31}$/i', $name)) return false;
+        if (self::isSystemAccount($name)) return false;
+        static $seen = [];
+        if (isset($seen[$name])) return $seen[$name];
+        $seen[$name] = is_file('/var/cpanel/users/' . $name)
+                    || is_dir('/home/' . $name);
+        return $seen[$name];
     }
 
     /**
@@ -1057,6 +1318,14 @@ class MailGuard
             'queue_readable' => $q >= 0,
             'findings'       => self::evaluate(),
             'top'            => self::topSenders(24, 25),
+            // Shown as its own table: a count of what left is only half the
+            // picture, and the half that was missing is why it did not arrive.
+            'delivery'       => array_map(function (array $d): array {
+                $e = self::explainCode((string)$d['code'], (string)$d['reason']);
+                $d['meaning'] = $e['what']   ?? '';
+                $d['advice']  = $e['action'] ?? '';
+                return $d;
+            }, self::deliveryFailures(24, 20)),
         ];
     }
 
@@ -1068,7 +1337,11 @@ class MailGuard
         $cut  = time() - $days * 86400;
         $st = Database::query("DELETE FROM mail_activity WHERE bucket < CAST(? AS INTEGER)",
                               [$cut]);
-        return $st->rowCount();
+        $n = $st->rowCount();
+        // The delivery table grows the same way and was being left behind.
+        $st2 = Database::query("DELETE FROM mail_delivery WHERE bucket < CAST(? AS INTEGER)",
+                               [$cut]);
+        return $n + $st2->rowCount();
     }
 
     // ── Attribution helpers ─────────────────────────────────────────────────

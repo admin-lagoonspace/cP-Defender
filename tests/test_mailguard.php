@@ -543,3 +543,130 @@ t_ok(substr_count($mgRaw, 'floor(time() / 3600)') <= 2,
      'and time() survives only as the fallback for an undated line');
 t_contains($mgRaw, '$undated',
      'undated lines are counted so the operator can be told the rates are soft');
+
+// ── Sender attribution: the local part, not the hostname's owner ────────────
+//
+// FROM A LIVE SERVER. The queue viewer labelled every `bgkgvs@host.lws-s1.com`
+// row with the account `lwss1`, because it resolved the DOMAIN -- and
+// host.lws-s1.com is owned by lwss1. Technically correct, materially useless:
+// it pointed the operator at the wrong customer for seventy messages.
+//
+// WordPress sends as <account>@<server hostname> whenever a site has no From
+// address configured, which is most of them.
+
+t_ok(MailGuard::isServerHostname(gethostname()),
+     "the server's own hostname is recognised");
+t_ok(!MailGuard::isServerHostname('example.com'),
+     'a customer domain is not');
+t_ok(!MailGuard::isServerHostname(''), 'and neither is nothing');
+
+t_eq(null, MailGuard::senderAccount('<>'),
+     'a null sender yields no account');
+t_eq(null, MailGuard::senderAccount('nonsense'),
+     'and an address with no domain');
+
+// accountExists() gates the local-part shortcut, so a hostile or system local
+// part cannot become an "account".
+t_ok(!MailGuard::accountExists('mailnull'),
+     'a system user is never treated as a customer account');
+t_ok(!MailGuard::accountExists('../../etc'),
+     'and a path traversal is rejected outright');
+t_ok(!MailGuard::accountExists(''), 'and an empty name');
+
+// ── Delivery outcomes: the half the panel was missing ───────────────────────
+//
+// A queue sat undelivered for four days while the dashboard said nothing,
+// because it counted only ARRIVALS. These are the real lines from that server.
+
+$routing = '2026-10-20 20:12:46 1xIDrJ-00000003IyZ-0Kvz == furkan131993@gmail.com '
+         . '<Furkan131993@gmail.com> routing defer: retry time not reached';
+$rate    = '2026-10-19 01:58:57 1xIgCl-00000001IUJ-47QB == a@b.com R=dnslookup '
+         . 'T=remote_smtp defer (-46): SMTP error from remote mail server after end '
+         . 'of data: 421-4.7.0 [51.68.163.24 21] Gmail has detected an unusual rate '
+         . 'of unsolicited mail';
+$full    = '2026-10-16 20:30:51 1xAbCd-00000001AAA-1234 == furkan131993@gmail.com '
+         . 'R=dnslookup defer (-44): SMTP error from remote mail server after '
+         . 'RCPT TO:<Furkan131993@gmail.com>: 452-4.2.2 The recipient is out of '
+         . 'storage space';
+
+foreach ([$routing, $rate, $full] as $l) {
+    t_eq('deferred', MailGuard::parseLine($l)['kind'],
+         'a temporary failure is recognised -- these lines used to be ignored '
+       . 'entirely, and they are where the answer lives');
+}
+
+t_eq('421', MailGuard::parseLine($rate)['code'], 'the 421 rate limit is read');
+t_eq('452', MailGuard::parseLine($full)['code'], 'and the 452 full mailbox');
+t_eq('',    MailGuard::parseLine($routing)['code'],
+     'a routing defer carries no SMTP code, and none is invented');
+
+// Three failures that all look like "mail is stuck" need three different fixes.
+$e = MailGuard::explainCode('421', MailGuard::parseLine($rate)['reason']);
+t_eq('high', $e['severity'], 'a rate limit is high severity');
+t_contains($e['what'], 'rate-limiting', 'and named as such');
+// The operator ran exim -qff during the incident. Against a 421 that sends the
+// provider exactly the burst it is objecting to.
+t_contains($e['action'], 'exim -qff',
+     'and the advice warns against forcing the queue, which makes it worse');
+
+$e = MailGuard::explainCode('452', MailGuard::parseLine($full)['reason']);
+t_eq('medium', $e['severity'], 'a full mailbox is medium');
+t_contains($e['what'], 'full', 'and named');
+t_contains($e['action'], 'Nothing is wrong with this server',
+     'and says plainly that the server is not at fault');
+
+$e = MailGuard::explainCode('', MailGuard::parseLine($routing)['reason']);
+t_eq('low', $e['severity'], 'a routing defer is low');
+t_contains($e['action'], 'exinext',
+     'and points at the retry database, where the real error is');
+
+// Reasons are normalised so identical failures aggregate. Without this a
+// thousand rate limits are a thousand distinct strings and count as one each.
+$a = MailGuard::failureReason(str_replace('51.68.163.24', '1.2.3.4', $rate));
+$b = MailGuard::failureReason($rate);
+t_eq($b['reason'], $a['reason'],
+     'the same failure from a different IP normalises to the same reason');
+t_ok(!str_contains($b['reason'], '51.68.163.24'),
+     'the IP is stripped');
+t_ok(!str_contains($b['reason'], '1xIgCl'),
+     'and the message id');
+t_contains(strtolower($b['reason']), 'unusual rate',
+     'while the sentence that identifies the problem survives');
+
+// A 421 at volume becomes a finding, because it means reputation damage.
+Database::query("DELETE FROM mail_delivery");
+$bk2 = (int)(floor(time() / 3600) * 3600);
+Database::get()->prepare(
+    "INSERT INTO mail_delivery (bucket, kind, code, reason, n) VALUES (?,?,?,?,?)")
+    ->execute([$bk2, 'deferred', '421',
+               MailGuard::parseLine($rate)['reason'], 1240]);
+$df = array_values(array_filter(MailGuard::evaluate(),
+      fn($x) => $x['type'] === 'delivery_failure'));
+t_eq(1, count($df), 'a rate limit at volume is reported as a finding');
+t_eq('high', $df[0]['severity'], 'at high');
+t_contains($df[0]['what'], '1,240', 'with the count');
+t_contains($df[0]['what'], '421', 'and the SMTP code');
+
+// A handful of deferrals is normal on any server and must not alarm.
+Database::query("DELETE FROM mail_delivery");
+Database::get()->prepare(
+    "INSERT INTO mail_delivery (bucket, kind, code, reason, n) VALUES (?,?,?,?,?)")
+    ->execute([$bk2, 'deferred', '421', 'x unusual rate y', 3]);
+t_eq(0, count(array_filter(MailGuard::evaluate(),
+     fn($x) => $x['type'] === 'delivery_failure')),
+     'three deferrals is noise, not a finding');
+Database::query("DELETE FROM mail_delivery");
+
+// Both tables are pruned. The delivery table grows the same way and was
+// being left behind.
+$mgSrc = t_code(dirname(__DIR__) . '/backend/lib/MailGuard.php');
+t_contains($mgSrc, 'DELETE FROM mail_delivery WHERE bucket',
+     'the delivery table is pruned too, not just mail_activity');
+
+// And the panel shows it.
+$html2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+t_contains($html2, 'id="mg-delivery-body"',
+     'the panel has a delivery-problems table');
+t_contains($html2, 'Delivery problems', 'labelled for what it is');
+$app2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+t_contains($app2, "g('mg-delivery-card')", 'which the loader fills');
