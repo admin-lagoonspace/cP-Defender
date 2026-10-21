@@ -217,8 +217,14 @@ function openPage(name) {
   // Promise.all is used wherever a page needs more than one call.
   const PAGE_LOADERS = {
     dashboard:  ['Loading dashboard…', () => refreshDashboard()],
+    // loadExclusions() belongs here: the Scan exclusions card lives on this
+    // page and nothing else fills it. Without it the card rendered with an
+    // empty "already excluded" line and an empty textarea showing only its
+    // placeholder, which reads as "there are no exclusions" rather than "this
+    // was never loaded".
     scanner:    ['Loading scanner…',   () => Promise.all([loadThreats(),
-                                                          adoptRunningScan()])],
+                                                          adoptRunningScan(),
+                                                          loadExclusions()])],
     firewall:   ['Loading firewall…',  () => loadFirewall()],
     waf:        ['Loading WAF…',       () => Promise.all([loadWAF(),
                                                           loadWafEngine()])],
@@ -236,8 +242,14 @@ function openPage(name) {
     // The one that was missing. Both halves: the daemon's own status, and the
     // systemd unit -- loadMonitor() does not fetch the service, which is why
     // that panel said "Checking…" even after a manual refresh.
+    // Three loaders, not one. loadMonitor() fetches the daemon's status,
+    // loadServiceStatus() the systemd unit, and loadMonitorDetections() the
+    // table -- which nothing called at all, so "RECENT DETECTIONS" sat on
+    // "Loading…" even after the page dispatch was fixed.
     monitor:    ['Loading monitor…',   () => Promise.all([loadMonitor(),
-                                                          loadServiceStatus()])],
+                                                          loadServiceStatus(),
+                                                          loadMonitorDetections(),
+                                                          loadMonitorLog()])],
     rootkit:    ['Loading rootkit scan…', () => loadRootkit()],
     integrity:  ['Loading file integrity…', () => loadIntegrity()],
     logs:       ['Loading logs…',      () => loadLogs()],
@@ -4656,9 +4668,18 @@ function updateBulkBar() {
   // until a selection existed made the feature undiscoverable: someone looking
   // for a way to delete several files at once sees nothing to click, and
   // concludes it was never built.
-  [document.getElementById('threat-bulk-quarantine'),
-   document.getElementById('threat-bulk-delete')].forEach(b => {
-    if (b) { b.disabled = ids.length === 0; }
+  // BY CLASS, not a hardcoded id list.
+  //
+  // This named two buttons explicitly. A third bulk action was added with the
+  // threat-bulk-btn class, on the assumption the class was what drove this --
+  // so it was never enabled, stayed disabled from the markup, and did nothing
+  // when clicked. The control existed, its handler existed, its API route
+  // existed, and it was dead.
+  //
+  // Selecting by class means a bulk button added tomorrow works without
+  // anybody remembering to edit this line.
+  document.querySelectorAll('.threat-bulk-btn').forEach(b => {
+    b.disabled = ids.length === 0;
   });
   if (bar) { bar.classList.remove('hidden'); }
   if (master) {

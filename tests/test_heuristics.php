@@ -457,8 +457,19 @@ t_contains($appJs, 'State.threatPaths = {}',
 t_contains($htmlF, 'onclick="excludeSelectedThreats()"',
      'there is a bulk exclude button');
 t_contains($htmlF, 'id="threat-bulk-exclude"', 'with an id');
-t_contains($htmlF, 'threat-bulk-btn" id="threat-bulk-exclude"',
-     'carrying the class the bulk bar enables and disables');
+// This used to assert the button CARRIED the class, which it did -- while
+// updateBulkBar() enabled buttons from a hardcoded list of two ids that did
+// not include it. The button was disabled from the markup and never enabled,
+// so clicking it did nothing. Asserting a class is present is not evidence
+// anything acts on it.
+t_contains($appJs, "querySelectorAll('.threat-bulk-btn')",
+     'the bulk bar enables buttons BY CLASS, so a new one works without '
+   . 'anybody editing a list');
+t_ok(!preg_match("/\[document\.getElementById\('threat-bulk-quarantine'\)/", $appJs),
+     'and no longer enables a hardcoded pair of ids');
+$ub = substr($appJs, strpos($appJs, 'function updateBulkBar'), 1400);
+t_contains($ub, 'b.disabled = ids.length === 0',
+     'enabling is driven by the selection, not set to a fixed value');
 t_contains($appJs, 'async function excludeSelectedThreats',
      'and a handler behind it');
 t_contains($appJs, 'selectedThreatIds()',

@@ -226,6 +226,23 @@ def main():
     else:
         ok("no JS helper is called outside the function that declares it")
 
+    # 2c-wire. controls that exist but are never activated
+    # Three features shipped dead in a row and every check passed each time:
+    # a button whose attribute was broken by JSON.stringify, a bulk button
+    # given a class while the enable logic used a hardcoded id list, and a
+    # card added to a page whose loader was never called. In all three the
+    # function existed, the brackets balanced and the API route was there.
+    r = subprocess.run([sys.executable,
+                        os.path.join(REPO, "scripts", "check-js-wiring.py")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        for line in (r.stdout + r.stderr).strip().splitlines():
+            if line.strip():
+                fail(line.strip())
+        problems += 1
+    else:
+        ok("every disabled control is enabled, and every loader is reached")
+
     # 2c-attr. a value interpolated into an HTML event attribute
     # A threat row rendered onclick="excludeThreatPath(${JSON.stringify(path)})".
     # JSON.stringify emits DOUBLE quotes, which terminate the attribute, so the
