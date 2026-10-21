@@ -336,6 +336,12 @@ const API = (() => {
     // anything: one connection and six queries per install.
     // Network guards. 'egressPreview' applies nothing -- see the route.
     // Outbound mail. No queue-clearing or suspend call exists by design.
+    exclList: ()      => req('GET',  'exclusions/list'),
+    exclSave: (raw)   => req('POST', 'exclusions/save', { raw: raw }),
+    exclAdd:  (path)  => req('POST', 'exclusions/add',  { path: path }),
+    exclTest: (path)  => req('GET',  'exclusions/test?path='
+                             + encodeURIComponent(path)),
+
     mgStatus:   ()            => req('GET',  'mailguard/status'),
     mgSenders:  (h, l)        => req('GET',  'mailguard/senders?hours=' + (h || 24)
                                              + '&limit=' + (l || 25)),

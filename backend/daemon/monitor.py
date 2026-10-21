@@ -737,6 +737,73 @@ STASH = re.compile(r'/wp-content/(?:uploads|upgrade|cache)/'
                    r'.*/?\.[0-9a-f]{16,}(?:\.(?:cache|tmp|dat|bin))?$')
 
 
+# ── Never examined ──────────────────────────────────────────────────────────
+#
+# These detections came from THIS daemon. On a live server it reported five
+# HIGH threats against ai-bolit -- Imunify360's own scanner, shipped by
+# CloudLinux. Every one was SG.RT.eval_base64, and every one was technically
+# correct: a malware scanner carries the patterns it hunts for.
+#
+# A scanner that flags other scanners teaches the operator that HIGH findings
+# are usually wrong, and the next one that matters gets the same shrug.
+#
+# Kept in step with Heuristics::BUILTIN_SKIP in the PHP side -- both must skip
+# the same trees, or a file is quarantined in real time and then declared clean
+# by the next scheduled scan.
+BUILTIN_SKIP = re.compile(
+    r'(?:^|/)ai-bolit(?:/|$)'
+    r'|^/opt/alt/'
+    r'|^/(?:usr/share|var|opt)/imunify360(?:/|$)'
+    r'|^/usr/share/av-defender(?:/|$)'
+    r'|^/var/imunify360-webshield(?:/|$)'
+    r'|^/usr/local/maldetect(?:/|$)'
+    r'|^/usr/local/cpguard(?:/|$)'
+    r'|^/var/lib/(?:clamav|rkhunter)(?:/|$)'
+    r'|^/usr/share/clamav(?:/|$)'
+    r'|^/usr/local/cpanel/3rdparty/'
+    r'|/(?:malscan_quarantine|malscan_backup)/'
+    r'|/serverscrub[_-]?quarantine/'
+)
+
+_user_excl = []
+
+
+def load_exclusions(conn):
+    """The operator's own exclusions, from the same setting the panel writes.
+
+    Plain paths and * globs, never regular expressions: an operator typing a
+    path should not be able to switch the scanner off with a stray character.
+    """
+    global _user_excl
+    raw = db_get(conn, 'scan_exclusions', '')
+    out = []
+    for line in re.split(r'[\r\n,]+', raw or ''):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        if line in ('/', '*', '/*', '**'):
+            continue            # would exclude everything
+        out.append(line)
+    _user_excl = out
+    return out
+
+
+def _excluded(path):
+    if BUILTIN_SKIP.search(path):
+        return True
+    for rule in _user_excl:
+        if '*' not in rule:
+            r = rule.rstrip('/')
+            if path == r or path.startswith(r + '/'):
+                return True
+        else:
+            rx = re.escape(rule).replace(r'\*\*', '\x00')
+            rx = rx.replace(r'\*', '[^/]*').replace('\x00', '.*')
+            if re.match(rx, path):
+                return True
+    return False
+
+
 def interesting(path):
     """Is this path worth opening?
 
@@ -744,6 +811,8 @@ def interesting(path):
     no syscall -- because it runs on every inotify event on the server.
     """
     low = path.replace('\\', '/')
+    if _excluded(low):
+        return False
     if os.path.splitext(low)[1].lower() in PHP_EXTS:
         return True
     if os.path.basename(low) in ('db.php', 'object-cache.php', 'advanced-cache.php'):
@@ -1020,6 +1089,7 @@ def run_inotify(conn, paths, limits):
                 apply_cpu_priority_nice(limits['nice'])
                 log.info('resource profile reloaded: %s', limits['profile'])
             backups.reload(conn)
+            load_exclusions(conn)
             last_reload = time.time()
 
         for ev in evts:

@@ -307,3 +307,114 @@ foreach (Heuristics::rules() as $r) {
         }
     }
 }
+
+// ── Exclusions ──────────────────────────────────────────────────────────────
+//
+// FROM A LIVE SERVER. This product reported five HIGH threats against
+// ai-bolit -- Imunify360's own malware scanner, shipped by CloudLinux. Every
+// one was SG.RT.eval_base64, and every one was correct in the narrow sense:
+// those files really do contain eval(base64_decode(...)), because a malware
+// scanner carries the patterns it hunts for.
+//
+// A scanner that flags other scanners is not merely noisy. It teaches the
+// operator that HIGH findings are usually wrong, and the next one that matters
+// gets the same shrug. The signature was right and the product was still wrong.
+
+foreach ([
+    '/usr/share/ai-bolit/ai-bolit.php'          => 'the ai-bolit engine',
+    '/home/x/ai-bolit/imunify_dbscan.real.php'  => 'ai-bolit wherever it sits',
+    '/opt/alt/php74/usr/share/pear/x.php'       => 'CloudLinux alt-php',
+    '/var/imunify360/files/x.php'               => 'Imunify360 itself',
+    '/usr/local/maldetect/sigs/x.php'           => 'maldet signatures',
+    '/usr/local/cpguard/x.php'                  => 'cPGuard',
+    '/usr/local/cpanel/3rdparty/share/y.php'    => "cPanel's bundled code",
+    '/home/malscan_quarantine/w/x.php'          => 'our own quarantine',
+] as $path => $what) {
+    t_ok(Heuristics::isExcluded($path), "excluded by default: $what");
+    t_eq('built-in', Heuristics::excludedBy($path), "  and reported as built-in");
+}
+
+// Customer paths must NEVER be excluded by default -- that is the entire
+// coverage of this product.
+foreach (['/home/bgkgvs/public_html/wp-content/x.php',
+          '/home/alice/public_html/index.php',
+          '/home/x/public_html/wp-content/mu-plugins/health-monitor.php'] as $live) {
+    t_ok(!Heuristics::isExcluded($live),
+         "a customer path is NOT excluded by default: $live");
+}
+
+// ── The operator's own rules ────────────────────────────────────────────────
+
+Database::setSetting(Heuristics::SETTING, '');
+t_eq([], Heuristics::userExclusions(), 'no exclusions by default');
+
+Heuristics::setExclusions("/home/bob/vendor
+# a comment
+
+/opt/mytool
+");
+t_eq(['/home/bob/vendor', '/opt/mytool'], Heuristics::userExclusions(),
+     'blank lines and comments are ignored');
+
+// A bare path is a prefix: naming a folder excludes what is under it, which is
+// what an operator means by typing it.
+t_ok(Heuristics::isExcluded('/home/bob/vendor/lib/x.php'),
+     'a plain path excludes everything beneath it');
+t_eq('/home/bob/vendor', Heuristics::excludedBy('/home/bob/vendor/lib/x.php'),
+     'and the rule that did it is reported back');
+t_ok(!Heuristics::isExcluded('/home/bob/vendorother/x.php'),
+     'but it does not match a sibling with a longer name');
+t_ok(!Heuristics::isExcluded('/home/bob/public_html/x.php'),
+     'nor anything outside it');
+
+// Globs.
+Heuristics::setExclusions("/home/*/cache
+/srv/**/tmp");
+t_ok(Heuristics::isExcluded('/home/alice/cache/x.php'),
+     '* matches one path segment');
+t_ok(!Heuristics::isExcluded('/home/alice/deep/cache/x.php'),
+     'and does not span a slash');
+t_ok(Heuristics::isExcluded('/srv/a/b/c/tmp/x.php'),
+     '** spans slashes');
+
+// THE DANGEROUS INPUT. "/" or "*" alone would exclude the entire filesystem
+// and silently turn scanning off, with the panel still reporting "Protected".
+foreach (['/', '*', '/*', '**'] as $kill) {
+    Heuristics::setExclusions($kill);
+    t_eq([], Heuristics::userExclusions(),
+         "\"$kill\" is refused — it would switch scanning off entirely");
+    t_ok(!Heuristics::isExcluded('/home/alice/public_html/index.php'),
+         "  and a customer file is still scanned");
+}
+
+// Adding one at a time, from a threat row.
+Database::setSetting(Heuristics::SETTING, '');
+Heuristics::addExclusion('/opt/thing');
+Heuristics::addExclusion('/opt/thing');
+t_eq(['/opt/thing'], Heuristics::userExclusions(), 'adding twice stores one');
+Heuristics::addExclusion('/');
+t_eq(['/opt/thing'], Heuristics::userExclusions(),
+     'and "/" cannot be added that way either');
+Database::setSetting(Heuristics::SETTING, '');
+
+// shouldInspect() must honour exclusions, or the rules are decorative.
+Heuristics::setExclusions('/home/zed/skipme');
+t_ok(!Heuristics::shouldInspect('/home/zed/skipme/evil.php', 100),
+     'an excluded file is never even read');
+t_ok(Heuristics::shouldInspect('/home/zed/other/evil.php', 100),
+     'while the rest of the account still is');
+Database::setSetting(Heuristics::SETTING, '');
+
+// ── Both engines must agree ────────────────────────────────────────────────
+//
+// The ai-bolit findings came from the real-time daemon, not the scanner. If
+// only one side excluded them, a file would be quarantined in real time and
+// then declared clean by the next scheduled scan.
+
+$daemon = (string)file_get_contents(dirname(__DIR__) . '/backend/daemon/monitor.py');
+foreach (['ai-bolit', 'imunify360', '/opt/alt/', 'maldetect', 'cpguard'] as $tool) {
+    t_contains($daemon, $tool,
+         "the real-time daemon skips $tool too — these detections came from it");
+}
+t_contains($daemon, 'scan_exclusions',
+     'and the daemon reads the same operator setting as the scanner');

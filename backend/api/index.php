@@ -180,6 +180,7 @@ try {
         'botshield'  => routeBotShield($action, $method, $body, $query, $user),
         'cmsguard'   => routeCMSGuard($action, $method, $body, $query, $user),
         'wpscan'     => routeWPScan($action, $method, $body, $query, $user),
+        'exclusions' => routeExclusions($action, $method, $body, $query, $user),
         'netguard'   => routeNetGuard($action, $method, $body, $query, $user),
         'mailguard'  => routeMailGuard($action, $method, $body, $query, $user),
         'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
@@ -1319,6 +1320,62 @@ function routeCMSGuard(string $action, string $method, array $body, array $q, ?a
             ? ['success' => true, 'data' => $cg->checkInstall((int)($body['id'] ?? 0))]
             : ['success' => false, 'code' => 405],
         default    => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Scan exclusions
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Exists because this product reported five HIGH threats against Imunify360's
+// own scanner. The signatures were right -- ai-bolit genuinely contains
+// eval(base64_decode(...)), because a malware scanner carries the patterns it
+// hunts for -- and the product was still wrong. There was no way to say so
+// from the panel.
+function routeExclusions(string $action, string $method, array $body, array $q, ?array $user): array {
+    return match($action) {
+        'list' => ['success' => true, 'data' => [
+            'user'    => Heuristics::userExclusions(),
+            'raw'     => Database::setting(Heuristics::SETTING, ''),
+            'builtin' => Heuristics::builtinExclusions(),
+        ]],
+
+        'save' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  $list = Heuristics::setExclusions((string)($body['raw'] ?? ''));
+                  return ['success' => true, 'data' => ['user' => $list]];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        // One click from a threat row. The operator is looking at the finding
+        // when they decide it is wrong, which is the only moment they have all
+        // the context.
+        'add' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  $path = (string)($body['path'] ?? '');
+                  if ($path === '') {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'No path given'];
+                  }
+                  return ['success' => true,
+                          'data' => ['user' => Heuristics::addExclusion($path)]];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        // Would this path be scanned? Lets the operator check a rule before
+        // trusting it, rather than finding out at the next scan.
+        'test' => (function () use ($q) {
+                  $path = (string)($q['path'] ?? '');
+                  return ['success' => true, 'data' => [
+                      'path'     => $path,
+                      'excluded' => $path !== '' && Heuristics::isExcluded($path),
+                      'by'       => $path !== '' ? Heuristics::excludedBy($path) : null,
+                  ]];
+              })(),
+
+        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };
 }
 

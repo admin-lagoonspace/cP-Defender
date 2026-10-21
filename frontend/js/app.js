@@ -840,7 +840,7 @@ function followScan(jobId) {
     // file count IS known and IS truthful, which makes it the useful signal.
     const bar  = document.getElementById('scan-progress-bar');
     const pctEl = document.getElementById('scan-progress-pct');
-    const done = job.status === 'done';
+    const done = !['running', 'pending', 'queued', 'cancelling'].includes(job.status);
 
     if (done) {
       bar.classList.remove('indeterminate');
@@ -903,8 +903,18 @@ function followScan(jobId) {
       }
     }
 
-    if (job.status === 'done' || job.status === 'error') {
+    // ANY ending is an ending.
+    //
+    // This checked only 'done' and 'error'. The backend also writes
+    // 'cancelled', 'skipped' and 'interrupted' -- the last when a worker dies
+    // and reapStaleJobs() closes the row out. None of those cleared the
+    // interval, so the UI polled a finished job for ever and never showed it
+    // complete. Listing the ACTIVE states instead means a status added later
+    // is treated as finished rather than looping silently.
+    const ACTIVE = ['running', 'pending', 'queued', 'cancelling'];
+    if (!ACTIVE.includes(job.status)) {
       clearInterval(State.scanInterval);
+      State.scanInterval = null;
       State.scanInterval = null;
       State.scanJobId = null;
       setScanButton(false);
@@ -1196,6 +1206,12 @@ async function loadThreats() {
       <td style="white-space:nowrap">
         <button class="btn btn-ghost btn-xs" onclick="viewThreatFile(${id})"
                 title="View contents (does not run the file)">👁</button>
+        <!-- "Not malware" -- the moment the operator is looking at a finding
+             is the only moment they have the context to judge it wrong, so the
+             exclusion is one click from here rather than buried in settings. -->
+        <button class="btn btn-ghost btn-xs"
+                onclick="excludeThreatPath(${JSON.stringify(t.file_path || '')})"
+                title="Not malware — exclude this path from future scans">🚫</button>
         ${t.status === 'active' ? `
           <button class="btn btn-ghost btn-xs" onclick="quarantineThreat(${id})" title="Quarantine">🔒</button>
           <button class="btn btn-danger btn-xs" onclick="deleteThreat(${id})" title="Delete file">🗑</button>
@@ -5234,4 +5250,82 @@ async function deleteSelectedQueue() {
 
   await reloadMailQueue();
   await loadMailGuard();
+}
+
+// ── Scan exclusions ─────────────────────────────────────────────────────────
+//
+// The product reported five HIGH threats against ai-bolit, Imunify360's own
+// scanner. Each was SG.RT.eval_base64 and each was technically correct: a
+// malware scanner carries the patterns it hunts for. A tool that flags other
+// security tools teaches the operator that HIGH findings are usually wrong,
+// and the next one that matters gets the same shrug.
+//
+// Those paths are excluded in the product now, but an operator needs to be
+// able to add their own without waiting for a release.
+
+async function loadExclusions() {
+  const r = await API.exclList();
+  const d = (r && r.data) || {};
+
+  const b = g('excl-builtin');
+  if (b) b.textContent = (d.builtin || []).join(' · ');
+
+  const t = g('excl-raw');
+  if (t) t.value = d.raw || '';
+}
+
+async function saveExclusions() {
+  const t = g('excl-raw');
+  const r = await API.exclSave(t ? t.value : '');
+  const d = (r && r.data) || {};
+  if (r && r.success) {
+    const n = (d.user || []).length;
+    toast(n + ' exclusion(s) saved. They apply to the next scan and to the '
+        + 'real-time monitor within a minute.', 'success', 7000);
+    await loadExclusions();
+  } else {
+    toast((r && r.error) || 'Could not save exclusions', 'error');
+  }
+}
+
+// Check a rule BEFORE trusting it, rather than finding out at the next scan.
+async function testExclusion() {
+  const el = g('excl-test');
+  const out = g('excl-test-result');
+  const path = el ? el.value.trim() : '';
+  if (!path) { if (out) out.textContent = ''; return; }
+
+  const r = await API.exclTest(path);
+  const d = (r && r.data) || {};
+  if (!out) return;
+  if (d.excluded) {
+    out.style.color = 'var(--amber)';
+    out.textContent = 'Not scanned — excluded by '
+      + (d.by === 'built-in' ? 'a built-in rule' : '"' + d.by + '"');
+  } else {
+    out.style.color = 'var(--green)';
+    out.textContent = 'This path WOULD be scanned';
+  }
+}
+
+// One click from a threat row, which is the moment the operator has all the
+// context to judge the finding wrong.
+async function excludeThreatPath(path) {
+  if (!path) return;
+  // The directory, not the single file: a scanner's own tree will produce more
+  // of these, and excluding one file at a time is how an operator gives up.
+  const dir = path.replace(/\/[^/]*$/, '');
+  const choice = prompt(
+    'Exclude from future scans.\n\n'
+  + 'Leave the folder to exclude everything in it, or edit to just this file.',
+    dir || path);
+  if (choice === null) return;
+
+  const r = await API.exclAdd(choice.trim());
+  if (r && r.success) {
+    toast('Excluded: ' + choice.trim(), 'success', 6000);
+    await loadThreats();
+  } else {
+    toast((r && r.error) || 'Could not add the exclusion', 'error');
+  }
 }

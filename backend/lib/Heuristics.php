@@ -59,9 +59,56 @@
 
 class Heuristics
 {
-    /** Paths we never judge: our own quarantine and backup trees. */
-    private const SKIP_PATHS = '#/(?:malscan_quarantine|malscan_backup|'
-                             . 'serverscrub[_-]?quarantine|quarantine/\d{4})/#';
+    /**
+     * Paths never examined, built in.
+     *
+     * WHY OTHER SECURITY TOOLS ARE ON THIS LIST.
+     *
+     * On a live server this product reported five HIGH threats against
+     * ai-bolit — Imunify360's own malware scanner, shipped by CloudLinux. Every
+     * one was `SG.RT.eval_base64`, and every one was correct in the narrow
+     * sense: those files really do contain `eval(base64_decode(...))`, because
+     * a malware scanner carries the patterns it hunts for.
+     *
+     * A scanner that flags other scanners is not merely noisy. It teaches the
+     * operator that HIGH findings are usually wrong, and the next one that
+     * matters gets the same shrug. The signature was right and the product was
+     * still wrong.
+     *
+     * These are vendor-installed trees owned by root, outside any customer's
+     * home directory. If one of them is compromised the machine is already
+     * lost in ways this module cannot help with, so excluding them costs no
+     * real coverage.
+     *
+     * Customer paths are NOT on this list and never will be by default -- that
+     * is what the operator's own exclusions are for.
+     */
+    private const BUILTIN_SKIP = [
+        // Our own evidence. Re-judging quarantined malware finds it again.
+        '#/(?:malscan_quarantine|malscan_backup)/#',
+        '#/serverscrub[_-]?quarantine/#',
+        '#/quarantine/\d{4}-\d{2}-\d{2}/#',
+
+        // Imunify360 / CloudLinux, and the ai-bolit engine it ships.
+        '#(?:^|/)ai-bolit(?:/|$)#',
+        '#^/opt/alt/#',
+        '#^/(?:usr/share|var|opt)/imunify360(?:/|$)#',
+        '#^/usr/share/av-defender(?:/|$)#',
+        '#^/var/imunify360-webshield(?:/|$)#',
+
+        // Other scanners, for exactly the same reason.
+        '#^/usr/local/maldetect(?:/|$)#',
+        '#^/usr/local/cpguard(?:/|$)#',
+        '#^/var/lib/(?:clamav|rkhunter)(?:/|$)#',
+        '#^/usr/share/clamav(?:/|$)#',
+
+        // cPanel's own vendored third-party code, which it manages and
+        // replaces on every update.
+        '#^/usr/local/cpanel/3rdparty/#',
+    ];
+
+    /** Settings key holding the operator's own exclusions. */
+    public const SETTING = 'scan_exclusions';
 
     /**
      * WordPress drop-ins. These three filenames are loaded by WordPress itself
@@ -462,7 +509,7 @@ class Heuristics
     public static function shouldInspect(string $path, int $size): bool
     {
         if ($size <= 0 || $size > SCAN_MAX_SIZE) return false;
-        if (preg_match(self::SKIP_PATHS, $path))  return false;
+        if (self::isExcluded($path))              return false;
 
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
         if (in_array($ext, ['php', 'php3', 'php4', 'php5', 'php7', 'phtml', 'phps'], true)) {
@@ -477,6 +524,120 @@ class Heuristics
         }
 
         return false;
+    }
+
+    /**
+     * Is this path excluded, by a built-in rule or by the operator?
+     *
+     * Checked before the file is opened, so it costs a string comparison.
+     */
+    public static function isExcluded(string $path): bool
+    {
+        $p = str_replace('\\', '/', $path);
+
+        foreach (self::BUILTIN_SKIP as $re) {
+            if (preg_match($re, $p)) return true;
+        }
+        foreach (self::userExclusions() as $rule) {
+            if (self::pathMatches($p, $rule)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Which rule excluded it, for explaining a decision to the operator.
+     * Null when nothing did.
+     */
+    public static function excludedBy(string $path): ?string
+    {
+        $p = str_replace('\\', '/', $path);
+        foreach (self::BUILTIN_SKIP as $re) {
+            if (preg_match($re, $p)) return 'built-in';
+        }
+        foreach (self::userExclusions() as $rule) {
+            if (self::pathMatches($p, $rule)) return $rule;
+        }
+        return null;
+    }
+
+    /**
+     * The operator's exclusions.
+     *
+     * Plain paths and `*` globs, one per line. Deliberately NOT regular
+     * expressions: an operator typing a path should not be able to write
+     * something that excludes the entire filesystem by accident, and `.` in a
+     * path is a literal dot to everyone except a regex engine.
+     *
+     * @return array<int,string>
+     */
+    public static function userExclusions(): array
+    {
+        $raw = (string)(Database::setting(self::SETTING, '') ?? '');
+        $out = [];
+        foreach (preg_split('/[\r\n,]+/', $raw) as $line) {
+            $line = trim($line);
+            if ($line === '' || $line[0] === '#') continue;
+            // A bare "/" or "*" would exclude everything and silently turn the
+            // scanner off. Refused rather than honoured.
+            if (in_array($line, ['/', '*', '/*', '**'], true)) continue;
+            $out[] = str_replace('\\', '/', $line);
+        }
+        return $out;
+    }
+
+    /** Glob-ish match: `*` spans anything but a slash, `**` spans slashes. */
+    public static function pathMatches(string $path, string $rule): bool
+    {
+        if ($rule === '') return false;
+
+        // A rule with no wildcard is a prefix: naming a directory excludes
+        // everything under it, which is what an operator means by it.
+        if (strpos($rule, '*') === false) {
+            $r = rtrim($rule, '/');
+            return $path === $r || str_starts_with($path, $r . '/');
+        }
+
+        $re = preg_quote($rule, '#');
+        $re = str_replace('\\*\\*', '\x00', $re);   // ** placeholder
+        $re = str_replace('\\*', '[^/]*', $re);
+        $re = str_replace('\x00', '.*', $re);
+        return (bool)preg_match('#^' . $re . '#', $path);
+    }
+
+    /** Add a path to the operator's exclusions. Returns the new list. */
+    public static function addExclusion(string $path): array
+    {
+        $path = trim(str_replace('\\', '/', $path));
+        if ($path === '' || in_array($path, ['/', '*', '/*', '**'], true)) {
+            return self::userExclusions();
+        }
+        $list = self::userExclusions();
+        if (!in_array($path, $list, true)) {
+            $list[] = $path;
+            Database::setSetting(self::SETTING, implode("\n", $list));
+            Logger::info('Scan exclusion added: ' . $path);
+        }
+        return $list;
+    }
+
+    /** Replace the operator's exclusions wholesale. */
+    public static function setExclusions(string $raw): array
+    {
+        Database::setSetting(self::SETTING, $raw);
+        $list = self::userExclusions();
+        Logger::info('Scan exclusions set: ' . count($list) . ' rule(s)');
+        return $list;
+    }
+
+    /** The built-in list, so the panel can show what is already covered. */
+    public static function builtinExclusions(): array
+    {
+        return [
+            'Our own quarantine and backup trees',
+            'Imunify360, ai-bolit and CloudLinux (/opt/alt, /usr/share/imunify360)',
+            'Other scanners: maldet, cPGuard, ClamAV and rkhunter databases',
+            "cPanel's own bundled third-party code (/usr/local/cpanel/3rdparty)",
+        ];
     }
 
     /**
