@@ -90,7 +90,8 @@ t_eq(0, count($unreachable), 'every page section is reachable from the sidebar'
     . ($unreachable ? ' -- unreachable: ' . implode(', ', $unreachable) : ''));
 
 t_contains($html, 'id="page-logs"', 'the Log Analyzer page exists');
-t_contains($js, "case 'logs':", 'showPage() loads the Log Analyzer');
+t_contains($js, 'logs:', 'the Log Analyzer has a page loader');
+t_contains($js, 'loadLogs()', 'which opens it');
 t_contains($js, 'function loadLogs', 'loadLogs is implemented');
 t_contains($api, "'days'",  'logs/days is routed');
 t_contains($api, "'query'", 'logs/query is routed');

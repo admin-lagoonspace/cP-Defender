@@ -292,7 +292,11 @@ $html = file_get_contents($repo . '/frontend/index.html');
 $js   = file_get_contents($repo . '/frontend/js/app.js');
 t_contains($html, 'data-page="bruteforce"', 'there is a nav entry');
 t_contains($html, 'id="page-bruteforce"', 'and a page');
-t_contains($js, "case 'bruteforce': loadBruteForce()", 'which loads when opened');
+// The dispatch is a table, not a switch. Pinning the exact `case` text made a
+// correct refactor fail here for no reason; the property is that the page has
+// a loader at all. test_navigation.php proves that for every page.
+t_contains($js, 'bruteforce:', 'Brute Force has a page loader');
+t_contains($js, 'loadBruteForce()', 'which loads it when opened');
 t_contains($html, 'id="dash-bf-24h"', 'the dashboard shows the counts');
 t_contains($js, "setText('dash-bf-24h'", 'and fills them in');
 

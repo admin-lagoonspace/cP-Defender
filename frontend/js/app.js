@@ -195,24 +195,65 @@ function openPage(name) {
   State.currentPage = name;
   startMonitorPolling(name);
 
-  // Trigger page-specific data load
-  switch (name) {
-    case 'dashboard': refreshDashboard();   break;
-    case 'scanner':   loadThreats(); adoptRunningScan(); break;
-    case 'firewall':  loadFirewall();       break;
-    case 'waf':       loadWAF(); loadWafEngine();            break;
-    case 'iprep':     loadTopAttackers(); loadServerIpForBlocklist();   break;
-    case 'events':    loadEvents();         break;
-    case 'bruteforce': loadBruteForce();     break;
-    case 'settings':  loadSettings(); loadUpdateSettings(); break;
-    case 'botshield': loadBotShield();      break;
-    case 'cms':       loadCMSGuard();       break;
-    case 'wpscan':    loadWPScan();         break;
-    case 'mailguard': loadMailGuard(); loadMailSettings(); break;
-    case 'rootkit':   loadRootkit();        break;
-    case 'integrity': loadIntegrity();      break;
-    case 'logs':      loadLogs();           break;
-    case 'php':       loadPHPHardening();   break;
+  // Trigger page-specific data load.
+  //
+  // A TABLE, not a switch, for two reasons that both bit us.
+  //
+  // 1. The switch was missing `monitor`. Every other page had a case;
+  //    Real-Time Monitor did not, so opening it loaded nothing and the panel
+  //    sat on "Loading…" and "Checking…" for ever. The Refresh button worked,
+  //    because it calls the loader directly -- which made it look like a
+  //    refresh problem rather than a missing wire. A missing entry in a table
+  //    is visible; a missing `case` in a 16-arm switch is not, and
+  //    tests/test_navigation.php now asserts every sidebar page has one.
+  //
+  // 2. Only `firewall` went through API.withBusy(), so every other page
+  //    loaded with no indication anything was happening. Dispatching through
+  //    one place means the busy overlay is automatic and cannot be forgotten
+  //    for the next page added.
+  //
+  // Each entry RETURNS a promise. The overlay lifts when the work finishes,
+  // so an entry that forgets to return one would flash and vanish --
+  // Promise.all is used wherever a page needs more than one call.
+  const PAGE_LOADERS = {
+    dashboard:  ['Loading dashboard…', () => refreshDashboard()],
+    scanner:    ['Loading scanner…',   () => Promise.all([loadThreats(),
+                                                          adoptRunningScan()])],
+    firewall:   ['Loading firewall…',  () => loadFirewall()],
+    waf:        ['Loading WAF…',       () => Promise.all([loadWAF(),
+                                                          loadWafEngine()])],
+    iprep:      ['Loading reputation…', () => Promise.all([loadTopAttackers(),
+                                                           loadServerIpForBlocklist()])],
+    events:     ['Loading events…',    () => loadEvents()],
+    bruteforce: ['Loading brute force…', () => loadBruteForce()],
+    settings:   ['Loading settings…',  () => Promise.all([loadSettings(),
+                                                          loadUpdateSettings()])],
+    botshield:  ['Loading bot shield…', () => loadBotShield()],
+    cms:        ['Loading CMS Guard…', () => loadCMSGuard()],
+    wpscan:     ['Loading WP database…', () => loadWPScan()],
+    mailguard:  ['Loading spam monitor…', () => Promise.all([loadMailGuard(),
+                                                             loadMailSettings()])],
+    // The one that was missing. Both halves: the daemon's own status, and the
+    // systemd unit -- loadMonitor() does not fetch the service, which is why
+    // that panel said "Checking…" even after a manual refresh.
+    monitor:    ['Loading monitor…',   () => Promise.all([loadMonitor(),
+                                                          loadServiceStatus()])],
+    rootkit:    ['Loading rootkit scan…', () => loadRootkit()],
+    integrity:  ['Loading file integrity…', () => loadIntegrity()],
+    logs:       ['Loading logs…',      () => loadLogs()],
+    php:        ['Loading PHP hardening…', () => loadPHPHardening()],
+  };
+
+  const entry = PAGE_LOADERS[name];
+  if (entry) {
+    // Not awaited: the page is already on screen and the overlay is the
+    // feedback. A rejected loader must not stop the splash being dismissed
+    // below, or a single failing endpoint leaves the whole UI covered.
+    API.withBusy(entry[0], entry[1]).catch(err => {
+      console.error('page load failed:', name, err);
+      toast('Could not load this page: '
+            + (err && err.message ? err.message : err), 'error', 8000);
+    });
   }
 
   // The page is on screen now, so the splash has done its job. Its loading
@@ -2646,7 +2687,29 @@ async function loadMonitorStats() {
 
 async function loadMonitor() {
   const res = Demo.active ? Demo.mockMonitorStatus() : await API.monitorStatus();
-  if (!res?.success) return;
+
+  // A failed load must not leave the page showing "Loading…".
+  //
+  // This returned silently, so an API error and a page that was never wired
+  // looked identical -- both just sat on the placeholder text the markup
+  // ships with. That is how the missing `monitor` dispatch went unnoticed:
+  // the symptom was indistinguishable from a slow or failing endpoint.
+  if (!res?.success) {
+    const badge = document.getElementById('monitor-status-badge');
+    if (badge) {
+      badge.className = 'badge badge-red';
+      badge.textContent = 'Status unknown';
+    }
+    ['mon-engine', 'mon-pid', 'mon-files', 'mon-det-24h', 'mon-det-all']
+      .forEach(id => setText(id, '—'));
+    const body = document.getElementById('rt-detections-body');
+    if (body) {
+      body.innerHTML = '<tr><td colspan="5" style="text-align:center;'
+        + 'color:var(--red);padding:24px">Could not reach the monitor API — '
+        + 'protection status cannot be confirmed.</td></tr>';
+    }
+    return;
+  }
   const d = res.data;
   monitorRunning = d.running;
 

@@ -87,7 +87,9 @@ t_contains($js, "dataset.ready !== '1'",
     'toggleMonitor refuses to act before the first status load');
 
 // ── 3. The monitor page badge must not claim protection it is not giving ────
-$lm = substr($js, strpos($js, 'async function loadMonitor()'), 1200);
+// Widened: loadMonitor() gained an explicit failure branch, which pushed the
+// badge logic past a fixed 1,200-character window.
+$lm = substr($js, strpos($js, 'async function loadMonitor()'), 3000);
 t_contains($lm, 'd.suspended', 'the monitor page reports a paused monitor');
 t_contains($lm, 'd.stale', 'and one that is running but doing nothing');
 $stopPos = strpos($lm, "'○ Stopped'");

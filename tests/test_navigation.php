@@ -101,3 +101,68 @@ t_ok(substr_count($html, 'class="nav-item"') >= 6,
 // ── The brand mark in the sidebar header ────────────────────────────────────
 t_contains($html, 'ServerScrub', 'the product name is in the shell');
 t_contains($html, 'images/icon-64.png', 'and the icon mark');
+
+// ── Every nav entry must actually load its page ─────────────────────────────
+//
+// FROM A LIVE SERVER. The dispatch was a 16-arm switch and `monitor` was not
+// one of them. Opening Real-Time Monitor therefore loaded nothing: the panel
+// sat on "Loading…" and "Checking…" indefinitely, and the operator had to hit
+// Refresh every single time. That button works because it calls the loader
+// directly, which made it look like a refresh bug rather than a missing wire.
+//
+// A missing arm in a long switch is invisible. A missing key in a table is
+// not, and this test makes it fail the build.
+
+$app = file_get_contents($repo . '/frontend/js/app.js');
+
+t_ok(preg_match('/const PAGE_LOADERS = \{(.*?)
+  \};/s', $app, $m) === 1,
+     'the page dispatch is a table that can be checked');
+$table = $m[1];
+
+preg_match_all('/data-page="([a-z0-9_-]+)"/', $html, $nav);
+$pages = array_values(array_unique($nav[1]));
+t_ok(count($pages) > 10, 'the sidebar has its full set of entries');
+
+preg_match_all('/^\s{4}([a-z0-9_]+):/m', $table, $km);
+$keys = $km[1];
+
+foreach ($pages as $page) {
+    t_ok(in_array($page, $keys, true),
+         "the \"$page\" nav entry has a loader — without one the page opens "
+       . "empty and only a manual Refresh fills it");
+}
+
+// A loader for a page that does not exist is dead weight and usually a typo
+// in the key, which silently breaks the page it was meant to serve.
+foreach ($keys as $k) {
+    t_ok(in_array($k, $pages, true),
+         "the loader \"$k\" corresponds to a real nav entry");
+}
+
+// ── Every page shows that it is loading ─────────────────────────────────────
+//
+// Only `firewall` went through API.withBusy(); every other page loaded in
+// silence, so a slow endpoint was indistinguishable from a broken one.
+// Dispatching through one call site means it cannot be forgotten again.
+
+t_contains($app, 'API.withBusy(entry[0], entry[1])',
+     'page loads go through the busy overlay');
+t_eq(1, preg_match_all('/API\.withBusy\(entry/', $app),
+     'from exactly one place, so no page can be missed');
+
+// Each entry must RETURN its work, or the overlay lifts immediately and the
+// indicator flashes instead of covering the load.
+foreach (explode("
+", $table) as $line) {
+    if (!preg_match('/^\s{4}[a-z0-9_]+:\s*\[/', $line)) continue;
+    if (strpos($line, '=>') === false) continue;   // continuation line
+    t_ok(preg_match('/=>\s*(?:Promise\.all\(|[A-Za-z_]\w*\()/', $line) === 1,
+         'a loader entry returns its promise: ' . trim(substr($line, 0, 48)));
+}
+
+// A failing loader must not leave the splash up over the whole UI.
+t_contains($app, '.catch(err =>',
+     'a page load that throws is caught');
+t_contains($app, 'Could not load this page',
+     'and the operator is told, rather than left looking at a blank panel');

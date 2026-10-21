@@ -359,8 +359,18 @@ foreach (['mg-set-enabled', 'mg-set-hourly', 'mg-set-queue', 'mg-set-frozen',
 t_contains($html, 'saveMailSettings()', 'with a save button wired to a handler');
 
 $app = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
-t_contains($app, "case 'mailguard': loadMailGuard(); loadMailSettings();",
-     'opening the page loads both the data and the settings form');
+// The dispatch is a table now, not a switch. Asserting the property --
+// "this page has a loader that fills both halves" -- instead of the spelling,
+// because pinning the spelling is what made a correct refactor fail.
+t_contains($app, 'mailguard:', 'Spam Monitor has a page loader');
+// Checked within the dispatch table rather than as one contiguous string:
+// the entry wraps across two lines, and asserting on exact whitespace is the
+// same brittleness that just broke six tests.
+preg_match('/mailguard:.*?\],/s', $app, $mgEntry);
+t_contains($mgEntry[0] ?? '', 'loadMailGuard()',
+     'the Spam Monitor loader fetches the data');
+t_contains($mgEntry[0] ?? '', 'loadMailSettings()',
+     'and the settings form, so the page is complete on open');
 t_contains($app, 'async function loadMailSettings',
      'the settings loader exists');
 t_contains($app, 'async function saveMailSettings',

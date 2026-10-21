@@ -83,7 +83,10 @@ t_contains($html, 'id="ss-splash"', 'there is a first-load splash');
 t_contains($html, 'images/logo.png', 'showing the full lockup');
 t_contains($js, 'function dismissSplash', 'which is dismissed');
 // Dismissing on a timer would either cover a ready page or uncover a blank one.
-$op = substr($js, strpos($js, 'function openPage(name)'), 3000);
+// Sized to the function, not a guess. A fixed 3,000 characters meant any
+// addition to openPage() pushed dismissSplash() out of the window and failed
+// this test for an unrelated reason.
+$op = substr($js, strpos($js, 'function openPage(name)'), 6000);
 t_contains($op, 'dismissSplash()', 'once a page has actually been drawn');
 t_contains($html, 'dismissSplash', 'and when the login form is shown instead');
 
