@@ -217,3 +217,49 @@ t_contains($updateSh, 'for _SG_D in database quarantine logs; do',
      'the optional directories are tightened only when present');
 t_contains($updateSh, "Database::setting('quarantine_dir'",
      'and the real quarantine path is read from settings, not assumed');
+
+// ── The release-notes link must point somewhere that exists ─────────────────
+//
+// The panel renders ONE "Release Notes" link and has no fallback. It pointed at
+// the CDN -- https://defender.lws-s1.com/serverscrub/code/v<version>/CHANGELOG.md
+// -- which 404s, because that CDN has never been populated. The download
+// survives the same problem only because update.sh walks both channels.
+//
+// Both generators write this url and they must agree, for the same reason the
+// file lists must: they produce the same manifest and whichever ran last wins.
+
+$mkNotes = preg_match('/NOTES_URL="([^"]+)"/', $makeSh, $mn) ? $mn[1] : '';
+$pyNotes = preg_match('/"notes":\s*"([^"]+)"/', $buildPy, $pn) ? $pn[1] : '';
+
+t_ok($mkNotes !== '', 'make-release.sh defines a notes url');
+t_ok($pyNotes !== '', 'build.py defines a notes url');
+
+foreach (['make-release.sh' => $mkNotes, 'build.py' => $pyNotes] as $who => $u) {
+    t_ok(strpos($u, 'defender.lws-s1.com') === false,
+         "$who does not point the notes link at the CDN, which is not populated");
+    t_ok(strpos($u, 'CDN') === false,
+         "$who does not interpolate the CDN variable into it either");
+    t_contains($u, 'notes-',
+         "$who links THIS version's notes, not the whole changelog");
+}
+
+// build.py interpolates a variable, so the host is asserted where it is
+// actually written rather than in the format string.
+t_contains($buildPy, 'GH_REPO = "https://github.com/',
+     'build.py resolves the notes host to GitHub');
+t_contains($pyNotes, '%s/blob/',
+     'and builds the notes url from it');
+t_contains($mkNotes, 'github.com',
+     'make-release.sh names GitHub directly');
+
+// publish.sh has to commit the file that url names, or the link 404s one
+// release later instead of immediately.
+$pub = t_shell(dirname(__DIR__) . '/scripts/publish.sh');
+t_contains($pub, 'dist/notes-',
+     'publish.sh commits the per-version notes file the link points at');
+
+// And the panel must not render a link with nowhere to go.
+$appJs2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+t_contains($appJs2, "relLink.style.display = 'none'",
+     'the Release Notes link is hidden when there is no url, rather than '
+   . 'sitting there dead');

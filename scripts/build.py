@@ -44,6 +44,7 @@ NEVER_PACKAGE = ("/tests/", "/scripts/", "/php/", "/.github/", "/.git/")
 SKIP_FILES = {".DS_Store", "Thumbs.db"}
 CDN = "https://defender.lws-s1.com/serverscrub/code"
 MIRROR = "https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main"
+GH_REPO = "https://github.com/admin-lagoonspace/cP-Defender"
 
 
 def discard(path):
@@ -190,7 +191,12 @@ def main():
         "url": "%s/dist/serverscrub-%s.zip" % (CDN, version),
         "mirror": "%s/dist/serverscrub-%s.zip" % (MIRROR, version),
         "sha256": sha,
-        "notes": "%s/v%s/CHANGELOG.md" % (CDN, version),
+        # GitHub, not the CDN. The panel renders ONE "Release Notes" link with
+        # no fallback, and the CDN has never been populated -- every
+        # defender.lws-s1.com path 404s. The zip survives that because
+        # update.sh walks both channels; a single link in the UI does not.
+        # Must match make-release.sh; tests/test_packaging.php asserts it.
+        "notes": "%s/blob/main/dist/notes-%s.md" % (GH_REPO, version),
     }
     with io.open(os.path.join(REPO, "latest.json"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(manifest, indent=2) + "\n")

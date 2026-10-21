@@ -79,3 +79,29 @@ $msg      = substr($up, $msgStart, 1600);
 t_contains($msg, 'serverscrub quarantine prune', 'it names the command that frees quarantine');
 t_contains($msg, 'scan_*.log', 'it names the log files that accumulate');
 t_contains($msg, 'BACKUP_ROOT', 'it names the backup directory');
+
+// ── The updater must not claim success on a half-applied update ────────────
+//
+// FROM A LIVE SERVER. VERSION read 4.13.1 while backend/config/config.php
+// still defined 4.10.0: the top-level files were copied by `cp` and the
+// backend was not delivered by the `rsync`. The panel reported 4.10.0, because
+// the API reads SG_VERSION -- and the updater had already printed
+// "Update complete".
+//
+// An updater that can leave those out of step and still claim success is worse
+// than one that fails outright: the operator believes they are patched.
+
+$upd = (string)file_get_contents($repo . '/update.sh');
+
+t_contains($upd, 'PARTIAL UPDATE',
+     'the updater checks that the code actually landed');
+t_contains($upd, "SG_VERSION',\s*'",
+     'by reading SG_VERSION out of the installed config.php');
+t_contains($upd, 'state_failed',
+     'and records the run as failed, so the panel does not show success');
+
+// The check must come BEFORE the success banner, or it reports both.
+$posCheck  = strpos($upd, 'PARTIAL UPDATE');
+$posBanner = strpos($upd, 'Update complete!');
+t_ok($posCheck !== false && $posBanner !== false && $posCheck < $posBanner,
+     'and it runs before the "Update complete" banner, not after it');

@@ -321,7 +321,19 @@ async function checkForUpdates(forceLive = false) {
       if (dot)     { dot.style.display     = 'block'; }
       if (newVer)  newVer.textContent  = 'v' + d.latest_version;
       if (curVer)  curVer.textContent  = 'v' + d.current_version;
-      if (relLink && d.release_url) relLink.href = d.release_url;
+      // A link with no destination is worse than no link: it looks like a
+      // feature and does nothing. The href defaults to "#" in the markup, so
+      // without this the button sat there dead whenever the manifest carried
+      // no notes url.
+      if (relLink) {
+        if (d.release_url) {
+          relLink.href = d.release_url;
+          relLink.style.display = '';
+        } else {
+          relLink.removeAttribute('href');
+          relLink.style.display = 'none';
+        }
+      }
     } else {
       if (banner)  banner.style.display  = 'none';
       if (dot)     dot.style.display     = 'none';

@@ -213,7 +213,17 @@ DL_URL="${CDN_BASE}/dist/${ZIP_NAME}"
 MIRROR_URL="https://raw.githubusercontent.com/${RELEASES_REPO}/${RELEASES_BRANCH}/dist/${ZIP_NAME}"
 # Notes point at THIS version's notes, not the full history. A user opening the
 # notes for the release they just installed wants the one section.
-NOTES_URL="${CDN_BASE}/v${VERSION}/CHANGELOG.md"
+#
+# ON GITHUB, NOT THE CDN, and unlike the download there is no fallback here:
+# the panel renders ONE url as a "Release Notes" link, so it has to be one that
+# exists. It pointed at ${CDN_BASE}/v<version>/CHANGELOG.md, which 404s --
+# the CDN has never been populated, so every defender.lws-s1.com path is empty.
+# The zip survives that because update.sh walks both channels; a single link in
+# the UI does not.
+#
+# dist/notes-<version>.md is committed by publish.sh, so this URL is live the
+# moment the release is pushed, and GitHub renders the markdown.
+NOTES_URL="https://github.com/${RELEASES_REPO}/blob/${RELEASES_BRANCH}/dist/notes-${VERSION}.md"
 cat > "${OUT_DIR}/latest.json" << JSON
 {
   "version": "${VERSION}",

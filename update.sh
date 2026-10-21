@@ -797,6 +797,31 @@ section "Finalising"
 php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; Database::setSetting('update_available', '0'); Database::setSetting('update_latest_ver', '${LATEST_VERSION}'); echo 'Update state cleared.' . PHP_EOL;" 2>/dev/null || true
 
 NEW_VERSION="$(cat "${INSTALL_DIR}/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
+
+# ── Did the code actually land? ───────────────────────────────────────────────
+#
+# VERSION is a six-byte file copied by a `cp`. config.php is one file among
+# thousands delivered by an `rsync`. They can disagree, and on a live server
+# they did: VERSION read 4.13.1 while backend/config/config.php still defined
+# 4.10.0 -- the top-level files were copied and the backend was not. The panel
+# reported 4.10.0 because the API reads SG_VERSION, and the updater had already
+# printed "Update complete".
+#
+# An updater that can leave those out of step and still claim success is worse
+# than one that fails: the operator believes they are patched.
+_SG_CODE_VER="$(grep -oP "^define\('SG_VERSION',\s*'\K[^']+"                 "${INSTALL_DIR}/backend/config/config.php" 2>/dev/null | head -1 || true)"
+
+if [[ -n "$_SG_CODE_VER" && -n "$NEW_VERSION" && "$_SG_CODE_VER" != "$NEW_VERSION" ]]; then
+    err "PARTIAL UPDATE: VERSION says ${NEW_VERSION} but the code says ${_SG_CODE_VER}."
+    err "The version file was copied and backend/ was not, so this install is"
+    err "running ${_SG_CODE_VER} while reporting ${NEW_VERSION}."
+    err ""
+    err "Re-run this updater. If it happens again, the rsync of backend/ is"
+    err "failing -- check ${LOG_DIR:-${INSTALL_DIR}/logs}/update.log and disk space."
+    state_failed "Partial update: VERSION ${NEW_VERSION}, code ${_SG_CODE_VER}"
+    exit 1
+fi
+
 echo ""
 echo -e "${BOLD}${GREEN}╔═══════════════════════════════════════╗"
 echo -e "║  ✔  Update complete!                  ║"

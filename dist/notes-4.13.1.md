@@ -17,14 +17,14 @@
 
   It now passes the numeric id like every other button in the row, and the path
   is resolved from a map rebuilt when the table renders. **No event attribute
-  anywhere carries a file path** — a path can contain an apostrophe, a space or
+  anywhere carries a file path** â€” a path can contain an apostrophe, a space or
   a backslash, and single quotes do not save it either.
 
 ### Added
 
-- **Bulk exclusion.** Five findings from one vendor tree is the normal case —
-  it is exactly what ai-bolit produced — so excluding them one prompt at a time
-  was the wrong shape of work. Tick the rows, press **Not malware — exclude**.
+- **Bulk exclusion.** Five findings from one vendor tree is the normal case â€”
+  it is exactly what ai-bolit produced â€” so excluding them one prompt at a time
+  was the wrong shape of work. Tick the rows, press **Not malware â€” exclude**.
 
   Selected files collapse to their **parent folders** and de-duplicate, so five
   files in one directory become one rule rather than five. Otherwise the
