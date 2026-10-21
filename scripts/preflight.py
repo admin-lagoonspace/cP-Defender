@@ -226,6 +226,23 @@ def main():
     else:
         ok("no JS helper is called outside the function that declares it")
 
+    # 2c-attr. a value interpolated into an HTML event attribute
+    # A threat row rendered onclick="excludeThreatPath(${JSON.stringify(path)})".
+    # JSON.stringify emits DOUBLE quotes, which terminate the attribute, so the
+    # browser never bound a handler and the button did nothing when clicked.
+    # Every existing check passed: the function existed, brackets balanced, the
+    # test asserted the name was present. The feature was completely dead.
+    r = subprocess.run([sys.executable,
+                        os.path.join(REPO, "scripts", "check-js-attrs.py")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        for line in (r.stdout + r.stderr).strip().splitlines():
+            if line.strip():
+                fail(line.strip())
+        problems += 1
+    else:
+        ok("only numbers are interpolated into HTML event attributes")
+
     # 2c-dup. two top-level JS functions of the same name
     # JavaScript allows it and the later one silently replaces the earlier for
     # every caller in the file. A helper named fmtNum() was added to app.js

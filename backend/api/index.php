@@ -1364,6 +1364,35 @@ function routeExclusions(string $action, string $method, array $body, array $q, 
               })()
             : ['success' => false, 'code' => 405],
 
+        // Bulk. One vendor tree routinely produces several findings at once,
+        // and excluding them individually is how an exclusion list becomes its
+        // own unreadable mess.
+        'add-many' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  $paths = (array)($body['paths'] ?? []);
+                  if ($paths === []) {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'No paths given'];
+                  }
+                  if (count($paths) > 200) {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'Refusing more than 200 at once — '
+                                       . 'an exclusion list that long is not '
+                                       . 'reviewable'];
+                  }
+                  $before = count(Heuristics::userExclusions());
+                  $list   = Heuristics::userExclusions();
+                  foreach ($paths as $path) {
+                      $list = Heuristics::addExclusion((string)$path);
+                  }
+                  return ['success' => true, 'data' => [
+                      'user'  => $list,
+                      'added' => max(0, count($list) - $before),
+                  ]];
+              })()
+            : ['success' => false, 'code' => 405],
+
         // Would this path be scanned? Lets the operator check a rule before
         // trusting it, rather than finding out at the next scan.
         'test' => (function () use ($q) {

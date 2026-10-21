@@ -418,3 +418,53 @@ foreach (['ai-bolit', 'imunify360', '/opt/alt/', 'maldetect', 'cpguard'] as $too
 }
 t_contains($daemon, 'scan_exclusions',
      'and the daemon reads the same operator setting as the scanner');
+
+// ── The exclude controls must actually be wired ─────────────────────────────
+//
+// The first version of the per-row button rendered
+//   onclick="excludeThreatPath(${JSON.stringify(t.file_path || '')})"
+// JSON.stringify emits DOUBLE quotes, which terminate a double-quoted HTML
+// attribute. The browser saw  onclick="excludeThreatPath("  and never bound a
+// handler, so the button did nothing at all when clicked.
+//
+// Every check at the time passed. The function existed, brackets balanced, and
+// the test asserted the name appeared in app.js. None of that is evidence the
+// control works, which is the lesson: assert the SHAPE of what is rendered,
+// not that an identifier is present somewhere in the file.
+
+$appJs = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+$htmlF = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+
+t_contains($appJs, 'onclick="excludeThreatPath(${id})"',
+     'the per-row exclude button passes the numeric id');
+t_ok(strpos($appJs, 'excludeThreatPath(${JSON.stringify') === false,
+     'and never interpolates a path into the attribute — that is what broke it');
+
+// No event attribute anywhere may carry a path. A path can contain an
+// apostrophe, a space or a backslash; single quotes do not save it either.
+t_ok(preg_match('/on[a-z]+="[^"]*\$\{[^}]*(?:file_path|filepath)[^}]*\}/i', $appJs) === 0,
+     'no event attribute interpolates a file path at all');
+
+// The path is resolved from state instead.
+t_contains($appJs, 'State.threatPaths',
+     'paths are looked up from state, keyed by id');
+t_contains($appJs, 'State.threatPaths = {}',
+     'and the map is rebuilt whenever the table is rendered');
+
+// Bulk. Five findings from one vendor tree is the normal case — that is
+// exactly what ai-bolit produced — so one-at-a-time prompting is the wrong
+// shape of work.
+t_contains($htmlF, 'onclick="excludeSelectedThreats()"',
+     'there is a bulk exclude button');
+t_contains($htmlF, 'id="threat-bulk-exclude"', 'with an id');
+t_contains($htmlF, 'threat-bulk-btn" id="threat-bulk-exclude"',
+     'carrying the class the bulk bar enables and disables');
+t_contains($appJs, 'async function excludeSelectedThreats',
+     'and a handler behind it');
+t_contains($appJs, 'selectedThreatIds()',
+     'which uses the same selection the other bulk actions use');
+
+// Several files in one folder must collapse to ONE rule, or the exclusion list
+// becomes its own unreadable mess within a week.
+t_contains($appJs, 'new Set(',
+     'bulk exclusion de-duplicates to parent folders');

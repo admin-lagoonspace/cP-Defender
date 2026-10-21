@@ -1169,6 +1169,16 @@ async function loadThreats() {
   const threats = res?.data || [];
   document.getElementById('threat-count-badge').textContent = threats.length;
 
+  // id -> file path, so an action can resolve a path WITHOUT it ever being
+  // interpolated into markup. A path can contain quotes, spaces, backslashes
+  // and non-ASCII; there is no safe way to put one in an onclick attribute,
+  // and the attempt is what broke the exclude button.
+  State.threatPaths = {};
+  threats.forEach(t => {
+    const tid = Number(t.id);
+    if (tid) State.threatPaths[tid] = t.file_path || '';
+  });
+
   if (!threats.length) {
     tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--txt3);padding:28px">No threats found. Run a scan to check your server.</td></tr>';
     const masterEmpty = document.getElementById('threat-check-all');
@@ -1208,9 +1218,13 @@ async function loadThreats() {
                 title="View contents (does not run the file)">👁</button>
         <!-- "Not malware" -- the moment the operator is looking at a finding
              is the only moment they have the context to judge it wrong, so the
-             exclusion is one click from here rather than buried in settings. -->
-        <button class="btn btn-ghost btn-xs"
-                onclick="excludeThreatPath(${JSON.stringify(t.file_path || '')})"
+             exclusion is one click from here rather than buried in settings.
+             Takes the ID, like every other button in this row. It used to
+             interpolate the path through JSON.stringify(), which emits DOUBLE
+             quotes into a double-quoted attribute: the attribute terminated at
+             the first one and the handler was never bound, so the button did
+             nothing at all. A path must never be inlined into an attribute. -->
+        <button class="btn btn-ghost btn-xs" onclick="excludeThreatPath(${id})"
                 title="Not malware — exclude this path from future scans">🚫</button>
         ${t.status === 'active' ? `
           <button class="btn btn-ghost btn-xs" onclick="quarantineThreat(${id})" title="Quarantine">🔒</button>
@@ -5310,22 +5324,84 @@ async function testExclusion() {
 
 // One click from a threat row, which is the moment the operator has all the
 // context to judge the finding wrong.
-async function excludeThreatPath(path) {
-  if (!path) return;
-  // The directory, not the single file: a scanner's own tree will produce more
-  // of these, and excluding one file at a time is how an operator gives up.
+//
+// Takes the threat ID and resolves the path from State, never from markup.
+async function excludeThreatPath(id) {
+  const path = State.threatPaths ? State.threatPaths[Number(id)] : '';
+  if (!path) {
+    toast('Could not resolve that file path — reload the page and try again',
+          'error');
+    return;
+  }
+  // The folder, not the single file: a vendor tree produces more of these, and
+  // excluding one file at a time is how an operator gives up and stops reading
+  // findings altogether.
   const dir = path.replace(/\/[^/]*$/, '');
   const choice = prompt(
     'Exclude from future scans.\n\n'
-  + 'Leave the folder to exclude everything in it, or edit to just this file.',
+  + 'Leave the folder to exclude everything in it, or edit it down to just '
+  + 'this one file.',
     dir || path);
   if (choice === null) return;
 
-  const r = await API.exclAdd(choice.trim());
+  const want = choice.trim();
+  if (!want) return;
+
+  const r = await API.exclAdd(want);
   if (r && r.success) {
-    toast('Excluded: ' + choice.trim(), 'success', 6000);
+    toast('Excluded: ' + want + '. It will not be scanned again.',
+          'success', 7000);
     await loadThreats();
+    await loadExclusions();
   } else {
     toast((r && r.error) || 'Could not add the exclusion', 'error');
+  }
+}
+
+// Bulk. Five findings from one vendor tree is the normal case -- that is
+// exactly what ai-bolit produced -- so excluding them one prompt at a time is
+// the wrong shape of work.
+async function excludeSelectedThreats() {
+  const ids = selectedThreatIds();
+  if (!ids.length) {
+    toast('Tick the rows you want excluded first', 'info');
+    return;
+  }
+
+  const paths = ids
+    .map(i => (State.threatPaths || {})[i] || '')
+    .filter(Boolean);
+  if (!paths.length) {
+    toast('Could not resolve those file paths — reload and try again', 'error');
+    return;
+  }
+
+  // Collapse to parent folders. Ticking five files from one directory should
+  // produce ONE rule, not five -- otherwise the exclusion list becomes its own
+  // unreadable mess within a week.
+  const folders = Array.from(new Set(
+    paths.map(p => p.replace(/\/[^/]*$/, '') || p)));
+
+  const msg = folders.length === 1
+    ? 'Exclude this folder from future scans?\n\n' + folders[0]
+    : 'Exclude these ' + folders.length + ' folders from future scans?\n\n'
+      + folders.slice(0, 12).join('\n')
+      + (folders.length > 12 ? '\n…and ' + (folders.length - 12) + ' more' : '');
+
+  if (!confirm(msg + '\n\nFiles under them will no longer be scanned or '
+             + 'reported by the real-time monitor.')) {
+    return;
+  }
+
+  const r = await API.exclAddMany(folders);
+  const d = (r && r.data) || {};
+  if (r && r.success) {
+    toast('Excluded ' + fmtNum(d.added ?? folders.length) + ' folder(s). '
+        + 'Now ' + fmtNum((d.user || []).length) + ' exclusion rule(s) in total.',
+          'success', 8000);
+    await loadThreats();
+    await loadExclusions();
+  } else {
+    toast((r && r.error) || 'Could not add those exclusions', 'error');
   }
 }

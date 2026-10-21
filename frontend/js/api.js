@@ -339,6 +339,7 @@ const API = (() => {
     exclList: ()      => req('GET',  'exclusions/list'),
     exclSave: (raw)   => req('POST', 'exclusions/save', { raw: raw }),
     exclAdd:  (path)  => req('POST', 'exclusions/add',  { path: path }),
+    exclAddMany: (paths) => req('POST', 'exclusions/add-many', { paths: paths }),
     exclTest: (path)  => req('GET',  'exclusions/test?path='
                              + encodeURIComponent(path)),
 
