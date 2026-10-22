@@ -5,14 +5,14 @@
 ### Added
 
 - **"Not malware" is now a verdict, not an exclusion.** Marking a finding as
-  not malware records the file's **sha256** and stops reporting it â€” while the
+  not malware records the file's **sha256** and stops reporting it — while the
   file is still scanned on every pass. Change one byte and it is flagged again
   at full severity.
 
   This matters because the alternative on offer was a path exclusion. Silencing
-  the five findings against `/opt/ai-bolit/` â€” Imunify360's own scanner, which
+  the five findings against `/opt/ai-bolit/` — Imunify360's own scanner, which
   genuinely contains `eval(base64_decode(...))` because a malware scanner
-  carries the patterns it hunts for â€” would also have hidden anything an
+  carries the patterns it hunts for — would also have hidden anything an
   attacker dropped in that directory afterwards. On a shared host that is a
   permanent blind spot bought to tidy a table.
 
@@ -37,13 +37,13 @@
 - **Both "Not malware" buttons did nothing when clicked.** Each opened with
   `prompt()` or `confirm()`. This plugin renders inside cPanel's iframe, and an
   iframe without `allow-modals` makes both return `null` **instantly and
-  silently** â€” which the handler read as "cancelled" and returned on. No error,
+  silently** — which the handler read as "cancelled" and returned on. No error,
   no console output, nothing. The function existed, the route existed, the
   button was enabled, and it was dead. Replaced with an in-app dialog, which
   also gives somewhere to record *why* the file is safe.
 
 - **Realtime detections recorded no hash and no size**, which is why every
-  realtime row in the UI read **0 B** â€” and why there was nothing for a verdict
+  realtime row in the UI read **0 B** — and why there was nothing for a verdict
   to be keyed on. The daemon now streams a sha256 (not read-whole: some of
   these files are gigabytes) and stores the size.
 
@@ -53,7 +53,7 @@
 
 ### Changed
 
-- All six detection writers â€” five in `Scanner.php`, one in the Python daemon â€”
+- All six detection writers — five in `Scanner.php`, one in the Python daemon —
   now go through a single gate (`ThreatStore::record()`), so "respect the
   operator's verdict" is enforced in one place rather than copy-pasted into six.
   `scripts/check-threat-gate.py` fails the build if a seventh appears. This
