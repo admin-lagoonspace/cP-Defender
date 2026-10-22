@@ -309,6 +309,67 @@ function g(id) { return document.getElementById(id); }
 function openModal(id)  { document.getElementById(id)?.classList.remove('hidden'); }
 function closeModal(id) { document.getElementById(id)?.classList.add('hidden'); }
 
+// ── In-app confirm / show ───────────────────────────────────────────────────
+//
+// window.confirm() and window.alert() are not reliable here. Once a page has
+// shown a few, Chrome and Firefox offer "prevent this page from creating
+// additional dialogs"; after that confirm() returns false and alert() does
+// nothing at all, silently, with no error. Every handler shaped like
+//
+//     if (!confirm('Really?')) return;
+//
+// then becomes a button that does nothing when clicked, which is exactly how
+// two controls in this product shipped dead.
+//
+// These also allow real markup in the body, which matters for an action that
+// needs to show WHICH messages it is about to send.
+let _uiDialogResolve = null;
+
+function uiDialogResolve(result) {
+  closeModal('ui-dialog');
+  const fn = _uiDialogResolve;
+  _uiDialogResolve = null;
+  if (fn) fn(result);
+}
+
+/**
+ * @param {{title:string, body:string, pre?:string, ok?:string,
+ *          danger?:boolean, cancel?:string|null}} o
+ * @returns {Promise<boolean>}
+ */
+function uiConfirm(o) {
+  return new Promise(resolve => {
+    // A dialog already open would otherwise leave the previous promise
+    // pending forever, which is a hang rather than a cancel.
+    if (_uiDialogResolve) { uiDialogResolve(false); }
+
+    g('uid-title').textContent = o.title || 'Confirm';
+    g('uid-body').innerHTML    = o.body || '';
+
+    const pre = g('uid-pre');
+    if (o.pre) { pre.textContent = o.pre; pre.classList.remove('hidden'); }
+    else       { pre.textContent = '';    pre.classList.add('hidden'); }
+
+    const ok = g('uid-ok');
+    ok.textContent = o.ok || 'OK';
+    ok.className   = 'btn btn-sm ' + (o.danger ? 'btn-danger' : 'btn-primary');
+
+    const cancel = g('uid-cancel');
+    if (o.cancel === null) { cancel.classList.add('hidden'); }
+    else { cancel.classList.remove('hidden'); cancel.textContent = o.cancel || 'Cancel'; }
+
+    _uiDialogResolve = resolve;
+    openModal('ui-dialog');
+    ok.focus();
+  });
+}
+
+/** Show something and wait for acknowledgement. Replaces alert(). */
+function uiAlert(o) {
+  return uiConfirm({ title: o.title, body: o.body || '', pre: o.pre,
+                     ok: o.ok || 'Close', cancel: null });
+}
+
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 async function checkForUpdates(forceLive = false) {
   if (Demo.active) {
@@ -5273,7 +5334,10 @@ async function reloadMailQueue() {
       ? '<br><span style="color:var(--txt3)">+' + (rcpt.length - 3) + ' more</span>'
       : '';
     return '<tr>'
-      + '<td><input type="checkbox" class="mg-q-pick" value="' + esc(m.id) + '"></td>'
+      // data-frozen drives the thaw warning in the deliver dialog. Delivering
+      // a frozen message unfreezes it, which is not what "retry" sounds like.
+      + '<td><input type="checkbox" class="mg-q-pick" value="' + esc(m.id) + '"'
+        + ' data-frozen="' + (m.frozen ? '1' : '0') + '"></td>'
       + '<td>' + esc(m.age || '') + '</td>'
       + '<td>' + esc(m.size || '') + '</td>'
       + '<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis" title="'
@@ -5309,8 +5373,103 @@ async function inspectMessage(id) {
   let src = '';
   Object.keys(d.source || {}).forEach(k => { src += k + ': ' + d.source[k] + '\n'; });
 
-  alert((src ? 'WHAT SENT IT\n' + src + '\n' : '')
-      + 'HEADERS\n' + (d.headers || '').slice(0, 4000));
+  // Was alert(). A browser that has suppressed dialogs makes alert() a no-op,
+  // so the Headers button simply did nothing and there was no way to tell.
+  await uiAlert({
+    title: 'Message headers',
+    body: src
+      ? '<div style="font-size:.8rem;color:var(--txt3);margin-bottom:6px">'
+        + 'cPanel stamps locally generated mail with the script that sent it.</div>'
+        + '<strong style="font-size:.78rem">WHAT SENT IT</strong>'
+      : '',
+    pre: (src ? src + '\n' : '') + (d.headers || '').slice(0, 4000)
+  });
+}
+
+/**
+ * Force a delivery attempt on the selected queued messages.
+ *
+ * cPanel's Mail Queue Manager calls this "Deliver". It runs `exim -M`, which
+ * attempts delivery immediately and ignores the retry schedule — the right
+ * tool, because the usual reason real mail sits in this queue is a timer that
+ * has not expired. A Gmail 421 rate limit or a full recipient mailbox parks a
+ * genuine message for hours.
+ *
+ * Confirmed, never one-click, and the dialog states the two things that are
+ * easy to get wrong: it SENDS, and for frozen messages it also THAWS.
+ */
+async function deliverSelectedQueue() {
+  const picked = Array.from(document.querySelectorAll('.mg-q-pick:checked'));
+  const ids = picked.map(c => c.value);
+  if (!ids.length) {
+    toast('Select the messages to deliver first', 'info');
+    return;
+  }
+
+  // Frozen means exim already gave up. Delivering one is not a neutral retry,
+  // so it is called out separately rather than buried in a count.
+  const frozen = picked.filter(c => c.dataset.frozen === '1').length;
+
+  const ok = await uiConfirm({
+    title: 'Deliver ' + ids.length + ' message(s) now?',
+    ok: 'Deliver now',
+    body:
+      '<p style="margin:0 0 10px">This asks Exim to attempt delivery '
+    + '<strong>immediately</strong>, ignoring the retry schedule. Mail that is '
+    + 'simply waiting on a timer — a rate limit, a full mailbox — usually goes '
+    + 'out on the first attempt.</p>'
+    + (frozen
+        ? '<p style="margin:0 0 10px;color:var(--amber)"><strong>'
+          + frozen + ' of these are frozen.</strong> Exim already gave up on '
+          + 'them, and delivering a frozen message also <strong>unfreezes</strong> '
+          + 'it. Check why it froze before sending.</p>'
+        : '')
+    + '<p style="margin:0;color:var(--txt3);font-size:.8rem">These messages '
+    + 'leave your server. Check the senders and recipients first — a queue that '
+    + 'filled up with spam usually still contains real customer mail, and the '
+    + 'reverse is also true.</p>'
+  });
+  if (!ok) return;
+
+  const btns = Array.from(document.querySelectorAll('.mg-q-action'));
+  btns.forEach(b => { b.disabled = true; });
+  toast('Attempting delivery of ' + ids.length + ' message(s)…', 'info', 4000);
+
+  const r = await API.mgDeliver(ids);
+  btns.forEach(b => { b.disabled = false; });
+
+  const d = (r && r.data) || {};
+  if (!r || r.success === false) {
+    toast((r && r.error) || 'Delivery refused', 'error', 9000);
+    return;
+  }
+  if (d.error) { toast(d.error, 'error', 9000); return; }
+
+  // "Delivered" means LEFT THE QUEUE. exim exits 0 for an attempt that
+  // deferred, so reporting its exit status as success would be a lie the
+  // operator then acts on.
+  const bits = [];
+  if (d.delivered) bits.push(fmtNum(d.delivered) + ' delivered');
+  if (d.deferred)  bits.push(fmtNum(d.deferred) + ' still queued');
+  if (d.skipped)   bits.push(fmtNum(d.skipped) + ' not attempted (time budget)');
+
+  const failed = (d.failed || []).length;
+  toast(bits.join(', ') + (failed ? '; ' + failed + ' reported an error' : ''),
+        d.delivered ? 'success' : 'warning', 10000);
+
+  if (failed) {
+    await uiAlert({
+      title: 'Messages that did not go',
+      body: '<p style="margin:0 0 8px">Still deferred usually means the far end '
+          + 'is rate-limiting or unreachable — the message stays queued and '
+          + 'Exim will retry on its own.</p>',
+      pre: (d.failed || []).slice(0, 25)
+             .map(f => f.id + '  ' + f.error).join('\n')
+    });
+  }
+
+  await reloadMailQueue();
+  await loadMailGuard();
 }
 
 async function deleteSelectedQueue() {
@@ -5321,12 +5480,21 @@ async function deleteSelectedQueue() {
     return;
   }
   // Spelled out, because this cannot be undone and the queue holds real mail.
-  if (!confirm('Permanently delete ' + ids.length + ' message(s) from the mail '
-             + 'queue?\n\nThis cannot be undone. Check the senders and '
-             + 'recipients above first \u2014 a queue that filled up with spam '
-             + 'usually still contains real customer mail.')) {
-    return;
-  }
+  //
+  // Was confirm(). A browser that has suppressed dialogs returns false from it
+  // without telling anyone, so this button did nothing at all \u2014 the same
+  // silent failure that killed the two "Not malware" controls.
+  const ok = await uiConfirm({
+    title: 'Permanently delete ' + ids.length + ' message(s)?',
+    ok: 'Delete permanently',
+    danger: true,
+    body: '<p style="margin:0 0 10px">This removes them from the mail queue. '
+        + '<strong>It cannot be undone.</strong></p>'
+        + '<p style="margin:0;color:var(--txt3);font-size:.8rem">Check the '
+        + 'senders and recipients first \u2014 a queue that filled up with spam '
+        + 'usually still contains real customer mail.</p>'
+  });
+  if (!ok) return;
 
   const r = await API.mgDelete(ids);
   const d = (r && r.data) || {};

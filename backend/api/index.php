@@ -1561,6 +1561,33 @@ function routeMailGuard(string $action, string $method, array $body, array $q, ?
               })()
             : ['success' => false, 'code' => 405],
 
+        // Force a delivery attempt — cPanel's "Deliver" button.
+        //
+        // Confirmed like deletion, and for a sharper reason: this SENDS. On a
+        // server that once relayed 92,954 messages, an unconfirmed button that
+        // pushes selected queue entries out to the internet is the wrong
+        // control to build. Capped in MailGuard at 100 because each one is a
+        // live SMTP conversation, not a local unlink.
+        'deliver' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  if (empty($body['confirm'])) {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'Forcing delivery must be confirmed '
+                                       . 'explicitly — it sends the selected '
+                                       . 'messages, and thaws any that are frozen'];
+                  }
+                  $ids = (array)($body['ids'] ?? []);
+                  if ($ids === []) {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'Select the messages to deliver. There is '
+                                       . 'no "flush the whole queue" action by design.'];
+                  }
+                  return ['success' => true,
+                          'data' => MailGuard::deliverMessages($ids)];
+              })()
+            : ['success' => false, 'code' => 405],
+
         'settings' => ['success' => true, 'data' => MailGuard::settings()],
 
         // Saves through MailGuard's own clamps and reports anything it had to

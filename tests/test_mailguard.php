@@ -680,3 +680,164 @@ t_contains($html2, 'id="mg-delivery-body"',
 t_contains($html2, 'Delivery problems', 'labelled for what it is');
 $app2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
 t_contains($app2, "g('mg-delivery-card')", 'which the loader fills');
+
+
+// Slice exactly one function body, from its declaration to the next top-level
+// one. A fixed-size substr() runs past the end and picks up the NEXT
+// function's calls -- which is what made the first version of these checks
+// fail against code that was already correct.
+function t_fn_body(string $src, string $name, string $lang = 'js'): string {
+    $pat = $lang === 'js'
+        ? '/^(?:async\s+)?function\s+' . preg_quote($name, '/') . '\s*\(/m'
+        : '/^\s*(?:public|private|protected|static|\s)*function\s+'
+          . preg_quote($name, '/') . '\s*\(/m';
+    if (!preg_match($pat, $src, $m, PREG_OFFSET_CAPTURE)) { return ''; }
+    $start = (int)$m[0][1];
+    $nextPat = $lang === 'js'
+        ? '/^(?:async\s+)?function\s+\w+\s*\(/m'
+        : '/^\s*(?:public|private|protected|static|\s)*function\s+\w+\s*\(/m';
+    $rest = substr($src, $start + strlen($m[0][0]));
+    $end  = preg_match($nextPat, $rest, $m2, PREG_OFFSET_CAPTURE)
+        ? $start + strlen($m[0][0]) + (int)$m2[0][1]
+        : strlen($src);
+    return substr($src, $start, $end - $start);
+}
+
+// ── Forcing delivery of queued mail ─────────────────────────────────────────
+//
+// cPanel's Mail Queue Manager calls this "Deliver"; underneath it is
+// `exim -M`, which attempts delivery immediately and ignores the retry
+// schedule. The usual reason real mail sits in this queue is a timer that has
+// not expired — a Gmail 421 rate limit, a full recipient mailbox — so this is
+// the action an operator actually needs most of the time.
+//
+// It is also the only route in this module that SENDS. On a server that once
+// relayed 92,954 messages in a single incident, these guards are the feature.
+
+// The id check runs BEFORE exim is located, so a hostile id is rejected as
+// hostile rather than as "exim not found". This is the one check that keeps
+// shell metacharacters away from a root command, and it must not depend on a
+// binary being installed — the suite runs on Windows, where it is not.
+$evil = MailGuard::deliverMessages(['1aBcDe-0001Xy-Zz; rm -rf /']);
+t_ok(empty($evil['success']), 'a shell-injecting message id is refused');
+t_contains(strtolower((string)($evil['error'] ?? '')), 'no valid message ids',
+     'and refused as INVALID, not as "exim not found"');
+t_eq(0, (int)($evil['attempted'] ?? -1), 'nothing was attempted for it');
+t_eq(1, count($evil['failed'] ?? []), 'and the bad id is reported back');
+
+foreach (['`id`', '$(whoami)', 'a b', '../../etc/passwd', '', '*'] as $bad) {
+    $r = MailGuard::deliverMessages([$bad]);
+    t_ok(empty($r['success']), 'refused as a message id: ' . ($bad ?: '(empty)'));
+}
+
+t_ok(empty(MailGuard::deliverMessages([])['success']),
+     'delivering nothing is refused rather than treated as "deliver all"');
+
+// Bounded far lower than deletion. Deletion is a local unlink; each of these
+// is a live SMTP conversation with a remote server.
+$many = [];
+for ($i = 0; $i < 101; $i++) {
+    $many[] = sprintf('1aBcD%01d-00%04d-Zz', $i % 10, $i);
+}
+$cap = MailGuard::deliverMessages($many);
+t_ok(empty($cap['success']), 'more than 100 at once is refused');
+t_contains(strtolower((string)($cap['error'] ?? '')), 'batches',
+     'and says to do it in batches');
+t_eq(0, (int)($cap['attempted'] ?? -1), 'with nothing attempted');
+
+// The cap must be STRICTER than deletion's, because the cost per item is a
+// network round trip rather than an unlink.
+$src = (string)file_get_contents(dirname(__DIR__) . '/backend/lib/MailGuard.php');
+$dl  = t_fn_body($src, 'deliverMessages', 'php');
+$dd  = t_fn_body($src, 'deleteMessages', 'php');
+t_ok($dl !== '' && $dd !== '', 'both queue functions were located for inspection');
+preg_match('/count\(\$clean\) > (\d+)/', $dl, $mDeliver);
+preg_match('/count\(\$clean\) > (\d+)/', $dd, $mDelete);
+t_ok((int)($mDeliver[1] ?? 0) > 0 && (int)($mDelete[1] ?? 0) > 0,
+     'both paths carry an explicit cap');
+t_ok((int)$mDeliver[1] < (int)$mDelete[1],
+     'and delivery is capped lower than deletion ('
+   . ($mDeliver[1] ?? '?') . ' vs ' . ($mDelete[1] ?? '?')
+   . '), because each one is a network round trip');
+
+// THE THING EXIT STATUS CANNOT TELL YOU.
+//
+// `exim -M` exits 0 for an attempt that DEFERRED — the message is still
+// queued and exim is perfectly happy. Reporting that as "delivered" would be
+// a lie the operator then acts on, so success is defined as LEFT THE QUEUE
+// and the queue is re-read to establish it.
+t_contains($dl, 'queuedIdSet',
+     'delivery confirms success by re-reading the queue, not by exit status');
+t_ok(strpos($dl, "rc === 0") === false || strpos($dl, 'queuedIdSet') !== false,
+     'a zero exit alone is never treated as delivered');
+
+// A hung remote MTA must not hang the request.
+t_contains($dl, 'timeout', 'each attempt is bounded by a timeout');
+t_contains($dl, 'deadline', 'and the batch has an overall wall-clock budget');
+t_contains($dl, "'skipped'",
+     'messages dropped for lack of budget are reported, not silently skipped');
+t_contains($dl, '124',
+     'and a timeout kill is distinguished from a delivery failure');
+
+// It runs nice, like every other shell-out in this module. The box is usually
+// already in trouble when somebody opens this page.
+t_contains($dl, 'nice -n 19', 'the delivery runs at low priority');
+
+// What is being sent is recorded BEFORE it is sent.
+t_contains($dl, 'Logger::warn', 'the ids are logged before delivery is forced');
+t_contains($dl, 'mail_queue_deliver', 'and the outcome lands on the timeline');
+
+// ── The route ───────────────────────────────────────────────────────────────
+
+$api = (string)file_get_contents(dirname(__DIR__) . '/backend/api/index.php');
+$rt  = substr($api, (int)strpos($api, "'deliver' => \$method === 'POST'"), 1400);
+t_ok($rt !== '', 'there is a mailguard/deliver route');
+t_contains($rt, "Auth::requireRole('admin'", 'restricted to admins');
+t_contains($rt, "empty(\$body['confirm'])",
+     'and refuses an unconfirmed request — this route SENDS');
+t_contains($rt, 'no "flush the whole queue" action',
+     'there is still no flush-everything action, by design');
+
+// ── The UI ──────────────────────────────────────────────────────────────────
+
+$html3 = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+$app3  = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+
+t_contains($html3, 'onclick="deliverSelectedQueue()"',
+     'the queue bar has a Deliver selected button');
+t_contains($app3, 'async function deliverSelectedQueue',
+     'with a handler behind it');
+t_contains($app3, 'API.mgDeliver', 'that calls the deliver route');
+
+// NO NATIVE DIALOGS in the queue handlers.
+//
+// This is why two controls shipped dead: a browser that has suppressed
+// dialogs makes confirm() return false and alert() a no-op, silently, so
+// `if (!confirm(...)) return;` becomes a button that does nothing. Checked
+// over these handlers specifically so an unrelated confirm() elsewhere
+// neither fails this nor hides a regression here.
+foreach (['deliverSelectedQueue', 'deleteSelectedQueue', 'inspectMessage'] as $fn) {
+    $body = t_fn_body($app3, $fn);
+    t_ok($body !== '', $fn . '() exists');
+    // Strip comments first. The first version of this failed on the comments
+    // explaining why confirm() was removed -- a check that cannot tell code
+    // from a remark ABOUT the code reports a bug that is not there, and the
+    // natural response is to delete the explanation to appease it.
+    $code = preg_replace('~/\*.*?\*/~s', '', $body);
+    $code = preg_replace('~^\s*//.*$~m', '', (string)$code);
+    t_ok(preg_match('/(?<![\w.])(?:confirm|alert|prompt)\s*\(/', (string)$code) === 0,
+         $fn . '() uses an in-app dialog, not confirm()/alert() which a '
+       . 'browser can suppress without telling anyone');
+}
+
+// Delivering a frozen message THAWS it. The Exim spec is explicit about this,
+// and "retry" does not sound like "unfreeze", so the dialog has to say so.
+$dsq = t_fn_body($app3, 'deliverSelectedQueue');
+t_contains($dsq, 'frozen', 'the deliver dialog knows about frozen messages');
+t_contains($dsq, 'unfreeze', 'and warns that delivering one unfreezes it');
+t_contains($app3, "data-frozen",
+     'which it can only know because the row carries the frozen flag');
+
+// Honest reporting in the toast.
+t_contains($dsq, 'still queued',
+     'a deferred message is reported as still queued, never as delivered');

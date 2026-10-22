@@ -1248,6 +1248,225 @@ class MailGuard
     }
 
     /**
+     * Force a delivery attempt on queued messages — cPanel's "Deliver" button.
+     *
+     * `exim -M <id>` runs a delivery attempt immediately, ignoring the retry
+     * schedule. That is the right tool: the usual reason mail sits in this
+     * queue is a retry timer that has not expired, not a permanent failure. A
+     * Gmail `421-4.7.0` rate limit or a full recipient mailbox parks a genuine
+     * customer message for hours, and the operator can see it is genuine.
+     *
+     * THREE THINGS THIS HAS TO GET RIGHT THAT DELETION DOES NOT:
+     *
+     * 1. IT THAWS. The Exim spec is explicit: with -M, "if any of the messages
+     *    are frozen, they are automatically thawed before the delivery
+     *    attempt". Frozen means Exim already gave up, so delivering a frozen
+     *    message is not a neutral retry and the UI says so before you click.
+     *
+     * 2. IT BLOCKS ON THE NETWORK. Deletion is a local unlink and returns at
+     *    once; a delivery attempt opens an SMTP conversation with a remote MTA
+     *    that may be slow, rate-limiting or black-holing. Unbounded, one
+     *    unreachable domain hangs the request until the CGI times out and the
+     *    operator learns nothing. So: a per-message timeout, an overall wall
+     *    clock budget, and a much lower cap than deletion's 500.
+     *
+     * 3. EXIT 0 DOES NOT MEAN DELIVERED. It means the attempt ran. A message
+     *    that deferred again is still in the queue and exim is still happy.
+     *    Reporting that as "delivered" would be a lie the operator acts on, so
+     *    the queue is re-read afterwards and success is defined as LEFT THE
+     *    QUEUE.
+     *
+     * This server relayed 92,954 spam messages in one incident. Forcing
+     * delivery is therefore an outbound send of whatever is selected, logged
+     * at warning level with the ids, and never a one-click action in the UI.
+     *
+     * @param string[] $ids
+     * @param int $budgetSeconds total wall clock across the batch
+     * @return array{success:bool,delivered:int,deferred:int,attempted:int,
+     *               skipped:int,failed:array,error?:string}
+     */
+    public static function deliverMessages(array $ids, int $budgetSeconds = 90): array
+    {
+        // VALIDATE FIRST, then look for exim — same order as deleteMessages(),
+        // and for the same reason: the check that keeps shell metacharacters
+        // out of a root command must not depend on a binary being installed.
+        $clean  = [];
+        $failed = [];
+        foreach ($ids as $id) {
+            $id = trim((string)$id);
+            if (self::isMessageId($id)) { $clean[] = $id; }
+            else { $failed[] = ['id' => substr($id, 0, 40),
+                                'error' => 'not a valid exim message id']; }
+        }
+        if ($clean === []) {
+            return ['success' => false, 'delivered' => 0, 'deferred' => 0,
+                    'attempted' => 0, 'skipped' => 0, 'failed' => $failed,
+                    'error' => 'No valid message ids'];
+        }
+
+        // Capped far lower than deletion. Each of these is a network round
+        // trip, not an unlink: 500 would be 500 SMTP conversations in one
+        // request on a box that is usually already struggling when somebody
+        // opens this page.
+        if (count($clean) > 100) {
+            return ['success' => false, 'delivered' => 0, 'deferred' => 0,
+                    'attempted' => 0, 'skipped' => 0, 'failed' => $failed,
+                    'error' => 'Refusing more than 100 messages in one go — '
+                             . 'each one is a live delivery attempt, so deliver '
+                             . 'in batches'];
+        }
+
+        $bin = null;
+        foreach (['/usr/sbin/exim', '/usr/bin/exim'] as $b) {
+            if (is_executable($b)) { $bin = $b; break; }
+        }
+        if ($bin === null) {
+            return ['success' => false, 'delivered' => 0, 'deferred' => 0,
+                    'attempted' => 0, 'skipped' => 0, 'failed' => $failed,
+                    'error' => 'exim not found'];
+        }
+
+        // What is being SENT, recorded before it is sent. If this turns out to
+        // have pushed spam out, this line is the record of who did it.
+        Logger::warn(sprintf(
+            'Forcing delivery of %d queued message(s): %s',
+            count($clean), implode(' ', array_slice($clean, 0, 50))));
+
+        // One at a time, each with its own timeout.
+        //
+        // Not batched like deletion: `exim -M a b c` processes them in turn, so
+        // a single hung remote MTA would eat the whole budget and the caller
+        // could not tell which message caused it. Per-message also means a
+        // per-message result, which is what the operator needs.
+        $perMsg   = max(5, min(30, (int) ceil($budgetSeconds / 3)));
+        $deadline = microtime(true) + $budgetSeconds;
+        $attempted = [];
+        $skipped   = 0;
+        $hasTimeout = self::hasTimeoutBinary();
+
+        foreach ($clean as $id) {
+            if (microtime(true) >= $deadline) {
+                // Out of budget. Reported, never silently dropped: "nothing
+                // happened to 60 of your messages" is something the operator
+                // has to know to click again.
+                $skipped++;
+                continue;
+            }
+
+            $cmd = 'nice -n 19 ';
+            if ($hasTimeout) {
+                $cmd .= 'timeout ' . (int)$perMsg . ' ';
+            }
+            $cmd .= escapeshellarg($bin) . ' -M ' . escapeshellarg($id) . ' 2>&1';
+
+            $o = []; $rc = 0;
+            @exec($cmd, $o, $rc);
+            $attempted[$id] = ['rc' => $rc,
+                               'out' => trim(implode(' ', array_slice($o, 0, 2)))];
+
+            // 124 is `timeout` killing it. The attempt is still in flight as
+            // far as exim is concerned, so this is not a failure — it is "we
+            // stopped waiting", and saying so is the honest report.
+            if ($rc === 124) {
+                $failed[] = ['id' => $id,
+                             'error' => 'still running after ' . $perMsg
+                                      . 's — the remote server is slow; it may '
+                                      . 'yet be delivered'];
+            }
+        }
+
+        // SUCCESS = LEFT THE QUEUE.
+        //
+        // exim exits 0 for an attempt that deferred, so the exit code cannot
+        // tell delivered from still-stuck. One cheap re-read of the queue can.
+        $stillQueued = self::queuedIdSet(array_keys($attempted));
+
+        $delivered = 0; $deferred = 0;
+        foreach ($attempted as $id => $res) {
+            if (isset($stillQueued[$id])) {
+                $deferred++;
+                if ($res['rc'] !== 0 && $res['rc'] !== 124) {
+                    $failed[] = ['id' => $id,
+                                 'error' => $res['out'] ?: 'exim refused'];
+                }
+            } else {
+                $delivered++;
+            }
+        }
+
+        Logger::event(
+            'mail_queue_deliver', 'medium', '', 'mail queue',
+            sprintf('%d message(s) left the queue, %d still deferred, after an '
+                  . 'operator forced delivery of %d',
+                    $delivered, $deferred, count($attempted)));
+
+        return [
+            'success'   => $delivered > 0 || $deferred > 0,
+            'delivered' => $delivered,
+            'deferred'  => $deferred,
+            'attempted' => count($attempted),
+            'skipped'   => $skipped,
+            'failed'    => $failed,
+        ];
+    }
+
+    /** Is GNU coreutils `timeout` available to bound a delivery attempt? */
+    private static function hasTimeoutBinary(): bool
+    {
+        foreach (['/usr/bin/timeout', '/bin/timeout'] as $t) {
+            if (is_executable($t)) { return true; }
+        }
+        return false;
+    }
+
+    /**
+     * Which of these ids are STILL in the queue.
+     *
+     * Used to tell a real delivery from a deferral, because exim's exit status
+     * cannot. Reads ids only -- `exim -bp` output is parsed for the id column
+     * and nothing else, so this stays cheap even on a large queue.
+     *
+     * @param string[] $ids
+     * @return array<string,true>
+     */
+    private static function queuedIdSet(array $ids): array
+    {
+        if ($ids === []) { return []; }
+
+        $bin = null;
+        foreach (['/usr/sbin/exim', '/usr/bin/exim'] as $b) {
+            if (is_executable($b)) { $bin = $b; break; }
+        }
+        if ($bin === null) {
+            // Cannot tell. Treat every message as still queued rather than
+            // reporting deliveries that may not have happened -- overstating
+            // success here is how an operator stops chasing real stuck mail.
+            $all = [];
+            foreach ($ids as $id) { $all[$id] = true; }
+            return $all;
+        }
+
+        $o = []; $rc = 0;
+        @exec('nice -n 19 ' . escapeshellarg($bin) . ' -bp 2>/dev/null', $o, $rc);
+        if ($rc !== 0) {
+            $all = [];
+            foreach ($ids as $id) { $all[$id] = true; }
+            return $all;
+        }
+
+        $want = array_fill_keys($ids, true);
+        $set  = [];
+        foreach ($o as $line) {
+            // "  34h 24K 1aBcDe-0001Xy-Zz <sender@example.com>"
+            if (preg_match('/\b([A-Za-z0-9]{6}-[A-Za-z0-9]{6,20}-[A-Za-z0-9]{2,6})\b/', $line, $m)
+                && isset($want[$m[1]])) {
+                $set[$m[1]] = true;
+            }
+        }
+        return $set;
+    }
+
+    /**
      * A message's headers, for deciding whether it is spam before deleting it.
      *
      * Headers only -- never the body. The body is a customer's private mail,

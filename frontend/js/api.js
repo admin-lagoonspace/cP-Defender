@@ -365,6 +365,10 @@ const API = (() => {
                                   + encodeURIComponent(id)),
     mgDelete:  (ids)       => req('POST', 'mailguard/delete',
                                   { ids: ids, confirm: true }),
+    // Force a delivery attempt (exim -M). Confirmed server-side too, because
+    // this SENDS — and thaws anything frozen.
+    mgDeliver: (ids)       => req('POST', 'mailguard/deliver',
+                                  { ids: ids, confirm: true }),
     mgSettings:     ()        => req('GET',  'mailguard/settings'),
     mgSaveSettings: (o)       => req('POST', 'mailguard/save-settings', o),
     mgThrottle: (acct, perHr) => req('POST', 'mailguard/throttle',
