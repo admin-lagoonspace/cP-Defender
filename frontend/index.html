@@ -4,18 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ServerScrub — Security Dashboard</title>
-<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.13.5">
-<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.13.5">
-<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.13.5">
+<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.14.0">
+<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.14.0">
+<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.14.0">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=4.13.5">
+<link rel="stylesheet" href="css/app.css?v=4.14.0">
 </head>
 <body>
 <!-- First-load splash. The full lockup, because this is the one moment the
      product introduces itself; everywhere else uses the icon alone. -->
 <div id="ss-splash">
-  <img src="images/logo.png?v=4.13.5" alt="ServerScrub">
+  <img src="images/logo.png?v=4.14.0" alt="ServerScrub">
   <div class="ss-cap">Loading…</div>
 </div>
 
@@ -62,7 +62,7 @@
 
     <!-- Logo -->
     <div class="login-logo" style="margin-bottom:20px">
-      <img src="images/logo.png?v=4.13.5" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
+      <img src="images/logo.png?v=4.14.0" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
       <div id="login-mode-sub" style="font-size:.75rem;color:var(--blue2);margin-top:5px;font-weight:600;letter-spacing:.03em">cPanel Security Suite</div>
     </div>
 
@@ -103,7 +103,7 @@
 <div id="activate-screen" class="hidden">
   <div class="activate-card">
     <div class="activate-mark">
-      <img src="images/icon-180.png?v=4.13.5" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
+      <img src="images/icon-180.png?v=4.14.0" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
     </div>
 
     <div class="activate-title">Activate ServerScrub</div>
@@ -149,7 +149,7 @@
   <div class="topbar-brand">
     <!-- Shield icon mark — inline SVG so it renders crisp at any size with no background bleed -->
     <div class="brand-icon">
-      <img src="images/icon-64.png?v=4.13.5" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
+      <img src="images/icon-64.png?v=4.14.0" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
     </div>
     <div>
       <div class="brand-name">ServerScrub</div>
@@ -278,7 +278,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.13.5 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.14.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -661,8 +661,9 @@
                  excluding them one prompt at a time is the wrong shape of
                  work. Collapses to parent folders so five files in one
                  directory become one rule, not five. -->
-            <button class="btn btn-ghost btn-sm threat-bulk-btn" id="threat-bulk-exclude"
-                    onclick="excludeSelectedThreats()" disabled>🚫 Not malware — exclude</button>
+            <button class="btn btn-ghost btn-sm threat-bulk-btn" id="threat-bulk-notmalware"
+                    onclick="markSelectedNotMalware()" disabled
+                    title="Record these as judged safe. They stay under the scanner and are reported again if their contents change.">🚫 Not malware</button>
             <span style="font-size:.72rem;color:var(--txt3)">
               Tick rows, or the box in the header to select all. Delete cannot be undone.
             </span>
@@ -687,12 +688,55 @@
           </div>
         </div>
       </div>
+      <!-- Files judged not malware.
+           Deliberately ABOVE exclusions, because this is the one an operator
+           should reach for first. A verdict keeps the file under scan and only
+           suppresses the report while its bytes are unchanged; an exclusion
+           stops the scanner looking at a path at all, forever. -->
+      <div class="card mt-5">
+        <div class="card-header">
+          <div class="card-title">Marked not malware</div>
+          <span id="verdict-summary" class="dim" style="font-size:.76rem;margin-left:10px"></span>
+          <button class="btn btn-ghost btn-sm" style="margin-left:auto"
+                  onclick="doRefresh(this, loadVerdicts)">&#8634; Reload</button>
+        </div>
+        <div class="card-body">
+          <div style="font-size:.82rem;color:var(--txt3);margin-bottom:12px">
+            These files are <strong>still scanned on every pass</strong>. Only the
+            report is suppressed, and only while the file's contents are exactly
+            what was judged. Change one byte and it is reported again at full
+            severity.
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="verdict-table">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Was flagged as</th>
+                  <th>sha256</th>
+                  <th>Cleared by</th>
+                  <th>When</th>
+                  <th>State</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="verdict-tbody">
+                <tr><td colspan="7" class="dim">Loading&hellip;</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- Scan exclusions.
            This exists because the product reported five HIGH threats against
            ai-bolit -- Imunify360's own scanner, shipped by CloudLinux. The
            signatures were correct: a malware scanner contains the patterns it
            hunts for. The product was still wrong, and there was no way to say
-           so from the panel. -->
+           so from the panel.
+
+           Kept, but it is the blunter instrument of the two: prefer a verdict
+           above unless you really do want a path never looked at again. -->
       <div class="card mt-5">
         <div class="card-header">
           <div class="card-title">Scan exclusions</div>
@@ -2756,11 +2800,11 @@
      as hard as one whose name never changes. icon-64.png held the
      old crop in 4.0.0 and the new mark in 4.1.0, so an updated
      server kept showing the old logo. -->
-<script>window.SG_ASSET_V = "4.13.5";</script>
+<script>window.SG_ASSET_V = "4.14.0";</script>
 <script src="config.js"></script>
-<script src="js/api.js?v=4.13.5"></script>
-<script src="js/charts.js?v=4.13.5"></script>
-<script src="js/app.js?v=4.13.5"></script>
+<script src="js/api.js?v=4.14.0"></script>
+<script src="js/charts.js?v=4.14.0"></script>
+<script src="js/app.js?v=4.14.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2911,7 +2955,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 <div id="sg-busy" role="status" aria-live="polite" aria-hidden="true">
   <div class="sg-busy-box">
     <div class="ss-load sm">
-      <img src="images/icon.png?v=4.13.5" alt="">
+      <img src="images/icon.png?v=4.14.0" alt="">
       <span class="ss-cap" id="sg-busy-text">Working…</span>
     </div>
   </div>
@@ -2923,6 +2967,7 @@ document.addEventListener('DOMContentLoaded', async () => {
      understood, and there was no way to see the rest. -->
 <style>
   #scan-accounts-modal,
+  #notmalware-modal,
   #waf-event-modal {
     position: fixed; inset: 0; z-index: 9000;
     display: flex; align-items: center; justify-content: center;
@@ -2930,8 +2975,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     padding: 20px;
   }
   #scan-accounts-modal.hidden,
+  #notmalware-modal.hidden,
   #waf-event-modal.hidden { display: none; }
   #scan-accounts-modal .wem-box,
+  #notmalware-modal .wem-box,
   #waf-event-modal .wem-box {
     background: var(--card, #1b1f23);
     border: 1px solid var(--line, #2d333a);
@@ -2941,13 +2988,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     box-shadow: 0 18px 60px rgba(0,0,0,.5);
   }
   #scan-accounts-modal .wem-head,
+  #notmalware-modal .wem-head,
   #waf-event-modal .wem-head {
     display: flex; align-items: center; gap: 10px;
     padding: 14px 18px; border-bottom: 1px solid var(--line, #2d333a);
   }
   #scan-accounts-modal .wem-body,
+  #notmalware-modal .wem-body,
   #waf-event-modal .wem-body { padding: 16px 18px; overflow: auto; }
   #scan-accounts-modal .wem-foot,
+  #notmalware-modal .wem-foot,
   #waf-event-modal .wem-foot {
     display: flex; gap: 8px; justify-content: flex-end;
     padding: 12px 18px; border-top: 1px solid var(--line, #2d333a);
@@ -2992,6 +3042,49 @@ document.addEventListener('DOMContentLoaded', async () => {
               onclick="closeModal('scan-accounts-modal')">Cancel</button>
       <button class="btn btn-primary btn-sm" id="scan-accounts-go"
               onclick="startScanFromPicker()">Scan selected</button>
+    </div>
+  </div>
+</div>
+
+<!-- "Not malware" confirmation.
+     An in-app dialog rather than prompt()/confirm(). This plugin renders inside
+     cPanel's iframe, and an iframe without allow-modals makes both of those
+     return null INSTANTLY and silently -- the handler reads that as "cancelled"
+     and returns, so the button looks completely dead with nothing in the
+     console. Two buttons behaved exactly that way.
+
+     It also gives somewhere to type WHY, which a confirm() cannot. -->
+<div id="notmalware-modal" class="hidden" role="dialog" aria-modal="true"
+     aria-labelledby="nmm-title" onclick="if(event.target===this)closeModal('notmalware-modal')">
+  <div class="wem-box">
+    <div class="wem-head">
+      <div style="font-weight:700;font-size:.92rem" id="nmm-title">Mark as not malware</div>
+      <button class="btn btn-ghost btn-xs" style="margin-left:auto"
+              onclick="closeModal('notmalware-modal')" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="wem-body">
+      <div id="nmm-files" style="font-family:ui-monospace,monospace;font-size:.78rem;
+                                 max-height:190px;overflow:auto;margin-bottom:12px"></div>
+      <div style="font-size:.82rem;color:var(--txt3);margin-bottom:10px">
+        The file stays under the scanner. ServerScrub records its sha256 and stops
+        reporting it <strong>only while the contents are identical</strong>. If the
+        file is modified or replaced, it is flagged again immediately.
+        <br><br>
+        This is not an exclusion &mdash; nothing becomes invisible.
+      </div>
+      <label style="display:block">
+        <span style="display:block;font-size:.82rem;margin-bottom:4px">Why is it safe? (optional, kept with the record)</span>
+        <input type="text" id="nmm-note" maxlength="500"
+               placeholder="e.g. Imunify360 scanner engine shipped by CloudLinux"
+               style="width:100%">
+      </label>
+    </div>
+    <div class="wem-foot">
+      <span class="dim" style="font-size:.75rem" id="nmm-count"></span>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto"
+              onclick="closeModal('notmalware-modal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="nmm-go"
+              onclick="confirmNotMalware()">Mark not malware</button>
     </div>
   </div>
 </div>

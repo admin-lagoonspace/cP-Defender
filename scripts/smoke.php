@@ -67,6 +67,10 @@ $routes = [
     ['GET', 'phphard/stats'],
     ['GET', 'update/status'],
     ['GET', 'update/progress'],
+    ['GET', 'exclusions/list'],
+    // verdicts/list stat()s and re-hashes every cleared file to report drift,
+    // so it touches the filesystem on a route the Scanner page loads on open.
+    ['GET', 'verdicts/list'],
 ];
 
 $php = PHP_BINARY;

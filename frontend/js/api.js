@@ -336,6 +336,17 @@ const API = (() => {
     // anything: one connection and six queries per install.
     // Network guards. 'egressPreview' applies nothing -- see the route.
     // Outbound mail. No queue-clearing or suspend call exists by design.
+    // Not-malware verdicts. Separate from exclusions on purpose: a verdict
+    // keeps the file under scan and is keyed on its sha256, so it lapses the
+    // moment the file changes. An exclusion is a permanent blind spot.
+    verdictList:      ()            => req('GET',  'verdicts/list'),
+    verdictClear:     (id, note)    => req('POST', 'verdicts/clear',
+                                           { id: id, note: note || '' }),
+    verdictClearMany: (ids, note)   => req('POST', 'verdicts/clear-many',
+                                           { ids: ids, note: note || '' }),
+    verdictRevoke:    (id)          => req('POST', 'verdicts/revoke', { id: id }),
+    verdictPrune:     ()            => req('POST', 'verdicts/prune'),
+
     exclList: ()      => req('GET',  'exclusions/list'),
     exclSave: (raw)   => req('POST', 'exclusions/save', { raw: raw }),
     exclAdd:  (path)  => req('POST', 'exclusions/add',  { path: path }),

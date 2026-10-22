@@ -42,6 +42,8 @@ require_once __DIR__ . '/../lib/Database.php';
 require_once __DIR__ . '/../lib/Auth.php';
 require_once __DIR__ . '/../lib/Logger.php';
 require_once __DIR__ . '/../lib/Heuristics.php';
+require_once __DIR__ . '/../lib/Verdicts.php';
+require_once __DIR__ . '/../lib/ThreatStore.php';
 require_once __DIR__ . '/../lib/Scanner.php';
 require_once __DIR__ . '/../lib/Firewall.php';
 require_once __DIR__ . '/../lib/WAF.php';
@@ -181,6 +183,7 @@ try {
         'cmsguard'   => routeCMSGuard($action, $method, $body, $query, $user),
         'wpscan'     => routeWPScan($action, $method, $body, $query, $user),
         'exclusions' => routeExclusions($action, $method, $body, $query, $user),
+        'verdicts'   => routeVerdicts($action, $method, $body, $query, $user),
         'netguard'   => routeNetGuard($action, $method, $body, $query, $user),
         'mailguard'  => routeMailGuard($action, $method, $body, $query, $user),
         'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
@@ -1403,6 +1406,87 @@ function routeExclusions(string $action, string $method, array $body, array $q, 
                       'by'       => $path !== '' ? Heuristics::excludedBy($path) : null,
                   ]];
               })(),
+
+        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Not-malware verdicts
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Distinct from exclusions above, and deliberately so. An exclusion says "never
+// look here again" -- a permanent blind spot. A verdict says "I have read THIS
+// FILE as it is now, and it is fine": the file is still scanned on every pass,
+// and the moment its bytes change it is reported again at full severity.
+//
+// That distinction is the whole feature. ai-bolit is a malware scanner, so it
+// is full of eval(base64_decode(...)) and always will be; excluding
+// /opt/ai-bolit/ would also hide anything an attacker later dropped beside it.
+function routeVerdicts(string $action, string $method, array $body, array $q, ?array $user): array {
+    return match($action) {
+        'list' => ['success' => true, 'data' => [
+            'verdicts' => Verdicts::listAll((int)($q['limit'] ?? 500)),
+            'stats'    => Verdicts::stats(),
+        ]],
+
+        // One finding.
+        'clear' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  $id = (int)($body['id'] ?? 0);
+                  if ($id <= 0) {
+                      return ['success' => false, 'error' => 'No finding id given',
+                              'code' => 400];
+                  }
+                  return Verdicts::clearThreat(
+                      $id,
+                      (string)($body['note'] ?? ''),
+                      (string)($user['username'] ?? '')
+                  );
+              })()
+            : ['success' => false, 'code' => 405],
+
+        // Several findings. Five rows from one vendor tree is the normal case --
+        // that is exactly what ai-bolit produced -- so clearing them one
+        // confirmation at a time is the wrong shape of work.
+        'clear-many' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  $ids = $body['ids'] ?? [];
+                  if (!is_array($ids) || !$ids) {
+                      return ['success' => false, 'error' => 'No findings given',
+                              'code' => 400];
+                  }
+                  // Bounded: an unbounded list here means an unbounded number of
+                  // hash_file() calls in one request on a box that is already
+                  // running a scan.
+                  if (count($ids) > 500) {
+                      return ['success' => false,
+                              'error' => 'Too many at once (max 500)', 'code' => 400];
+                  }
+                  return Verdicts::clearMany(
+                      $ids,
+                      (string)($body['note'] ?? ''),
+                      (string)($user['username'] ?? '')
+                  );
+              })()
+            : ['success' => false, 'code' => 405],
+
+        // Changed your mind. The file becomes reportable again immediately.
+        'revoke' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  return Verdicts::revoke((int)($body['id'] ?? 0));
+              })()
+            : ['success' => false, 'code' => 405],
+
+        'prune' => $method === 'POST'
+            ? (function () use ($user) {
+                  Auth::requireRole('admin', $user);
+                  return Verdicts::pruneMissing();
+              })()
+            : ['success' => false, 'code' => 405],
 
         default => ['success' => false, 'error' => 'Not found', 'code' => 404],
     };

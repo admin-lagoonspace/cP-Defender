@@ -224,7 +224,8 @@ function openPage(name) {
     // was never loaded".
     scanner:    ['Loading scanner…',   () => Promise.all([loadThreats(),
                                                           adoptRunningScan(),
-                                                          loadExclusions()])],
+                                                          loadExclusions(),
+                                                   loadVerdicts()])],
     firewall:   ['Loading firewall…',  () => loadFirewall()],
     waf:        ['Loading WAF…',       () => Promise.all([loadWAF(),
                                                           loadWafEngine()])],
@@ -1248,8 +1249,8 @@ async function loadThreats() {
              quotes into a double-quoted attribute: the attribute terminated at
              the first one and the handler was never bound, so the button did
              nothing at all. A path must never be inlined into an attribute. -->
-        <button class="btn btn-ghost btn-xs" onclick="excludeThreatPath(${id})"
-                title="Not malware — exclude this path from future scans">🚫</button>
+        <button class="btn btn-ghost btn-xs" onclick="markNotMalware(${id})"
+                title="Not malware — keep scanning this file, but stop reporting it while its contents are unchanged">🚫</button>
         ${t.status === 'active' ? `
           <button class="btn btn-ghost btn-xs" onclick="quarantineThreat(${id})" title="Quarantine">🔒</button>
           <button class="btn btn-danger btn-xs" onclick="deleteThreat(${id})" title="Delete file">🗑</button>
@@ -1272,6 +1273,12 @@ function threatStatusBadge(status) {
     quarantined: '<span class="badge badge-amber">Quarantined</span>',
     deleted:     '<span class="badge badge-gray">Deleted</span>',
     restored:    '<span class="badge badge-blue">Restored</span>',
+    // Judged by an operator. Green, because it is a resolved finding and not
+    // an outstanding one -- a cleared file sitting in a red "Active" row is
+    // exactly what made the old buttons look broken.
+    not_malware: '<span class="badge badge-green" title="An operator judged this '
+               + 'file safe. It is still scanned; it will be reported again if '
+               + 'its contents change.">Not malware</span>',
   };
   return map[status] || `<span class="badge badge-gray">${esc(status || '')}</span>`;
 }
@@ -5355,45 +5362,199 @@ async function testExclusion() {
   }
 }
 
-// One click from a threat row, which is the moment the operator has all the
-// context to judge the finding wrong.
+// ── "Not malware" verdicts ──────────────────────────────────────────────────
 //
-// Takes the threat ID and resolves the path from State, never from markup.
-async function excludeThreatPath(id) {
-  const path = State.threatPaths ? State.threatPaths[Number(id)] : '';
-  if (!path) {
-    toast('Could not resolve that file path — reload the page and try again',
+// This replaced a pair of handlers that added PATH EXCLUSIONS. Two things were
+// wrong with those, and both mattered:
+//
+//   1. They were silently dead. Both opened with prompt() or confirm(). This
+//      plugin runs inside cPanel's iframe, and an iframe without allow-modals
+//      makes those return null immediately -- which the code read as
+//      "cancelled" and returned on. No error, no console entry, nothing. The
+//      button simply did nothing, every time.
+//
+//   2. Excluding was the wrong remedy anyway. Silencing five findings against
+//      ai-bolit by excluding /opt/ai-bolit/ also hides anything an attacker
+//      drops in there afterwards -- a permanent blind spot bought to tidy a
+//      table. A verdict keeps the file under scan and lapses the instant its
+//      bytes change.
+//
+// The exclusion list is still there for operators who genuinely do want a path
+// skipped. It is just no longer what this button does.
+
+// Which findings the open dialog is about. Module scope, so the modal's
+// confirm button can read it without inlining anything into markup.
+let NotMalwarePending = [];
+
+function openNotMalware(ids) {
+  const list = ids
+    .map(i => ({ id: i, path: (State.threatPaths || {})[i] || '' }))
+    .filter(x => x.path);
+
+  if (!list.length) {
+    toast('Could not resolve those file paths — reload the page and try again',
           'error');
     return;
   }
-  // The folder, not the single file: a vendor tree produces more of these, and
-  // excluding one file at a time is how an operator gives up and stops reading
-  // findings altogether.
-  const dir = path.replace(/\/[^/]*$/, '');
-  const choice = prompt(
-    'Exclude from future scans.\n\n'
-  + 'Leave the folder to exclude everything in it, or edit it down to just '
-  + 'this one file.',
-    dir || path);
-  if (choice === null) return;
 
-  const want = choice.trim();
-  if (!want) return;
+  NotMalwarePending = list;
 
-  const r = await API.exclAdd(want);
-  if (r && r.success) {
-    toast('Excluded: ' + want + '. It will not be scanned again.',
-          'success', 7000);
-    await loadThreats();
-    await loadExclusions();
+  const box = g('nmm-files');
+  if (box) {
+    box.innerHTML = list
+      .map(x => '<div style="padding:2px 0;word-break:break-all">' + esc(x.path) + '</div>')
+      .join('');
+  }
+  const cnt = g('nmm-count');
+  if (cnt) {
+    cnt.textContent = list.length === 1
+      ? '1 file' : list.length + ' files';
+  }
+  const note = g('nmm-note');
+  if (note) { note.value = ''; }
+
+  openModal('notmalware-modal');
+}
+
+// One row.
+function markNotMalware(id) { openNotMalware([Number(id)]); }
+
+// Bulk. Five findings from one vendor tree is the normal case -- that is
+// exactly what ai-bolit produced -- so clearing them one dialog at a time is
+// the wrong shape of work.
+function markSelectedNotMalware() {
+  const ids = selectedThreatIds();
+  if (!ids.length) {
+    toast('Tick the rows you want to clear first', 'info');
+    return;
+  }
+  openNotMalware(ids);
+}
+
+async function confirmNotMalware() {
+  const list = NotMalwarePending.slice();
+  if (!list.length) { closeModal('notmalware-modal'); return; }
+
+  const note = (g('nmm-note')?.value || '').trim();
+  const btn  = g('nmm-go');
+  if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
+
+  const res = await API.verdictClearMany(list.map(x => x.id), note);
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Mark not malware'; }
+  closeModal('notmalware-modal');
+  NotMalwarePending = [];
+
+  if (!res) {
+    toast('No response from the server', 'error', 6000);
+    return;
+  }
+  if (res.success === false) {
+    toast(res.error || 'Could not record those verdicts', 'error', 7000);
+    return;
+  }
+
+  const ok     = res.ok || 0;
+  const failed = res.failed || 0;
+
+  if (failed === 0) {
+    toast(ok + ' file(s) marked not malware. They stay under the scanner and '
+        + 'will be reported again if their contents change.', 'success', 8000);
   } else {
-    toast((r && r.error) || 'Could not add the exclusion', 'error');
+    // Name the failures with their reasons. A bare count is not actionable:
+    // the usual cause is that the file was deleted or quarantined between the
+    // scan and the click, which needs a different action entirely.
+    const why = (res.results || [])
+      .filter(r => !r.ok)
+      .slice(0, 4)
+      .map(r => (r.path || ('#' + r.id)) + ': ' + (r.error || 'failed'))
+      .join('\n');
+    toast('Marked ' + ok + ', could not mark ' + failed + '.\n' + why,
+          'warn', 11000);
+  }
+
+  await loadThreats();
+  await loadVerdicts();
+}
+
+// ── The list of what has been cleared ───────────────────────────────────────
+//
+// Operators need to audit this: a verdict list nobody can read is how a
+// "temporary" clearance becomes permanent. The important column is State --
+// a verdict whose file has since changed is DORMANT, the file is being
+// reported again, and that is invisible in a plain list of paths.
+async function loadVerdicts() {
+  const tb = g('verdict-tbody');
+  if (!tb) return;
+
+  const r = await API.verdictList();
+  const d = (r && r.data) || {};
+  const rows = d.verdicts || [];
+  const st   = d.stats || {};
+
+  const sum = g('verdict-summary');
+  if (sum) {
+    sum.textContent = rows.length
+      ? fmtNum(st.active || 0) + ' active'
+        + ((st.drifted || 0) ? ', ' + fmtNum(st.drifted) + ' lapsed (file changed)' : '')
+        + ((st.missing || 0) ? ', ' + fmtNum(st.missing) + ' gone from disk' : '')
+      : '';
+  }
+
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="7" class="dim">'
+      + 'Nothing marked yet. Use <strong>Not malware</strong> on a finding you '
+      + 'have checked and believe is safe.</td></tr>';
+    return;
+  }
+
+  tb.innerHTML = rows.map(v => {
+    const id   = Number(v.id) || 0;
+    const path = String(v.file_path || '');
+    let state;
+    if (!v.file_exists) {
+      state = '<span class="badge badge-gray" title="The file is no longer on disk, '
+            + 'so this verdict matches nothing">Gone</span>';
+    } else if (v.drifted) {
+      state = '<span class="badge badge-amber" title="The file has changed since it '
+            + 'was cleared, so it is being scanned and reported again">Lapsed</span>';
+    } else {
+      state = '<span class="badge badge-green" title="Contents unchanged since '
+            + 'it was cleared">Active</span>';
+    }
+    return `
+    <tr>
+      <td class="mono" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;
+                              white-space:nowrap" title="${esc(path)}">${esc(path)}</td>
+      <td class="mono" style="color:var(--txt3);font-size:.75rem">${esc(v.threat_name || '—')}</td>
+      <td class="mono dim" style="font-size:.72rem"
+          title="${esc(v.sha256 || '')}">${esc(String(v.sha256 || '').slice(0, 12))}</td>
+      <td class="dim">${esc(v.created_by || '—')}</td>
+      <td class="dim">${reltime(v.created_at)}</td>
+      <td>${state}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-xs" onclick="revokeVerdict(${id})"
+                title="Withdraw this verdict — the file becomes reportable again">Undo</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function revokeVerdict(id) {
+  const r = await API.verdictRevoke(Number(id));
+  if (r && r.success) {
+    toast('Verdict withdrawn. ' + (r.path || 'The file')
+        + ' will be reported again if it still matches a signature.',
+          'success', 7000);
+    await loadVerdicts();
+    await loadThreats();
+  } else {
+    toast((r && r.error) || 'Could not withdraw that verdict', 'error');
   }
 }
 
-// Bulk. Five findings from one vendor tree is the normal case -- that is
-// exactly what ai-bolit produced -- so excluding them one prompt at a time is
-// the wrong shape of work.
+// Kept so the exclusion list still has a bulk path, now that the threat-table
+// button no longer points at it.
 async function excludeSelectedThreats() {
   const ids = selectedThreatIds();
   if (!ids.length) {
@@ -5414,17 +5575,6 @@ async function excludeSelectedThreats() {
   // unreadable mess within a week.
   const folders = Array.from(new Set(
     paths.map(p => p.replace(/\/[^/]*$/, '') || p)));
-
-  const msg = folders.length === 1
-    ? 'Exclude this folder from future scans?\n\n' + folders[0]
-    : 'Exclude these ' + folders.length + ' folders from future scans?\n\n'
-      + folders.slice(0, 12).join('\n')
-      + (folders.length > 12 ? '\n…and ' + (folders.length - 12) + ' more' : '');
-
-  if (!confirm(msg + '\n\nFiles under them will no longer be scanned or '
-             + 'reported by the real-time monitor.')) {
-    return;
-  }
 
   const r = await API.exclAddMany(folders);
   const d = (r && r.data) || {};

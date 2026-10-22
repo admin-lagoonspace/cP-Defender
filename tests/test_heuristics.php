@@ -435,9 +435,9 @@ t_contains($daemon, 'scan_exclusions',
 $appJs = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
 $htmlF = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
 
-t_contains($appJs, 'onclick="excludeThreatPath(${id})"',
-     'the per-row exclude button passes the numeric id');
-t_ok(strpos($appJs, 'excludeThreatPath(${JSON.stringify') === false,
+t_contains($appJs, 'onclick="markNotMalware(${id})"',
+     'the per-row not-malware button passes the numeric id');
+t_ok(strpos($appJs, '(${JSON.stringify') === false,
      'and never interpolates a path into the attribute — that is what broke it');
 
 // No event attribute anywhere may carry a path. A path can contain an
@@ -454,9 +454,9 @@ t_contains($appJs, 'State.threatPaths = {}',
 // Bulk. Five findings from one vendor tree is the normal case — that is
 // exactly what ai-bolit produced — so one-at-a-time prompting is the wrong
 // shape of work.
-t_contains($htmlF, 'onclick="excludeSelectedThreats()"',
-     'there is a bulk exclude button');
-t_contains($htmlF, 'id="threat-bulk-exclude"', 'with an id');
+t_contains($htmlF, 'onclick="markSelectedNotMalware()"',
+     'there is a bulk not-malware button');
+t_contains($htmlF, 'id="threat-bulk-notmalware"', 'with an id');
 // This used to assert the button CARRIED the class, which it did -- while
 // updateBulkBar() enabled buttons from a hardcoded list of two ids that did
 // not include it. The button was disabled from the markup and never enabled,
@@ -470,8 +470,36 @@ t_ok(!preg_match("/\[document\.getElementById\('threat-bulk-quarantine'\)/", $ap
 $ub = substr($appJs, strpos($appJs, 'function updateBulkBar'), 1400);
 t_contains($ub, 'b.disabled = ids.length === 0',
      'enabling is driven by the selection, not set to a fixed value');
-t_contains($appJs, 'async function excludeSelectedThreats',
+t_contains($appJs, 'function markSelectedNotMalware',
      'and a handler behind it');
+
+// NEITHER control may use prompt() or confirm().
+//
+// This is why both of them did nothing in production. The plugin renders inside
+// cPanel's iframe, and an iframe without allow-modals makes prompt() and
+// confirm() return null INSTANTLY -- the handler reads that as "cancelled" and
+// returns. No error, no console output, no clue. The function existed, the
+// route existed, the button was enabled, and it was dead.
+//
+// Checked over the two handlers specifically rather than the whole file, so an
+// unrelated confirm() elsewhere neither fails this nor hides a regression here.
+foreach (['markNotMalware', 'markSelectedNotMalware', 'confirmNotMalware'] as $fn) {
+    $at = strpos($appJs, 'function ' . $fn);
+    t_ok($at !== false, $fn . '() exists');
+    $body = substr($appJs, (int)$at, 1800);
+    t_ok(strpos($body, 'prompt(') === false && strpos($body, 'confirm(') === false,
+         $fn . '() uses an in-app dialog, not prompt()/confirm() which the '
+       . 'cPanel iframe silently suppresses');
+}
+
+// The verdict flow must not be the exclusion flow wearing a new name. If the
+// button that says "not malware" writes a path exclusion, the operator has a
+// permanent blind spot they were told they did not have.
+$cnm = substr($appJs, (int)strpos($appJs, 'async function confirmNotMalware'), 1800);
+t_contains($cnm, 'API.verdictClearMany',
+     'marking not-malware records a hash-keyed verdict');
+t_ok(strpos($cnm, 'exclAdd') === false,
+     'and does NOT add a path exclusion — that would be a permanent blind spot');
 t_contains($appJs, 'selectedThreatIds()',
      'which uses the same selection the other bulk actions use');
 

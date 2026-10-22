@@ -8,7 +8,7 @@ Started by: RealTimeMonitor::start() (PHP) or systemd unit
 Environment: SG_ROOT must be set (defaults to 2 dirs up from this script)
 """
 
-import os, re, sys, time, signal, logging, sqlite3, shutil, datetime
+import os, re, sys, time, signal, logging, sqlite3, shutil, datetime, hashlib
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -560,12 +560,71 @@ def apply_cpu_priority(cpu_pct):
     log.info('CPU limit %d%% -> nice %d, scan_sleep %.2fs',
              cpu_pct, target, cpu_to_scan_sleep(cpu_pct))
 
+def sha256_of(path):
+    """sha256 of a file, or '' if it cannot be read.
+
+    Streamed, not read whole: this runs against arbitrary files on a shared
+    host and some of them are gigabytes.
+    """
+    try:
+        h = hashlib.sha256()
+        with open(path, 'rb') as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b''):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ''
+
+
+def is_cleared(conn, path, digest):
+    """Has an operator already judged these exact bytes at this exact path?
+
+    Mirrors Verdicts::isCleared() in PHP. The daemon cannot call into PHP, so
+    the rule is reimplemented against the same table -- and tested from both
+    sides rather than assumed to agree.
+
+    An empty digest returns False. A file we could not hash must never read as
+    cleared: that would make an unreadable file a silently trusted one.
+    """
+    if not path or not digest:
+        return False
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM file_verdicts WHERE file_path=? AND sha256=? LIMIT 1",
+            (path, digest)).fetchone()
+        return row is not None
+    except Exception as e:
+        # No table yet (pre-4.14.0 database, or a migration that has not run).
+        # Fail OPEN -- report the threat. A monitor that silently stops
+        # reporting because of a schema problem is worse than a duplicate row.
+        log.debug('is_cleared: %s', e)
+        return False
+
+
 def db_threat(conn, path, name, sev='high'):
+    """Record a realtime detection, unless an operator verdict covers it.
+
+    Stores the hash and size, which this did not do before 4.14.0: every
+    realtime row in the UI read "0 B", and with no hash there was nothing for a
+    not-malware verdict to be keyed on.
+    """
+    digest = sha256_of(path)
+
+    if is_cleared(conn, path, digest):
+        log.debug('suppressed by verdict: %s', path)
+        return 0
+
+    try:
+        size = os.path.getsize(path)
+    except Exception:
+        size = 0
+
     try:
         cur = conn.execute(
-            "INSERT INTO threats(file_path,threat_name,threat_type,severity,status,detected_at)"
-            " VALUES(?,?,?,?,?,strftime('%s','now'))",
-            (path, name, 'realtime_detection', sev, 'active'))
+            "INSERT INTO threats(file_path,threat_name,threat_type,severity,status,"
+            "hash,size,detected_at)"
+            " VALUES(?,?,?,?,?,?,?,strftime('%s','now'))",
+            (path, name, 'realtime_detection', sev, 'active', digest or None, size))
         conn.commit()
         return cur.lastrowid or 0
     except Exception as e:
@@ -917,9 +976,21 @@ def handle(conn, path, limits=None, limiter=None, debouncer=None):
                  % path)
 
     tid = db_threat(conn, path, t, sev)
+
+    # 0 means an operator has already read these exact bytes and cleared them.
+    # Return BEFORE the warning, the event and the quarantine: a suppressed
+    # finding that still logged "THREAT ... (id=0)" and wrote to the security
+    # timeline would make marking something not-malware look like it had done
+    # nothing at all, which is the complaint this feature exists to fix.
+    #
+    # The file was still read and still matched. Only the report is suppressed,
+    # and only while the bytes are unchanged.
+    if not tid:
+        return
+
     log.warning('THREAT %s -> %s (id=%s sev=%s)', path, t, tid, sev)
     db_event(conn, 'realtime_threat', '%s in %s' % (t, path))
-    if db_get(conn,'auto_quarantine') == '1' and tid:
+    if db_get(conn,'auto_quarantine') == '1':
         quarantine(conn, path, tid)
 
 

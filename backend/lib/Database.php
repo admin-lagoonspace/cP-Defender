@@ -297,6 +297,33 @@ class Database {
                 ('RATE_LIMIT_SSH',     'in',   'tcp', '22',   'LIMIT',  'Rate limit SSH brute force');
         ");
 
+        // Operator verdicts: "I looked at this file and it is not malware."
+        //
+        // Keyed on (file_path, sha256), NOT on path. This is the whole point:
+        // an exclusion blinds the scanner to a path forever, while a verdict
+        // only suppresses the REPORT for the exact bytes somebody read and
+        // cleared. Change one byte and the hash no longer matches, so the file
+        // is reported again at full severity. See Verdicts.php.
+        //
+        // UNIQUE(file_path, sha256) makes a double-click a no-op rather than a
+        // duplicate row.
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS file_verdicts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path   TEXT    NOT NULL,
+                sha256      TEXT    NOT NULL,
+                verdict     TEXT    NOT NULL DEFAULT 'not_malware',
+                threat_name TEXT,
+                size        INTEGER DEFAULT 0,
+                note        TEXT,
+                created_by  TEXT,
+                created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                UNIQUE(file_path, sha256)
+            );
+            CREATE INDEX IF NOT EXISTS idx_verdict_lookup
+                ON file_verdicts(file_path, sha256);
+        ");
+
         // Incremental migrations — safe to run on every boot (IF NOT EXISTS / IGNORE)
         // Add cpanel_user column to threats if missing (SQLite ALTER TABLE is append-only)
         $cols = array_column($db->query("PRAGMA table_info(threats)")->fetchAll(PDO::FETCH_ASSOC), 'name');

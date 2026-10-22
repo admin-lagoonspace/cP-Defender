@@ -243,6 +243,23 @@ def main():
     else:
         ok("every disabled control is enabled, and every loader is reached")
 
+    # 2c-gate. a detection writer that bypasses the not-malware verdict
+    # "Respect the operator's verdict" has to hold for EVERY finding or it
+    # holds for none: one writer inserting straight into `threats` re-creates
+    # a row that was already cleared, which from the panel is indistinguishable
+    # from the feature being broken. There were six writers when the gate went
+    # in -- five in Scanner.php and one in the Python daemon.
+    r = subprocess.run([sys.executable,
+                        os.path.join(REPO, "scripts", "check-threat-gate.py")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        for line in (r.stdout + r.stderr).strip().splitlines():
+            if line.strip():
+                fail(line.strip())
+        problems += 1
+    else:
+        ok("every detection writer goes through the verdict gate")
+
     # 2c-attr. a value interpolated into an HTML event attribute
     # A threat row rendered onclick="excludeThreatPath(${JSON.stringify(path)})".
     # JSON.stringify emits DOUBLE quotes, which terminate the attribute, so the

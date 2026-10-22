@@ -4,6 +4,13 @@
  * ClamAV + custom signature-based scanning
  */
 
+// Required HERE, not left to each caller. Scanner.php is bootstrapped by the
+// API, the CLI, two cron entry points and a dozen tests; a class it needs that
+// only the API remembered to require would fatal in all the others. Pulling its
+// own dependencies in makes the file safe to include from anywhere.
+require_once __DIR__ . '/Verdicts.php';
+require_once __DIR__ . '/ThreatStore.php';
+
 class Scanner {
 
     private array $customSignatures = [];
@@ -853,16 +860,25 @@ class Scanner {
         $threats = [];
         foreach ($output as $line) {
             if (preg_match('/^(.+):\s+(.+)\s+FOUND$/', $line, $m)) {
-                $threats[] = $this->recordThreat($m[1], $m[2], $jobId);
+                // Null means the operator already cleared these exact bytes.
+                // Skipped rather than reported, and never counted as a threat.
+                $rec = $this->recordThreat($m[1], $m[2], $jobId);
+                if ($rec !== null) { $threats[] = $rec; }
             }
         }
         return $threats;
     }
 
-    /** Persist one ClamAV detection and report it. */
-    private function recordThreat(string $filePath, string $threatName, int $jobId): array
+    /**
+     * Persist one ClamAV detection and report it.
+     *
+     * Returns null when a not-malware verdict covers this file's current
+     * contents: the file was still scanned and still matched, but the operator
+     * has already judged these bytes and we do not re-ask.
+     */
+    private function recordThreat(string $filePath, string $threatName, int $jobId): ?array
     {
-        $threatId = Database::insert('threats', [
+        $threatId = ThreatStore::record([
             'scan_job_id'  => $jobId,
             'file_path'    => $filePath,
             'threat_name'  => $threatName,
@@ -873,6 +889,8 @@ class Scanner {
             'status'       => 'active',
             'cpanel_user'  => self::getCpanelUser($filePath),
         ]);
+
+        if ($threatId === null) { return null; }
 
         Logger::event('malware_detected', $this->getSeverity($threatName), '',
                       $filePath, "Malware detected: {$threatName}");
@@ -959,7 +977,7 @@ class Scanner {
             if (preg_match('/^(.+):\s+(.+)\s+FOUND$/', $line, $m)) {
                 $filePath   = $m[1];
                 $threatName = $m[2];
-                $threatId   = Database::insert('threats', [
+                $threatId   = ThreatStore::record([
                     'scan_job_id'  => $jobId,
                     'file_path'    => $filePath,
                     'threat_name'  => $threatName,
@@ -970,6 +988,8 @@ class Scanner {
                     'status'       => 'active',
                     'cpanel_user'  => self::getCpanelUser($filePath),
                 ]);
+                // Cleared by an operator verdict: scanned, matched, not reported.
+                if ($threatId === null) { continue; }
                 $threats[] = ['id' => $threatId, 'file' => $filePath, 'name' => $threatName];
 
                 // Record it on the Security Events timeline too. That page had
@@ -1031,7 +1051,7 @@ class Scanner {
             // "long_base64".
             $h = Heuristics::evaluate($file, $content);
             if ($h !== null) {
-                $threatId = Database::insert('threats', [
+                $threatId = ThreatStore::record([
                     'scan_job_id' => $jobId,
                     'file_path'   => $file,
                     'threat_name' => 'SG.WP.' . $h['name'],
@@ -1047,6 +1067,11 @@ class Scanner {
                     // the file does and why its location condemns it.
                     'detail'      => $h['why'],
                 ]);
+                // Cleared by an operator verdict. `continue`, not `break`: the
+                // heuristic is done with this file either way, and the pattern
+                // loop below would otherwise re-report the same cleared bytes
+                // under a different signature name.
+                if ($threatId === null) { continue; }
                 $threats[] = [
                     'id'   => $threatId,
                     'file' => $file,
@@ -1062,7 +1087,7 @@ class Scanner {
 
             foreach ($this->phpPatterns as $sigName => $pattern) {
                 if (preg_match($pattern, $content)) {
-                    $threatId = Database::insert('threats', [
+                    $threatId = ThreatStore::record([
                         'scan_job_id' => $jobId,
                         'file_path'   => $file,
                         'threat_name' => "SG.PHP.$sigName",
@@ -1073,6 +1098,11 @@ class Scanner {
                         'status'      => 'active',
                         'cpanel_user' => self::getCpanelUser($file),
                     ]);
+                    // Cleared by an operator verdict. `break`, matching the
+                    // non-suppressed path: one signature match per file is
+                    // enough either way, and trying the rest would only
+                    // re-report bytes that have already been judged.
+                    if ($threatId === null) { break; }
                     $threats[] = ['id' => $threatId, 'file' => $file, 'name' => $sigName];
 
                     // Severity decides: delete outright, or quarantine with
@@ -1086,7 +1116,7 @@ class Scanner {
             // Also check custom signatures
             foreach ($this->customSignatures as $sig) {
                 if ($sig['type'] === 'regex' && preg_match($sig['pattern'], $content)) {
-                    Database::insert('threats', [
+                    ThreatStore::record([
                         'scan_job_id' => $jobId,
                         'file_path'   => $file,
                         'threat_name' => $sig['name'],
