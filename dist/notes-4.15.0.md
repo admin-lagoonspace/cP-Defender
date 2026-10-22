@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Deliver queued mail from Spam Monitor**, selected or in bulk â€” the action
+- **Deliver queued mail from Spam Monitor**, selected or in bulk — the action
   cPanel's Mail Queue Manager calls *Deliver*. It runs `exim -M`, which attempts
   delivery immediately and ignores the retry schedule. That is usually the right
   tool: mail sits in this queue because a timer has not expired, not because
@@ -26,7 +26,7 @@
     against deletion's 500, because the cost per item is a round trip.
 
   - **Exit 0 does not mean delivered.** `exim -M` exits 0 for an attempt that
-    deferred â€” the message is still queued and Exim is perfectly happy.
+    deferred — the message is still queued and Exim is perfectly happy.
     Reporting that as success would be a lie an operator then acts on, so the
     queue is re-read afterwards and *delivered* means **left the queue**. The
     result separates delivered from still-queued and names what failed.
@@ -40,7 +40,7 @@
   Once a page has shown a few dialogs, Chrome and Firefox offer *"prevent this
   page from creating additional dialogs"*; after that `confirm()` returns false
   and `alert()` does nothing, silently. Every handler shaped like
-  `if (!confirm(...)) return;` becomes a button that does nothing when clicked â€”
+  `if (!confirm(...)) return;` becomes a button that does nothing when clicked —
   which is exactly how the two "Not malware" controls shipped dead. **Delete
   selected** and **Headers** were both exposed to this.
 
@@ -50,7 +50,7 @@
   explanation was not.
 
   Eight other `confirm()`/`prompt()` calls remain elsewhere in the product with
-  the same exposure â€” listed in the commit, not yet converted.
+  the same exposure — listed in the commit, not yet converted.
 
 ---
 
