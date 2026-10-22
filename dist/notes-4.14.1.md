@@ -7,12 +7,12 @@
 - **Marking findings not-malware left every counter reading the old number.**
   The rows correctly flipped to *Not malware*, and a red **5** went on sitting
   beside the filter while the sidebar badge also said **5**. From the panel that
-  is indistinguishable from the action having silently failed â€” which is the
+  is indistinguishable from the action having silently failed — which is the
   complaint the feature was built to fix in the first place.
 
   Two separate causes:
 
-  - The red count was `data.length` â€” **rows on screen**, resolved ones
+  - The red count was `data.length` — **rows on screen**, resolved ones
     included. It is now the number of findings still `active`, computed by the
     server with the same query the dashboard and sidebar already use, so there
     is one definition of "outstanding" rather than a second invented in
@@ -21,7 +21,7 @@
 
   - The sidebar badge is written by `refreshDashboard()`, which only runs when
     the Dashboard page is opened. It therefore went stale after **every** threat
-    action â€” quarantine and delete overstated it too, not just this feature.
+    action — quarantine and delete overstated it too, not just this feature.
     `loadThreats()` now updates it from the response it already has, costing no
     extra request (it is polled while a scan runs).
 
