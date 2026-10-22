@@ -510,7 +510,23 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
                 "SELECT * FROM threats $sqlWhere ORDER BY detected_at DESC LIMIT 200",
                 $params
             );
-            return ['success' => true, 'data' => $threats];
+            // How many findings are still OUTSTANDING, independent of the
+            // filter and of the 200-row page.
+            //
+            // The red count beside the filter used to be `data.length` -- the
+            // number of rows on screen. With the filter on "All" that counts
+            // resolved findings too, so marking all five files not-malware
+            // left the badge reading "5" next to five rows that all said "Not
+            // malware". It looked exactly like the action had failed.
+            //
+            // Computed here, with the same `status='active'` the dashboard and
+            // the sidebar already use, so there is ONE definition of
+            // "outstanding" rather than a second one invented in JavaScript.
+            $active = (int) (Database::fetchOne(
+                "SELECT COUNT(*) AS c FROM threats WHERE status = 'active'"
+            )['c'] ?? 0);
+            return ['success' => true, 'data' => $threats,
+                    'meta' => ['active' => $active]];
         })(),
 
         'quarantine' => $method === 'POST' && $id

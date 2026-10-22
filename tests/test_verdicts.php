@@ -178,3 +178,67 @@ t_ok(ThreatStore::record([
 t_ok(empty(Verdicts::revoke(999999)['success']),
      'withdrawing a verdict that does not exist fails cleanly');
 
+
+// ── The counters must follow the verdict ────────────────────────────────────
+//
+// The feature worked and still looked broken: every row said "Not malware"
+// while a red "5" sat beside the filter and the sidebar badge also said 5.
+// That is indistinguishable from the action having silently failed, which is
+// exactly the complaint this whole feature started from.
+//
+// Two separate causes, both pinned here:
+//   1. the red count was data.length -- rows on SCREEN, resolved ones included
+//   2. the sidebar badge is written by refreshDashboard(), which only runs on
+//      the Dashboard page, so it went stale after EVERY threat action
+
+$sandbox2 = sys_get_temp_dir() . '/sg-verdict-count-' . getmypid() . '-' . mt_rand(1000, 9999);
+@mkdir($sandbox2, 0700, true);
+register_shutdown_function(function () use ($sandbox2) {
+    foreach (glob($sandbox2 . '/*') ?: [] as $f) { @unlink($f); }
+    @rmdir($sandbox2);
+});
+
+Database::query("DELETE FROM threats");
+
+$made = [];
+foreach (['a', 'b', 'c'] as $n) {
+    [$tid, ] = mkFinding($sandbox2, $n . '.php', "<?php eval(base64_decode('$n'));");
+    $made[] = $tid;
+}
+
+$activeCount = fn() => (int) (Database::fetchOne(
+    "SELECT COUNT(*) AS c FROM threats WHERE status = 'active'")['c'] ?? 0);
+
+t_eq(3, $activeCount(), 'three findings are outstanding to begin with');
+
+Verdicts::clearThreat($made[0], '', 'tester');
+t_eq(2, $activeCount(), 'clearing one drops the outstanding count to two');
+
+foreach ([$made[1], $made[2]] as $tid) { Verdicts::clearThreat($tid, '', 'tester'); }
+t_eq(0, $activeCount(),
+     'THE REPORTED BUG: clearing every finding leaves ZERO outstanding, '
+   . 'even though the rows are all still listed');
+
+t_eq(3, (int) (Database::fetchOne("SELECT COUNT(*) AS c FROM threats")['c'] ?? 0),
+     'while the findings themselves are kept, so the decision stays auditable');
+
+// Same definition as the dashboard and the sidebar, not a second one.
+$st = (new Scanner())->getStats();
+t_eq(0, (int) ($st['active'] ?? -1),
+     'and the dashboard stats agree, because both count status=active');
+
+// The wiring that carries it to the UI.
+$appJs2 = (string) file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+$api2   = (string) file_get_contents(dirname(__DIR__) . '/backend/api/index.php');
+
+t_contains($api2, "'meta' => ['active' => \$active]",
+     'the threats route reports the outstanding count to the client');
+t_ok(strpos($appJs2, "getElementById('threat-count-badge').textContent = threats.length") === false,
+     'the red badge is no longer the number of rows on screen');
+t_contains($appJs2, "res?.meta?.active",
+     'it uses the count the server computed');
+
+$lt = substr($appJs2, (int) strpos($appJs2, 'async function loadThreats'), 2600);
+t_contains($lt, "g('sb-threats')",
+     'and loadThreats() refreshes the sidebar badge, which previously went '
+   . 'stale after every threat action, not just this one');

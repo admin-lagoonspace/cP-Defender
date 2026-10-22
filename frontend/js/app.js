@@ -1192,7 +1192,44 @@ async function loadThreats() {
   if (!tbody) return;
 
   const threats = res?.data || [];
-  document.getElementById('threat-count-badge').textContent = threats.length;
+
+  // OUTSTANDING findings, not rows on screen.
+  //
+  // This was `threats.length`. With the filter on "All" that counts resolved
+  // findings too, so clearing all five ai-bolit files left a red "5" sitting
+  // beside five rows that each said "Not malware" -- indistinguishable from
+  // the action having silently failed.
+  //
+  // The number comes from the server, which counts status='active' the same
+  // way the dashboard and the sidebar do. Deriving it here from the rows we
+  // happen to have would be a SECOND definition of "outstanding", and it would
+  // be wrong whenever a filter is applied or there are more than 200 findings.
+  const outstanding = Number(res?.meta?.active ?? threats.length) || 0;
+
+  const cb = g('threat-count-badge');
+  if (cb) {
+    cb.textContent = outstanding;
+    // Red means "something needs you". Zero outstanding is not an alert, and
+    // leaving it red is how a cleared scanner still reads as a compromised one.
+    cb.className = outstanding > 0 ? 'badge badge-red' : 'badge badge-gray';
+    cb.title = outstanding > 0
+      ? outstanding + ' finding(s) still need attention'
+      : 'Nothing outstanding. Rows below may include findings already '
+      + 'quarantined, deleted or judged not malware.';
+  }
+
+  // Keep the sidebar in step, from the same number.
+  //
+  // The sidebar badge is written by refreshDashboard(), which only runs when
+  // the Dashboard page is opened -- so it went stale after EVERY threat
+  // action, not just this one: quarantine and delete left it overstated too.
+  // Updating it from the response we already have costs no extra request,
+  // which matters because loadThreats() is polled while a scan runs.
+  const sbT = g('sb-threats');
+  if (sbT) {
+    sbT.textContent = outstanding;
+    sbT.style.display = outstanding > 0 ? '' : 'none';
+  }
 
   // id -> file path, so an action can resolve a path WITHOUT it ever being
   // interpolated into markup. A path can contain quotes, spaces, backslashes
