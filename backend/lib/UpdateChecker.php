@@ -60,15 +60,40 @@ class UpdateChecker {
      * Called by the frontend on every dashboard load (cheap — no HTTP).
      */
     public static function getCachedStatus(): array {
-        $available   = Database::setting('update_available',   '0');
-        $latest      = Database::setting('update_latest_ver',  '');
+        $latest      = ltrim((string) Database::setting('update_latest_ver',  ''), 'v');
         $current     = defined('SG_VERSION') ? SG_VERSION : (Database::setting('sg_version', '0.0.0'));
         $checkedAt   = Database::setting('update_checked_at',  '0');
         $releaseUrl  = Database::setting('update_release_url', '');
         $releaseNotes= Database::setting('update_release_notes','');
 
+        // DERIVED HERE, never read back from the stored flag.
+        //
+        // `update_available` is a function of (latest, current). Persisting the
+        // ANSWER meant it was computed against the version that was installed
+        // at check time -- and then the install was upgraded, which is the one
+        // event guaranteed to invalidate it.
+        //
+        // The result: immediately after every successful upgrade the panel
+        // announced "New version available - v4.15.0" directly above "You are
+        // running v4.15.0". The flag said 1 because it was written while the
+        // server was still on 4.14.1, and nothing cleared it. Upgrades run from
+        // a shell script that has no reason to touch this database, so there
+        // was no moment at which it could have been cleared.
+        //
+        // Deriving at read time is self-correcting whatever upgraded the files:
+        // the panel's own updater, /home/upgrade.sh, or an rsync by hand.
+        $available = $latest !== ''
+                  && preg_match('/^\d+\.\d+\.\d+/', $latest)
+                  && version_compare($latest, (string)$current, '>');
+
+        // Self-heal the stored value so anything reading the raw setting -- a
+        // log line, a future caller -- cannot disagree with this answer.
+        if (!$available && Database::setting('update_available', '0') === '1') {
+            Database::setSetting('update_available', '0');
+        }
+
         return [
-            'update_available'  => $available === '1',
+            'update_available'  => $available,
             'current_version'   => $current,
             'latest_version'    => $latest ?: $current,
             'checked_at'        => (int) $checkedAt,

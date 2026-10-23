@@ -285,3 +285,100 @@ t_contains($sched, 'Updater::reconcile',    'reconciles the previous run');
 t_contains($sched, 'Updater::launch',       'and launches the updater');
 t_contains($sched, "require_once SG_ROOT . '/backend/lib/Updater.php';",
      'and requires the class it uses');
+
+// ── "New version available — v4.15.0 … you are running v4.15.0" ─────────────
+//
+// Reported from a live panel, and it is not a display glitch: the banner, the
+// Update Now button, the auto-updater's go/no-go decision and the daily cron
+// all read one field, and that field was a STORED BOOLEAN.
+//
+// `update_available` is a function of (latest, current). Persisting the ANSWER
+// meant it was computed against whatever was installed at CHECK time — and
+// then the install was upgraded, which is the single event guaranteed to
+// invalidate it. Upgrades run from a shell script that has no reason to touch
+// this database, so there was no moment at which the flag could be cleared.
+//
+// Every user therefore saw this after every successful upgrade, and the
+// auto-updater would have happily tried to "upgrade" 4.15.0 to 4.15.0.
+
+$cur = SG_VERSION;
+
+function t_bump(string $v, int $part = 1): string {
+    $p = array_map('intval', explode('.', $v) + [0, 0, 0]);
+    $p[$part]++;
+    return implode('.', array_slice($p, 0, 3));
+}
+function t_drop(string $v): string {
+    $p = array_map('intval', explode('.', $v) + [0, 0, 0]);
+    if ($p[2] > 0) { $p[2]--; } elseif ($p[1] > 0) { $p[1]--; } else { $p[0]--; }
+    return implode('.', array_slice($p, 0, 3));
+}
+
+// THE REPORTED STATE: the flag says an update exists, and the version it names
+// is the one already running.
+Database::setSetting('update_latest_ver', $cur);
+Database::setSetting('update_available', '1');
+
+$st = UpdateChecker::getCachedStatus();
+t_ok($st['update_available'] === false,
+     'THE REPORTED BUG: a stale flag naming the version already installed '
+   . 'does NOT report an update');
+t_eq($cur, $st['latest_version'], 'and latest is reported as the current version');
+t_eq($cur, $st['current_version'], 'alongside the current version');
+
+// Self-healing, so a log line or a future caller reading the raw setting
+// cannot disagree with the answer above.
+t_eq('0', Database::setting('update_available', 'unset'),
+     'and the stale stored flag is corrected on read');
+
+// The decision the auto-updater actually acts on must agree. This is the one
+// that matters most: it gates a live self-update on a production server.
+$dec = Updater::shouldApply(UpdateChecker::getCachedStatus());
+t_ok(empty($dec['go']),
+     'the auto-updater refuses to "upgrade" a version to itself');
+t_contains(strtolower((string)($dec['reason'] ?? '')), 'already on the latest',
+     'and says so plainly');
+
+// A real update is still reported. The fix must not simply suppress the
+// banner — that would be a far worse bug, hiding genuine security updates.
+Database::setSetting('update_latest_ver', t_bump($cur));
+Database::setSetting('update_available', '0');   // deliberately wrong the other way
+$st = UpdateChecker::getCachedStatus();
+t_ok($st['update_available'] === true,
+     'a genuinely newer version IS reported, even if the stored flag says no');
+t_eq(t_bump($cur), $st['latest_version'], 'and names the newer version');
+
+// A manifest BEHIND the installed build — a rolled-back release, or a dev box
+// running ahead of the channel — is not an update.
+Database::setSetting('update_latest_ver', t_drop($cur));
+Database::setSetting('update_available', '1');
+t_ok(UpdateChecker::getCachedStatus()['update_available'] === false,
+     'a manifest older than the installed version is not an update');
+
+// Never checked, or a malformed manifest: no banner, and no crash.
+foreach (['', 'not-a-version', 'v', '4.15'] as $junk) {
+    Database::setSetting('update_latest_ver', $junk);
+    Database::setSetting('update_available', '1');
+    t_ok(UpdateChecker::getCachedStatus()['update_available'] === false,
+         'no update claimed for an unusable stored version: '
+       . ($junk === '' ? '(empty)' : $junk));
+}
+
+// A 'v' prefix in the manifest must not read as a different version.
+Database::setSetting('update_latest_ver', 'v' . $cur);
+Database::setSetting('update_available', '1');
+t_ok(UpdateChecker::getCachedStatus()['update_available'] === false,
+     'a leading "v" on the stored version is stripped before comparing');
+
+// The derivation must not be read back from the flag it also writes.
+$src = t_code(dirname(__DIR__) . '/backend/lib/UpdateChecker.php');
+$gcs = substr($src, (int)strpos($src, 'function getCachedStatus'), 2200);
+t_contains($gcs, 'version_compare',
+     'getCachedStatus() compares versions rather than trusting a stored flag');
+// Single-quoted: a double-quoted PHP string eats the $ and the pattern then
+// silently matches nothing, which is a test that passes for the wrong reason.
+t_ok(!preg_match('/\'update_available\'\s*=>\s*\$available\s*===\s*\'1\'/', $gcs),
+     'and no longer returns the stored string as the answer');
+
+Database::setSetting('update_latest_ver', $cur);
+Database::setSetting('update_available', '0');
