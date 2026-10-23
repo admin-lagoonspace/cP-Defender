@@ -5,9 +5,9 @@
 ### Fixed
 
 - **CSF was never detected, so nothing was ever blocked.** Backend detection
-  ran `command -v csf`. A CGI does not inherit a login shell's PATH â€” under
+  ran `command -v csf`. A CGI does not inherit a login shell's PATH — under
   cPanel it is typically `/usr/local/bin:/bin:/usr/bin`, with **no
-  `/usr/sbin`** â€” so `csf` was not found on a server with CSF plainly
+  `/usr/sbin`** — so `csf` was not found on a server with CSF plainly
   installed, detection fell through to `none`, and every block was refused.
 
   The engine now carries its own PATH for firewall tools, locates CSF **on
@@ -24,7 +24,7 @@
 - **A refused block was still recorded as a block.** `blockIP()` wrote the
   `blocked_ips` row *before* checking whether the firewall accepted anything,
   so the Firewall page listed addresses as blocked while packets from them
-  arrived normally. The row is now written only on success â€” the most
+  arrived normally. The row is now written only on success — the most
   expensive kind of wrong a security tool can be is the kind that makes the
   operator stop looking.
 
@@ -33,8 +33,8 @@
 - **One banner instead of twenty red badges.** When blocking is broken it is
   broken for every address; repeating the same sentence on each row buried the
   one fact that mattered. The offenders table now carries a single alert
-  naming the reason, the usual cause, and the consequence â€” *"detection is
-  still running but nothing is being blocked"* â€” and each row reads simply
+  naming the reason, the usual cause, and the consequence — *"detection is
+  still running but nothing is being blocked"* — and each row reads simply
   **Not blocked**.
 
 ---
