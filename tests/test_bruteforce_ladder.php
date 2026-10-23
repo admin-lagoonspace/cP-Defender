@@ -298,3 +298,114 @@ $bp->setValue(null, null);
 $blockCmds = array_filter($fwCalls, function ($c) { return strpos($c, '-I ') !== false; });
 t_ok(count($blockCmds) >= 4,
     'each rung of the ladder issued a real firewall command, not just a database row');
+
+// ── "Watching" meant four different things ──────────────────────────────────
+//
+// Reported from a live panel: every offending address read "Watching",
+// including one with 398 port-scan hits, each with a "Release" button. That
+// status is produced whenever blocked=0, and blocked=0 has four very different
+// causes:
+//
+//   1. genuinely below the auto-block threshold
+//   2. auto-block switched off          — the product is deliberately passive
+//   3. the firewall REFUSED the block   — a fault, and completely invisible
+//   4. the address is on the allow list — never blocked, by instruction
+//
+// Three of those mean nothing is protecting the server, and one is a bug.
+// Rendering all four as "Watching" is how an address knocking 398 times sat
+// there looking as though that were the plan.
+
+BruteForce::ensureSchema();
+Database::query('DELETE FROM brute_force_offenders');
+
+function t_off(string $ip, array $cols = []): void {
+    Database::query(
+        'INSERT INTO brute_force_offenders (ip_address, service, attempts, usernames,
+             first_seen, last_seen, blocked) VALUES (?,?,?,?,?,?,?)',
+        [$ip, 'ssh', 398, 'root', time() - 600, time(), (int)($cols['blocked'] ?? 0)]);
+    foreach ($cols as $k => $v) {
+        if ($k === 'blocked') { continue; }
+        Database::query("UPDATE brute_force_offenders SET $k = ? WHERE ip_address = ?",
+                        [$v, $ip]);
+    }
+}
+function t_state(string $ip): array {
+    foreach (BruteForce::offenders(100) as $o) {
+        if ($o['ip_address'] === $ip) { return $o; }
+    }
+    return [];
+}
+
+Database::setSetting('bf_whitelist', '');
+Database::setSetting('bf_auto_block', '1');
+
+// 1. Below the threshold — the only case that should say "Watching".
+t_off('203.0.113.1');
+t_eq('watching', t_state('203.0.113.1')['state'] ?? '',
+     'an address with no block attempt recorded is watching');
+t_ok((t_state('203.0.113.1')['threshold'] ?? 0) > 0,
+     'and carries the threshold, so "watching" is a number not a mood');
+
+// 2. The firewall refused. THE INVISIBLE FAULT.
+t_off('203.0.113.2', ['block_error' => 'no firewall backend available',
+                      'block_tried_at' => time()]);
+$s = t_state('203.0.113.2');
+t_eq('block_failed', $s['state'] ?? '',
+     'THE REPORTED BUG: a block the firewall refused is NOT reported as watching');
+t_contains($s['state_reason'] ?? '', 'no firewall backend',
+     'and the reason travels with it');
+
+// 3. Auto-block switched off — a decision, shown as one.
+t_off('203.0.113.3', ['block_error' => 'auto-block is switched off',
+                      'block_tried_at' => time()]);
+t_eq('monitor_only', t_state('203.0.113.3')['state'] ?? '',
+     'auto-block being off is reported distinctly, not as watching');
+
+// 4. Allow-listed — never blocked, by instruction.
+Database::setSetting('bf_whitelist', '203.0.113.4');
+t_off('203.0.113.4');
+t_eq('allowlisted', t_state('203.0.113.4')['state'] ?? '',
+     'an allow-listed address says so rather than pretending to watch');
+Database::setSetting('bf_whitelist', '');
+
+// Blocked states still work.
+t_off('203.0.113.5', ['blocked' => 1, 'blocked_until' => time() + 3600]);
+t_eq('blocked', t_state('203.0.113.5')['state'] ?? '', 'a timed block reads as blocked');
+t_off('203.0.113.6', ['blocked' => 1, 'blocked_until' => null]);
+t_eq('permanent', t_state('203.0.113.6')['state'] ?? '',
+     'and a permanent one as permanent');
+
+// A recorded failure must never mask a real block.
+t_off('203.0.113.7', ['blocked' => 1, 'blocked_until' => time() + 60,
+                      'block_error' => 'stale error from an earlier attempt']);
+t_eq('blocked', t_state('203.0.113.7')['state'] ?? '',
+     'a stale error does not downgrade an address that IS blocked');
+
+// ── The UI ──────────────────────────────────────────────────────────────────
+
+$bfJs = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+$badge = substr($bfJs, (int)strpos($bfJs, 'function bfStatusBadge'), 2200);
+
+t_contains($badge, 'Block FAILED', 'the table shows a refused block as a failure');
+t_contains($badge, 'Would block',  'and auto-block being off as such');
+t_contains($badge, 'Allow-listed', 'and an allow-listed address as such');
+t_contains($badge, 'blocks at',    'while watching states the threshold');
+t_ok(substr_count($badge, 'badge-amber') >= 2 && strpos($badge, 'badge-red') !== false,
+     'and they are not all the same colour');
+
+// The action must match the state: "Release" on a row that was never blocked
+// does not unblock anything, it deletes the strike history.
+$acts = substr($bfJs, (int)strpos($bfJs, 'function bfRowActions'), 1200);
+t_contains($acts, 'bfBlockNow', 'an unblocked row offers a way to block it');
+t_contains($acts, 'Forget', 'and calls the destructive option what it is');
+t_contains($acts, 'bfRelease', 'while a blocked row can still be released');
+
+// ── Escalation records what it could not do ─────────────────────────────────
+
+$src = t_code(dirname(__DIR__) . '/backend/lib/BruteForce.php');
+t_contains($src, 'brute_force_block_failed',
+     'a refused block raises a security event rather than vanishing');
+t_contains($src, 'could NOT block',
+     'and is logged at error level');
+t_contains($src, "ADD COLUMN block_error",
+     'the reason is persisted so the panel can show it');

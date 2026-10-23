@@ -2137,8 +2137,7 @@ async function loadBruteForce() {
               title="${esc(r.usernames || '')}">${esc(r.usernames || '—')}</td>
           <td class="dim">${esc(reltime(r.last_seen))}</td>
           <td>${bfStatusBadge(r)}</td>
-          <td><button class="btn btn-ghost btn-xs"
-                      onclick="bfRelease('${esc(r.ip_address)}')">Release</button></td>
+          <td style="white-space:nowrap">${bfRowActions(r)}</td>
         </tr>`).join('');
     }
   }
@@ -2187,17 +2186,100 @@ function bfTermLeft(secs) {
 function bfStatusBadge(r) {
   const strike = Number(r.offences || 0);
   const nth = strike > 0 ? ` &middot; offence ${strike}` : '';
-  if (!Number(r.blocked)) {
-    const next = r.next_term ? ` &middot; next: ${esc(String(r.next_term))}` : '';
-    return `<span class="badge badge-amber">Watching</span>`
-         + `<span class="dim" style="font-size:.72rem">${nth}${next}</span>`;
+  const dim = (t) => `<span class="dim" style="font-size:.72rem">${t}</span>`;
+
+  if (Number(r.blocked)) {
+    if (Number(r.permanent)) {
+      return `<span class="badge badge-red">Blocked &middot; permanent</span>` + dim(nth);
+    }
+    return `<span class="badge badge-red">Blocked</span>`
+         + dim(` ${esc(bfTermLeft(r.expires_in))}${nth}`);
   }
-  if (Number(r.permanent)) {
-    return `<span class="badge badge-red">Blocked &middot; permanent</span>`
-         + `<span class="dim" style="font-size:.72rem">${nth}</span>`;
+
+  // NOT blocked — and the reason matters more than the fact.
+  //
+  // Every one of these used to render as "Watching", which reads as a
+  // deliberate choice to observe. Three of the four mean the product is not
+  // acting, and one of them is an outright fault. An address with 398
+  // port-scan hits sat in this table labelled "Watching", and nothing on the
+  // page could tell you whether that was policy or a broken firewall.
+  const why = esc(String(r.state_reason || ''));
+
+  if (r.state === 'block_failed') {
+    return `<span class="badge badge-red" title="${why || 'The firewall refused the block'}">`
+         + `Block FAILED</span>`
+         + dim(` ${why ? '&middot; ' + why : ''}${nth}`);
   }
-  return `<span class="badge badge-red">Blocked</span>`
-       + `<span class="dim" style="font-size:.72rem"> ${esc(bfTermLeft(r.expires_in))}${nth}</span>`;
+  if (r.state === 'monitor_only') {
+    return `<span class="badge badge-amber" title="This address earned a block, but `
+         + `auto-block is switched off in Brute Force settings.">Would block</span>`
+         + dim(` &middot; auto-block is off${nth}`);
+  }
+  if (r.state === 'allowlisted') {
+    return `<span class="badge badge-blue" title="On your allow list — never blocked, `
+         + `however it behaves.">Allow-listed</span>` + dim(nth);
+  }
+
+  // Genuinely still under the threshold. Say what the threshold IS, so
+  // "watching" is a number rather than a mood.
+  const t = Number(r.threshold || 0);
+  const w = Number(r.window_mins || 0);
+  const gate = t ? ` &middot; blocks at ${t} in ${w}m` : '';
+  const next = r.next_term ? ` &middot; next: ${esc(String(r.next_term))}` : '';
+  return `<span class="badge badge-amber" title="Below the auto-block threshold.">`
+       + `Watching</span>` + dim(`${gate}${next}${nth}`);
+}
+
+// The action has to match the state.
+//
+// Every row offered "Release", including rows that were never blocked. On
+// those, release() does not unblock anything -- it DELETES the strike history,
+// which is close to the opposite of what an operator reading "Release" on an
+// address with 398 port-scan hits would expect. A row that is not blocked
+// needs a way to block it, not a way to forget it.
+function bfRowActions(r) {
+  const ip = esc(r.ip_address);
+  if (Number(r.blocked)) {
+    return `<button class="btn btn-ghost btn-xs" title="Unblock at the firewall and `
+         + `clear its strike history" onclick="bfRelease('${ip}')">Release</button>`;
+  }
+  const forget = ` <button class="btn btn-ghost btn-xs" title="Forget this address and `
+       + `its strike history. It is NOT blocked, so nothing is unblocked." `
+       + `onclick="bfRelease('${ip}')">Forget</button>`;
+
+  // No Block button on an allow-listed address. Offering one directly
+  // contradicts the allow list the operator configured, and acting on it
+  // would be undone by the next evaluation anyway.
+  if (r.state === 'allowlisted') { return forget; }
+
+  return `<button class="btn btn-ghost btn-xs" title="Block this address now, `
+       + `without waiting for the threshold" onclick="bfBlockNow('${ip}')">Block</button>`
+       + forget;
+}
+
+// Block on demand. The answer to "why is this still only being watched" should
+// not have to be "go to the Firewall page and retype the address".
+async function bfBlockNow(ip) {
+  const ok = await uiConfirm({
+    title: 'Block ' + ip + '?',
+    ok: 'Block now',
+    danger: true,
+    body: '<p style="margin:0 0 8px">Adds a firewall block immediately, without '
+        + 'waiting for the auto-block threshold.</p>'
+        + '<p style="margin:0;color:var(--txt3);font-size:.8rem">Check it is not '
+        + 'an address you reach this server from.</p>'
+  });
+  if (!ok) return;
+
+  const res = await API.fwBlockIP(ip, 'Blocked by operator from Brute Force', false);
+  if (res?.success) {
+    toast('Blocked ' + ip, 'success');
+  } else {
+    // The reason, not just "failed" -- this is the same failure that used to
+    // leave rows silently reading "Watching".
+    toast(res?.error || 'The firewall refused that block', 'error', 9000);
+  }
+  loadBruteForce();
 }
 
 async function bfRelease(ip) {

@@ -113,6 +113,23 @@ class BruteForce
             Database::get()->exec(
                 'ALTER TABLE brute_force_offenders ADD COLUMN offences INTEGER NOT NULL DEFAULT 0');
         }
+        // Why an address that earned a block did not get one.
+        //
+        // Escalation only set blocked=1 when the firewall reported success. A
+        // refusal -- no firewall backend, a rule that would not apply, auto
+        // blocking switched off -- fell through silently, leaving the row at
+        // blocked=0, which the panel rendered as "Watching". An operator
+        // looking at an address with 398 port-scan hits marked "Watching" is
+        // right to ask what the product is doing, and nothing on the page or
+        // in the database could answer.
+        if (!isset($have['block_error'])) {
+            Database::get()->exec(
+                'ALTER TABLE brute_force_offenders ADD COLUMN block_error TEXT');
+        }
+        if (!isset($have['block_tried_at'])) {
+            Database::get()->exec(
+                'ALTER TABLE brute_force_offenders ADD COLUMN block_tried_at INTEGER');
+        }
         // When the current block lifts. NULL while blocked means permanent.
         if (!isset($have['blocked_until'])) {
             Database::get()->exec(
@@ -434,6 +451,19 @@ class BruteForce
             // while it kept trying. An operator looking at a list of addresses
             // marked "Watching" after two hundred failures is right to ask
             // what the product is for.
+            // Auto blocking switched off is a DECISION, and the panel has to
+            // show it as one. Left unrecorded it looked identical to a block
+            // that failed and to an address still below its next rung: all
+            // three rendered as "Watching".
+            if (!self::autoBlock() && empty($existing['blocked'])) {
+                Database::query(
+                    'UPDATE brute_force_offenders
+                        SET block_error = ?, block_tried_at = ?
+                      WHERE ip_address = ?',
+                    ['auto-block is switched off', time(), $ip]
+                );
+            }
+
             if (self::autoBlock() && empty($existing['blocked'])) {
                 $offence = (int) ($existing['offences'] ?? 0) + 1;
                 $ttl     = self::termFor($offence);
@@ -450,14 +480,40 @@ class BruteForce
                 if (!empty($res['success'])) {
                     Database::query(
                         'UPDATE brute_force_offenders
-                            SET blocked=1, blocked_at=?, blocked_until=?, offences=?
+                            SET blocked=1, blocked_at=?, blocked_until=?, offences=?,
+                                block_error=NULL, block_tried_at=?
                           WHERE ip_address=?',
-                        [time(), $perm ? null : time() + $ttl, $offence, $ip]
+                        [time(), $perm ? null : time() + $ttl, $offence, time(), $ip]
                     );
                     $blocked++;
                     Logger::warn("Brute force: blocked {$ip} after {$r['attempts']} failures"
                         . ' — offence ' . $offence . ', '
                         . ($perm ? 'permanent' : self::humanTerm($ttl)));
+                } else {
+                    // THE FAILURE THAT USED TO VANISH.
+                    //
+                    // Without this the row stayed at blocked=0 and the panel
+                    // said "Watching" — which reads as a deliberate choice to
+                    // observe rather than "we tried to block this and the
+                    // firewall would not do it". The operator has no way to
+                    // discover the difference, and the address keeps knocking.
+                    $why = trim((string) ($res['error'] ?? '')) ?: 'the firewall refused the block';
+                    Database::query(
+                        'UPDATE brute_force_offenders
+                            SET block_error = ?, block_tried_at = ?
+                          WHERE ip_address = ?',
+                        [mb_substr($why, 0, 200), time(), $ip]
+                    );
+                    Logger::error("Brute force: could NOT block {$ip} after "
+                        . "{$r['attempts']} failures — {$why}");
+                    Database::insert('security_events', [
+                        'type'        => 'brute_force_block_failed',
+                        'severity'    => 'high',
+                        'source_ip'   => $ip,
+                        'target'      => (string) $r['services'],
+                        'description' => 'Wanted to block ' . $ip . ' after '
+                                       . $r['attempts'] . ' failures but could not: ' . $why,
+                    ]);
                 }
             }
         }
@@ -637,7 +693,8 @@ class BruteForce
 
         // Derived here rather than in the front end so the list, the API and
         // the logs all describe a block the same way.
-        $now = time();
+        $now   = time();
+        $white = self::whitelist();
         foreach ($rows as &$r) {
             $off   = (int) ($r['offences'] ?? 0);
             $until = $r['blocked_until'] === null ? null : (int) $r['blocked_until'];
@@ -649,9 +706,31 @@ class BruteForce
             // What the next offence will cost, which is the part that makes
             // the ladder visible instead of implied.
             $r['next_term']     = self::humanTerm(self::termFor($off + 1));
-            $r['state']         = empty($r['blocked'])
-                ? 'watching'
-                : ($until === null ? 'permanent' : 'blocked');
+
+            // "Watching" used to mean four different things, and the operator
+            // could not tell them apart: below the threshold, auto-block
+            // switched off, a block the firewall refused, and an address on
+            // the allow list. Three of those mean the product is NOT acting,
+            // and one of them is a fault. Saying "Watching" for all four is
+            // how an address with 398 port-scan hits sat there looking as
+            // though that were the plan.
+            $err = trim((string) ($r['block_error'] ?? ''));
+            if (!empty($r['blocked'])) {
+                $r['state'] = ($until === null) ? 'permanent' : 'blocked';
+            } elseif (isset($white[(string) $r['ip_address']])) {
+                $r['state'] = 'allowlisted';
+            } elseif ($err !== '') {
+                $r['state'] = (stripos($err, 'switched off') !== false)
+                    ? 'monitor_only'
+                    : 'block_failed';
+            } else {
+                $r['state'] = 'watching';
+            }
+            $r['state_reason'] = $err;
+            // What it would take to act, so "watching" is a number rather
+            // than a mood.
+            $r['threshold']    = self::threshold();
+            $r['window_mins']  = (int) round(self::window() / 60);
         }
         unset($r);
         return $rows;
