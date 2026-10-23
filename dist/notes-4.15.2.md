@@ -11,12 +11,12 @@
   a cPanel server quarantine lives under `/home` and the panel named the wrong
   partition on every such install.
 
-  Not cosmetic â€” an operator reading it sizes the wrong filesystem. This product
+  Not cosmetic — an operator reading it sizes the wrong filesystem. This product
   has already shipped one bug from the same assumption: an update rolled itself
   back after `chmod`-ing `${INSTALL_DIR}/quarantine` on a server whose
   quarantine was at `/home/.serverscrub/quarantine`.
 
-  Both cards now show **In use now** â€” the real path, from the server â€” and the
+  Both cards now show **In use now** — the real path, from the server — and the
   "blank = default" placeholder is the default that machine would actually use.
 
 - **The whole Storage Management card was never loaded.** Files held, status,
@@ -29,7 +29,7 @@
 
 - `scripts/check-js-wiring.py` now follows a loader into its renderer. It
   existed to catch exactly this bug and missed it, because `loadStorageStats()`
-  touches no element itself â€” it hands the payload to `populateStorageUI()`.
+  touches no element itself — it hands the payload to `populateStorageUI()`.
   It now follows a helper that has **exactly one caller in the file**, which
   distinguishes a loader's private renderer from a shared utility like
   `toast()`; page loaders and click handlers are excluded, since what those
