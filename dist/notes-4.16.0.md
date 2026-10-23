@@ -5,15 +5,15 @@
 ### Fixed
 
 - **Brute Force said "Watching" for four different things, one of them a
-  fault.** Every offending address rendered the same amber badge â€” including
+  fault.** Every offending address rendered the same amber badge — including
   one with 398 port-scan hits. That status is produced whenever `blocked=0`,
   and `blocked=0` has four very different causes:
 
   | cause | now reads |
   |---|---|
-  | below the auto-block threshold | **Watching** Â· blocks at 5 in 10m |
-  | auto-block switched off | **Would block** Â· auto-block is off |
-  | the firewall refused the block | **Block FAILED** Â· *with the reason* |
+  | below the auto-block threshold | **Watching** · blocks at 5 in 10m |
+  | auto-block switched off | **Would block** · auto-block is off |
+  | the firewall refused the block | **Block FAILED** · *with the reason* |
   | address is on the allow list | **Allow-listed** |
 
   Three of those mean nothing is protecting the server and one is an outright
@@ -28,7 +28,7 @@
   the server should be quiet.
 
 - **Every row offered "Release", including rows that were never blocked.** On
-  those, `release()` does not unblock anything â€” it **deletes the strike
+  those, `release()` does not unblock anything — it **deletes the strike
   history**, close to the opposite of what the label implies. Unblocked rows
   now offer **Block** and **Forget**; blocked rows keep **Release**. An
   allow-listed row offers only Forget, since blocking it would contradict the
