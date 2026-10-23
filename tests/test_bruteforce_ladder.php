@@ -386,7 +386,20 @@ t_eq('blocked', t_state('203.0.113.7')['state'] ?? '',
 $bfJs = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
 $badge = substr($bfJs, (int)strpos($bfJs, 'function bfStatusBadge'), 2200);
 
-t_contains($badge, 'Block FAILED', 'the table shows a refused block as a failure');
+t_contains($badge, 'Not blocked',
+     'the table marks a refused block as not blocked');
+// The REASON lives in one banner above the table, not stamped on every row.
+// Twenty copies of the same sentence is not twenty times the information: it
+// buries the one fact that matters, that nothing is being blocked at all.
+t_contains($bfJs, 'function bfBlockAlert',
+     'and a single banner carries the reason');
+$alert = substr($bfJs, (int)strpos($bfJs, 'function bfBlockAlert'), 2200);
+t_contains($alert, 'could not be blocked', 'which states how many failed');
+t_contains($alert, 'nothing is being blocked',
+     'and spells out the consequence rather than leaving it implied');
+t_contains($alert, 'no firewall backend',
+     'and recognises the PATH/CSF case specifically, since that is the one '
+   . 'an operator can act on');
 t_contains($badge, 'Would block',  'and auto-block being off as such');
 t_contains($badge, 'Allow-listed', 'and an allow-listed address as such');
 t_contains($badge, 'blocks at',    'while watching states the threshold');

@@ -62,7 +62,17 @@ class FirewallEngine
     {
         if (self::$backend !== null) { return self::$backend; }
 
-        if (self::has('csf') && file_exists('/usr/sbin/csf')) {
+        // CSF, by its own files rather than by PATH.
+        //
+        // This used to require `command -v csf` AND /usr/sbin/csf. The first
+        // fails whenever PATH lacks /usr/sbin, which is the normal case for a
+        // CGI, so a cPanel box running CSF was detected as having no firewall
+        // and every block was refused.
+        //
+        // /etc/csf/csf.conf is the authoritative marker: the binary moves
+        // between /usr/sbin and /usr/local/sbin across installs, the config
+        // directory does not.
+        if (self::csfPath() !== null && is_dir('/etc/csf')) {
             self::$backend = 'csf';           // respect an existing CSF install
         } elseif (self::serviceActive('firewalld')) {
             self::$backend = 'firewalld';
@@ -179,7 +189,7 @@ class FirewallEngine
         if (!self::validIp($ip)) { return ['success' => false, 'error' => 'Invalid IP']; }
         switch (self::detect()) {
             case 'csf':
-                $r = self::sh('csf -d ' . escapeshellarg($ip) . ' "ServerScrub"'); break;
+                $r = self::sh(escapeshellarg((string) self::csfPath()) . ' -d ' . escapeshellarg($ip) . ' "ServerScrub"'); break;
             case 'nftables':
                 $r = self::sh('nft add element inet ' . self::TABLE . ' ' .
                               self::SET_DENY . ' { ' . escapeshellarg($ip) . ' }'); break;
@@ -199,7 +209,17 @@ class FirewallEngine
                 return ['success' => false, 'error' => 'No firewall backend available'];
         }
         self::persist();
-        return ['success' => $r['code'] === 0, 'output' => $r['out']];
+        // On failure the tool's own words are the error. Returning only
+        // `output` meant every caller that looked for `error` found nothing
+        // and reported a generic "the firewall refused the block", which is
+        // exactly as useful as saying nothing.
+        $ok = $r['code'] === 0;
+        return $ok
+            ? ['success' => true, 'output' => $r['out']]
+            : ['success' => false, 'output' => $r['out'],
+               'error'   => trim($r['out']) !== ''
+                   ? trim($r['out'])
+                   : self::detect() . ' rejected the block (exit ' . $r['code'] . ')'];
     }
 
     public static function unblock(string $ip): array
@@ -207,7 +227,7 @@ class FirewallEngine
         if (!self::validIp($ip)) { return ['success' => false, 'error' => 'Invalid IP']; }
         switch (self::detect()) {
             case 'csf':
-                $r = self::sh('csf -dr ' . escapeshellarg($ip)); break;
+                $r = self::sh(escapeshellarg((string) self::csfPath()) . ' -dr ' . escapeshellarg($ip)); break;
             case 'nftables':
                 $r = self::sh('nft delete element inet ' . self::TABLE . ' ' .
                               self::SET_DENY . ' { ' . escapeshellarg($ip) . ' }'); break;
@@ -231,7 +251,7 @@ class FirewallEngine
         if (!self::validIp($ip)) { return ['success' => false, 'error' => 'Invalid IP']; }
         switch (self::detect()) {
             case 'csf':
-                $r = self::sh('csf -a ' . escapeshellarg($ip) . ' "ServerScrub"'); break;
+                $r = self::sh(escapeshellarg((string) self::csfPath()) . ' -a ' . escapeshellarg($ip) . ' "ServerScrub"'); break;
             case 'nftables':
                 $r = self::sh('nft add element inet ' . self::TABLE . ' ' .
                               self::SET_ALLOW . ' { ' . escapeshellarg($ip) . ' }'); break;
@@ -369,6 +389,11 @@ class FirewallEngine
 
     private static function has(string $bin): bool
     {
+        // On disk first. `command -v` is kept only as a fallback for a tool
+        // installed somewhere unusual, because it answers about the CALLER's
+        // PATH -- which is how a server running CSF reported no firewall at
+        // all when the panel asked, while the CLI on the same box was fine.
+        if (self::binPath($bin) !== null) { return true; }
         $r = self::sh('command -v ' . escapeshellarg($bin));
         return $r['code'] === 0 && trim($r['out']) !== '';
     }
@@ -392,11 +417,39 @@ class FirewallEngine
      */
     private static $runner = null;
 
+    /**
+     * Forget the detected backend.
+     *
+     * Detection is cached for the life of the request, which is right in
+     * production and wrong in a test that needs to exercise more than one
+     * backend. Without this the first detect() in the suite pinned every
+     * later assertion to the same answer.
+     */
+    public static function resetBackend(): void
+    {
+        self::$backend = null;
+    }
+
     /** @param (callable(string):array{out:string,code:int})|null $runner */
     public static function setRunner(?callable $runner): void
     {
         self::$runner = $runner;
     }
+
+    /**
+     * Where firewall tools actually live.
+     *
+     * Every one of them is in an sbin directory, and a CGI does not get an
+     * interactive login shell's PATH. Under cPanel this process typically runs
+     * with PATH=/usr/local/bin:/bin:/usr/bin -- no /usr/sbin -- so
+     * `command -v csf` found nothing on a server with CSF plainly installed,
+     * detection fell through to "none", and every block was refused with
+     * "No firewall backend available".
+     *
+     * Exported for the duration of each command rather than relied upon.
+     */
+    private const SBIN_PATH =
+        '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
     private static function sh(string $cmd): array
     {
@@ -405,7 +458,37 @@ class FirewallEngine
         }
         $out = [];
         $code = 0;
-        @exec($cmd . ' 2>&1', $out, $code);
+        // PATH first, so both detection and the commands themselves can find
+        // tools in sbin. Without it this class was blind on exactly the
+        // servers it is meant to run on.
+        @exec('PATH=' . self::SBIN_PATH . ' ' . $cmd . ' 2>&1', $out, $code);
         return ['out' => implode("\n", $out), 'code' => $code];
+    }
+
+    /**
+     * Absolute path of a tool, or null.
+     *
+     * Checked on disk rather than through the shell: `command -v` depends on
+     * the PATH of whatever invoked us, and that varies between the panel CGI,
+     * the CLI and cron. The firewall backend must not be decided by which of
+     * those happened to run.
+     */
+    /** The csf binary, wherever this install put it. */
+    public static function csfPath(): ?string
+    {
+        foreach (['/usr/sbin/csf', '/usr/local/sbin/csf', '/usr/bin/csf',
+                  '/usr/local/csf/bin/csf.pl'] as $p) {
+            if (@is_file($p) && @is_executable($p)) { return $p; }
+        }
+        return self::binPath('csf');
+    }
+
+    public static function binPath(string $bin): ?string
+    {
+        foreach (explode(':', self::SBIN_PATH) as $dir) {
+            $p = $dir . '/' . $bin;
+            if (@is_file($p) && @is_executable($p)) { return $p; }
+        }
+        return null;
     }
 }

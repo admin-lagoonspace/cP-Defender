@@ -25,6 +25,22 @@ class Firewall {
         $out  = [$res['output'] ?? ''];
         $code = ($res['success'] ?? false) ? 0 : 1;
 
+        // Checked BEFORE the database is written.
+        //
+        // The row used to be inserted regardless, so a block the firewall
+        // refused still appeared in the Firewall page's blocked list. The
+        // panel then showed an address as blocked while packets from it were
+        // arriving normally, which is the most expensive kind of wrong a
+        // security tool can be.
+        if ($code !== 0) {
+            $why = trim((string) ($res['error'] ?? '')) ?: trim(implode("\n", $out));
+            $why = $why !== '' ? $why : 'the firewall backend rejected it';
+            Logger::error("Firewall: could not block {$ip} — {$why}");
+            return ['success' => false, 'error' => $why,
+                    'output' => implode("\n", $out),
+                    'backend' => FirewallEngine::detect()];
+        }
+
         // Record in DB
         $existing = Database::fetchOne("SELECT id FROM blocked_ips WHERE ip_address = ?", [$ip]);
         if ($existing) {
@@ -43,8 +59,10 @@ class Firewall {
             ]);
         }
 
+
         $this->logEvent('block_ip', "Blocked IP $ip — $reason");
-        return ['success' => $code === 0, 'output' => implode("\n", $out)];
+        return ['success' => true, 'output' => implode("\n", $out),
+                'backend' => FirewallEngine::detect()];
     }
 
     /**

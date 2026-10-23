@@ -200,3 +200,90 @@ t_ok($s1 !== false && $s2 !== false && $s3 !== false, 'all three calls are prese
 t_ok($s1 < $s2 && $s2 < $s3, 'and issued in stage order');
 t_ok(strpos($fw, 'Promise.all') === false,
     'they are no longer awaited together, which is what made one slow call blank the page');
+
+// ── "the firewall refused the block", on a server running CSF ───────────────
+//
+// Reported from a live cPanel box with CSF installed: every offending address
+// read "Block FAILED · the firewall refused the block". Three separate faults
+// stacked up, and each one hid the next.
+//
+//   1. detect() asked `command -v csf`. A CGI does not get a login shell's
+//      PATH — under cPanel it is typically /usr/local/bin:/bin:/usr/bin, with
+//      no /usr/sbin — so csf was not found, detection fell through to "none",
+//      and block() correctly returned "No firewall backend available".
+//
+//   2. Firewall::blockIP() returned only `success` and `output`. The
+//      brute-force escalation reads `error`, found nothing, and substituted
+//      its own generic sentence. The real reason existed and was discarded.
+//
+//   3. blockIP() wrote the blocked_ips row BEFORE checking success, so a
+//      refused block still showed in the Firewall page as blocked.
+
+$fwSrc = t_code(dirname(__DIR__) . '/backend/lib/FirewallEngine.php');
+
+// 1. Discovery must not depend on the caller's PATH.
+t_contains($fwSrc, 'private const SBIN_PATH',
+     'the engine carries its own PATH for firewall tools');
+t_contains($fwSrc, "@exec('PATH=' . self::SBIN_PATH",
+     'and exports it for every command it runs');
+t_contains($fwSrc, 'function csfPath',
+     'CSF is located on disk rather than through the shell');
+t_ok(strpos($fwSrc, "file_exists('/usr/sbin/csf')") === false,
+     'and is no longer pinned to one install location');
+
+// The csf binary is invoked by absolute path, not by bare name.
+t_ok(strpos($fwSrc, "self::sh('csf -d ") === false,
+     'csf is not called by bare name, which needs a PATH we may not have');
+t_contains($fwSrc, "self::csfPath()) . ' -d '",
+     'but by the path it was found at');
+
+// 2. A failure must carry its reason.
+FirewallEngine::resetBackend();
+FirewallEngine::setRunner(function (string $cmd) {
+    // No firewall tools at all: command -v finds nothing.
+    return ['out' => '', 'code' => 1];
+});
+$r = FirewallEngine::block('203.0.113.77');
+t_ok(empty($r['success']), 'with no backend the block fails');
+t_contains(strtolower((string)($r['error'] ?? '')), 'no firewall backend',
+     'and says exactly that, rather than a generic refusal');
+
+// A backend that runs but rejects the address reports the tool's own words.
+FirewallEngine::resetBackend();
+FirewallEngine::setRunner(function (string $cmd) {
+    if (strpos($cmd, 'command -v') !== false) { return ['out' => '/usr/sbin/nft', 'code' => 0]; }
+    if (strpos($cmd, 'systemctl') !== false)  { return ['out' => 'inactive', 'code' => 3]; }
+    return ['out' => 'Error: Could not process rule: No such file or directory', 'code' => 1];
+});
+$r = FirewallEngine::block('203.0.113.78');
+t_ok(empty($r['success']), 'a backend that rejects the rule fails');
+t_contains((string)($r['error'] ?? ''), 'Could not process rule',
+     'and the tool\'s own message is what reaches the caller');
+
+// Success is still success.
+FirewallEngine::resetBackend();
+FirewallEngine::setRunner(function (string $cmd) {
+    if (strpos($cmd, 'command -v') !== false) { return ['out' => '/usr/sbin/nft', 'code' => 0]; }
+    if (strpos($cmd, 'systemctl') !== false)  { return ['out' => 'inactive', 'code' => 3]; }
+    return ['out' => '', 'code' => 0];
+});
+$r = FirewallEngine::block('203.0.113.79');
+t_ok(!empty($r['success']), 'a backend that accepts the rule succeeds');
+t_ok(!isset($r['error']), 'and carries no error');
+
+FirewallEngine::setRunner(null);
+FirewallEngine::resetBackend();
+
+// 3. A refused block must not be recorded as a block.
+$fwLib = t_code(dirname(__DIR__) . '/backend/lib/Firewall.php');
+$blk   = substr($fwLib, (int)strpos($fwLib, 'function blockIP'), 2000);
+$failAt = strpos($blk, 'if ($code !== 0)');
+$dbAt   = strpos($blk, "Database::insert('blocked_ips'");
+t_ok($failAt !== false && $dbAt !== false && $failAt < $dbAt,
+     'THE DISHONEST ROW: blockIP() returns on failure BEFORE writing '
+   . 'blocked_ips, so the panel cannot list an address as blocked while '
+   . 'packets from it are still arriving');
+t_contains($blk, "'error' => \$why",
+     'and the reason is returned to the caller');
+t_contains($blk, "'backend' =>",
+     'along with which backend answered, so this is diagnosable');

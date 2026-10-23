@@ -2150,6 +2150,11 @@ async function loadBruteForce() {
         + 'No offending addresses. Either nothing has crossed the threshold, or no '
         + 'authentication log could be read — the Log sources panel below says which.</td></tr>';
     } else {
+      // When blocking is broken it is broken for EVERY address, so say it
+      // once, loudly, at the top -- rather than stamping the same red badge on
+      // twenty rows, which buries the one fact that matters.
+      bfBlockAlert(rows);
+
       tb.innerHTML = rows.map(r => `
         <tr>
           <td class="mono">${esc(r.ip_address)}</td>
@@ -2228,9 +2233,10 @@ function bfStatusBadge(r) {
   const why = esc(String(r.state_reason || ''));
 
   if (r.state === 'block_failed') {
+    // The reason lives in the banner above the table, once. Repeating it on
+    // every row made the column unreadable and the table twice as tall.
     return `<span class="badge badge-red" title="${why || 'The firewall refused the block'}">`
-         + `Block FAILED</span>`
-         + dim(` ${why ? '&middot; ' + why : ''}${nth}`);
+         + `Not blocked</span>` + dim(nth);
   }
   if (r.state === 'monitor_only') {
     return `<span class="badge badge-amber" title="This address earned a block, but `
@@ -2250,6 +2256,45 @@ function bfStatusBadge(r) {
   const next = r.next_term ? ` &middot; next: ${esc(String(r.next_term))}` : '';
   return `<span class="badge badge-amber" title="Below the auto-block threshold.">`
        + `Watching</span>` + dim(`${gate}${next}${nth}`);
+}
+
+// One message when the firewall is refusing blocks.
+//
+// "the firewall refused the block" on every row is noise: it is alarming,
+// repetitive, and does not say what to DO. Collapsed into a single banner
+// naming the reason and the usual cause, the per-row badge can stay short.
+function bfBlockAlert(rows) {
+  const box = g('bf-block-alert');
+  if (!box) return;
+
+  const failed = (rows || []).filter(r => r.state === 'block_failed');
+  if (failed.length < 1) { box.classList.add('hidden'); return; }
+
+  // The distinct reasons, because two different failures are two problems.
+  const reasons = Array.from(new Set(
+    failed.map(r => String(r.state_reason || '').trim()).filter(Boolean)));
+  const noBackend = reasons.some(x => /no firewall backend/i.test(x));
+
+  box.innerHTML =
+      `<div style="font-weight:700;color:var(--red);margin-bottom:5px">`
+    + `${failed.length} address${failed.length === 1 ? '' : 'es'} could not be blocked</div>`
+    + (reasons.length
+        ? `<div class="mono" style="font-size:.76rem;margin-bottom:7px">`
+          + reasons.slice(0, 3).map(esc).join('<br>') + `</div>`
+        : '')
+    + (noBackend
+        ? `<div>ServerScrub could not find a firewall to talk to. On a cPanel `
+          + `server with CSF this is almost always because the panel process `
+          + `runs without <code>/usr/sbin</code> on its PATH, which 4.16.2 `
+          + `fixes. If it persists, check that <code>/etc/csf</code> exists and `
+          + `that <code>csf -d &lt;ip&gt;</code> works from a root shell.</div>`
+        : `<div>The firewall rejected these rules. The message above is the `
+          + `firewall's own; running the equivalent command from a root shell `
+          + `will usually reproduce it.</div>`)
+    + `<div class="dim" style="margin-top:6px;font-size:.78rem">`
+    + `Until this is resolved, detection is still running but `
+    + `<strong>nothing is being blocked</strong>.</div>`;
+  box.classList.remove('hidden');
 }
 
 // The action has to match the state.

@@ -59,7 +59,13 @@ t_ok(is_string($backend) && $backend !== '', "a backend is detected ({$backend})
 t_ok($nftBox->calls !== [], 'detection actually consults the system');
 
 // ── Blocking an address must issue a command AND record it ───────────────────
-$fw = new FakeShell();
+// A backend that exists and accepts the rule. Without this the block FAILS,
+// and since 4.16.2 a failed block is deliberately not recorded -- so this
+// asserted persistence while nothing was being blocked, and passed only
+// because blockIP() used to write the row regardless of the outcome.
+$fw = new FakeShell(['command -v' => ['out' => '/usr/sbin/nft', 'code' => 0],
+                     'systemctl'  => ['out' => 'inactive',      'code' => 3]]);
+FirewallEngine::resetBackend();
 FirewallEngine::setRunner($fw);
 
 $before = (int) (Database::fetchOne("SELECT COUNT(*) c FROM blocked_ips")['c'] ?? 0);
@@ -176,3 +182,36 @@ FirewallEngine::setRunner(null);
 WAFInstaller::setRunner(null);
 WAFInstaller::setConfDir(null);
 WAFInstaller::setIncludeDir(null);
+
+// ── A block that fails must NOT be recorded as a block ──────────────────────
+//
+// blockIP() wrote the blocked_ips row before checking whether the firewall
+// had accepted anything, so a refused block still appeared in the Firewall
+// page's blocked list. The panel showed an address as blocked while packets
+// from it were arriving normally, which is the most expensive kind of wrong a
+// security tool can be — the operator stops looking.
+
+FirewallEngine::resetBackend();
+FirewallEngine::setRunner(new FakeShell([
+    'command -v' => ['out' => '',  'code' => 1],   // no firewall tools at all
+    'systemctl'  => ['out' => 'inactive', 'code' => 3],
+]));
+
+$before = (int) (Database::fetchOne("SELECT COUNT(*) c FROM blocked_ips")['c'] ?? 0);
+$res = (new Firewall())->blockIP('198.51.100.88', 'unit test', false);
+$after = (int) (Database::fetchOne("SELECT COUNT(*) c FROM blocked_ips")['c'] ?? 0);
+
+t_ok(empty($res['success']), 'a block with no firewall backend fails');
+t_eq($before, $after,
+     'THE DISHONEST ROW: and nothing is written to blocked_ips, so the panel '
+   . 'cannot claim an address is blocked when it is not');
+t_contains(strtolower((string)($res['error'] ?? '')), 'no firewall backend',
+     'and the caller is told why, in the firewall\'s own words');
+t_ok(!empty($res['backend']), 'along with which backend answered');
+
+$row = Database::fetchOne('SELECT id FROM blocked_ips WHERE ip_address=?', ['198.51.100.88']);
+t_ok($row === null || $row === false,
+     'the address is absent from the blocked list entirely');
+
+FirewallEngine::setRunner(null);
+FirewallEngine::resetBackend();
