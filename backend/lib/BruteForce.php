@@ -20,6 +20,8 @@
  * firewall that is already here.
  */
 
+require_once __DIR__ . '/ExternalDefence.php';
+
 class BruteForce
 {
     /**
@@ -498,6 +500,13 @@ class BruteForce
                     // firewall would not do it". The operator has no way to
                     // discover the difference, and the address keeps knocking.
                     $why = trim((string) ($res['error'] ?? '')) ?: 'the firewall refused the block';
+                    // CSF usually knows exactly why, and says so in its own
+                    // files: the address is in csf.allow, it is already in
+                    // csf.deny, or CSF is in TESTING mode and flushing every
+                    // rule it writes. Any of those is actionable; "refused"
+                    // is not.
+                    $csfWhy = ExternalDefence::explainRefusal($ip);
+                    if ($csfWhy !== '') { $why = $csfWhy; }
                     Database::query(
                         'UPDATE brute_force_offenders
                             SET block_error = ?, block_tried_at = ?
@@ -658,6 +667,11 @@ class BruteForce
             // threshold also silently emptied the allow list and reset the
             // retention. A settings page that quietly discards settings is
             // worse than one that has none.
+            // The other defences on this box. Without these the panel implies
+            // it is the only thing standing between the server and the
+            // internet, which on a cPanel box is simply untrue.
+            'csf'            => ExternalDefence::csf(),
+            'cphulk'         => ExternalDefence::cphulk(),
             'whitelist'      => (string) (Database::setting('bf_whitelist', '') ?? ''),
             'retention_days' => max(1, min(90,
                                    (int) (Database::setting('bf_retention_days', '7') ?? 7))),
@@ -708,6 +722,19 @@ class BruteForce
         // the logs all describe a block the same way.
         $now   = time();
         $white = self::whitelist();
+
+        // What the REST of the server is doing about these addresses.
+        //
+        // A cPanel box runs lfd and usually cPHulk before this product is
+        // installed. Reporting "Not blocked" while lfd dropped the address
+        // minutes ago is true of us and false of the server, and it invites
+        // an operator to go and fix a problem that does not exist.
+        //
+        // Read once for the whole page, never per row.
+        require_once __DIR__ . '/ExternalDefence.php';
+        $external = ExternalDefence::reconcile(
+            array_map(fn($x) => (string) ($x['ip_address'] ?? ''), $rows));
+
         foreach ($rows as &$r) {
             $off   = (int) ($r['offences'] ?? 0);
             $until = $r['blocked_until'] === null ? null : (int) $r['blocked_until'];
@@ -728,8 +755,23 @@ class BruteForce
             // how an address with 398 port-scan hits sat there looking as
             // though that were the plan.
             $err = trim((string) ($r['block_error'] ?? ''));
+            $ext = $external[(string) $r['ip_address']]
+                   ?? ['denied_by' => null, 'allowed_by' => null, 'note' => ''];
+            $r['external'] = $ext;
+
             if (!empty($r['blocked'])) {
                 $r['state'] = ($until === null) ? 'permanent' : 'blocked';
+            } elseif ($ext['denied_by'] !== null) {
+                // Someone else got there first. The server IS protected from
+                // this address, which is the fact that matters -- far more
+                // than whose rule did it.
+                $r['state'] = 'blocked_external';
+                $r['state_reason'] = $ext['note'];
+            } elseif ($ext['allowed_by'] === 'csf') {
+                // And this is why our block is refused every single time: CSF
+                // will never deny an address in csf.allow.
+                $r['state'] = 'allowlisted_csf';
+                $r['state_reason'] = $ext['note'];
             } elseif (isset($white[(string) $r['ip_address']])) {
                 $r['state'] = 'allowlisted';
             } elseif ($err !== '') {
@@ -739,7 +781,7 @@ class BruteForce
             } else {
                 $r['state'] = 'watching';
             }
-            $r['state_reason'] = $err;
+            if (!isset($r['state_reason'])) { $r['state_reason'] = $err; }
             // What it would take to act, so "watching" is a number rather
             // than a mood.
             $r['threshold']    = self::threshold();

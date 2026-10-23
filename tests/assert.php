@@ -120,3 +120,24 @@ function t_shell(string $path): string
     }
     return implode("\n", $out);
 }
+
+// Slice exactly one function body, from its declaration to the next top-level
+// one. A fixed-size substr() runs past the end and picks up the NEXT
+// function's calls -- which is what made the first version of these checks
+// fail against code that was already correct.
+function t_fn_body(string $src, string $name, string $lang = 'js'): string {
+    $pat = $lang === 'js'
+        ? '/^(?:async\s+)?function\s+' . preg_quote($name, '/') . '\s*\(/m'
+        : '/^\s*(?:public|private|protected|static|\s)*function\s+'
+          . preg_quote($name, '/') . '\s*\(/m';
+    if (!preg_match($pat, $src, $m, PREG_OFFSET_CAPTURE)) { return ''; }
+    $start = (int)$m[0][1];
+    $nextPat = $lang === 'js'
+        ? '/^(?:async\s+)?function\s+\w+\s*\(/m'
+        : '/^\s*(?:public|private|protected|static|\s)*function\s+\w+\s*\(/m';
+    $rest = substr($src, $start + strlen($m[0][0]));
+    $end  = preg_match($nextPat, $rest, $m2, PREG_OFFSET_CAPTURE)
+        ? $start + strlen($m[0][0]) + (int)$m2[0][1]
+        : strlen($src);
+    return substr($src, $start, $end - $start);
+}

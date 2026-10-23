@@ -2094,6 +2094,33 @@ async function loadBruteForce() {
     // configured list) and retention always showed the markup's 7 — so
     // changing the threshold silently emptied the allow list and reset the
     // retention.
+    // Kept for the banner, which must be able to say "CSF is in TESTING mode"
+    // without re-fetching.
+    State.bfCsf = d.csf || {};
+
+    // Say plainly what else is defending this box. The panel used to imply it
+    // was the only thing between the server and the internet, which on a
+    // cPanel server running lfd and cPHulk is simply untrue — and it is why
+    // "Not blocked" read as "nothing is protecting you".
+    const peers = g('bf-peers');
+    if (peers) {
+      const bits = [];
+      const csf = d.csf || {};
+      if (csf.installed) {
+        bits.push('CSF/lfd' + (csf.testing ? ' (TESTING mode — blocks do not hold)' : '')
+                  + (csf.deny_count ? ' · ' + fmtNum(csf.deny_count) + ' denied' : ''));
+      }
+      const hulk = d.cphulk || {};
+      if (hulk.installed) {
+        bits.push('cPHulk' + (hulk.enabled === false ? ' (disabled)'
+                            : hulk.enabled === true ? '' : ' (state unknown)'));
+      }
+      peers.textContent = bits.length
+        ? 'Also defending this server: ' + bits.join('  ·  ')
+        : 'No other brute-force defence detected on this server.';
+      peers.style.color = (csf.testing || !bits.length) ? 'var(--amber)' : 'var(--txt3)';
+    }
+
     val('bf-set-retention', d.retention_days || 7);
     val('bf-set-whitelist', d.whitelist || '');
 
@@ -2232,6 +2259,22 @@ function bfStatusBadge(r) {
   // page could tell you whether that was policy or a broken firewall.
   const why = esc(String(r.state_reason || ''));
 
+  // Someone else is already blocking it. The server IS protected from this
+  // address, which matters far more than whose rule did it — and saying
+  // "Not blocked" here is how this module came to look useless on a box
+  // where lfd had been doing the work all along.
+  if (r.state === 'blocked_external') {
+    const by = /lfd/i.test(String(r.state_reason || '')) ? 'lfd' : 'CSF';
+    return `<span class="badge badge-green" title="${esc(String(r.state_reason || ''))}">`
+         + `Blocked by ${by}</span>` + dim(nth);
+  }
+  // And the reason our own blocks will never stick for this address.
+  if (r.state === 'allowlisted_csf') {
+    return `<span class="badge badge-blue" title="${esc(String(r.state_reason || ''))}">`
+         + `In csf.allow</span>`
+         + dim(` &middot; CSF will not deny it${nth}`);
+  }
+
   if (r.state === 'block_failed') {
     // The reason lives in the banner above the table, once. Repeating it on
     // every row made the column unreadable and the table twice as tall.
@@ -2269,6 +2312,22 @@ function bfBlockAlert(rows) {
 
   const failed = (rows || []).filter(r => r.state === 'block_failed');
   if (failed.length < 1) { box.classList.add('hidden'); return; }
+
+  // If CSF is in TESTING mode, that is the answer and nothing else matters:
+  // it writes every rule we ask for and a cron flushes them minutes later,
+  // so "blocked" and "not blocked" are equally meaningless until it is off.
+  const csf = (State.bfCsf || {});
+  if (csf.testing) {
+    box.innerHTML =
+        `<div style="font-weight:700;color:var(--red);margin-bottom:5px">`
+      + `CSF is in TESTING mode</div>`
+      + `<div><code>TESTING = "1"</code> in <code>/etc/csf/csf.conf</code>. CSF `
+      + `writes the rules it is given and a cron job flushes them a few minutes `
+      + `later, so <strong>no block of any kind will hold</strong> — ours or `
+      + `lfd's. Set <code>TESTING = "0"</code> and run <code>csf -r</code>.</div>`;
+    box.classList.remove('hidden');
+    return;
+  }
 
   // The distinct reasons, because two different failures are two problems.
   const reasons = Array.from(new Set(

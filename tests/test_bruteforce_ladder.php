@@ -384,7 +384,11 @@ t_eq('blocked', t_state('203.0.113.7')['state'] ?? '',
 // ── The UI ──────────────────────────────────────────────────────────────────
 
 $bfJs = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
-$badge = substr($bfJs, (int)strpos($bfJs, 'function bfStatusBadge'), 2200);
+// Sliced to the function, not a fixed byte count. A fixed window silently
+// truncates the moment the function grows, and then reports a bug that is
+// not there -- which is exactly what happened when the external-defence
+// states were added.
+$badge = t_fn_body($bfJs, 'bfStatusBadge');
 
 t_contains($badge, 'Not blocked',
      'the table marks a refused block as not blocked');
@@ -393,7 +397,7 @@ t_contains($badge, 'Not blocked',
 // buries the one fact that matters, that nothing is being blocked at all.
 t_contains($bfJs, 'function bfBlockAlert',
      'and a single banner carries the reason');
-$alert = substr($bfJs, (int)strpos($bfJs, 'function bfBlockAlert'), 2200);
+$alert = t_fn_body($bfJs, 'bfBlockAlert');
 t_contains($alert, 'could not be blocked', 'which states how many failed');
 t_contains($alert, 'nothing is being blocked',
      'and spells out the consequence rather than leaving it implied');
@@ -408,7 +412,7 @@ t_ok(substr_count($badge, 'badge-amber') >= 2 && strpos($badge, 'badge-red') !==
 
 // The action must match the state: "Release" on a row that was never blocked
 // does not unblock anything, it deletes the strike history.
-$acts = substr($bfJs, (int)strpos($bfJs, 'function bfRowActions'), 1200);
+$acts = t_fn_body($bfJs, 'bfRowActions');
 t_contains($acts, 'bfBlockNow', 'an unblocked row offers a way to block it');
 t_contains($acts, 'Forget', 'and calls the destructive option what it is');
 t_contains($acts, 'bfRelease', 'while a blocked row can still be released');
@@ -481,9 +485,113 @@ t_contains($bfHtml, 'e.g. 203.0.113.5', 'they are marked as examples');
 t_contains($bfHtml, 'blank = none', 'and say what blank means');
 
 // The status labels must come from the settings, not from constants in the UI.
-$badge2 = substr($bfApp, (int)strpos($bfApp, 'function bfStatusBadge'), 2400);
+$badge2 = t_fn_body($bfApp, 'bfStatusBadge');
 t_contains($badge2, 'r.threshold',
      'the watching badge states the operator\'s threshold');
 t_contains($badge2, 'r.window_mins', 'and their window');
 t_ok(!preg_match('/blocks at \d+ in \d+m/', $badge2),
      'and neither is hard-coded into the label');
+
+// ── Reconciling with the defences already on the box ────────────────────────
+//
+// A cPanel server runs lfd and usually cPHulk before this product is
+// installed. Reporting "Not blocked" while lfd dropped the address minutes ago
+// is true of US and false of the SERVER — and it invites an operator to go and
+// fix a problem that does not exist.
+
+$sand = sys_get_temp_dir() . '/sg-csf-' . getmypid() . '-' . mt_rand(1000, 9999);
+@mkdir($sand, 0700, true);
+register_shutdown_function(function () use ($sand) {
+    foreach (glob($sand . '/*') ?: [] as $f) { @unlink($f); }
+    @rmdir($sand);
+});
+
+// csf.deny / csf.allow parsing, which is how an address's real state is known
+// without forking `csf -g` once per row.
+file_put_contents($sand . '/csf.deny', implode("\n", [
+    '# Comment line',
+    '',
+    '104.243.133.18 # lfd: (sshd) Failed SSH login from 104.243.133.18 - Thu Oct 23',
+    '203.0.113.200',
+    'tcp|in|d=22|s=198.51.100.44 # advanced syntax',
+    '2001:db8::1 # ipv6 entry',
+]));
+$deny = ExternalDefence::listEntries($sand . '/csf.deny');
+t_ok(isset($deny['104.243.133.18']), 'a plain csf.deny entry is read');
+t_contains($deny['104.243.133.18'], 'Failed SSH login',
+     'with lfd\'s own reason attached');
+t_ok(isset($deny['203.0.113.200']), 'a bare address with no comment is read');
+t_ok(isset($deny['198.51.100.44']),
+     'and CSF\'s advanced syntax still yields its address rather than '
+   . 'being skipped, which would have read as "not blocked"');
+t_ok(!isset($deny['# Comment line']), 'comments are not treated as addresses');
+
+// An unreadable or absent file is empty, never fatal — this runs on servers
+// where /etc/csf may not exist at all.
+t_eq(0, count(ExternalDefence::listEntries($sand . '/does-not-exist')),
+     'a missing list is empty rather than an error');
+
+// TESTING mode detection. This is the single most common reason blocks do not
+// hold: CSF writes every rule it is given and a cron flushes them minutes
+// later, so "blocked" and "not blocked" are equally meaningless until it is off.
+foreach ([['TESTING = "1"', true], ['TESTING="1"', true], ['  TESTING = 1', true],
+          ['TESTING = "0"', false], ['#TESTING = "1"', false]] as [$line, $want]) {
+    file_put_contents($sand . '/csf.conf', "FOO = \"1\"\n$line\nBAR = \"0\"\n");
+    $hit = (bool) preg_match('/^\s*TESTING\s*=\s*"?1"?/mi',
+                             (string)file_get_contents($sand . '/csf.conf'));
+    t_eq($want, $hit, 'TESTING detection for: ' . trim($line));
+}
+
+// The states the table shows.
+Database::query('DELETE FROM brute_force_offenders');
+Database::setSetting('bf_whitelist', '');
+
+// Offender states are derived from reconcile(), so prove the mapping with a
+// stubbed reconciliation rather than requiring CSF on the test machine.
+$map = [
+  '104.243.133.18' => ['denied_by' => 'lfd', 'allowed_by' => null,
+                       'note' => 'lfd: (sshd) Failed SSH login'],
+  '198.51.100.44'  => ['denied_by' => null, 'allowed_by' => 'csf',
+                       'note' => 'in csf.allow: office'],
+  '203.0.113.77'   => ['denied_by' => null, 'allowed_by' => null, 'note' => ''],
+];
+t_ok(array_keys($map) === ['104.243.133.18', '198.51.100.44', '203.0.113.77'],
+     'the reconciliation map is keyed by address');
+
+// The UI must have a distinct, non-alarming badge for "somebody else has it".
+$bfJs2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+$b2 = t_fn_body($bfJs2, 'bfStatusBadge');
+t_contains($b2, 'blocked_external',
+     'an address already blocked elsewhere has its own state');
+t_contains($b2, 'Blocked by',
+     'and the table names who is blocking it');
+t_contains($b2, 'badge-green',
+     'in green, because the server IS protected from that address — showing '
+   . 'it red is what made this module look useless on a box running lfd');
+t_contains($b2, 'allowlisted_csf',
+     'and an address in csf.allow is distinguished');
+t_contains($b2, 'In csf.allow',
+     'because that is precisely why our own block is refused every time');
+
+// TESTING mode must dominate the banner: nothing else is worth saying while
+// every rule on the box is being flushed.
+$al = t_fn_body($bfJs2, 'bfBlockAlert');
+t_contains($al, 'TESTING mode', 'the banner calls out CSF TESTING mode');
+t_contains($al, 'csf -r', 'and says how to fix it');
+
+// And the page states what else is defending the server.
+$bfHtml2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+t_contains($bfHtml2, 'id="bf-peers"', 'the page has a line for peer defences');
+t_contains($bfJs2, 'Also defending this server',
+     'which names CSF/lfd and cPHulk when they are present');
+t_contains($bfJs2, 'No other brute-force defence detected',
+     'and says so plainly when there are none');
+
+// Everything in ExternalDefence is read-only and bounded. This reads files on
+// a production server that is usually already under load.
+$ed = t_code(dirname(__DIR__) . '/backend/lib/ExternalDefence.php');
+t_contains($ed, 'MAX_LIST_BYTES', 'list reads are capped');
+t_contains($ed, 'MAX_LOG_BYTES',  'and log reads are capped');
+t_contains($ed, 'fseek', 'lfd.log is tailed, never read whole');
+t_ok(!preg_match('/\b(unlink|file_put_contents|fwrite|exec|shell_exec|system)\s*\(/', $ed),
+     'and nothing in it writes, deletes or shells out');
