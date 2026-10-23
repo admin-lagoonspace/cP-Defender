@@ -182,6 +182,38 @@ def check_loaders(html, js):
             end = marks[i + 1][1] if i + 1 < len(marks) else len(body)
             loaders[name] = body[pos:end]
 
+    # Functions that are themselves a page's loader. refreshDashboard() is the
+    # dashboard's entry in PAGE_LOADERS but does not start with "load", so
+    # following into it blamed every loader that calls it for the whole
+    # dashboard.
+    page_fillers = set()
+    for entry in loaders.values():
+        page_fillers.update(re.findall(r"([A-Za-z_$][\w$]*)\s*\(", entry))
+
+    # Functions invoked from an event attribute, in the markup or in a row
+    # template built in JS. Those are things a user CLICKS -- opening a file
+    # viewer, showing a WAF event -- not population of the page, and whatever
+    # they write to is not the calling loader's responsibility.
+    actions = set(re.findall(r"""on[a-z]+\s*=\s*["']\s*([A-Za-z_$][\w$]*)\s*\(""",
+                             html))
+    actions |= set(re.findall(r"""on[a-z]+\s*=\s*\\?["']?\s*([A-Za-z_$][\w$]*)\s*\(""",
+                              js))
+
+    # How many functions call each helper AT ALL.
+    #
+    # Counting only load* callers was not enough: toast() is called from one
+    # loader and from dozens of ordinary handlers, so by that measure it
+    # looked like that loader's private renderer and contributed
+    # #toast-container -- a global element -- to the loader's page set.
+    #
+    # A function with exactly ONE caller in the whole file is that caller's
+    # helper. populateStorageUI() has one. toast() has many.
+    loader_callers = {}
+    for lname, lbody in fns.items():
+        for cm in set(re.findall(r"\b([A-Za-z_$][\w$]*)\s*\(", lbody)):
+            if cm in fns and cm != lname:
+                loader_callers[cm] = loader_callers.get(cm, 0) + 1
+
     for fname, fbody in fns.items():
         if not fname.startswith("load"):
             continue
@@ -190,12 +222,45 @@ def check_loaders(html, js):
         if sig and sig.group(1).strip():
             continue
 
-        touched = set()
-        for im in re.finditer(r"""(?:getElementById|\bg)\(['"]([^'"]+)['"]\)""",
-                              fbody):
-            pg = ids.get(im.group(1))
-            if pg:
-                touched.add(pg)
+        # Ids written by this function OR by a helper it calls.
+        #
+        # Looking only at the function's own body missed a whole card.
+        # loadStorageStats() touches no element itself -- it fetches, then
+        # hands the payload to populateStorageUI(), which does all the
+        # writing. So the check saw a load* function that filled no page,
+        # concluded there was nothing to wire, and passed while the entire
+        # Storage Management card read "--" until somebody pressed Refresh.
+        #
+        # Only into a helper THIS loader alone calls.
+        #
+        # Following every callee was too blunt: toast(), doRefresh() and
+        # friends touch elements all over the app, so every loader that called
+        # one inherited every page those helpers write to, and the check
+        # reported pages that loader has nothing to do with.
+        #
+        # A helper called by exactly one load* function IS that loader's
+        # renderer -- populateStorageUI() is called only by loadStorageStats().
+        # A helper called by several is a utility, and whose page it writes to
+        # is not this loader's business.
+        def ids_touched(body, depth=1):
+            found = set()
+            for im in re.finditer(
+                    r"""(?:getElementById|\bg)\(['"]([^'"]+)['"]\)""", body):
+                pg = ids.get(im.group(1))
+                if pg:
+                    found.add(pg)
+            if depth > 0:
+                for cm in re.finditer(r"\b([A-Za-z_$][\w$]*)\s*\(", body):
+                    callee = cm.group(1)
+                    if (callee in fns and callee != fname
+                            and not callee.startswith("load")
+                            and callee not in page_fillers
+                            and callee not in actions
+                            and loader_callers.get(callee, 0) == 1):
+                        found |= ids_touched(fns[callee], depth - 1)
+            return found
+
+        touched = ids_touched(fbody)
 
         for pg in sorted(touched):
             entry = loaders.get(pg, "")

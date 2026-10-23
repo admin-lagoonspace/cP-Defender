@@ -148,3 +148,62 @@ t_contains($cli, "case 'quarantine'", 'there is a quarantine command');
 t_contains($cli, 'Scanner::quarantineUsage', 'it can report usage');
 t_contains($cli, 'Scanner::pruneQuarantine', 'it can prune');
 t_contains($cli, 'Scanner::moveQuarantine',  'it can relocate');
+
+// ── The Settings page must name the REAL quarantine ─────────────────────────
+//
+// Reported from a live panel: Storage Management showed
+// /usr/local/serverscrub/quarantine. That string was a hard-coded placeholder
+// in the markup, and it is only the LAST-RESORT default -- config.php prefers
+// /home/.serverscrub or /var/.serverscrub whenever either is writable, which
+// on a cPanel server means quarantine lives under /home.
+//
+// Not cosmetic. An operator reading it sizes the wrong filesystem, and this
+// product has already shipped one bug from exactly that assumption: an update
+// rolled itself back after chmod'ing ${INSTALL_DIR}/quarantine on a server
+// whose quarantine was at /home/.serverscrub/quarantine.
+
+$htmlQ = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+$appQ  = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+$apiQ  = (string)file_get_contents(dirname(__DIR__) . '/backend/api/index.php');
+
+// No storage field may hard-code a path as its placeholder.
+t_ok(strpos($htmlQ, 'id="stor-quar-dir" placeholder="/usr/local/serverscrub/quarantine"') === false,
+     'the quarantine path box no longer hard-codes a default');
+t_ok(strpos($htmlQ, 'id="stor-log-dir" placeholder="/usr/local/serverscrub/logs"') === false,
+     'nor does the log path box');
+
+// The server says what the default actually is on THIS machine.
+t_contains($apiQ, "'quarantine_dir' => QUARANTINE_DIR",
+     'the storage payload carries the real quarantine default');
+t_contains($apiQ, "'log_dir'        => SG_LOGS",
+     'and the real log default');
+
+// And the panel shows where it IS, not only where it could be overridden.
+t_contains($htmlQ, 'id="stor-quar-path"', 'the card shows the path in use');
+t_contains($appQ, "getElementById('stor-quar-path')", 'which the UI fills');
+t_contains($appQ, 'qdInput.placeholder = def.quarantine_dir',
+     'and the placeholder comes from the server, not the markup');
+
+// QUARANTINE_DIR must still prefer a data volume over the install root -- the
+// behaviour the panel was misreporting.
+t_ok(defined('QUARANTINE_DIR'), 'QUARANTINE_DIR is defined');
+$cfg = (string)file_get_contents(dirname(__DIR__) . '/backend/config/config.php');
+t_contains($cfg, "foreach (['/home', '/var'] as \$sgVolume)",
+     'the default still prefers /home or /var over the install root');
+
+// ── The whole card was never loaded ─────────────────────────────────────────
+//
+// Every figure on it read "--" because loadStorageStats() was reachable only
+// from its own Refresh button. Same shape as the Scan exclusions card, and the
+// wiring check missed it: loadStorageStats() touches no element itself, it
+// hands the payload to populateStorageUI(). The check now follows a helper
+// that has exactly one caller.
+t_contains($appQ, 'loadStorageStats()])],',
+     'loadStorageStats() is in the settings page loader, so the card fills on open');
+
+$chk = (string)file_get_contents(dirname(__DIR__) . '/scripts/check-js-wiring.py');
+t_contains($chk, 'def ids_touched',
+     'the wiring check follows a loader into its renderer');
+t_contains($chk, 'loader_callers.get(callee, 0) == 1',
+     'but only into a helper nothing else calls, so shared utilities like '
+   . 'toast() are not mistaken for page population');

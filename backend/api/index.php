@@ -1207,6 +1207,24 @@ function routeStorage(string $action, string $method, array $body, ?array $user)
                         'cron_log'        => (int)(Database::fetchOne("SELECT COUNT(*) as c FROM cron_log")['c'] ?? 0),
                     ],
                 ],
+                // What "blank = default" actually resolves to ON THIS SERVER.
+                //
+                // The settings card hard-coded /usr/local/serverscrub/quarantine
+                // as the placeholder for the custom-path box. That is only the
+                // last-resort default: config.php prefers /home/.serverscrub or
+                // /var/.serverscrub whenever either is writable, which on a
+                // cPanel box means quarantine lives under /home and the panel
+                // was naming the wrong partition.
+                //
+                // That is not cosmetic. An operator reading it would size the
+                // wrong filesystem, and this product has already shipped one
+                // bug from the same assumption: an update rolled itself back
+                // after chmod'ing ${INSTALL_DIR}/quarantine on a server whose
+                // quarantine was at /home/.serverscrub/quarantine.
+                'defaults' => [
+                    'quarantine_dir' => QUARANTINE_DIR,
+                    'log_dir'        => SG_LOGS,
+                ],
                 'settings' => [
                     'quarantine_dir'            => Database::setting('quarantine_dir', ''),
                     'log_dir'                   => Database::setting('log_dir', ''),

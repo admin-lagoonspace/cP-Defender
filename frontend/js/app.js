@@ -234,7 +234,8 @@ function openPage(name) {
     events:     ['Loading events…',    () => loadEvents()],
     bruteforce: ['Loading brute force…', () => loadBruteForce()],
     settings:   ['Loading settings…',  () => Promise.all([loadSettings(),
-                                                          loadUpdateSettings()])],
+                                                          loadUpdateSettings(),
+                                                          loadStorageStats()])],
     botshield:  ['Loading bot shield…', () => loadBotShield()],
     cms:        ['Loading CMS Guard…', () => loadCMSGuard()],
     wpscan:     ['Loading WP database…', () => loadWPScan()],
@@ -3176,6 +3177,8 @@ async function loadStorageStats() {
                     writable: true, monitor_log_bytes: 1048576 },
       database:   { path: '/usr/local/serverscrub/database/serverscrub.db', size_bytes: 8388608,
                     rows: { waf_events: 94441, security_events: 12803, threats: 47, cron_log: 342 } },
+      defaults:   { quarantine_dir: '/home/.serverscrub/quarantine',
+                    log_dir: '/usr/local/serverscrub/logs' },
       settings:   { quarantine_dir: '', log_dir: '', log_retention_days: 30,
                     quarantine_retention_days: 90, db_max_waf_events: 100000,
                     db_max_security_events: 50000, db_max_cron_log: 1000, monitor_log_max_mb: 50 },
@@ -3200,8 +3203,21 @@ function populateStorageUI(d) {
   if (qf) qf.textContent = q.files || 0;
   const qst = document.getElementById('stor-quar-status');
   if (qst) qst.textContent = q.writable ? '✓ Writable' : '✕ Read-only';
+  // Where quarantine IS, and what "blank" would mean — both from the server.
+  //
+  // The placeholder used to be the string /usr/local/serverscrub/quarantine,
+  // written into the markup. That is only the last-resort default: config.php
+  // prefers /home/.serverscrub or /var/.serverscrub whenever either is
+  // writable, so on a cPanel box quarantine lives under /home and this card
+  // named the wrong partition on every such server.
+  const def = d.defaults || {};
+  const qPath = document.getElementById('stor-quar-path');
+  if (qPath) qPath.textContent = q.path || def.quarantine_dir || '—';
   const qdInput = document.getElementById('stor-quar-dir');
-  if (qdInput && s.quarantine_dir !== undefined) qdInput.value = s.quarantine_dir;
+  if (qdInput) {
+    if (s.quarantine_dir !== undefined) qdInput.value = s.quarantine_dir;
+    if (def.quarantine_dir) qdInput.placeholder = def.quarantine_dir;
+  }
   const qRange = document.getElementById('stor-quar-days-range');
   if (qRange) {
     qRange.value = s.quarantine_retention_days || 90;
@@ -3216,8 +3232,13 @@ function populateStorageUI(d) {
   if (lf) lf.textContent = l.files || 0;
   const lm = document.getElementById('stor-log-monitor');
   if (lm) lm.textContent = fmtBytes(l.monitor_log_bytes || 0);
+  const lPath = document.getElementById('stor-log-path');
+  if (lPath) lPath.textContent = l.path || def.log_dir || '—';
   const ldInput = document.getElementById('stor-log-dir');
-  if (ldInput && s.log_dir !== undefined) ldInput.value = s.log_dir;
+  if (ldInput) {
+    if (s.log_dir !== undefined) ldInput.value = s.log_dir;
+    if (def.log_dir) ldInput.placeholder = def.log_dir;
+  }
   const lRange = document.getElementById('stor-log-days-range');
   if (lRange) {
     lRange.value = s.log_retention_days || 30;
