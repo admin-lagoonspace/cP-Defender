@@ -409,3 +409,68 @@ t_contains($src, 'could NOT block',
      'and is logged at error level');
 t_contains($src, "ADD COLUMN block_error",
      'the reason is persisted so the panel can show it');
+
+// ── Settings the form could save but never read back ────────────────────────
+//
+// The Brute Force settings form posts every box on it. Two of those boxes were
+// never POPULATED from the server:
+//
+//   bf-set-whitelist  — always rendered empty, and its placeholder is a pair of
+//                       RFC 5737 documentation addresses, so an empty allow
+//                       list was indistinguishable from a configured one
+//   bf-set-retention  — always rendered the markup's hard-coded 7
+//
+// So opening the page and changing the threshold ALSO emptied the allow list
+// and reset retention to 7, silently. Clearing an allow list makes the product
+// block MORE, including potentially the address the operator is connected
+// from.
+
+Database::setSetting('bf_whitelist', '198.51.100.7, 203.0.113.9');
+Database::setSetting('bf_retention_days', '30');
+
+$st = BruteForce::stats();
+t_eq('198.51.100.7, 203.0.113.9', $st['whitelist'] ?? '(absent)',
+     'THE DATA-LOSS BUG: stats() returns the allow list so the form can '
+   . 'repopulate it instead of posting an empty box back');
+t_eq(30, (int)($st['retention_days'] ?? 0),
+     'and the retention, instead of the markup default');
+
+// Clamped on the way out, like every other setting this module reports.
+Database::setSetting('bf_retention_days', '9999');
+t_ok((int)BruteForce::stats()['retention_days'] <= 90,
+     'an out-of-range retention is clamped rather than echoed back');
+Database::setSetting('bf_retention_days', '7');
+
+// An empty allow list must come back as empty, not as the placeholder.
+Database::setSetting('bf_whitelist', '');
+t_eq('', BruteForce::stats()['whitelist'],
+     'an empty allow list reports as empty');
+
+// The form must actually use them.
+$bfApp = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+t_contains($bfApp, "val('bf-set-whitelist', d.whitelist",
+     'the form fills the allow list from the server');
+t_contains($bfApp, "val('bf-set-retention', d.retention_days",
+     'and the retention');
+t_contains($bfApp, 'Nothing is allow-listed',
+     'and says so plainly when nothing is allow-listed, because an empty box '
+   . 'and a greyed-out example look identical');
+
+// Placeholders must not read as configured values. This is the same mistake
+// as the Settings page naming /usr/local/serverscrub/quarantine: a grey
+// example in an empty box is routinely read as the current setting.
+$bfHtml = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+t_ok(strpos($bfHtml, 'placeholder="203.0.113.5, 198.51.100.0"') === false,
+     'the allow-list placeholder no longer looks like a configured list');
+t_ok(strpos($bfHtml, 'placeholder="3, 6, 24, 0"') === false,
+     'nor does the escalation ladder placeholder');
+t_contains($bfHtml, 'e.g. 203.0.113.5', 'they are marked as examples');
+t_contains($bfHtml, 'blank = none', 'and say what blank means');
+
+// The status labels must come from the settings, not from constants in the UI.
+$badge2 = substr($bfApp, (int)strpos($bfApp, 'function bfStatusBadge'), 2400);
+t_contains($badge2, 'r.threshold',
+     'the watching badge states the operator\'s threshold');
+t_contains($badge2, 'r.window_mins', 'and their window');
+t_ok(!preg_match('/blocks at \d+ in \d+m/', $badge2),
+     'and neither is hard-coded into the label');

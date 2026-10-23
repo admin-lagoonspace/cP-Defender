@@ -648,6 +648,19 @@ class BruteForce
             'auto_block'     => self::autoBlock(),
             'ladder'         => array_map([self::class, 'humanTerm'], self::ladder()),
             'ladder_secs'    => self::ladder(),
+            // Both of these were saved by the settings form and never sent
+            // back to it, so the form could not populate them. The allow-list
+            // box therefore always LOOKED empty -- its placeholder is a pair of
+            // RFC 5737 documentation addresses, which reads like a configured
+            // list -- and "Keep records for" always showed the markup's 7.
+            //
+            // Saving the form posts whatever is in the boxes, so changing the
+            // threshold also silently emptied the allow list and reset the
+            // retention. A settings page that quietly discards settings is
+            // worse than one that has none.
+            'whitelist'      => (string) (Database::setting('bf_whitelist', '') ?? ''),
+            'retention_days' => max(1, min(90,
+                                   (int) (Database::setting('bf_retention_days', '7') ?? 7))),
             'last_run'       => (int) (Database::setting('bf_last_run', '0') ?? 0),
             'attempts_24h'   => (int) (Database::fetchOne(
                 'SELECT COUNT(*) c FROM brute_force_attempts WHERE attempted_at >= ?',

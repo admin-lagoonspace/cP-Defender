@@ -2088,6 +2088,28 @@ async function loadBruteForce() {
     // The ladder, in hours, which is how the policy is written.
     val('bf-set-ladder', (d.ladder_secs || [10800, 21600, 86400, 0])
           .map(x => x === 0 ? '0' : String(x / 3600)).join(', '));
+    // Write-only until 4.16.1: both were posted by Save and never sent back,
+    // so the form could not show them. The allow-list box looked empty (its
+    // placeholder is a pair of documentation addresses, which reads like a
+    // configured list) and retention always showed the markup's 7 — so
+    // changing the threshold silently emptied the allow list and reset the
+    // retention.
+    val('bf-set-retention', d.retention_days || 7);
+    val('bf-set-whitelist', d.whitelist || '');
+
+    // And state plainly what is allow-listed, because an empty box and a box
+    // showing a grey example look the same at a glance.
+    const wl = g('bf-whitelist-effective');
+    if (wl) {
+      const list = String(d.whitelist || '').split(',')
+                     .map(x => x.trim()).filter(Boolean);
+      wl.textContent = list.length
+        ? 'Never blocked: ' + list.join(', ')
+        : 'Nothing is allow-listed — every address can be blocked, including '
+          + 'the one you are connected from.';
+      wl.style.color = list.length ? 'var(--txt3)' : 'var(--amber)';
+    }
+
     const prev = g('bf-ladder-preview');
     if (prev) {
       prev.textContent = (d.ladder || []).length
