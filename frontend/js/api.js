@@ -369,6 +369,15 @@ const API = (() => {
     // this SENDS — and thaws anything frozen.
     mgDeliver: (ids)       => req('POST', 'mailguard/deliver',
                                   { ids: ids, confirm: true }),
+    // One message in full. Admin only, and the view is logged.
+    mgView:    (id)        => req('GET',  'mailguard/view?id='
+                                  + encodeURIComponent(id)),
+    mgFlagged: ()          => req('GET',  'mailguard/flagged'),
+    mgFlagAttachment: (id, filename, sha256, content_type, bytes) =>
+        req('POST', 'mailguard/flag-attachment',
+            { id, filename, sha256, content_type, bytes }),
+    mgUnflagAttachment: (id, filename) =>
+        req('POST', 'mailguard/unflag-attachment', { id, filename }),
     mgSettings:     ()        => req('GET',  'mailguard/settings'),
     mgSaveSettings: (o)       => req('POST', 'mailguard/save-settings', o),
     mgThrottle: (acct, perHr) => req('POST', 'mailguard/throttle',

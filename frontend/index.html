@@ -4,18 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ServerScrub — Security Dashboard</title>
-<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.17.0">
-<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.17.0">
-<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.17.0">
+<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.18.0">
+<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.18.0">
+<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.18.0">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=4.17.0">
+<link rel="stylesheet" href="css/app.css?v=4.18.0">
 </head>
 <body>
 <!-- First-load splash. The full lockup, because this is the one moment the
      product introduces itself; everywhere else uses the icon alone. -->
 <div id="ss-splash">
-  <img src="images/logo.png?v=4.17.0" alt="ServerScrub">
+  <img src="images/logo.png?v=4.18.0" alt="ServerScrub">
   <div class="ss-cap">Loading…</div>
 </div>
 
@@ -62,7 +62,7 @@
 
     <!-- Logo -->
     <div class="login-logo" style="margin-bottom:20px">
-      <img src="images/logo.png?v=4.17.0" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
+      <img src="images/logo.png?v=4.18.0" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
       <div id="login-mode-sub" style="font-size:.75rem;color:var(--blue2);margin-top:5px;font-weight:600;letter-spacing:.03em">cPanel Security Suite</div>
     </div>
 
@@ -103,7 +103,7 @@
 <div id="activate-screen" class="hidden">
   <div class="activate-card">
     <div class="activate-mark">
-      <img src="images/icon-180.png?v=4.17.0" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
+      <img src="images/icon-180.png?v=4.18.0" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
     </div>
 
     <div class="activate-title">Activate ServerScrub</div>
@@ -149,7 +149,7 @@
   <div class="topbar-brand">
     <!-- Shield icon mark — inline SVG so it renders crisp at any size with no background bleed -->
     <div class="brand-icon">
-      <img src="images/icon-64.png?v=4.17.0" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
+      <img src="images/icon-64.png?v=4.18.0" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
     </div>
     <div>
       <div class="brand-name">ServerScrub</div>
@@ -278,7 +278,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.17.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.18.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -2237,7 +2237,21 @@
            during the incident this page was built after, 92,954 of 93,255
            queued messages were a relay, which still left 301 a real customer
            was waiting for. Emptying it destroys those with no record. -->
-      <div class="card mb-5" id="mg-queue-card" style="display:none">
+      <!-- Tabs. The page had five stacked cards mixing live mail, policy and
+           history, so the thing an operator came for was never on screen. The
+           KPI row above stays visible on every tab: those four numbers are the
+           reason to open the page at all. -->
+      <div class="mg-tabs" role="tablist" style="display:flex;gap:4px;margin-bottom:16px;
+                  border-bottom:1px solid var(--bd)">
+        <button class="mg-tab active" role="tab" data-tab="mail"
+                onclick="mgTab('mail')">Mail view</button>
+        <button class="mg-tab" role="tab" data-tab="settings"
+                onclick="mgTab('settings')">Settings</button>
+        <button class="mg-tab" role="tab" data-tab="logs"
+                onclick="mgTab('logs')">Logs</button>
+      </div>
+
+      <div class="card mb-5" id="mg-queue-card" data-mgtab="mail" style="display:none">
         <div class="card-header">
           <div class="card-title" id="mg-queue-title">Queued messages</div>
           <div style="display:flex;gap:8px;align-items:center">
@@ -2274,7 +2288,7 @@
         </div>
       </div>
 
-      <div class="card mb-5" id="mg-findings-card" style="display:none">
+      <div class="card mb-5" id="mg-findings-card" data-mgtab="mail" style="display:none">
         <div class="card-header"><div class="card-title">Findings</div></div>
         <div class="card-body" style="padding:0">
           <table class="table">
@@ -2284,7 +2298,7 @@
         </div>
       </div>
 
-      <div class="card mb-5">
+      <div class="card mb-5" data-mgtab="settings">
         <div class="card-header">
           <div class="card-title">Settings</div>
           <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, loadMailSettings)">&#8634; Reload</button>
@@ -2338,7 +2352,7 @@
            four days showed as silence. These lines carry the actual SMTP
            reason, and a rate limit, a full mailbox and a retry backoff are
            three different problems with three different fixes. -->
-      <div class="card mb-5" id="mg-delivery-card" style="display:none">
+      <div class="card mb-5" id="mg-delivery-card" data-mgtab="logs" style="display:none">
         <div class="card-header">
           <div class="card-title">Delivery problems, last 24 hours</div>
           <div class="badge badge-amber" id="mg-delivery-badge">0</div>
@@ -2351,7 +2365,30 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card mb-5" data-mgtab="logs">
+        <div class="card-header">
+          <div class="card-title">Attachments flagged as malicious</div>
+          <button class="btn btn-ghost btn-sm" style="margin-left:auto"
+                  onclick="doRefresh(this, loadFlaggedAttachments)">&#8634; Reload</button>
+        </div>
+        <div class="card-body" style="padding:0">
+          <div style="padding:10px 14px;font-size:.8rem;color:var(--txt3)">
+            Recorded, not removed &mdash; exim has no clean way to strip one part
+            from a queued message, and a half-rewritten message is worse than a
+            flagged one. The sha256 is the useful part: the malware scanner
+            recognises the same bytes if they ever land on disk.
+          </div>
+          <table class="table">
+            <thead><tr><th>Attachment</th><th>Type</th><th>Size</th><th>sha256</th>
+                       <th>Message</th><th>By</th><th>When</th><th></th></tr></thead>
+            <tbody id="mg-flagged-body">
+              <tr><td colspan="8" style="text-align:center;color:var(--txt3);padding:20px">Loading&hellip;</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" data-mgtab="mail">
         <div class="card-header">
           <div class="card-title">Senders, last 24 hours</div>
           <div class="badge badge-blue" id="mg-count-badge">0</div>
@@ -2848,11 +2885,11 @@
      as hard as one whose name never changes. icon-64.png held the
      old crop in 4.0.0 and the new mark in 4.1.0, so an updated
      server kept showing the old logo. -->
-<script>window.SG_ASSET_V = "4.17.0";</script>
+<script>window.SG_ASSET_V = "4.18.0";</script>
 <script src="config.js"></script>
-<script src="js/api.js?v=4.17.0"></script>
-<script src="js/charts.js?v=4.17.0"></script>
-<script src="js/app.js?v=4.17.0"></script>
+<script src="js/api.js?v=4.18.0"></script>
+<script src="js/charts.js?v=4.18.0"></script>
+<script src="js/app.js?v=4.18.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -3003,7 +3040,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 <div id="sg-busy" role="status" aria-live="polite" aria-hidden="true">
   <div class="sg-busy-box">
     <div class="ss-load sm">
-      <img src="images/icon.png?v=4.17.0" alt="">
+      <img src="images/icon.png?v=4.18.0" alt="">
       <span class="ss-cap" id="sg-busy-text">Working…</span>
     </div>
   </div>
@@ -3014,9 +3051,26 @@ document.addEventListener('DOMContentLoaded', async () => {
      actually tell you what was attempted -- so a row could be read but not
      understood, and there was no way to see the rest. -->
 <style>
+  .mg-tab {
+    background: none; border: 0; border-bottom: 2px solid transparent;
+    color: var(--txt3); padding: 9px 15px; font-size: .84rem; font-weight: 600;
+    cursor: pointer; border-radius: 6px 6px 0 0;
+  }
+  .mg-tab:hover { color: var(--txt2); background: rgba(255,255,255,.03); }
+  .mg-tab.active { color: var(--txt); border-bottom-color: var(--blue, #3b82f6); }
+  #msgview-modal .mv-field { display: grid; grid-template-columns: 92px 1fr;
+                             gap: 4px 12px; font-size: .82rem; margin-bottom: 4px; }
+  #msgview-modal .mv-label { color: var(--txt3); }
+  #msgview-modal .mv-body {
+    background: rgba(0,0,0,.25); border: 1px solid var(--bd); border-radius: 7px;
+    padding: 11px 13px; font-size: .78rem; white-space: pre-wrap;
+    word-break: break-word; max-height: 240px; overflow: auto;
+    font-family: ui-monospace, monospace;
+  }
   #scan-accounts-modal,
   #notmalware-modal,
   #ui-dialog,
+  #msgview-modal,
   #waf-event-modal {
     position: fixed; inset: 0; z-index: 9000;
     display: flex; align-items: center; justify-content: center;
@@ -3026,10 +3080,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   #scan-accounts-modal.hidden,
   #notmalware-modal.hidden,
   #ui-dialog.hidden,
+  #msgview-modal.hidden,
   #waf-event-modal.hidden { display: none; }
   #scan-accounts-modal .wem-box,
   #notmalware-modal .wem-box,
   #ui-dialog .wem-box,
+  #msgview-modal .wem-box,
   #waf-event-modal .wem-box {
     background: var(--card, #1b1f23);
     border: 1px solid var(--line, #2d333a);
@@ -3041,6 +3097,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   #scan-accounts-modal .wem-head,
   #notmalware-modal .wem-head,
   #ui-dialog .wem-head,
+  #msgview-modal .wem-head,
   #waf-event-modal .wem-head {
     display: flex; align-items: center; gap: 10px;
     padding: 14px 18px; border-bottom: 1px solid var(--line, #2d333a);
@@ -3048,10 +3105,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   #scan-accounts-modal .wem-body,
   #notmalware-modal .wem-body,
   #ui-dialog .wem-body,
+  #msgview-modal .wem-body,
   #waf-event-modal .wem-body { padding: 16px 18px; overflow: auto; }
   #scan-accounts-modal .wem-foot,
   #notmalware-modal .wem-foot,
   #ui-dialog .wem-foot,
+  #msgview-modal .wem-foot,
   #waf-event-modal .wem-foot {
     display: flex; gap: 8px; justify-content: flex-end;
     padding: 12px 18px; border-top: 1px solid var(--line, #2d333a);
@@ -3110,6 +3169,36 @@ document.addEventListener('DOMContentLoaded', async () => {
      nothing, which is exactly how two controls shipped dead.
 
      uiConfirm() resolves true/false; uiAlert() just shows something. -->
+<!-- One message, in enough detail to judge it.
+     Body capped at 1,000 characters, admin only, and every view is written to
+     the security timeline. This module read headers and never bodies on
+     purpose; that still holds for the automatic detection. Reading a
+     customer's mail should leave a mark. -->
+<div id="msgview-modal" class="hidden" role="dialog" aria-modal="true"
+     aria-labelledby="mv-title" onclick="if(event.target===this)closeModal('msgview-modal')">
+  <div class="wem-box" style="max-width:760px">
+    <div class="wem-head">
+      <div style="font-weight:700;font-size:.92rem" id="mv-title">Message</div>
+      <button class="btn btn-ghost btn-xs" style="margin-left:auto"
+              onclick="closeModal('msgview-modal')" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="wem-body">
+      <div id="mv-meta"></div>
+      <div class="label" style="margin:14px 0 6px">Attachments</div>
+      <div id="mv-attachments" style="font-size:.8rem"></div>
+      <div class="label" style="margin:14px 0 6px">
+        Body <span id="mv-body-note" style="font-weight:400;color:var(--txt3)"></span>
+      </div>
+      <div class="mv-body" id="mv-body"></div>
+    </div>
+    <div class="wem-foot">
+      <span class="dim" style="font-size:.72rem">This view is recorded on the security timeline.</span>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto"
+              onclick="closeModal('msgview-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="ui-dialog" class="hidden" role="dialog" aria-modal="true"
      aria-labelledby="uid-title" onclick="if(event.target===this)uiDialogResolve(false)">
   <div class="wem-box">

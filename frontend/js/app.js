@@ -240,7 +240,8 @@ function openPage(name) {
     cms:        ['Loading CMS Guard…', () => loadCMSGuard()],
     wpscan:     ['Loading WP database…', () => loadWPScan()],
     mailguard:  ['Loading spam monitor…', () => Promise.all([loadMailGuard(),
-                                                             loadMailSettings()])],
+                                                             loadMailSettings(),
+                                                             loadFlaggedAttachments()])],
     // The one that was missing. Both halves: the daemon's own status, and the
     // systemd unit -- loadMonitor() does not fetch the service, which is why
     // that panel said "Checking…" even after a manual refresh.
@@ -2354,6 +2355,191 @@ function bfBlockAlert(rows) {
     + `Until this is resolved, detection is still running but `
     + `<strong>nothing is being blocked</strong>.</div>`;
   box.classList.remove('hidden');
+}
+
+
+// ── Spam Monitor tabs ───────────────────────────────────────────────────────
+//
+// The page was five stacked cards mixing live mail, policy and history, so the
+// thing an operator came for was never on screen. The KPI row stays visible on
+// every tab: those four numbers are the reason to open the page at all.
+let MgTab = 'mail';
+let MsgViewId = '';
+
+function mgTab(name) {
+  MgTab = name;
+  document.querySelectorAll('.mg-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === name);
+  });
+  document.querySelectorAll('[data-mgtab]').forEach(card => {
+    const mine = card.dataset.mgtab === name;
+    // Cards that manage their own visibility (the queue and findings cards
+    // stay hidden until they have something to show) must not be forced open
+    // by a tab switch -- that is how an empty card ends up looking broken.
+    if (!mine) { card.style.display = 'none'; return; }
+    card.style.display = card.dataset.mgHidden === '1' ? 'none' : '';
+  });
+  if (name === 'logs') { loadFlaggedAttachments(); }
+}
+
+// Cards that hide themselves record it here, so a tab switch can honour it.
+function mgSetCardHidden(id, hidden) {
+  const el = g(id);
+  if (!el) return;
+  el.dataset.mgHidden = hidden ? '1' : '0';
+  el.style.display = (hidden || el.dataset.mgtab !== MgTab) ? 'none' : '';
+}
+
+// ── One message, in enough detail to judge it ───────────────────────────────
+async function viewMessage(id) {
+  const r = await API.mgView(id);
+  const d = (r && r.data) || {};
+  if (!d.success) {
+    toast(d.error || 'Could not read that message', 'error', 7000);
+    return;
+  }
+  MsgViewId = id;
+
+  const row = (label, value) =>
+    '<div class="mv-field"><div class="mv-label">' + esc(label) + '</div>'
+  + '<div>' + value + '</div></div>';
+
+  const to = (d.to || []);
+  g('mv-title').textContent = 'Message ' + id;
+  g('mv-meta').innerHTML =
+      row('From', '<span class="mono">' + esc(d.from || '—') + '</span>')
+    + row('To', to.length
+        ? to.slice(0, 12).map(x => '<span class="mono">' + esc(x) + '</span>').join('<br>')
+          + (to.length > 12 ? '<br><span class="dim">+' + (to.length - 12) + ' more</span>' : '')
+        : '<span class="dim">—</span>')
+    + row('Subject', esc(d.subject || '—'))
+    + row('Date', '<span class="dim">' + esc(d.date || '—') + '</span>')
+    + (Object.keys(d.source || {}).length
+        ? row('Sent by', '<span class="mono" style="font-size:.76rem">'
+            + Object.keys(d.source).map(k => esc(k) + ': ' + esc(d.source[k])).join('<br>')
+            + '</span>')
+        : '');
+
+  renderAttachments(d.attachments || [], d.flagged || {});
+
+  g('mv-body').textContent = d.body || '(no text part)';
+  g('mv-body-note').textContent = d.body_truncated
+    ? '— first ' + (d.body || '').length + ' characters'
+    : '';
+
+  openModal('msgview-modal');
+}
+
+function renderAttachments(list, flagged) {
+  const box = g('mv-attachments');
+  if (!box) return;
+  State.mvAttachments = list;
+  State.mvFlagged = flagged;
+
+  if (!list.length) {
+    box.innerHTML = '<span class="dim">None</span>';
+    return;
+  }
+  box.innerHTML = list.map((a, i) => {
+    const isFlagged = !!flagged[a.filename];
+    // A hash of a truncated attachment is not that attachment's hash, so we
+    // say so rather than offering a fiction for somebody to act on later.
+    const hash = a.truncated
+      ? '<span class="dim" title="The message was larger than the 2 MB we read, so '
+        + 'this attachment is incomplete and cannot be hashed">not hashed — message too large</span>'
+      : (a.sha256
+          ? '<span class="mono dim" title="' + esc(a.sha256) + '">'
+            + esc(a.sha256.slice(0, 16)) + '</span>'
+          : '<span class="dim">—</span>');
+    return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;'
+         + 'border-bottom:1px solid var(--bd)">'
+         + '<div style="flex:1;min-width:0">'
+         + '<div class="mono" style="word-break:break-all">' + esc(a.filename)
+         + (a.suspicious
+             ? ' <span class="badge badge-amber" title="The extension or type is one '
+               + 'commonly used to deliver malware. A hint, not a verdict.">risky type</span>'
+             : '')
+         + (isFlagged ? ' <span class="badge badge-red">flagged</span>' : '')
+         + '</div>'
+         + '<div class="dim" style="font-size:.74rem">'
+         + esc(a.content_type || '') + ' · ' + fmtBytes(a.bytes || 0) + ' · ' + hash
+         + '</div></div>'
+         + '<button class="btn btn-ghost btn-xs" onclick="toggleAttachmentFlag(' + i + ')">'
+         + (isFlagged ? 'Unflag' : 'Flag as malicious') + '</button>'
+         + '</div>';
+  }).join('');
+}
+
+// Index, never a filename interpolated into an attribute. A filename can
+// contain a quote, and that is exactly what killed the exclude button.
+async function toggleAttachmentFlag(index) {
+  const a = (State.mvAttachments || [])[Number(index)];
+  if (!a) { toast('Could not resolve that attachment — reopen the message', 'error'); return; }
+
+  if ((State.mvFlagged || {})[a.filename]) {
+    const r = await API.mgUnflagAttachment(MsgViewId, a.filename);
+    if (r && r.success) { toast('Flag withdrawn', 'success'); await viewMessage(MsgViewId); }
+    else { toast((r && r.error) || 'Could not withdraw the flag', 'error'); }
+    return;
+  }
+
+  const ok = await uiConfirm({
+    title: 'Flag this attachment as malicious?',
+    ok: 'Flag it',
+    danger: true,
+    body: '<p style="margin:0 0 8px"><span class="mono">' + esc(a.filename) + '</span></p>'
+        + '<p style="margin:0 0 8px">This records the attachment and its sha256 so the '
+        + 'malware scanner recognises the same bytes if they ever land on disk.</p>'
+        + '<p style="margin:0;color:var(--txt3);font-size:.8rem">It does <strong>not</strong> '
+        + 'alter the message — exim cannot cleanly strip one part from a queued mail, and a '
+        + 'half-rewritten message is worse than a flagged one. Delete the whole message from '
+        + 'the queue if that is what you want.</p>'
+  });
+  if (!ok) return;
+
+  const r = await API.mgFlagAttachment(MsgViewId, a.filename, a.sha256 || '',
+                                       a.content_type || '', a.bytes || 0);
+  if (r && r.success) {
+    toast('Flagged ' + a.filename, 'success', 7000);
+    await viewMessage(MsgViewId);
+  } else {
+    toast((r && r.error) || 'Could not flag that attachment', 'error');
+  }
+}
+
+async function loadFlaggedAttachments() {
+  const tb = g('mg-flagged-body');
+  if (!tb) return;
+  const r = await API.mgFlagged();
+  const rows = (r && r.data) || [];
+  State.flaggedRows = rows;
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--txt3);'
+                 + 'padding:20px">Nothing flagged.</td></tr>';
+    return;
+  }
+  tb.innerHTML = rows.map(f =>
+      '<tr>'
+    + '<td class="mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis"'
+    + ' title="' + esc(f.filename) + '">' + esc(f.filename) + '</td>'
+    + '<td class="dim">' + esc(f.content_type || '—') + '</td>'
+    + '<td class="dim">' + fmtBytes(f.bytes || 0) + '</td>'
+    + '<td class="mono dim" style="font-size:.72rem" title="' + esc(f.sha256 || '') + '">'
+    + esc(String(f.sha256 || '—').slice(0, 14)) + '</td>'
+    + '<td class="mono dim" style="font-size:.72rem">' + esc(f.message_id) + '</td>'
+    + '<td class="dim">' + esc(f.flagged_by || '—') + '</td>'
+    + '<td class="dim">' + reltime(f.flagged_at) + '</td>'
+    + '<td><button class="btn btn-ghost btn-xs" onclick="unflagFromLog('
+    + (Number(f.id) || 0) + ')">Unflag</button></td>'
+    + '</tr>').join('');
+}
+
+async function unflagFromLog(id) {
+  const row = (State.flaggedRows || []).find(x => Number(x.id) === Number(id));
+  if (!row) { toast('Could not resolve that row — reload', 'error'); return; }
+  const r = await API.mgUnflagAttachment(row.message_id, row.filename);
+  if (r && r.success) { toast('Flag withdrawn', 'success'); loadFlaggedAttachments(); }
+  else { toast((r && r.error) || 'Could not withdraw the flag', 'error'); }
 }
 
 // The action has to match the state.
@@ -5282,7 +5468,7 @@ async function loadMailGuard() {
 
   const card = g('mg-findings-card');
   const fbody = g('mg-findings-body');
-  if (card) card.style.display = f.length ? '' : 'none';
+  mgSetCardHidden('mg-findings-card', !f.length);
   if (fbody) {
     fbody.innerHTML = f.map(x =>
         '<tr><td>' + mgSev(x.severity) + '</td>'
@@ -5295,7 +5481,7 @@ async function loadMailGuard() {
   // stuck queue is more urgent than who filled it.
   const dely = d.delivery || [];
   const dcard = g('mg-delivery-card');
-  if (dcard) dcard.style.display = dely.length ? '' : 'none';
+  mgSetCardHidden('mg-delivery-card', !dely.length);
   const dbadge = g('mg-delivery-badge');
   if (dbadge) dbadge.textContent = dely.length;
   const dbody = g('mg-delivery-body');
@@ -5497,7 +5683,10 @@ let mgQueueFrozen = false;
 function openMailQueue(frozen) {
   mgQueueFrozen = !!frozen;
   const card = g('mg-queue-card');
-  if (card) card.style.display = '';
+  // Opening the queue belongs to the Mail view tab; jumping to a hidden
+  // card is how a button comes to look dead.
+  mgTab('mail');
+  mgSetCardHidden('mg-queue-card', false);
   setText('mg-queue-title', frozen ? 'Frozen messages' : 'Queued messages');
   const all = g('mg-queue-all');
   if (all) all.checked = false;
@@ -5506,8 +5695,7 @@ function openMailQueue(frozen) {
 }
 
 function closeMailQueue() {
-  const card = g('mg-queue-card');
-  if (card) card.style.display = 'none';
+  mgSetCardHidden('mg-queue-card', true);
 }
 
 async function reloadMailQueue() {
@@ -5576,7 +5764,11 @@ async function reloadMailQueue() {
       + '<td>' + (m.frozen
           ? '<span class="badge badge-amber">frozen</span>'
           : '<span class="badge badge-blue">queued</span>') + '</td>'
-      + '<td><button class="btn btn-ghost btn-sm" onclick="inspectMessage(\''
+      + '<td style="white-space:nowrap">'
+        + '<button class="btn btn-ghost btn-sm" onclick="viewMessage(\''
+        + esc(m.id) + '\')" title="Sender, recipients, subject, attachments '
+        + 'and the first 1,000 characters">View</button> '
+        + '<button class="btn btn-ghost btn-sm" onclick="inspectMessage(\''
         + esc(m.id) + '\')">Headers</button></td>'
       + '</tr>';
   }).join('');

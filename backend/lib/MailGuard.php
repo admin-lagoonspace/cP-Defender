@@ -173,6 +173,29 @@ class MailGuard
             )");
         $db->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_maildel
                      ON mail_delivery(bucket, kind, code, reason)");
+
+        // Attachments an operator has judged malicious.
+        //
+        // Recorded rather than removed: exim has no clean way to strip one
+        // part from a queued message, and a half-rewritten message is worse
+        // than a flagged one. The sha256 is the valuable column -- it lets the
+        // malware scanner recognise the same bytes when they land on disk,
+        // which is where they end up if anybody opens the mail.
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS mail_flagged_attachments (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id   TEXT    NOT NULL,
+                filename     TEXT    NOT NULL,
+                sha256       TEXT    NOT NULL DEFAULT '',
+                content_type TEXT    NOT NULL DEFAULT '',
+                bytes        INTEGER NOT NULL DEFAULT 0,
+                note         TEXT    NOT NULL DEFAULT '',
+                flagged_by   TEXT    NOT NULL DEFAULT '',
+                flagged_at   INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                UNIQUE(message_id, filename)
+            )");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_mailflag_hash
+                     ON mail_flagged_attachments(sha256)");
         $db->exec("CREATE INDEX IF NOT EXISTS idx_maildel_recent
                      ON mail_delivery(bucket DESC)");
     }
@@ -1498,6 +1521,399 @@ class MailGuard
         return ['success' => true,
                 'headers' => substr($out, 0, 16384),
                 'source'  => $source];
+    }
+
+    /**
+     * The most of a message body we will ever read off the spool.
+     *
+     * A queue entry can be tens of megabytes. Reading one whole to show a
+     * 1,000-character preview would be absurd on a box that is usually already
+     * struggling when somebody opens this page.
+     */
+    private const MAX_BODY_BYTES = 2097152;    // 2 MB
+
+    /** How much of the body is shown. The operator asked for 1,000. */
+    public const BODY_PREVIEW_CHARS = 1000;
+
+    /**
+     * One message, in full enough detail to judge it: who sent it, to whom,
+     * the subject, what is attached, and the first 1,000 characters.
+     *
+     * ON SHOWING THE BODY AT ALL
+     * --------------------------
+     * Until now this module read headers and never the body, deliberately:
+     * "the body is a customer's private mail and nothing here needs it to tell
+     * a relay from a receipt". That is still true of the automatic detection,
+     * and nothing here is automatic — this runs only when an operator opens a
+     * specific message.
+     *
+     * The compromise is that it is capped at 1,000 characters, it is admin
+     * only, and every view is written to the security timeline. Reading a
+     * customer's mail should leave a mark.
+     *
+     * @return array{success:bool,error?:string,...}
+     */
+    public static function messageView(string $id, string $by = ''): array
+    {
+        if (!self::isMessageId($id)) {
+            return ['success' => false, 'error' => 'Not a valid message id'];
+        }
+        $bin = null;
+        foreach (['/usr/sbin/exim', '/usr/bin/exim'] as $b) {
+            if (is_executable($b)) { $bin = $b; break; }
+        }
+        if ($bin === null) { return ['success' => false, 'error' => 'exim not found']; }
+
+        $hdrRaw = (string) @shell_exec('nice -n 19 ' . escapeshellarg($bin) . ' -Mvh '
+                                     . escapeshellarg($id) . ' 2>&1');
+        if (trim($hdrRaw) === '') {
+            return ['success' => false,
+                    'error' => 'That message is no longer in the queue'];
+        }
+
+        // Bounded at the pipe, not after reading. `head -c` stops exim writing
+        // once we have enough, so a 50 MB message costs 2 MB of I/O.
+        $bodyRaw = (string) @shell_exec(
+            'nice -n 19 ' . escapeshellarg($bin) . ' -Mvb ' . escapeshellarg($id)
+            . ' 2>/dev/null | head -c ' . self::MAX_BODY_BYTES);
+
+        $headers = self::parseHeaders($hdrRaw);
+        $parts   = self::mimeParts($headers, $bodyRaw);
+
+        $attachments = [];
+        $preview     = '';
+        $previewType = '';
+        foreach ($parts as $p) {
+            if ($p['is_attachment']) {
+                $attachments[] = [
+                    'filename'     => $p['filename'],
+                    'content_type' => $p['content_type'],
+                    'bytes'        => $p['bytes'],
+                    'sha256'       => $p['sha256'],
+                    // Honest about what we could not hash. A hash of a
+                    // truncated attachment is not that attachment's hash, and
+                    // acting on it later would be acting on a fiction.
+                    'truncated'    => $p['truncated'],
+                    'suspicious'   => self::riskyAttachment($p['filename'],
+                                                            $p['content_type']),
+                ];
+            } elseif ($preview === '' && $p['text'] !== '') {
+                $preview     = $p['text'];
+                $previewType = $p['content_type'];
+            }
+        }
+        if ($preview === '' && $parts === []) {
+            // Not MIME at all: a plain message is its own body.
+            $preview     = self::decodeText($bodyRaw, '');
+            $previewType = 'text/plain';
+        }
+
+        $full = $preview;
+        $preview = mb_substr($preview, 0, self::BODY_PREVIEW_CHARS);
+
+        // Reading someone's mail leaves a mark.
+        Logger::event('mail_body_viewed', 'low', '', $id,
+            'Operator ' . ($by !== '' ? $by : 'unknown') . ' viewed message '
+          . $id . ' (' . count($attachments) . ' attachment(s))');
+
+        return [
+            'success'      => true,
+            'id'           => $id,
+            'from'         => $headers['from'] ?? '',
+            'to'           => $headers['to'] ?? [],
+            'subject'      => $headers['subject'] ?? '',
+            'date'         => $headers['date'] ?? '',
+            'source'       => $headers['source'] ?? [],
+            'attachments'  => $attachments,
+            'body'         => $preview,
+            'body_type'    => $previewType,
+            'body_truncated' => mb_strlen($full) > self::BODY_PREVIEW_CHARS
+                                || strlen($bodyRaw) >= self::MAX_BODY_BYTES,
+            'flagged'      => self::flagsFor($id),
+        ];
+    }
+
+    /**
+     * Headers we actually use, from `exim -Mvh` output.
+     *
+     * exim's -Mvh prefixes each line with a byte count and a marker, so the
+     * raw text is NOT an RFC822 header block and cannot be parsed as one.
+     */
+    private static function parseHeaders(string $raw): array
+    {
+        // Strip exim's "045 " style prefixes and unfold continuations.
+        $lines = [];
+        foreach (explode("\n", $raw) as $line) {
+            $line = preg_replace('/^\d+[A-Za-z]?\s/', '', rtrim($line, "\r"));
+            if ($line === null) { continue; }
+            if ($line !== '' && ($line[0] === ' ' || $line[0] === "\t") && $lines) {
+                $lines[count($lines) - 1] .= ' ' . trim($line);
+            } else {
+                $lines[] = $line;
+            }
+        }
+        $text = implode("\n", $lines);
+
+        $get = function (string $h) use ($text): string {
+            return preg_match('/^' . preg_quote($h, '/') . ':\s*(.*)$/mi', $text, $m)
+                ? trim($m[1]) : '';
+        };
+
+        $to = [];
+        foreach (['To', 'Cc'] as $h) {
+            $v = $get($h);
+            if ($v !== '') {
+                foreach (explode(',', $v) as $one) {
+                    $one = trim($one);
+                    if ($one !== '') { $to[] = mb_substr($one, 0, 200); }
+                }
+            }
+        }
+
+        $source = [];
+        foreach (['X-Source', 'X-Source-Args', 'X-Source-Dir', 'X-PHP-Script'] as $h) {
+            $v = $get($h);
+            if ($v !== '') { $source[$h] = $v; }
+        }
+
+        return [
+            'from'         => self::decodeWords($get('From')),
+            'to'           => array_slice(array_map([self::class, 'decodeWords'], $to), 0, 50),
+            'subject'      => self::decodeWords($get('Subject')),
+            'date'         => $get('Date'),
+            'content_type' => $get('Content-Type'),
+            'source'       => $source,
+            'raw'          => $text,
+        ];
+    }
+
+    /**
+     * MIME parts, flat.
+     *
+     * Deliberately simple: split on the boundary, read each part's own headers,
+     * decode base64/quoted-printable. Nested multipart/* is walked one level,
+     * which covers multipart/mixed wrapping multipart/alternative — the shape
+     * of essentially every real message with an attachment.
+     *
+     * @return list<array{is_attachment:bool,filename:string,content_type:string,
+     *                    bytes:int,sha256:string,truncated:bool,text:string}>
+     */
+    private static function mimeParts(array $headers, string $body, int $depth = 0): array
+    {
+        $ctype = (string) ($headers['content_type'] ?? '');
+        if (!preg_match('/boundary\s*=\s*"?([^";\s]+)"?/i', $ctype, $m)) {
+            return [];
+        }
+        $boundary = $m[1];
+        $chunks   = explode('--' . $boundary, $body);
+        $out      = [];
+
+        foreach ($chunks as $chunk) {
+            $chunk = ltrim($chunk, "\r\n");
+            if ($chunk === '' || strpos($chunk, '--') === 0) { continue; }
+
+            $split = preg_split("/\r?\n\r?\n/", $chunk, 2);
+            if (count($split) !== 2) { continue; }
+            [$ph, $pb] = $split;
+
+            $pct  = self::headerValue($ph, 'Content-Type');
+            $pcd  = self::headerValue($ph, 'Content-Disposition');
+            $pcte = strtolower(trim(self::headerValue($ph, 'Content-Transfer-Encoding')));
+
+            // Nested multipart: one level down, which is where the text parts
+            // of a message with an attachment actually live.
+            if ($depth < 1 && stripos($pct, 'multipart/') === 0) {
+                foreach (self::mimeParts(['content_type' => $pct], $pb, $depth + 1) as $sub) {
+                    $out[] = $sub;
+                }
+                continue;
+            }
+
+            $filename = '';
+            foreach ([$pcd, $pct] as $src) {
+                if (preg_match('/(?:file)?name\s*=\s*"?([^";\r\n]+)"?/i', $src, $fm)) {
+                    $filename = self::decodeWords(trim($fm[1]));
+                    break;
+                }
+            }
+
+            $isAttachment = $filename !== ''
+                         || stripos($pcd, 'attachment') === 0;
+
+            // A part that ran past our 2 MB cap is incomplete, and we say so
+            // rather than reporting a size and a hash that are both wrong.
+            $truncated = (strlen($body) >= self::MAX_BODY_BYTES
+                          && $chunk === end($chunks));
+
+            if ($isAttachment) {
+                $decoded = $pcte === 'base64'
+                    ? (string) base64_decode(preg_replace('/\s+/', '', $pb) ?? '', true)
+                    : self::decodeText($pb, $pcte);
+                $out[] = [
+                    'is_attachment' => true,
+                    'filename'      => $filename !== '' ? $filename : '(unnamed)',
+                    'content_type'  => trim(explode(';', $pct)[0]) ?: 'application/octet-stream',
+                    'bytes'         => strlen($decoded),
+                    'sha256'        => ($truncated || $decoded === '')
+                                        ? '' : hash('sha256', $decoded),
+                    'truncated'     => $truncated,
+                    'text'          => '',
+                ];
+                continue;
+            }
+
+            if (stripos($pct, 'text/') === 0 || $pct === '') {
+                $text = self::decodeText($pb, $pcte);
+                if (stripos($pct, 'text/html') === 0) {
+                    $text = trim(html_entity_decode(strip_tags($text),
+                                                    ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+                }
+                $out[] = [
+                    'is_attachment' => false, 'filename' => '',
+                    'content_type'  => trim(explode(';', $pct)[0]) ?: 'text/plain',
+                    'bytes' => strlen($text), 'sha256' => '', 'truncated' => $truncated,
+                    'text'  => $text,
+                ];
+            }
+        }
+        return $out;
+    }
+
+    private static function headerValue(string $block, string $name): string
+    {
+        return preg_match('/^' . preg_quote($name, '/') . ':\s*(.*)$/mi', $block, $m)
+            ? trim($m[1]) : '';
+    }
+
+    private static function decodeText(string $s, string $encoding): string
+    {
+        $e = strtolower(trim($encoding));
+        if ($e === 'base64')            { $s = (string) base64_decode(preg_replace('/\s+/', '', $s) ?? '', true); }
+        elseif ($e === 'quoted-printable') { $s = (string) quoted_printable_decode($s); }
+        // Anything that is not valid UTF-8 would break json_encode and take the
+        // whole response with it.
+        if (!mb_check_encoding($s, 'UTF-8')) {
+            $s = (string) mb_convert_encoding($s, 'UTF-8', 'UTF-8');
+        }
+        return trim($s);
+    }
+
+    /** RFC 2047 =?utf-8?B?...?= subjects and filenames. */
+    private static function decodeWords(string $s): string
+    {
+        if ($s === '' || strpos($s, '=?') === false) { return mb_substr($s, 0, 400); }
+        $d = @iconv_mime_decode($s, ICONV_MIME_DECODE_CONTINUE_ON_ERROR, 'UTF-8');
+        $s = ($d === false || $d === '') ? $s : $d;
+        if (!mb_check_encoding($s, 'UTF-8')) {
+            $s = (string) mb_convert_encoding($s, 'UTF-8', 'UTF-8');
+        }
+        return mb_substr($s, 0, 400);
+    }
+
+    /**
+     * Extensions and types worth a second look, so the operator's eye goes to
+     * the right row. A hint, never a verdict — the flag is theirs to set.
+     */
+    public static function riskyAttachment(string $filename, string $type): bool
+    {
+        $risky = '/\.(exe|scr|pif|com|bat|cmd|js|jse|vbs|vbe|wsf|wsh|hta|jar|
+                      ps1|msi|dll|lnk|iso|img|img|php|phtml|sh)$/xi';
+        if (preg_match($risky, $filename)) { return true; }
+        // A double extension is the oldest trick there is.
+        if (preg_match('/\.(pdf|doc|docx|xls|xlsx|jpg|png|txt)\.[a-z0-9]{1,4}$/i', $filename)) {
+            return true;
+        }
+        return (bool) preg_match('#^application/(x-msdownload|x-dosexec|x-executable)#i', $type);
+    }
+
+    // ── Flagging an attachment ──────────────────────────────────────────────
+
+    /**
+     * Record that an operator judged an attachment malicious.
+     *
+     * Recorded, not deleted. Removing one attachment from a queued message is
+     * not something exim supports cleanly, and a half-rewritten message is
+     * worse than a flagged one — so this marks it, raises an event, and lets
+     * the operator decide whether to delete the whole message.
+     *
+     * The sha256 is the useful part: it lets the malware scanner recognise the
+     * same bytes on disk later, which is where the file will actually land if
+     * anybody opens it.
+     */
+    public static function flagAttachment(string $id, string $filename,
+                                          string $sha256 = '', string $ctype = '',
+                                          int $bytes = 0, string $note = '',
+                                          string $by = ''): array
+    {
+        if (!self::isMessageId($id)) {
+            return ['success' => false, 'error' => 'Not a valid message id'];
+        }
+        $filename = trim($filename);
+        if ($filename === '') {
+            return ['success' => false, 'error' => 'No attachment named'];
+        }
+        $sha256 = strtolower(trim($sha256));
+        if ($sha256 !== '' && !preg_match('/^[a-f0-9]{64}$/', $sha256)) {
+            return ['success' => false, 'error' => 'That is not a sha256'];
+        }
+
+        self::ensureSchema();
+        Database::query(
+            "INSERT INTO mail_flagged_attachments
+                 (message_id, filename, sha256, content_type, bytes, note, flagged_by)
+             VALUES (?,?,?,?,?,?,?)
+             ON CONFLICT(message_id, filename) DO UPDATE SET
+                 sha256 = excluded.sha256, note = excluded.note,
+                 flagged_by = excluded.flagged_by, flagged_at = strftime('%s','now')",
+            [$id, mb_substr($filename, 0, 255), $sha256, mb_substr($ctype, 0, 120),
+             max(0, $bytes), mb_substr(trim($note), 0, 500),
+             mb_substr(trim($by) !== '' ? trim($by) : 'unknown', 0, 64)]
+        );
+
+        Logger::event('mail_attachment_flagged', 'high', '', $id,
+            'Attachment "' . mb_substr($filename, 0, 120) . '" in message ' . $id
+          . ' flagged as malicious'
+          . ($sha256 !== '' ? ' (sha256 ' . substr($sha256, 0, 16) . ')' : '')
+          . (trim($note) !== '' ? ' — ' . mb_substr(trim($note), 0, 160) : ''));
+
+        return ['success' => true, 'id' => $id, 'filename' => $filename,
+                'sha256' => $sha256];
+    }
+
+    public static function unflagAttachment(string $id, string $filename): array
+    {
+        if (!self::isMessageId($id)) {
+            return ['success' => false, 'error' => 'Not a valid message id'];
+        }
+        self::ensureSchema();
+        Database::query(
+            'DELETE FROM mail_flagged_attachments WHERE message_id=? AND filename=?',
+            [$id, trim($filename)]);
+        Logger::info('Mail: attachment flag withdrawn for ' . $filename . ' in ' . $id);
+        return ['success' => true];
+    }
+
+    /** @return array<string,array> filename => flag row */
+    public static function flagsFor(string $id): array
+    {
+        if (!self::isMessageId($id)) { return []; }
+        self::ensureSchema();
+        $out = [];
+        foreach (Database::fetchAll(
+                    'SELECT * FROM mail_flagged_attachments WHERE message_id=?',
+                    [$id]) ?: [] as $r) {
+            $out[(string) $r['filename']] = $r;
+        }
+        return $out;
+    }
+
+    /** Everything flagged, newest first, for the Logs tab. */
+    public static function flaggedAttachments(int $limit = 200): array
+    {
+        self::ensureSchema();
+        return Database::fetchAll(
+            'SELECT * FROM mail_flagged_attachments ORDER BY flagged_at DESC LIMIT '
+            . max(1, min(1000, $limit))) ?: [];
     }
 
     // ── Reporting ───────────────────────────────────────────────────────────

@@ -1579,6 +1579,47 @@ function routeMailGuard(string $action, string $method, array $body, array $q, ?
               })()
             : ['success' => false, 'code' => 405],
 
+        // One message in full: sender, recipients, subject, attachments and
+        // the first 1,000 characters of the body.
+        //
+        // Admin only, and every view is written to the security timeline.
+        // Until now this module read headers and never the body on purpose;
+        // that is still true of the automatic detection, and this runs only
+        // when an operator opens a specific message. Reading a customer's mail
+        // should leave a mark.
+        'view' => ['success' => true,
+                   'data' => MailGuard::messageView(
+                       (string)($q['id'] ?? ''),
+                       (string)($user['username'] ?? ''))],
+
+        // An operator judging an attachment malicious. Recorded with its
+        // sha256 so the malware scanner can recognise the same bytes on disk.
+        'flag-attachment' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  return MailGuard::flagAttachment(
+                      (string)($body['id'] ?? ''),
+                      (string)($body['filename'] ?? ''),
+                      (string)($body['sha256'] ?? ''),
+                      (string)($body['content_type'] ?? ''),
+                      (int)($body['bytes'] ?? 0),
+                      (string)($body['note'] ?? ''),
+                      (string)($user['username'] ?? ''));
+              })()
+            : ['success' => false, 'code' => 405],
+
+        'unflag-attachment' => $method === 'POST'
+            ? (function () use ($body, $user) {
+                  Auth::requireRole('admin', $user);
+                  return MailGuard::unflagAttachment(
+                      (string)($body['id'] ?? ''), (string)($body['filename'] ?? ''));
+              })()
+            : ['success' => false, 'code' => 405],
+
+        'flagged' => ['success' => true,
+                      'data' => MailGuard::flaggedAttachments(
+                          (int)($q['limit'] ?? 200))],
+
         // Force a delivery attempt — cPanel's "Deliver" button.
         //
         // Confirmed like deletion, and for a sharper reason: this SENDS. On a

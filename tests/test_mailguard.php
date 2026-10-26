@@ -488,10 +488,34 @@ $exec = strpos($mg, '-Mrm');
 t_ok($pos !== false && $exec !== false && $pos < $exec,
      'what is being destroyed is recorded before it is destroyed');
 
-// Headers only — never the body.
+// The body rule, narrowed rather than dropped.
+//
+// Until 4.18.0 this module never read a body at all, deliberately: "the body
+// is a customer's private mail and nothing here needs it to tell a relay from
+// a receipt". That is still true of everything AUTOMATIC, and the detector
+// below is still header-only.
+//
+// What changed is that an operator can now open one specific message. The
+// safeguards are that it is capped at 1,000 characters, admin only, logged to
+// the security timeline, and bounded at the pipe so a 50 MB message costs 2 MB
+// of I/O rather than loading whole.
 t_contains($mg, '-Mvh', 'message inspection reads headers');
-t_ok(strpos($mg, '-Mvb') === false,
-     "and never the body, which is a customer's private mail");
+
+$auto = t_fn_body($mg, 'collect', 'php');
+t_ok($auto === '' || strpos($auto, '-Mvb') === false,
+     'the automatic log collector still never reads a message body');
+
+$view = t_fn_body($mg, 'messageView', 'php');
+t_contains($view, '-Mvb', 'the operator-initiated view does read the body');
+t_contains($view, 'head -c',
+     'bounded AT THE PIPE, so a 50MB message costs 2MB of I/O rather than '
+   . 'being read whole to show 1,000 characters');
+t_contains($view, 'MAX_BODY_BYTES', 'against an explicit cap');
+t_contains($view, 'mail_body_viewed',
+     'and every view is written to the security timeline — reading a '
+   . "customer's mail should leave a mark");
+t_contains($view, 'BODY_PREVIEW_CHARS', 'with the preview length a named constant');
+t_eq(1000, MailGuard::BODY_PREVIEW_CHARS, 'which is the 1,000 characters asked for');
 
 // ── The cards open the viewer ───────────────────────────────────────────────
 
@@ -821,3 +845,115 @@ t_contains($app3, "data-frozen",
 // Honest reporting in the toast.
 t_contains($dsq, 'still queued',
      'a deferred message is reported as still queued, never as delivered');
+
+// ── Message view: attachments, flagging, tabs ───────────────────────────────
+
+// Risky-type detection is a HINT that moves the operator's eye, never a
+// verdict. The flag is theirs to set.
+foreach (['invoice.exe', 'a.scr', 'x.js', 'payload.PhP', 'setup.msi',
+          'report.pdf.exe', 'photo.jpg.scr'] as $bad) {
+    t_ok(MailGuard::riskyAttachment($bad, 'application/octet-stream'),
+         "flagged as a risky type: $bad");
+}
+foreach (['invoice.pdf', 'photo.jpg', 'notes.txt', 'sheet.xlsx', 'archive.zip'] as $ok) {
+    t_ok(!MailGuard::riskyAttachment($ok, 'application/pdf'),
+         "not flagged as risky: $ok");
+}
+t_ok(MailGuard::riskyAttachment('x.bin', 'application/x-msdownload'),
+     'and an executable content-type counts even with a dull filename');
+
+// Flagging records the hash, because that is the part the malware scanner can
+// act on later when the same bytes land on disk.
+MailGuard::ensureSchema();
+Database::query('DELETE FROM mail_flagged_attachments');
+
+$mid  = '1aBcDe-0001Xy-Zz';
+$hash = hash('sha256', 'malicious bytes');
+
+$r = MailGuard::flagAttachment($mid, 'invoice.exe', $hash,
+                               'application/x-msdownload', 94208, 'dropper', 'root');
+t_ok(!empty($r['success']), 'an attachment can be flagged');
+$flags = MailGuard::flagsFor($mid);
+t_ok(isset($flags['invoice.exe']), 'and is listed against its message');
+t_eq($hash, $flags['invoice.exe']['sha256'],
+     'with the sha256 kept, which is what the scanner can match on disk');
+
+// Flagging twice is an update, not a duplicate or an error.
+MailGuard::flagAttachment($mid, 'invoice.exe', $hash, '', 0, 'second look', 'root');
+t_eq(1, count(MailGuard::flagsFor($mid)), 'flagging twice does not duplicate the row');
+
+// Refusals.
+t_ok(empty(MailGuard::flagAttachment('not-an-id', 'x.exe')['success']),
+     'a bad message id is refused');
+t_ok(empty(MailGuard::flagAttachment($mid, '')['success']),
+     'an unnamed attachment is refused');
+t_ok(empty(MailGuard::flagAttachment($mid, 'x.exe', 'nonsense')['success']),
+     'and something that is not a sha256 is refused rather than stored');
+
+t_ok(!empty(MailGuard::unflagAttachment($mid, 'invoice.exe')['success']),
+     'a flag can be withdrawn');
+t_eq(0, count(MailGuard::flagsFor($mid)), 'and is then gone');
+
+// ── MIME parsing ────────────────────────────────────────────────────────────
+//
+// Exercised through the private parser via the public view is impossible
+// without exim, so the shape is asserted on the source and the behaviour on
+// the pieces that are reachable.
+$mgSrc = t_code(dirname(__DIR__) . '/backend/lib/MailGuard.php');
+$mime  = t_fn_body($mgSrc, 'mimeParts', 'php');
+t_contains($mime, 'base64_decode', 'base64 parts are decoded');
+t_contains($mgSrc, 'quoted_printable_decode',
+     'and quoted-printable, in the shared text decoder');
+t_contains($mime, 'depth < 1',
+     'multipart/mixed wrapping multipart/alternative is walked one level, '
+   . 'which is the shape of nearly every real message with an attachment');
+t_contains($mime, 'truncated',
+     'a part running past the read cap is marked incomplete');
+t_ok(strpos($mime, "'sha256'      => (\$truncated") !== false
+     || strpos($mime, '$truncated || $decoded') !== false,
+     'and a truncated attachment is NOT given a hash — a hash of part of a '
+   . 'file is not that file\'s hash, and acting on it later would be acting '
+   . 'on a fiction');
+
+$dec = t_fn_body($mgSrc, 'decodeText', 'php');
+t_contains($dec, 'mb_check_encoding',
+     'decoded text is forced to valid UTF-8, or json_encode would fail and '
+   . 'take the whole response with it');
+
+// Headers come from exim -Mvh, which prefixes every line with a byte count,
+// so the output is NOT an RFC822 header block.
+$ph = t_fn_body($mgSrc, 'parseHeaders', 'php');
+t_contains($ph, "preg_replace('/^\d+[A-Za-z]?\s/'",
+     'exim\'s line-length prefixes are stripped before parsing');
+t_contains($ph, 'decodeWords', 'and RFC 2047 encoded subjects are decoded');
+
+// ── The UI ──────────────────────────────────────────────────────────────────
+$mgHtml = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+$mgApp  = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+
+foreach (['mail', 'settings', 'logs'] as $tab) {
+    t_contains($mgHtml, 'onclick="mgTab(\'' . $tab . '\')"', "there is a $tab tab");
+    t_contains($mgHtml, 'data-mgtab="' . $tab . '"', "with at least one $tab card");
+}
+t_contains($mgApp, 'function mgTab', 'with a handler behind them');
+
+// A card that hides itself must not be forced open by a tab switch — that is
+// how an empty card comes to look like a broken one.
+$tabFn = t_fn_body($mgApp, 'mgTab');
+t_contains($tabFn, 'mgHidden',
+     'a self-hiding card keeps its own state across a tab switch');
+
+t_contains($mgApp, 'function viewMessage', 'a message can be opened');
+// The row is built in JS, not in the markup.
+t_contains($mgApp, 'onclick="viewMessage(', 'from the queue row');
+t_contains($mgHtml, 'id="msgview-modal"', 'into a dedicated view');
+t_contains($mgHtml, 'id="mv-attachments"', 'which lists attachments');
+t_contains($mgHtml, 'id="mv-body"', 'and shows the body');
+
+// An attachment is addressed by INDEX in the markup, never by filename: a
+// filename can contain a quote, and interpolating one into an onclick is
+// exactly what killed the exclude button in 4.13.
+t_contains($mgApp, 'onclick="toggleAttachmentFlag(\' + i + \')"',
+     'attachments are addressed by index in the attribute');
+t_ok(preg_match('/onclick="toggleAttachmentFlag\(\s*\x27?\s*\+\s*esc\(/', $mgApp) === 0,
+     'and never by a filename interpolated into it');
