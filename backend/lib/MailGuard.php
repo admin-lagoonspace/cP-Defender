@@ -1109,9 +1109,95 @@ class MailGuard
         if ($cur !== null) { self::pushMsg($messages, $cur, $frozenOnly,
                                            $search, $limit, $total); }
 
+        // Subjects, for the page we are actually showing.
+        //
+        // `exim -bp` does not carry one, which is why a queue listing is a wall
+        // of message ids and addresses with no way to tell a receipt from a
+        // relay at a glance. ConfigServer Mail Manage showed the subject and
+        // that is most of why it was pleasant to use.
+        //
+        // Read from the spool header file directly: one small file read per
+        // message, never a fork. 200 reads is cheap; 200 forks of exim -Mvh on
+        // a box with a 93,000-message queue is not.
+        self::addSubjects($messages);
+
         return ['messages' => $messages, 'total' => $total,
                 'shown' => count($messages), 'truncated' => $total > count($messages)];
     }
+
+    /** Where exim keeps its spool. One fork, cached for the request. */
+    private static function spoolDir(): string
+    {
+        static $dir = null;
+        if ($dir !== null) { return $dir; }
+
+        $bin = null;
+        foreach (['/usr/sbin/exim', '/usr/bin/exim'] as $b) {
+            if (is_executable($b)) { $bin = $b; break; }
+        }
+        $dir = '/var/spool/exim';
+        if ($bin !== null) {
+            $o = (string) @shell_exec(escapeshellarg($bin)
+                                    . ' -bP spool_directory 2>/dev/null');
+            if (preg_match('/spool_directory\s*=\s*(\S+)/', $o, $m)) {
+                $dir = rtrim($m[1], '/');
+            }
+        }
+        return $dir;
+    }
+
+    /**
+     * Fill in `subject` for each message, from the spool header file.
+     *
+     * Bounded three ways, because this runs on a box that is often already in
+     * trouble: at most MAX_SUBJECT_READS files, each read capped, and only for
+     * messages already selected for display.
+     *
+     * A message whose header we cannot read keeps an empty subject rather than
+     * a guess — the queue listing still works, it is just less informative for
+     * that row.
+     */
+    private static function addSubjects(array &$messages): void
+    {
+        $spool = self::spoolDir();
+        $n     = 0;
+        foreach ($messages as &$m) {
+            $m['subject'] = '';
+            if ($n >= self::MAX_SUBJECT_READS) { continue; }
+            $id = (string) ($m['id'] ?? '');
+            if (!self::isMessageId($id)) { continue; }
+
+            // With split_spool_directory the subdirectory is the SIXTH
+            // character of the message id. Both layouts are tried rather than
+            // reading exim's config for a boolean.
+            $candidates = [
+                $spool . '/input/' . substr($id, 5, 1) . '/' . $id . '-H',
+                $spool . '/input/' . $id . '-H',
+            ];
+            foreach ($candidates as $path) {
+                if (!@is_file($path) || !@is_readable($path)) { continue; }
+                $fh = @fopen($path, 'rb');
+                if ($fh === false) { continue; }
+                $raw = (string) @fread($fh, self::MAX_HEADER_BYTES);
+                @fclose($fh);
+                $n++;
+                // Spool headers are prefixed with a byte count and a type
+                // letter, so this is not an RFC822 block.
+                if (preg_match('/^\d+[A-Za-z]?\s*Subject:\s*(.*)$/mi', $raw, $sm)
+                    || preg_match('/^Subject:\s*(.*)$/mi', $raw, $sm)) {
+                    $m['subject'] = self::decodeWords(trim($sm[1]));
+                }
+                break;
+            }
+        }
+        unset($m);
+    }
+
+    /** At most this many spool header files per queue listing. */
+    private const MAX_SUBJECT_READS = 250;
+
+    /** And at most this much of each one. */
+    private const MAX_HEADER_BYTES  = 65536;
 
     /** Collect a parsed message if it matches, keeping the page bounded. */
     private static function pushMsg(array &$acc, array $msg, bool $frozenOnly,

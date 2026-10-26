@@ -957,3 +957,65 @@ t_contains($mgApp, 'onclick="toggleAttachmentFlag(\' + i + \')"',
      'attachments are addressed by index in the attribute');
 t_ok(preg_match('/onclick="toggleAttachmentFlag\(\s*\x27?\s*\+\s*esc\(/', $mgApp) === 0,
      'and never by a filename interpolated into it');
+
+// ── The queue listing must carry subjects ───────────────────────────────────
+//
+// `exim -bp` does not report a Subject, so the listing was a wall of message
+// ids and addresses with no way to tell a receipt from a relay at a glance.
+// ConfigServer Mail Manage showed the subject and that is most of why it was
+// pleasant to use.
+$qsrc = t_fn_body($mgSrc, 'addSubjects', 'php');
+t_ok($qsrc !== '', 'subjects are filled in for the listing');
+t_contains($qsrc, 'MAX_SUBJECT_READS',
+     'capped at a number of files per listing, because a 93,000-message queue '
+   . 'must not become 93,000 reads');
+t_contains($qsrc, 'MAX_HEADER_BYTES', 'and each read is itself capped');
+t_contains($qsrc, "substr(\$id, 5, 1)",
+     'split_spool_directory is handled — the subdirectory is the sixth '
+   . 'character of the message id');
+t_ok(strpos($qsrc, '-Mvh') === false && strpos($qsrc, 'shell_exec') === false,
+     'and it reads the spool file directly rather than forking exim per '
+   . 'message, which is the difference between 200 reads and 200 forks');
+t_contains($qsrc, 'decodeWords',
+     'an RFC 2047 encoded subject is decoded rather than shown raw');
+
+$queueFn = t_fn_body($mgSrc, 'queueList', 'php');
+t_contains($queueFn, 'addSubjects', 'queueList fills them in');
+
+// The filter runs BEFORE subjects are read, so it matches sender and
+// recipient only. The placeholder must not promise otherwise.
+$mgHtml2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+t_contains($mgHtml2, 'placeholder="filter sender or recipient"',
+     'and the search box promises only what it actually matches');
+
+// ── Mail view shows mail ────────────────────────────────────────────────────
+//
+// The queue card hid itself until somebody clicked the QUEUE stat card, so the
+// Mail view tab looked empty. Worse, because the card declared no hidden
+// state, switching tabs revealed it with nothing loaded — a permanent
+// "Loading…".
+t_ok(strpos($mgHtml2, 'id="mg-queue-card" data-mgtab="mail" data-mg-hidden="1"') === false,
+     'THE REPORTED BUG: the queue card no longer hides itself on Mail view');
+t_contains($mgHtml2, 'id="mg-queue-card" data-mgtab="mail">',
+     'it is simply part of the tab');
+
+$mgApp2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+t_contains($mgApp2, 'reloadMailQueue(),',
+     'and the page loader fetches the queue, so Mail view has mail in it');
+
+// Every card that DOES hide itself must declare that in the markup, or a tab
+// switch reveals it empty.
+foreach (['mg-findings-card', 'mg-delivery-card'] as $id) {
+    t_ok(preg_match('/id="' . $id . '"[^>]*data-mg-hidden="1"/', $mgHtml2) === 1,
+         $id . ' declares that it starts hidden');
+}
+
+// Senders is history, so it belongs with the logs.
+t_ok(preg_match('/data-mgtab="logs">\s*<div class="card-header">\s*<div class="card-title">Senders, last 24 hours/', $mgHtml2) === 1,
+     'the senders table is on the Logs tab, not Mail view');
+
+// "Close" hid the only content on the tab. It resets the filter instead.
+t_ok(strpos($mgApp2, 'function closeMailQueue') === false,
+     'the Close button that emptied the tab is gone');
+t_contains($mgApp2, 'function showAllQueue', 'replaced by a filter reset');
+t_contains($mgHtml2, 'onclick="showAllQueue()"', 'which the button calls');

@@ -241,6 +241,7 @@ function openPage(name) {
     wpscan:     ['Loading WP database…', () => loadWPScan()],
     mailguard:  ['Loading spam monitor…', () => Promise.all([loadMailGuard(),
                                                              loadMailSettings(),
+                                                             reloadMailQueue(),
                                                              loadFlaggedAttachments()])],
     // The one that was missing. Both halves: the daemon's own status, and the
     // systemd unit -- loadMonitor() does not fetch the service, which is why
@@ -2377,6 +2378,9 @@ function mgTab(name) {
     // stay hidden until they have something to show) must not be forced open
     // by a tab switch -- that is how an empty card ends up looking broken.
     if (!mine) { card.style.display = 'none'; return; }
+    // An UNSET flag used to mean "show it", which revealed the queue card with
+    // nothing in it: a card stuck on "Loading…" that nobody had asked to load.
+    // Cards that start hidden now declare data-mg-hidden="1" in the markup.
     card.style.display = card.dataset.mgHidden === '1' ? 'none' : '';
   });
   if (name === 'logs') { loadFlaggedAttachments(); }
@@ -5683,10 +5687,9 @@ let mgQueueFrozen = false;
 function openMailQueue(frozen) {
   mgQueueFrozen = !!frozen;
   const card = g('mg-queue-card');
-  // Opening the queue belongs to the Mail view tab; jumping to a hidden
-  // card is how a button comes to look dead.
+  // The card is always present on Mail view now; this only picks which slice
+  // of the queue is shown, and makes sure that tab is the one in front of you.
   mgTab('mail');
-  mgSetCardHidden('mg-queue-card', false);
   setText('mg-queue-title', frozen ? 'Frozen messages' : 'Queued messages');
   const all = g('mg-queue-all');
   if (all) all.checked = false;
@@ -5694,8 +5697,15 @@ function openMailQueue(frozen) {
   if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function closeMailQueue() {
-  mgSetCardHidden('mg-queue-card', true);
+// Was closeMailQueue(), which hid the ONLY content on the Mail view tab and
+// left it blank. Clearing the filter is what an operator actually wants from a
+// button sitting beside a search box.
+function showAllQueue() {
+  const box = g('mg-queue-search');
+  if (box) { box.value = ''; }
+  mgQueueFrozen = false;
+  setText('mg-queue-title', 'Queued messages');
+  reloadMailQueue();
 }
 
 async function reloadMailQueue() {
@@ -5760,7 +5770,13 @@ async function reloadMailQueue() {
       + '<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis" title="'
         + esc(m.sender || '') + '">' + esc(m.sender || '&lt;&gt;') + '</td>'
       + '<td>' + esc(m.account || '\u2014') + '</td>'
-      + '<td style="max-width:260px;font-size:.8rem">' + shown + more + '</td>'
+      // Subject, read from the spool header. `exim -bp` does not carry one,
+      // which is why a queue listing used to be a wall of ids and addresses
+      // with no way to tell a receipt from a relay at a glance.
+      + '<td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;'
+        + 'white-space:nowrap;font-size:.8rem" title="' + esc(m.subject || '') + '">'
+        + (m.subject ? esc(m.subject) : '<span class="dim">(no subject)</span>') + '</td>'
+      + '<td style="max-width:230px;font-size:.8rem">' + shown + more + '</td>'
       + '<td>' + (m.frozen
           ? '<span class="badge badge-amber">frozen</span>'
           : '<span class="badge badge-blue">queued</span>') + '</td>'
