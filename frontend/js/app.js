@@ -242,7 +242,6 @@ function openPage(name) {
     mailqueue:  ['Loading mail queue…', () => loadMailQueue()],
     mailguard:  ['Loading spam monitor…', () => Promise.all([loadMailGuard(),
                                                              loadMailSettings(),
-                                                             reloadMailQueue(),
                                                              loadFlaggedAttachments()])],
     // The one that was missing. Both halves: the daemon's own status, and the
     // systemd unit -- loadMonitor() does not fetch the service, which is why
@@ -2361,6 +2360,18 @@ function bfBlockAlert(rows) {
 
 
 
+// Spam Monitor's QUEUE and FROZEN cards cross to the Mail Queue section.
+//
+// The queue used to be duplicated inside Spam Monitor, which meant two
+// listings of the same thing with different capabilities -- and the lesser one
+// was the one an operator met first.
+function goMailQueue(frozen) {
+  const st = g('mq-state');
+  if (st) { st.value = frozen ? 'frozen' : 'any'; }
+  const item = document.querySelector('.sidebar-item[data-page="mailqueue"]');
+  if (item) { item.click(); } else if (typeof showPage === 'function') { showPage('mailqueue'); }
+}
+
 // ── Mail Queue ──────────────────────────────────────────────────────────────
 //
 // A working queue manager, separate from Spam Monitor on purpose. Spam Monitor
@@ -2655,7 +2666,7 @@ async function mqLog(index) {
 // The page was five stacked cards mixing live mail, policy and history, so the
 // thing an operator came for was never on screen. The KPI row stays visible on
 // every tab: those four numbers are the reason to open the page at all.
-let MgTab = 'mail';
+let MgTab = 'findings';
 let MsgViewId = '';
 
 function mgTab(name) {
@@ -5973,282 +5984,6 @@ async function saveMailSettings() {
 // of text, and rendering all of it would hang the browser on exactly the server
 // that needs this most.
 
-let mgQueueFrozen = false;
-
-function openMailQueue(frozen) {
-  mgQueueFrozen = !!frozen;
-  const card = g('mg-queue-card');
-  // The card is always present on Mail view now; this only picks which slice
-  // of the queue is shown, and makes sure that tab is the one in front of you.
-  mgTab('mail');
-  setText('mg-queue-title', frozen ? 'Frozen messages' : 'Queued messages');
-  const all = g('mg-queue-all');
-  if (all) all.checked = false;
-  reloadMailQueue();
-  if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-// Was closeMailQueue(), which hid the ONLY content on the Mail view tab and
-// left it blank. Clearing the filter is what an operator actually wants from a
-// button sitting beside a search box.
-function showAllQueue() {
-  const box = g('mg-queue-search');
-  if (box) { box.value = ''; }
-  mgQueueFrozen = false;
-  setText('mg-queue-title', 'Queued messages');
-  reloadMailQueue();
-}
-
-async function reloadMailQueue() {
-  const body = g('mg-queue-body');
-  if (body) {
-    body.innerHTML = '<tr><td colspan="8" style="text-align:center;'
-      + 'color:var(--txt3);padding:24px">Reading the queue\u2026</td></tr>';
-  }
-  const search = g('mg-queue-search') ? g('mg-queue-search').value : '';
-
-  let d;
-  try {
-    const r = await API.mgQueue(mgQueueFrozen, search);
-    d = (r && r.data) || {};
-  } catch (e) {
-    if (body) {
-      body.innerHTML = '<tr><td colspan="8" style="text-align:center;'
-        + 'color:var(--red);padding:24px">Could not read the queue: '
-        + esc(e && e.message ? e.message : String(e)) + '</td></tr>';
-    }
-    return;
-  }
-
-  if (d.error) {
-    if (body) {
-      body.innerHTML = '<tr><td colspan="8" style="text-align:center;'
-        + 'color:var(--amber);padding:24px">' + esc(d.error) + '</td></tr>';
-    }
-    return;
-  }
-
-  const rows = d.messages || [];
-  // Says plainly when the list is a page of a larger queue. A table showing
-  // 200 of 93,000 with nothing saying so invites "delete selected" on the
-  // assumption it covers everything.
-  setText('mg-queue-note', d.truncated
-    ? 'Showing ' + fmtNum(d.shown) + ' of ' + fmtNum(d.total)
-      + ' matching \u2014 narrow the filter to reach the rest'
-    : fmtNum(d.total) + ' message(s)');
-
-  if (!body) return;
-  if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="8" style="text-align:center;'
-      + 'color:var(--txt3);padding:24px">Nothing '
-      + (mgQueueFrozen ? 'frozen' : 'queued') + ' matches.</td></tr>';
-    return;
-  }
-
-  body.innerHTML = rows.map(m => {
-    const rcpt = (m.recipients || []);
-    const shown = rcpt.slice(0, 3).map(esc).join('<br>');
-    const more = rcpt.length > 3
-      ? '<br><span style="color:var(--txt3)">+' + (rcpt.length - 3) + ' more</span>'
-      : '';
-    return '<tr>'
-      // data-frozen drives the thaw warning in the deliver dialog. Delivering
-      // a frozen message unfreezes it, which is not what "retry" sounds like.
-      + '<td><input type="checkbox" class="mg-q-pick" value="' + esc(m.id) + '"'
-        + ' data-frozen="' + (m.frozen ? '1' : '0') + '"></td>'
-      + '<td>' + esc(m.age || '') + '</td>'
-      + '<td>' + esc(m.size || '') + '</td>'
-      + '<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis" title="'
-        + esc(m.sender || '') + '">' + esc(m.sender || '&lt;&gt;') + '</td>'
-      + '<td>' + esc(m.account || '\u2014') + '</td>'
-      // Subject, read from the spool header. `exim -bp` does not carry one,
-      // which is why a queue listing used to be a wall of ids and addresses
-      // with no way to tell a receipt from a relay at a glance.
-      + '<td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;'
-        + 'white-space:nowrap;font-size:.8rem" title="' + esc(m.subject || '') + '">'
-        + (m.subject ? esc(m.subject) : '<span class="dim">(no subject)</span>') + '</td>'
-      + '<td style="max-width:230px;font-size:.8rem">' + shown + more + '</td>'
-      + '<td>' + (m.frozen
-          ? '<span class="badge badge-amber">frozen</span>'
-          : '<span class="badge badge-blue">queued</span>') + '</td>'
-      + '<td style="white-space:nowrap">'
-        + '<button class="btn btn-ghost btn-sm" onclick="viewMessage(\''
-        + esc(m.id) + '\')" title="Sender, recipients, subject, attachments '
-        + 'and the first 1,000 characters">View</button> '
-        + '<button class="btn btn-ghost btn-sm" onclick="inspectMessage(\''
-        + esc(m.id) + '\')">Headers</button></td>'
-      + '</tr>';
-  }).join('');
-}
-
-function toggleAllQueue(on) {
-  document.querySelectorAll('.mg-q-pick').forEach(c => { c.checked = !!on; });
-}
-
-// Headers only. The body is a customer's private mail and nothing here needs
-// it to tell a relay from a receipt.
-async function inspectMessage(id) {
-  const r = await API.mgMessage(id);
-  const d = (r && r.data) || {};
-  if (!d.success) {
-    toast(d.error || 'Could not read that message', 'error');
-    return;
-  }
-  // cPanel stamps locally generated mail with X-Source headers naming the
-  // script. That is the same answer cwd= gives in the log, from the other
-  // side -- and where the log does not carry cwd=, this is the only place the
-  // script name exists.
-  let src = '';
-  Object.keys(d.source || {}).forEach(k => { src += k + ': ' + d.source[k] + '\n'; });
-
-  // Was alert(). A browser that has suppressed dialogs makes alert() a no-op,
-  // so the Headers button simply did nothing and there was no way to tell.
-  await uiAlert({
-    title: 'Message headers',
-    body: src
-      ? '<div style="font-size:.8rem;color:var(--txt3);margin-bottom:6px">'
-        + 'cPanel stamps locally generated mail with the script that sent it.</div>'
-        + '<strong style="font-size:.78rem">WHAT SENT IT</strong>'
-      : '',
-    pre: (src ? src + '\n' : '') + (d.headers || '').slice(0, 4000)
-  });
-}
-
-/**
- * Force a delivery attempt on the selected queued messages.
- *
- * cPanel's Mail Queue Manager calls this "Deliver". It runs `exim -M`, which
- * attempts delivery immediately and ignores the retry schedule — the right
- * tool, because the usual reason real mail sits in this queue is a timer that
- * has not expired. A Gmail 421 rate limit or a full recipient mailbox parks a
- * genuine message for hours.
- *
- * Confirmed, never one-click, and the dialog states the two things that are
- * easy to get wrong: it SENDS, and for frozen messages it also THAWS.
- */
-async function deliverSelectedQueue() {
-  const picked = Array.from(document.querySelectorAll('.mg-q-pick:checked'));
-  const ids = picked.map(c => c.value);
-  if (!ids.length) {
-    toast('Select the messages to deliver first', 'info');
-    return;
-  }
-
-  // Frozen means exim already gave up. Delivering one is not a neutral retry,
-  // so it is called out separately rather than buried in a count.
-  const frozen = picked.filter(c => c.dataset.frozen === '1').length;
-
-  const ok = await uiConfirm({
-    title: 'Deliver ' + ids.length + ' message(s) now?',
-    ok: 'Deliver now',
-    body:
-      '<p style="margin:0 0 10px">This asks Exim to attempt delivery '
-    + '<strong>immediately</strong>, ignoring the retry schedule. Mail that is '
-    + 'simply waiting on a timer — a rate limit, a full mailbox — usually goes '
-    + 'out on the first attempt.</p>'
-    + (frozen
-        ? '<p style="margin:0 0 10px;color:var(--amber)"><strong>'
-          + frozen + ' of these are frozen.</strong> Exim already gave up on '
-          + 'them, and delivering a frozen message also <strong>unfreezes</strong> '
-          + 'it. Check why it froze before sending.</p>'
-        : '')
-    + '<p style="margin:0;color:var(--txt3);font-size:.8rem">These messages '
-    + 'leave your server. Check the senders and recipients first — a queue that '
-    + 'filled up with spam usually still contains real customer mail, and the '
-    + 'reverse is also true.</p>'
-  });
-  if (!ok) return;
-
-  const btns = Array.from(document.querySelectorAll('.mg-q-action'));
-  btns.forEach(b => { b.disabled = true; });
-  toast('Attempting delivery of ' + ids.length + ' message(s)…', 'info', 4000);
-
-  const r = await API.mgDeliver(ids);
-  btns.forEach(b => { b.disabled = false; });
-
-  const d = (r && r.data) || {};
-  if (!r || r.success === false) {
-    toast((r && r.error) || 'Delivery refused', 'error', 9000);
-    return;
-  }
-  if (d.error) { toast(d.error, 'error', 9000); return; }
-
-  // "Delivered" means LEFT THE QUEUE. exim exits 0 for an attempt that
-  // deferred, so reporting its exit status as success would be a lie the
-  // operator then acts on.
-  const bits = [];
-  if (d.delivered) bits.push(fmtNum(d.delivered) + ' delivered');
-  if (d.deferred)  bits.push(fmtNum(d.deferred) + ' still queued');
-  if (d.skipped)   bits.push(fmtNum(d.skipped) + ' not attempted (time budget)');
-
-  const failed = (d.failed || []).length;
-  toast(bits.join(', ') + (failed ? '; ' + failed + ' reported an error' : ''),
-        d.delivered ? 'success' : 'warning', 10000);
-
-  if (failed) {
-    await uiAlert({
-      title: 'Messages that did not go',
-      body: '<p style="margin:0 0 8px">Still deferred usually means the far end '
-          + 'is rate-limiting or unreachable — the message stays queued and '
-          + 'Exim will retry on its own.</p>',
-      pre: (d.failed || []).slice(0, 25)
-             .map(f => f.id + '  ' + f.error).join('\n')
-    });
-  }
-
-  await reloadMailQueue();
-  await loadMailGuard();
-}
-
-async function deleteSelectedQueue() {
-  const ids = Array.from(document.querySelectorAll('.mg-q-pick:checked'))
-                   .map(c => c.value);
-  if (!ids.length) {
-    toast('Select the messages to delete first', 'info');
-    return;
-  }
-  // Spelled out, because this cannot be undone and the queue holds real mail.
-  //
-  // Was confirm(). A browser that has suppressed dialogs returns false from it
-  // without telling anyone, so this button did nothing at all \u2014 the same
-  // silent failure that killed the two "Not malware" controls.
-  const ok = await uiConfirm({
-    title: 'Permanently delete ' + ids.length + ' message(s)?',
-    ok: 'Delete permanently',
-    danger: true,
-    body: '<p style="margin:0 0 10px">This removes them from the mail queue. '
-        + '<strong>It cannot be undone.</strong></p>'
-        + '<p style="margin:0;color:var(--txt3);font-size:.8rem">Check the '
-        + 'senders and recipients first \u2014 a queue that filled up with spam '
-        + 'usually still contains real customer mail.</p>'
-  });
-  if (!ok) return;
-
-  const r = await API.mgDelete(ids);
-  const d = (r && r.data) || {};
-  if (!r || r.success === false) {
-    toast((r && r.error) || 'Delete refused', 'error', 9000);
-    return;
-  }
-  const failed = (d.failed || []).length;
-  toast('Deleted ' + fmtNum(d.deleted) + ' message(s)'
-      + (failed ? '; ' + failed + ' could not be removed' : ''),
-        failed ? 'warning' : 'success', 8000);
-
-  await reloadMailQueue();
-  await loadMailGuard();
-}
-
-// ── Scan exclusions ─────────────────────────────────────────────────────────
-//
-// The product reported five HIGH threats against ai-bolit, Imunify360's own
-// scanner. Each was SG.RT.eval_base64 and each was technically correct: a
-// malware scanner carries the patterns it hunts for. A tool that flags other
-// security tools teaches the operator that HIGH findings are usually wrong,
-// and the next one that matters gets the same shrug.
-//
-// Those paths are excluded in the product now, but an operator needs to be
-// able to add their own without waiting for a release.
 
 async function loadExclusions() {
   const r = await API.exclList();

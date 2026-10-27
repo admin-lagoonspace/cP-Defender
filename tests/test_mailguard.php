@@ -517,17 +517,26 @@ t_contains($view, 'mail_body_viewed',
 t_contains($view, 'BODY_PREVIEW_CHARS', 'with the preview length a named constant');
 t_eq(1000, MailGuard::BODY_PREVIEW_CHARS, 'which is the 1,000 characters asked for');
 
-// ── The cards open the viewer ───────────────────────────────────────────────
+// ── The queue is NOT duplicated inside Spam Monitor ─────────────────────────
+//
+// It used to be listed here as well as in Mail Queue: two tables of the same
+// thing with different capabilities, and the lesser one was the one an
+// operator met first. Spam Monitor answers "who is sending too much"; finding
+// one message among thousands is a different job and now lives in one place.
 
 $html = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
-t_contains($html, 'onclick="openMailQueue(false)"', 'the Queue card is clickable');
-t_contains($html, 'onclick="openMailQueue(true)"',  'and the Frozen card');
-t_contains($html, 'id="mg-queue-body"', 'with a table to list into');
-t_contains($html, 'deleteSelectedQueue()', 'and a delete action');
-t_contains($app, 'function openMailQueue', 'the viewer opens');
-t_contains($app, 'Showing ',
-     'and says when the list is only a page of a larger queue — a table showing '
-   . '200 of 93,000 with nothing saying so invites a delete that looks complete');
+t_ok(strpos($html, 'id="mg-queue-body"') === false,
+     'Spam Monitor no longer carries its own queue table');
+t_ok(strpos($html, 'id="mg-queue-card"') === false, 'nor the card around it');
+t_ok(strpos($app, 'function reloadMailQueue') === false,
+     'and the code behind it is gone rather than left orphaned');
+
+// The stat cards still work — they cross to the section that does the job.
+t_contains($html, 'onclick="goMailQueue(false)"', 'the Queue card crosses to Mail Queue');
+t_contains($html, 'onclick="goMailQueue(true)"',  'and the Frozen card');
+t_contains($app, 'function goMailQueue', 'with a handler behind it');
+$gmq = t_fn_body($app, 'goMailQueue');
+t_contains($gmq, "mq-state", 'which carries the frozen filter across');
 
 // ── Lines are dated by THEMSELVES, not by the clock ─────────────────────────
 //
@@ -807,30 +816,28 @@ t_contains($rt, 'no "flush the whole queue" action',
      'there is still no flush-everything action, by design');
 
 // ── The UI ──────────────────────────────────────────────────────────────────
+//
+// Delivery now lives in the Mail Queue section. Spam Monitor's copy was
+// removed; these properties still have to hold, just in one place.
 
 $html3 = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
 $app3  = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
 
-t_contains($html3, 'onclick="deliverSelectedQueue()"',
-     'the queue bar has a Deliver selected button');
-t_contains($app3, 'async function deliverSelectedQueue',
-     'with a handler behind it');
-t_contains($app3, 'API.mgDeliver', 'that calls the deliver route');
+t_contains($html3, 'onclick="mqDeliver()"', 'Mail Queue has a Deliver selected button');
+t_contains($app3, 'async function mqDeliver', 'with a handler behind it');
+t_contains($app3, 'API.mqDeliver', 'that calls the deliver route');
 
 // NO NATIVE DIALOGS in the queue handlers.
 //
 // This is why two controls shipped dead: a browser that has suppressed
 // dialogs makes confirm() return false and alert() a no-op, silently, so
-// `if (!confirm(...)) return;` becomes a button that does nothing. Checked
-// over these handlers specifically so an unrelated confirm() elsewhere
-// neither fails this nor hides a regression here.
-foreach (['deliverSelectedQueue', 'deleteSelectedQueue', 'inspectMessage'] as $fn) {
+// `if (!confirm(...)) return;` becomes a button that does nothing.
+foreach (['mqDeliver', 'mqDelete', 'mqLog'] as $fn) {
     $body = t_fn_body($app3, $fn);
     t_ok($body !== '', $fn . '() exists');
-    // Strip comments first. The first version of this failed on the comments
-    // explaining why confirm() was removed -- a check that cannot tell code
-    // from a remark ABOUT the code reports a bug that is not there, and the
-    // natural response is to delete the explanation to appease it.
+    // Strip comments first: a check that cannot tell code from a remark ABOUT
+    // the code reports a bug that is not there, and the natural response is to
+    // delete the explanation to appease it.
     $code = preg_replace('~/\*.*?\*/~s', '', $body);
     $code = preg_replace('~^\s*//.*$~m', '', (string)$code);
     t_ok(preg_match('/(?<![\w.])(?:confirm|alert|prompt)\s*\(/', (string)$code) === 0,
@@ -838,129 +845,17 @@ foreach (['deliverSelectedQueue', 'deleteSelectedQueue', 'inspectMessage'] as $f
        . 'browser can suppress without telling anyone');
 }
 
-// Delivering a frozen message THAWS it. The Exim spec is explicit about this,
-// and "retry" does not sound like "unfreeze", so the dialog has to say so.
-$dsq = t_fn_body($app3, 'deliverSelectedQueue');
+// Delivering a frozen message THAWS it. The Exim spec is explicit, and "retry"
+// does not sound like "unfreeze", so the dialog has to say so.
+$dsq = t_fn_body($app3, 'mqDeliver');
 t_contains($dsq, 'frozen', 'the deliver dialog knows about frozen messages');
-t_contains($dsq, 'unfreeze', 'and warns that delivering one unfreezes it');
-t_contains($app3, "data-frozen",
+t_contains($dsq, 'unfreezes', 'and warns that delivering one unfreezes it');
+t_contains($app3, 'data-frozen',
      'which it can only know because the row carries the frozen flag');
 
-// Honest reporting in the toast.
+// Honest reporting: exim exits 0 for an attempt that deferred.
 t_contains($dsq, 'still queued',
      'a deferred message is reported as still queued, never as delivered');
-
-// ── Message view: attachments, flagging, tabs ───────────────────────────────
-
-// Risky-type detection is a HINT that moves the operator's eye, never a
-// verdict. The flag is theirs to set.
-foreach (['invoice.exe', 'a.scr', 'x.js', 'payload.PhP', 'setup.msi',
-          'report.pdf.exe', 'photo.jpg.scr'] as $bad) {
-    t_ok(MailGuard::riskyAttachment($bad, 'application/octet-stream'),
-         "flagged as a risky type: $bad");
-}
-foreach (['invoice.pdf', 'photo.jpg', 'notes.txt', 'sheet.xlsx', 'archive.zip'] as $ok) {
-    t_ok(!MailGuard::riskyAttachment($ok, 'application/pdf'),
-         "not flagged as risky: $ok");
-}
-t_ok(MailGuard::riskyAttachment('x.bin', 'application/x-msdownload'),
-     'and an executable content-type counts even with a dull filename');
-
-// Flagging records the hash, because that is the part the malware scanner can
-// act on later when the same bytes land on disk.
-MailGuard::ensureSchema();
-Database::query('DELETE FROM mail_flagged_attachments');
-
-$mid  = '1aBcDe-0001Xy-Zz';
-$hash = hash('sha256', 'malicious bytes');
-
-$r = MailGuard::flagAttachment($mid, 'invoice.exe', $hash,
-                               'application/x-msdownload', 94208, 'dropper', 'root');
-t_ok(!empty($r['success']), 'an attachment can be flagged');
-$flags = MailGuard::flagsFor($mid);
-t_ok(isset($flags['invoice.exe']), 'and is listed against its message');
-t_eq($hash, $flags['invoice.exe']['sha256'],
-     'with the sha256 kept, which is what the scanner can match on disk');
-
-// Flagging twice is an update, not a duplicate or an error.
-MailGuard::flagAttachment($mid, 'invoice.exe', $hash, '', 0, 'second look', 'root');
-t_eq(1, count(MailGuard::flagsFor($mid)), 'flagging twice does not duplicate the row');
-
-// Refusals.
-t_ok(empty(MailGuard::flagAttachment('not-an-id', 'x.exe')['success']),
-     'a bad message id is refused');
-t_ok(empty(MailGuard::flagAttachment($mid, '')['success']),
-     'an unnamed attachment is refused');
-t_ok(empty(MailGuard::flagAttachment($mid, 'x.exe', 'nonsense')['success']),
-     'and something that is not a sha256 is refused rather than stored');
-
-t_ok(!empty(MailGuard::unflagAttachment($mid, 'invoice.exe')['success']),
-     'a flag can be withdrawn');
-t_eq(0, count(MailGuard::flagsFor($mid)), 'and is then gone');
-
-// ── MIME parsing ────────────────────────────────────────────────────────────
-//
-// Exercised through the private parser via the public view is impossible
-// without exim, so the shape is asserted on the source and the behaviour on
-// the pieces that are reachable.
-$mgSrc = t_code(dirname(__DIR__) . '/backend/lib/MailGuard.php');
-$mime  = t_fn_body($mgSrc, 'mimeParts', 'php');
-t_contains($mime, 'base64_decode', 'base64 parts are decoded');
-t_contains($mgSrc, 'quoted_printable_decode',
-     'and quoted-printable, in the shared text decoder');
-t_contains($mime, 'depth < 1',
-     'multipart/mixed wrapping multipart/alternative is walked one level, '
-   . 'which is the shape of nearly every real message with an attachment');
-t_contains($mime, 'truncated',
-     'a part running past the read cap is marked incomplete');
-t_ok(strpos($mime, "'sha256'      => (\$truncated") !== false
-     || strpos($mime, '$truncated || $decoded') !== false,
-     'and a truncated attachment is NOT given a hash — a hash of part of a '
-   . 'file is not that file\'s hash, and acting on it later would be acting '
-   . 'on a fiction');
-
-$dec = t_fn_body($mgSrc, 'decodeText', 'php');
-t_contains($dec, 'mb_check_encoding',
-     'decoded text is forced to valid UTF-8, or json_encode would fail and '
-   . 'take the whole response with it');
-
-// Headers come from exim -Mvh, which prefixes every line with a byte count,
-// so the output is NOT an RFC822 header block.
-$ph = t_fn_body($mgSrc, 'parseHeaders', 'php');
-t_contains($ph, "preg_replace('/^\d+[A-Za-z]?\s/'",
-     'exim\'s line-length prefixes are stripped before parsing');
-t_contains($ph, 'decodeWords', 'and RFC 2047 encoded subjects are decoded');
-
-// ── The UI ──────────────────────────────────────────────────────────────────
-$mgHtml = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
-$mgApp  = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
-
-foreach (['mail', 'settings', 'logs'] as $tab) {
-    t_contains($mgHtml, 'onclick="mgTab(\'' . $tab . '\')"', "there is a $tab tab");
-    t_contains($mgHtml, 'data-mgtab="' . $tab . '"', "with at least one $tab card");
-}
-t_contains($mgApp, 'function mgTab', 'with a handler behind them');
-
-// A card that hides itself must not be forced open by a tab switch — that is
-// how an empty card comes to look like a broken one.
-$tabFn = t_fn_body($mgApp, 'mgTab');
-t_contains($tabFn, 'mgHidden',
-     'a self-hiding card keeps its own state across a tab switch');
-
-t_contains($mgApp, 'function viewMessage', 'a message can be opened');
-// The row is built in JS, not in the markup.
-t_contains($mgApp, 'onclick="viewMessage(', 'from the queue row');
-t_contains($mgHtml, 'id="msgview-modal"', 'into a dedicated view');
-t_contains($mgHtml, 'id="mv-attachments"', 'which lists attachments');
-t_contains($mgHtml, 'id="mv-body"', 'and shows the body');
-
-// An attachment is addressed by INDEX in the markup, never by filename: a
-// filename can contain a quote, and interpolating one into an onclick is
-// exactly what killed the exclude button in 4.13.
-t_contains($mgApp, 'onclick="toggleAttachmentFlag(\' + i + \')"',
-     'attachments are addressed by index in the attribute');
-t_ok(preg_match('/onclick="toggleAttachmentFlag\(\s*\x27?\s*\+\s*esc\(/', $mgApp) === 0,
-     'and never by a filename interpolated into it');
 
 // ── The queue listing must carry subjects ───────────────────────────────────
 //
@@ -986,43 +881,33 @@ t_contains($qsrc, 'decodeWords',
 $queueFn = t_fn_body($mgSrc, 'queueList', 'php');
 t_contains($queueFn, 'addSubjects', 'queueList fills them in');
 
-// The filter runs BEFORE subjects are read, so it matches sender and
-// recipient only. The placeholder must not promise otherwise.
 $mgHtml2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
-t_contains($mgHtml2, 'placeholder="filter sender or recipient"',
-     'and the search box promises only what it actually matches');
 
-// ── Mail view shows mail ────────────────────────────────────────────────────
+// ── Spam Monitor keeps only what belongs to it ──────────────────────────────
 //
-// The queue card hid itself until somebody clicked the QUEUE stat card, so the
-// Mail view tab looked empty. Worse, because the card declared no hidden
-// state, switching tabs revealed it with nothing loaded — a permanent
-// "Loading…".
-t_ok(strpos($mgHtml2, 'id="mg-queue-card" data-mgtab="mail" data-mg-hidden="1"') === false,
-     'THE REPORTED BUG: the queue card no longer hides itself on Mail view');
-t_contains($mgHtml2, 'id="mg-queue-card" data-mgtab="mail">',
-     'it is simply part of the tab');
+// The queue was briefly duplicated here as a "Mail view" tab. Two listings of
+// the same thing with different capabilities is worse than one, and the
+// weaker one was the one an operator met first. Finding a message is now the
+// Mail Queue section's job, and only its job.
+
+t_ok(strpos($mgHtml2, 'data-mgtab="mail"') === false,
+     'THE DUPLICATE IS GONE: Spam Monitor has no Mail view tab — with the '
+   . 'queue removed that tab held only the findings card, so it is named '
+   . 'after what is actually on it');
+t_ok(strpos($mgHtml2, 'onclick="showAllQueue()"') === false,
+     'nor the filter controls that went with it');
 
 $mgApp2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
-t_contains($mgApp2, 'reloadMailQueue(),',
-     'and the page loader fetches the queue, so Mail view has mail in it');
-
-// Every card that DOES hide itself must declare that in the markup, or a tab
-// switch reveals it empty.
-foreach (['mg-findings-card', 'mg-delivery-card'] as $id) {
-    t_ok(preg_match('/id="' . $id . '"[^>]*data-mg-hidden="1"/', $mgHtml2) === 1,
-         $id . ' declares that it starts hidden');
+foreach (['reloadMailQueue', 'openMailQueue', 'showAllQueue', 'toggleAllQueue',
+          'deliverSelectedQueue', 'deleteSelectedQueue'] as $gone) {
+    t_ok(strpos($mgApp2, 'function ' . $gone) === false,
+         $gone . '() removed rather than left orphaned');
 }
 
-// Senders is history, so it belongs with the logs.
-t_ok(preg_match('/data-mgtab="logs">\s*<div class="card-header">\s*<div class="card-title">Senders, last 24 hours/', $mgHtml2) === 1,
-     'the senders table is on the Logs tab, not Mail view');
-
-// "Close" hid the only content on the tab. It resets the filter instead.
-t_ok(strpos($mgApp2, 'function closeMailQueue') === false,
-     'the Close button that emptied the tab is gone');
-t_contains($mgApp2, 'function showAllQueue', 'replaced by a filter reset');
-t_contains($mgHtml2, 'onclick="showAllQueue()"', 'which the button calls');
+// What Spam Monitor DOES keep: its own tabs, and the cards that belong to it.
+foreach (['findings', 'settings', 'logs'] as $tab) {
+    t_contains($mgHtml2, "onclick=\"mgTab('$tab')\"", "the $tab tab remains");
+}
 
 // ── Mail Queue, as its own section ──────────────────────────────────────────
 //

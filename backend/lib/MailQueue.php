@@ -287,7 +287,17 @@ class MailQueue
 
             if ($older > 0 && (int) ($r['age_mins'] ?? 0) < $older) { continue; }
 
-            if ($text !== '' && $field !== '') {
+            if ($text !== '') {
+                // Typing text and pressing Search must SEARCH.
+                //
+                // This used to require a Field to be chosen as well, and the
+                // default was "no text search" -- so the obvious action, type
+                // a word and hit Search, silently matched everything and
+                // reported "57 of 57 matching". A filter that ignores what you
+                // typed is worse than no filter: it answers a question you did
+                // not ask and looks like it worked.
+                if ($field === '') { $field = 'any'; }
+
                 if ($field === 'subject') {
                     if ($deep >= self::MAX_DEEP_READS) { $deepTruncated = true; continue; }
                     $deep++;
@@ -299,6 +309,17 @@ class MailQueue
                     case 'id':      $hay[] = (string) $r['id']; break;
                     case 'subject': $hay[] = (string) $r['subject']; break;
                     case 'to':
+                        foreach (($r['recipients'] ?? []) as $rc) {
+                            $hay[] = (string) ($rc['address'] ?? '');
+                        }
+                        break;
+                    // Everything that is already in the snapshot, so the
+                    // default search costs nothing extra. Subject is NOT
+                    // included: it is a file read per message and belongs
+                    // behind an explicit choice.
+                    case 'any':
+                        $hay[] = (string) $r['sender'];
+                        $hay[] = (string) $r['id'];
                         foreach (($r['recipients'] ?? []) as $rc) {
                             $hay[] = (string) ($rc['address'] ?? '');
                         }

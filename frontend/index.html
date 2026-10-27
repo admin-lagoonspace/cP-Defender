@@ -4,18 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ServerScrub — Security Dashboard</title>
-<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.20.0">
-<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.20.0">
-<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.20.0">
+<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.20.1">
+<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.20.1">
+<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.20.1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=4.20.0">
+<link rel="stylesheet" href="css/app.css?v=4.20.1">
 </head>
 <body>
 <!-- First-load splash. The full lockup, because this is the one moment the
      product introduces itself; everywhere else uses the icon alone. -->
 <div id="ss-splash">
-  <img src="images/logo.png?v=4.20.0" alt="ServerScrub">
+  <img src="images/logo.png?v=4.20.1" alt="ServerScrub">
   <div class="ss-cap">Loading…</div>
 </div>
 
@@ -62,7 +62,7 @@
 
     <!-- Logo -->
     <div class="login-logo" style="margin-bottom:20px">
-      <img src="images/logo.png?v=4.20.0" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
+      <img src="images/logo.png?v=4.20.1" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
       <div id="login-mode-sub" style="font-size:.75rem;color:var(--blue2);margin-top:5px;font-weight:600;letter-spacing:.03em">cPanel Security Suite</div>
     </div>
 
@@ -103,7 +103,7 @@
 <div id="activate-screen" class="hidden">
   <div class="activate-card">
     <div class="activate-mark">
-      <img src="images/icon-180.png?v=4.20.0" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
+      <img src="images/icon-180.png?v=4.20.1" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
     </div>
 
     <div class="activate-title">Activate ServerScrub</div>
@@ -149,7 +149,7 @@
   <div class="topbar-brand">
     <!-- Shield icon mark — inline SVG so it renders crisp at any size with no background bleed -->
     <div class="brand-icon">
-      <img src="images/icon-64.png?v=4.20.0" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
+      <img src="images/icon-64.png?v=4.20.1" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
     </div>
     <div>
       <div class="brand-name">ServerScrub</div>
@@ -282,7 +282,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.20.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.20.1 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -2214,15 +2214,15 @@
       </div>
 
       <div class="stats-row mb-5">
-        <div class="stat-card blue" onclick="openMailQueue(false)" style="cursor:pointer" title="Click to list the queued messages">
+        <div class="stat-card blue" onclick="goMailQueue(false)" style="cursor:pointer" title="Click to list the queued messages">
           <div class="stat-label">Queue</div>
           <div class="stat-value" id="mg-stat-queue">&mdash;</div>
-          <div class="stat-sub" id="mg-stat-queue-sub" style="color:var(--blue)">waiting to send &mdash; click to view</div>
+          <div class="stat-sub" id="mg-stat-queue-sub" style="color:var(--blue)">waiting to send &mdash; open Mail Queue</div>
         </div>
-        <div class="stat-card amber" onclick="openMailQueue(true)" style="cursor:pointer" title="Click to list the frozen messages">
+        <div class="stat-card amber" onclick="goMailQueue(true)" style="cursor:pointer" title="Click to list the frozen messages">
           <div class="stat-label">Frozen</div>
           <div class="stat-value" id="mg-stat-frozen">&mdash;</div>
-          <div class="stat-sub" style="color:var(--amber)">rejected and parked &mdash; click to view</div>
+          <div class="stat-sub" style="color:var(--amber)">rejected and parked &mdash; open Mail Queue</div>
         </div>
         <div class="stat-card red">
           <div class="stat-label">Findings</div>
@@ -2247,57 +2247,15 @@
            reason to open the page at all. -->
       <div class="mg-tabs" role="tablist" style="display:flex;gap:4px;margin-bottom:16px;
                   border-bottom:1px solid var(--bd)">
-        <button class="mg-tab active" role="tab" data-tab="mail"
-                onclick="mgTab('mail')">Mail view</button>
+        <button class="mg-tab active" role="tab" data-tab="findings"
+                onclick="mgTab('findings')">Findings</button>
         <button class="mg-tab" role="tab" data-tab="settings"
                 onclick="mgTab('settings')">Settings</button>
         <button class="mg-tab" role="tab" data-tab="logs"
                 onclick="mgTab('logs')">Logs</button>
       </div>
 
-      <!-- The queue IS the Mail view. It used to hide itself until somebody
-           clicked the QUEUE stat card, which left the tab apparently empty --
-           and because the card declared no hidden state, a tab switch revealed
-           it with nothing loaded: a permanent "Loading…". -->
-      <div class="card mb-5" id="mg-queue-card" data-mgtab="mail">
-        <div class="card-header">
-          <div class="card-title" id="mg-queue-title">Queued messages</div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <input type="text" id="mg-queue-search" placeholder="filter sender or recipient"
-                   onkeydown="if(event.key==='Enter')reloadMailQueue()" style="max-width:240px">
-            <button class="btn btn-ghost btn-sm" onclick="reloadMailQueue()">Filter</button>
-            <button class="btn btn-ghost btn-sm" id="mg-queue-showall"
-                    onclick="showAllQueue()" title="Clear the filter and show the whole queue">Show all</button>
-          </div>
-        </div>
-        <div class="card-body" style="padding:0">
-          <div style="padding:10px 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--bd)">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-              <input type="checkbox" id="mg-queue-all" onclick="toggleAllQueue(this.checked)">
-              <span style="font-size:.82rem">Select all shown</span>
-            </label>
-            <!-- Deliver first, and not styled as a danger action: for a queue
-                 full of genuine mail stuck behind a retry timer this is the
-                 action you want, and deleting is the one to think twice about.
-                 cPanel's Mail Queue Manager offers the same pair. -->
-            <button class="btn btn-sm btn-primary mg-q-action"
-                    onclick="deliverSelectedQueue()"
-                    title="Attempt delivery now, ignoring the retry schedule (exim -M)">
-              Deliver selected</button>
-            <button class="btn btn-sm mg-q-action" style="background:var(--red);color:#fff"
-                    onclick="deleteSelectedQueue()">Delete selected</button>
-            <span id="mg-queue-note" style="font-size:.78rem;color:var(--txt3)"></span>
-          </div>
-          <table class="table">
-            <thead><tr><th style="width:32px"></th><th>Age</th><th>Size</th><th>Sender</th><th>Account</th><th>Subject</th><th>Recipients</th><th>State</th><th></th></tr></thead>
-            <tbody id="mg-queue-body">
-              <tr><td colspan="9" style="text-align:center;color:var(--txt3);padding:24px">Loading&hellip;</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card mb-5" id="mg-findings-card" data-mgtab="mail" data-mg-hidden="1" style="display:none">
+      <div class="card mb-5" id="mg-findings-card" data-mgtab="findings" data-mg-hidden="1" style="display:none">
         <div class="card-header"><div class="card-title">Findings</div></div>
         <div class="card-body" style="padding:0">
           <table class="table">
@@ -2485,10 +2443,13 @@
             <label style="flex:0 0 140px">
               <span style="display:block;font-size:.75rem;color:var(--txt3);margin-bottom:4px">Field</span>
               <select id="mq-field" class="form-input">
-                <option value="">— no text search —</option>
+                <!-- The default must be something that SEARCHES. "no text
+                     search" as the default meant typing a word and pressing
+                     Search matched everything and reported "57 of 57". -->
+                <option value="any">Sender, recipient or ID</option>
                 <option value="from">Sender</option>
                 <option value="to">Recipient</option>
-                <option value="subject">Subject</option>
+                <option value="subject">Subject (slower — reads each message)</option>
                 <option value="id">Message ID</option>
               </select>
             </label>
@@ -3049,11 +3010,11 @@
      as hard as one whose name never changes. icon-64.png held the
      old crop in 4.0.0 and the new mark in 4.1.0, so an updated
      server kept showing the old logo. -->
-<script>window.SG_ASSET_V = "4.20.0";</script>
+<script>window.SG_ASSET_V = "4.20.1";</script>
 <script src="config.js"></script>
-<script src="js/api.js?v=4.20.0"></script>
-<script src="js/charts.js?v=4.20.0"></script>
-<script src="js/app.js?v=4.20.0"></script>
+<script src="js/api.js?v=4.20.1"></script>
+<script src="js/charts.js?v=4.20.1"></script>
+<script src="js/app.js?v=4.20.1"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -3204,7 +3165,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 <div id="sg-busy" role="status" aria-live="polite" aria-hidden="true">
   <div class="sg-busy-box">
     <div class="ss-load sm">
-      <img src="images/icon.png?v=4.20.0" alt="">
+      <img src="images/icon.png?v=4.20.1" alt="">
       <span class="ss-cap" id="sg-busy-text">Working…</span>
     </div>
   </div>
