@@ -56,6 +56,7 @@ require_once __DIR__ . '/../lib/WPDatabaseScanner.php';
 require_once __DIR__ . '/../lib/Updater.php';
 require_once __DIR__ . '/../lib/NetworkGuard.php';
 require_once __DIR__ . '/../lib/MailGuard.php';
+require_once __DIR__ . '/../lib/MailQueue.php';
 require_once __DIR__ . '/../lib/RootkitScanner.php';
 require_once __DIR__ . '/../lib/FileIntegrity.php';
 require_once __DIR__ . '/../lib/PHPHardening.php';
@@ -186,6 +187,7 @@ try {
         'verdicts'   => routeVerdicts($action, $method, $body, $query, $user),
         'netguard'   => routeNetGuard($action, $method, $body, $query, $user),
         'mailguard'  => routeMailGuard($action, $method, $body, $query, $user),
+        'mailqueue'  => routeMailQueue($action, $method, $body, $query, $user),
         'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
         'bruteforce' => routeBruteForce($action, $method, $body, $query, $user),
         'overview'   => routeOverview($action, $method, $query, $user),
@@ -1519,6 +1521,79 @@ function routeVerdicts(string $action, string $method, array $body, array $q, ?a
             ? (function () use ($user) {
                   Auth::requireRole('admin', $user);
                   return Verdicts::pruneMissing();
+              })()
+            : ['success' => false, 'code' => 405],
+
+        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Mail Queue
+// ════════════════════════════════════════════════════════════════════════════
+//
+// A working queue manager, separate from Spam Monitor on purpose. Spam Monitor
+// answers "who is sending too much, from which script". This answers "find me
+// that one message among nine thousand and tell me whether it goes out".
+//
+// Prior art: ConfigServer Mail Queue, now discontinued and GPL-3.0, so no code
+// from it is used here. What is reused is which exim command does what, and
+// which questions an operator needs to ask -- neither of which is anyone's to
+// own.
+function routeMailQueue(string $action, string $method, array $body, array $q, ?array $user): array {
+    Auth::requireRole('admin', $user);
+
+    return match($action) {
+        'summary' => ['success' => true, 'data' => MailQueue::summary()],
+
+        // The listing. Filtering happens against a cached snapshot, so paging
+        // and refining a search do not re-run `exim -bp` on a large queue.
+        'search' => ['success' => true, 'data' => MailQueue::search([
+            'direction'       => (string)($q['direction'] ?? 'any'),
+            'state'           => (string)($q['state'] ?? 'any'),
+            'older_than_mins' => (int)($q['older'] ?? 0),
+            'field'           => (string)($q['field'] ?? ''),
+            'op'              => (string)($q['op'] ?? 'contains'),
+            'text'            => (string)($q['text'] ?? ''),
+            'negate'          => !empty($q['negate']),
+            'sort'            => (string)($q['sort'] ?? 'newest'),
+            'limit'           => (int)($q['limit'] ?? 100),
+            'offset'          => (int)($q['offset'] ?? 0),
+            'refresh'         => !empty($q['refresh']),
+        ])],
+
+        // What the main log says about one message. Time-limited: exigrep
+        // scans the whole of exim_mainlog, which on a busy server is hundreds
+        // of megabytes.
+        'log' => ['success' => true,
+                  'data' => MailQueue::deliveryLog((string)($q['id'] ?? ''))],
+
+        // Actions reuse MailGuard's implementations rather than reimplementing
+        // the id validation, the caps and the "left the queue" check. Two
+        // copies of a destructive path is one too many.
+        'deliver' => $method === 'POST'
+            ? (function () use ($body) {
+                  if (empty($body['confirm'])) {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'Forcing delivery must be confirmed — it '
+                                       . 'sends the selected messages and thaws '
+                                       . 'any that are frozen'];
+                  }
+                  $r = MailGuard::deliverMessages((array)($body['ids'] ?? []));
+                  MailQueue::invalidate();
+                  return ['success' => true, 'data' => $r];
+              })()
+            : ['success' => false, 'code' => 405],
+
+        'delete' => $method === 'POST'
+            ? (function () use ($body) {
+                  if (empty($body['confirm'])) {
+                      return ['success' => false, 'code' => 400,
+                              'error' => 'Deleting queued mail must be confirmed'];
+                  }
+                  $r = MailGuard::deleteMessages((array)($body['ids'] ?? []));
+                  MailQueue::invalidate();
+                  return ['success' => true, 'data' => $r];
               })()
             : ['success' => false, 'code' => 405],
 

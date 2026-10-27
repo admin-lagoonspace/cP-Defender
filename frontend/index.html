@@ -4,18 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ServerScrub — Security Dashboard</title>
-<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.19.0">
-<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.19.0">
-<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.19.0">
+<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.20.0">
+<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.20.0">
+<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.20.0">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=4.19.0">
+<link rel="stylesheet" href="css/app.css?v=4.20.0">
 </head>
 <body>
 <!-- First-load splash. The full lockup, because this is the one moment the
      product introduces itself; everywhere else uses the icon alone. -->
 <div id="ss-splash">
-  <img src="images/logo.png?v=4.19.0" alt="ServerScrub">
+  <img src="images/logo.png?v=4.20.0" alt="ServerScrub">
   <div class="ss-cap">Loading…</div>
 </div>
 
@@ -62,7 +62,7 @@
 
     <!-- Logo -->
     <div class="login-logo" style="margin-bottom:20px">
-      <img src="images/logo.png?v=4.19.0" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
+      <img src="images/logo.png?v=4.20.0" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
       <div id="login-mode-sub" style="font-size:.75rem;color:var(--blue2);margin-top:5px;font-weight:600;letter-spacing:.03em">cPanel Security Suite</div>
     </div>
 
@@ -103,7 +103,7 @@
 <div id="activate-screen" class="hidden">
   <div class="activate-card">
     <div class="activate-mark">
-      <img src="images/icon-180.png?v=4.19.0" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
+      <img src="images/icon-180.png?v=4.20.0" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
     </div>
 
     <div class="activate-title">Activate ServerScrub</div>
@@ -149,7 +149,7 @@
   <div class="topbar-brand">
     <!-- Shield icon mark — inline SVG so it renders crisp at any size with no background bleed -->
     <div class="brand-icon">
-      <img src="images/icon-64.png?v=4.19.0" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
+      <img src="images/icon-64.png?v=4.20.0" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
     </div>
     <div>
       <div class="brand-name">ServerScrub</div>
@@ -236,6 +236,10 @@
       <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><polyline points="4 7 12 13 20 7"/></svg>
       Spam Monitor
     </div>
+    <div class="sidebar-item" data-page="mailqueue">
+      <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z"/></svg>
+      Mail Queue
+    </div>
     <div class="sidebar-item" data-page="wpscan">
       <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg>
       WP Database
@@ -278,7 +282,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.19.0 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.20.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -2409,6 +2413,161 @@
       </div>
     </div>
 
+    <!-- ════ PAGE: MAIL QUEUE ═══════════════════════════════════════════════
+      A working queue manager, separate from Spam Monitor on purpose. Spam
+      Monitor answers "who is sending too much, from which script". This
+      answers "find me that one message among nine thousand and tell me
+      whether it goes out or gets destroyed".
+
+      Prior art is ConfigServer Mail Queue, now discontinued. It is GPL-3.0 and
+      this product is not, so no code from it is used -- only knowledge that is
+      not anyone's to own: which exim command does what, and which questions an
+      operator needs to ask of a queue.
+    -->
+    <div id="page-mailqueue" class="page hidden">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Mail Queue</div>
+          <div class="page-sub">Find a message, read it, and decide whether it goes out. <span id="mq-snap-note" class="dim"></span></div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="doRefresh(this, mqRefresh)">&#8634; Rebuild snapshot</button>
+        </div>
+      </div>
+
+      <div class="stats-row mb-5">
+        <div class="stat-card blue" onclick="mqQuick('any')" style="cursor:pointer">
+          <div class="stat-label">In queue</div>
+          <div class="stat-value" id="mq-stat-total">&mdash;</div>
+          <div class="stat-sub" id="mq-stat-oldest">&nbsp;</div>
+        </div>
+        <!-- The split that matters most on a cPanel box: customers' mail stuck
+             coming in is a very different problem from mail leaving. -->
+        <div class="stat-card green" onclick="mqQuick('inbound')" style="cursor:pointer">
+          <div class="stat-label">Inbound</div>
+          <div class="stat-value" id="mq-stat-in">&mdash;</div>
+          <div class="stat-sub" style="color:var(--ok)">to a domain on this server</div>
+        </div>
+        <div class="stat-card amber" onclick="mqQuick('outbound')" style="cursor:pointer">
+          <div class="stat-label">Outbound</div>
+          <div class="stat-value" id="mq-stat-out">&mdash;</div>
+          <div class="stat-sub" style="color:var(--amber)">leaving this server</div>
+        </div>
+        <div class="stat-card red" onclick="mqQuick('frozen')" style="cursor:pointer">
+          <div class="stat-label">Frozen</div>
+          <div class="stat-value" id="mq-stat-frozen">&mdash;</div>
+          <div class="stat-sub" id="mq-stat-bounce" style="color:var(--red)">&nbsp;</div>
+        </div>
+      </div>
+
+      <div class="card mb-5">
+        <div class="card-header"><div class="card-title">Find</div></div>
+        <div class="card-body">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label style="flex:0 0 150px">
+              <span style="display:block;font-size:.75rem;color:var(--txt3);margin-bottom:4px">Direction</span>
+              <select id="mq-direction" class="form-input">
+                <option value="any">Any</option>
+                <option value="outbound">Outbound</option>
+                <option value="inbound">Inbound</option>
+                <option value="mixed">Mixed</option>
+              </select>
+            </label>
+            <label style="flex:0 0 150px">
+              <span style="display:block;font-size:.75rem;color:var(--txt3);margin-bottom:4px">State</span>
+              <select id="mq-state" class="form-input">
+                <option value="any">Any</option>
+                <option value="normal">Normal</option>
+                <option value="frozen">Frozen</option>
+                <option value="bounce">Bounces</option>
+              </select>
+            </label>
+            <label style="flex:0 0 140px">
+              <span style="display:block;font-size:.75rem;color:var(--txt3);margin-bottom:4px">Field</span>
+              <select id="mq-field" class="form-input">
+                <option value="">— no text search —</option>
+                <option value="from">Sender</option>
+                <option value="to">Recipient</option>
+                <option value="subject">Subject</option>
+                <option value="id">Message ID</option>
+              </select>
+            </label>
+            <label style="flex:0 0 130px">
+              <span style="display:block;font-size:.75rem;color:var(--txt3);margin-bottom:4px">Match</span>
+              <select id="mq-op" class="form-input">
+                <option value="contains">contains</option>
+                <option value="starts">begins with</option>
+                <option value="ends">ends with</option>
+                <option value="equals">equals</option>
+              </select>
+            </label>
+            <label style="flex:1;min-width:180px">
+              <span style="display:block;font-size:.75rem;color:var(--txt3);margin-bottom:4px">Text</span>
+              <input type="text" id="mq-text" class="form-input"
+                     onkeydown="if(event.key==='Enter')mqSearch(0)">
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;padding-bottom:9px;cursor:pointer">
+              <input type="checkbox" id="mq-negate"><span style="font-size:.8rem">NOT</span>
+            </label>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:10px">
+            <label style="flex:0 0 170px">
+              <span style="display:block;font-size:.75rem;color:var(--txt3);margin-bottom:4px">Older than (minutes)</span>
+              <input type="number" id="mq-older" class="form-input" min="0" value="0">
+            </label>
+            <label style="flex:0 0 150px">
+              <span style="display:block;font-size:.75rem;color:var(--txt3);margin-bottom:4px">Sort</span>
+              <select id="mq-sort" class="form-input">
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="largest">Largest first</option>
+              </select>
+            </label>
+            <button class="btn btn-primary btn-sm" onclick="mqSearch(0)">Search</button>
+            <button class="btn btn-ghost btn-sm" onclick="mqReset()">Reset</button>
+            <span id="mq-deep-note" class="dim" style="font-size:.76rem"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Messages</div>
+          <span id="mq-count" class="dim" style="font-size:.78rem;margin-left:10px"></span>
+        </div>
+        <div class="card-body" style="padding:0">
+          <div style="padding:10px 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--bd)">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" id="mq-all" onclick="mqToggleAll(this.checked)">
+              <span style="font-size:.82rem">Select all shown</span>
+            </label>
+            <button class="btn btn-sm btn-primary mq-action" onclick="mqDeliver()" disabled
+                    title="Attempt delivery now, ignoring the retry schedule">Deliver selected</button>
+            <button class="btn btn-sm mq-action" style="background:var(--red);color:#fff"
+                    onclick="mqDelete()" disabled>Delete selected</button>
+            <span id="mq-selected" class="dim" style="font-size:.78rem"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr>
+                <th style="width:32px"></th><th>Age</th><th>Size</th>
+                <th>Sender</th><th>Subject</th><th>Recipients</th>
+                <th>Dir</th><th>State</th><th></th>
+              </tr></thead>
+              <tbody id="mq-body">
+                <tr><td colspan="9" style="text-align:center;color:var(--txt3);padding:24px">Loading&hellip;</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div style="padding:10px 14px;display:flex;gap:8px;align-items:center;border-top:1px solid var(--bd)">
+            <button class="btn btn-ghost btn-sm" id="mq-prev" onclick="mqPage(-1)">&larr; Previous</button>
+            <button class="btn btn-ghost btn-sm" id="mq-next" onclick="mqPage(1)">Next &rarr;</button>
+            <span id="mq-page-note" class="dim" style="font-size:.78rem"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ════ PAGE: WP DATABASE SCANNER ══════════════════════════════════════ -->
     <!--
       Every other panel in this product reports on files. This one reports on
@@ -2890,11 +3049,11 @@
      as hard as one whose name never changes. icon-64.png held the
      old crop in 4.0.0 and the new mark in 4.1.0, so an updated
      server kept showing the old logo. -->
-<script>window.SG_ASSET_V = "4.19.0";</script>
+<script>window.SG_ASSET_V = "4.20.0";</script>
 <script src="config.js"></script>
-<script src="js/api.js?v=4.19.0"></script>
-<script src="js/charts.js?v=4.19.0"></script>
-<script src="js/app.js?v=4.19.0"></script>
+<script src="js/api.js?v=4.20.0"></script>
+<script src="js/charts.js?v=4.20.0"></script>
+<script src="js/app.js?v=4.20.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -3045,7 +3204,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 <div id="sg-busy" role="status" aria-live="polite" aria-hidden="true">
   <div class="sg-busy-box">
     <div class="ss-load sm">
-      <img src="images/icon.png?v=4.19.0" alt="">
+      <img src="images/icon.png?v=4.20.0" alt="">
       <span class="ss-cap" id="sg-busy-text">Working…</span>
     </div>
   </div>

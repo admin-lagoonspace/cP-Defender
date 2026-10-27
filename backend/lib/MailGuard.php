@@ -1157,6 +1157,11 @@ class MailGuard
      * a guess — the queue listing still works, it is just less informative for
      * that row.
      */
+    public static function fillSubjects(array &$messages): void
+    {
+        self::addSubjects($messages);
+    }
+
     private static function addSubjects(array &$messages): void
     {
         $spool = self::spoolDir();

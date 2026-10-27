@@ -239,6 +239,7 @@ function openPage(name) {
     botshield:  ['Loading bot shield…', () => loadBotShield()],
     cms:        ['Loading CMS Guard…', () => loadCMSGuard()],
     wpscan:     ['Loading WP database…', () => loadWPScan()],
+    mailqueue:  ['Loading mail queue…', () => loadMailQueue()],
     mailguard:  ['Loading spam monitor…', () => Promise.all([loadMailGuard(),
                                                              loadMailSettings(),
                                                              reloadMailQueue(),
@@ -2358,6 +2359,296 @@ function bfBlockAlert(rows) {
   box.classList.remove('hidden');
 }
 
+
+
+// ── Mail Queue ──────────────────────────────────────────────────────────────
+//
+// A working queue manager, separate from Spam Monitor on purpose. Spam Monitor
+// answers "who is sending too much, from which script". This answers "find me
+// that one message among nine thousand and tell me whether it goes out".
+//
+// Filtering runs against a snapshot cached server-side, so refining a search or
+// paging does not re-run `exim -bp`. A UI that re-reads the whole queue for
+// every keystroke is unusable exactly when the queue is big enough to need
+// searching.
+const MQ = { offset: 0, limit: 100, matched: 0 };
+
+function mqFilters(refresh) {
+  return {
+    direction: g('mq-direction')?.value || 'any',
+    state:     g('mq-state')?.value || 'any',
+    field:     g('mq-field')?.value || '',
+    op:        g('mq-op')?.value || 'contains',
+    text:      (g('mq-text')?.value || '').trim(),
+    negate:    g('mq-negate')?.checked ? 1 : '',
+    older:     parseInt(g('mq-older')?.value, 10) || 0,
+    sort:      g('mq-sort')?.value || 'newest',
+    limit:     MQ.limit,
+    offset:    MQ.offset,
+    refresh:   refresh ? 1 : '',
+  };
+}
+
+async function loadMailQueue() {
+  const r = await API.mqSummary();
+  const d = (r && r.data) || {};
+  setText('mq-stat-total',  fmtNum(d.total || 0));
+  setText('mq-stat-in',     fmtNum(d.inbound || 0));
+  setText('mq-stat-out',    fmtNum(d.outbound || 0));
+  setText('mq-stat-frozen', fmtNum(d.frozen || 0));
+  setText('mq-stat-bounce', (d.bounce || 0) + ' bounce(s)');
+  setText('mq-stat-oldest', d.oldest_mins
+    ? 'oldest ' + mqAge(d.oldest_mins) : ' ');
+
+  const note = g('mq-snap-note');
+  if (note) {
+    if (d.error) {
+      note.textContent = '— ' + d.error;
+      note.style.color = 'var(--red)';
+    } else if (!d.local_domains) {
+      // Without /etc/localdomains we cannot tell inbound from outbound, and
+      // guessing would be worse than saying so.
+      note.textContent = '— /etc/localdomains is unreadable, so inbound and '
+                       + 'outbound cannot be told apart';
+      note.style.color = 'var(--amber)';
+    } else {
+      note.textContent = d.built_at
+        ? '— snapshot ' + reltime(d.built_at) + (d.cached ? ' (cached)' : '')
+        : '';
+      note.style.color = '';
+    }
+  }
+  await mqSearch(MQ.offset);
+}
+
+function mqAge(mins) {
+  mins = Number(mins) || 0;
+  if (mins >= 1440) return Math.floor(mins / 1440) + 'd';
+  if (mins >= 60)   return Math.floor(mins / 60) + 'h';
+  return mins + 'm';
+}
+
+async function mqSearch(offset) {
+  MQ.offset = Math.max(0, Number(offset) || 0);
+  const tb = g('mq-body');
+  if (!tb) return;
+
+  const r = await API.mqSearch(mqFilters(false));
+  const d = (r && r.data) || {};
+  const rows = d.messages || [];
+  MQ.matched = d.matched || 0;
+
+  setText('mq-count', d.error ? d.error
+    : fmtNum(d.matched || 0) + ' of ' + fmtNum(d.total || 0) + ' matching');
+
+  // A search that quietly examined only part of the queue would be worse than
+  // one that refuses, so say when the cap was reached.
+  const deep = g('mq-deep-note');
+  if (deep) {
+    deep.textContent = d.deep_truncated
+      ? 'Subject search stopped after ' + fmtNum(d.deep_limit)
+        + ' messages — narrow the other filters first'
+      : '';
+    deep.style.color = 'var(--amber)';
+  }
+
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--txt3);'
+                 + 'padding:24px">' + (d.error ? esc(d.error) : 'No matching messages.')
+                 + '</td></tr>';
+    mqUpdateBar();
+    mqPageNote(0);
+    return;
+  }
+
+  State.mqRows = rows;
+  tb.innerHTML = rows.map((m, i) => {
+    const rcpt = m.recipients || [];
+    const shown = rcpt.slice(0, 3).map(x =>
+      (x.delivered
+        // Already delivered for this message. Listing it as pending tells the
+        // operator the opposite of the truth.
+        ? '<span class="dim" title="already delivered">&check; ' + esc(x.address) + '</span>'
+        : esc(x.address))).join('<br>');
+    const more = rcpt.length > 3
+      ? '<br><span class="dim">+' + (rcpt.length - 3) + ' more</span>' : '';
+    const dir = m.direction === 'outbound'
+      ? '<span class="badge badge-amber">out</span>'
+      : m.direction === 'inbound'
+        ? '<span class="badge badge-green">in</span>'
+        : m.direction === 'mixed'
+          ? '<span class="badge badge-blue">mixed</span>'
+          : '<span class="badge badge-gray">?</span>';
+    const state = m.frozen
+      ? '<span class="badge badge-red">frozen</span>'
+      : (m.bounce ? '<span class="badge badge-gray">bounce</span>'
+                  : '<span class="badge badge-blue">queued</span>');
+    return '<tr>'
+      + '<td><input type="checkbox" class="mq-pick" value="' + esc(m.id) + '"'
+        + ' data-frozen="' + (m.frozen ? '1' : '0') + '" onchange="mqUpdateBar()"></td>'
+      + '<td>' + esc(m.age || '') + '</td>'
+      + '<td>' + esc(m.size || '') + '</td>'
+      + '<td class="mono" style="max-width:190px;overflow:hidden;text-overflow:ellipsis;'
+        + 'white-space:nowrap" title="' + esc(m.sender || '') + '">' + esc(m.sender || '') + '</td>'
+      + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"'
+        + ' title="' + esc(m.subject || '') + '">'
+        + (m.subject ? esc(m.subject) : '<span class="dim">(no subject)</span>') + '</td>'
+      + '<td style="max-width:220px;font-size:.8rem">' + shown + more + '</td>'
+      + '<td>' + dir + '</td>'
+      + '<td>' + state + '</td>'
+      + '<td style="white-space:nowrap">'
+        + '<button class="btn btn-ghost btn-xs" onclick="viewMessage(\'' + esc(m.id) + '\')"'
+        + ' title="Sender, recipients, subject, attachments and the first 1,000 characters">View</button> '
+        + '<button class="btn btn-ghost btn-xs" onclick="mqLog(' + i + ')"'
+        + ' title="What the exim main log says about this message">Log</button>'
+      + '</td>'
+      + '</tr>';
+  }).join('');
+
+  mqUpdateBar();
+  mqPageNote(rows.length);
+}
+
+function mqPageNote(shown) {
+  const from = MQ.matched ? MQ.offset + 1 : 0;
+  setText('mq-page-note', MQ.matched
+    ? 'Showing ' + fmtNum(from) + '–' + fmtNum(MQ.offset + shown)
+      + ' of ' + fmtNum(MQ.matched) : '');
+  const prev = g('mq-prev'), next = g('mq-next');
+  if (prev) prev.disabled = MQ.offset <= 0;
+  if (next) next.disabled = MQ.offset + shown >= MQ.matched;
+}
+
+function mqPage(dir) {
+  mqSearch(MQ.offset + dir * MQ.limit);
+}
+
+function mqReset() {
+  ['mq-direction', 'mq-state', 'mq-field', 'mq-sort'].forEach(id => {
+    const e = g(id); if (e) e.selectedIndex = 0;
+  });
+  const t = g('mq-text'); if (t) t.value = '';
+  const o = g('mq-older'); if (o) o.value = '0';
+  const n = g('mq-negate'); if (n) n.checked = false;
+  mqSearch(0);
+}
+
+// The stat cards are filters, which is the quickest way to the answer most of
+// the time: "show me what is stuck going out".
+function mqQuick(which) {
+  const dir = g('mq-direction'), st = g('mq-state');
+  if (which === 'frozen') {
+    if (dir) dir.value = 'any';
+    if (st)  st.value = 'frozen';
+  } else {
+    if (dir) dir.value = which;
+    if (st)  st.value = 'any';
+  }
+  mqSearch(0);
+}
+
+async function mqRefresh() {
+  // Rebuild the server-side snapshot rather than reading the cached one.
+  await API.mqSearch(mqFilters(true));
+  await loadMailQueue();
+}
+
+function mqToggleAll(on) {
+  document.querySelectorAll('.mq-pick').forEach(c => { c.checked = !!on; });
+  mqUpdateBar();
+}
+
+function mqSelected() {
+  return Array.from(document.querySelectorAll('.mq-pick:checked')).map(c => c.value);
+}
+
+function mqUpdateBar() {
+  const ids = mqSelected();
+  // BY CLASS, so a bulk action added later works without anyone editing this.
+  document.querySelectorAll('.mq-action').forEach(b => { b.disabled = ids.length === 0; });
+  setText('mq-selected', ids.length ? ids.length + ' selected' : '');
+}
+
+async function mqDeliver() {
+  const picked = Array.from(document.querySelectorAll('.mq-pick:checked'));
+  const ids = picked.map(c => c.value);
+  if (!ids.length) { toast('Select some messages first', 'info'); return; }
+  const frozen = picked.filter(c => c.dataset.frozen === '1').length;
+
+  const ok = await uiConfirm({
+    title: 'Deliver ' + ids.length + ' message(s) now?',
+    ok: 'Deliver now',
+    body: '<p style="margin:0 0 10px">Exim attempts delivery <strong>immediately</strong>, '
+        + 'ignoring the retry schedule.</p>'
+        + (frozen ? '<p style="margin:0 0 10px;color:var(--amber)"><strong>' + frozen
+            + ' of these are frozen.</strong> Delivering a frozen message also '
+            + '<strong>unfreezes</strong> it.</p>' : '')
+        + '<p style="margin:0;color:var(--txt3);font-size:.8rem">These messages leave '
+        + 'your server. Check the senders and recipients first.</p>'
+  });
+  if (!ok) return;
+
+  toast('Attempting delivery of ' + ids.length + ' message(s)…', 'info', 4000);
+  const r = await API.mqDeliver(ids);
+  const d = (r && r.data) || {};
+  if (!r || r.success === false) {
+    toast((r && r.error) || 'Delivery refused', 'error', 9000); return;
+  }
+  if (d.error) { toast(d.error, 'error', 9000); return; }
+
+  const bits = [];
+  if (d.delivered) bits.push(fmtNum(d.delivered) + ' delivered');
+  if (d.deferred)  bits.push(fmtNum(d.deferred) + ' still queued');
+  if (d.skipped)   bits.push(fmtNum(d.skipped) + ' not attempted (time budget)');
+  toast(bits.join(', ') || 'Nothing changed',
+        d.delivered ? 'success' : 'warning', 10000);
+  await loadMailQueue();
+}
+
+async function mqDelete() {
+  const ids = mqSelected();
+  if (!ids.length) { toast('Select some messages first', 'info'); return; }
+
+  const ok = await uiConfirm({
+    title: 'Permanently delete ' + ids.length + ' message(s)?',
+    ok: 'Delete permanently',
+    danger: true,
+    body: '<p style="margin:0 0 10px">This removes them from the queue. '
+        + '<strong>It cannot be undone.</strong></p>'
+        + '<p style="margin:0;color:var(--txt3);font-size:.8rem">A queue that filled '
+        + 'up with spam usually still contains real customer mail.</p>'
+  });
+  if (!ok) return;
+
+  const r = await API.mqDelete(ids);
+  const d = (r && r.data) || {};
+  if (!r || r.success === false) {
+    toast((r && r.error) || 'Delete refused', 'error', 9000); return;
+  }
+  const failed = (d.failed || []).length;
+  toast('Deleted ' + fmtNum(d.deleted || 0) + ' message(s)'
+      + (failed ? '; ' + failed + ' could not be removed' : ''),
+        failed ? 'warning' : 'success', 8000);
+  await loadMailQueue();
+}
+
+// What the main log says about one message. Index, never an id interpolated
+// into an attribute beyond the plain alphanumeric message id.
+async function mqLog(index) {
+  const m = (State.mqRows || [])[Number(index)];
+  if (!m) { toast('Could not resolve that row — search again', 'error'); return; }
+  const r = await API.mqLog(m.id);
+  const d = (r && r.data) || {};
+  if (!d.success) { toast(d.error || 'Could not read the log', 'error'); return; }
+  await uiAlert({
+    title: 'Delivery log — ' + m.id,
+    body: d.note
+      ? '<p style="margin:0 0 8px;color:var(--amber)">' + esc(d.note) + '</p>'
+      : '<p style="margin:0 0 8px;color:var(--txt3);font-size:.8rem">From '
+        + esc(d.searched || '') + '</p>',
+    pre: d.log || '(nothing)'
+  });
+}
 
 // ── Spam Monitor tabs ───────────────────────────────────────────────────────
 //

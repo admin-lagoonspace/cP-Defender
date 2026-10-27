@@ -794,7 +794,11 @@ t_contains($dl, 'mail_queue_deliver', 'and the outcome lands on the timeline');
 // ── The route ───────────────────────────────────────────────────────────────
 
 $api = (string)file_get_contents(dirname(__DIR__) . '/backend/api/index.php');
-$rt  = substr($api, (int)strpos($api, "'deliver' => \$method === 'POST'"), 1400);
+// Sliced to routeMailGuard specifically. Mail Queue has a 'deliver' route of
+// its own now, and a bare strpos() found whichever appeared first in the file
+// -- a test passing or failing on the ORDER of two functions is not a test.
+$mgRoute = t_fn_body($api, 'routeMailGuard', 'php');
+$rt  = substr($mgRoute, (int)strpos($mgRoute, "'deliver' => \$method === 'POST'"), 1400);
 t_ok($rt !== '', 'there is a mailguard/deliver route');
 t_contains($rt, "Auth::requireRole('admin'", 'restricted to admins');
 t_contains($rt, "empty(\$body['confirm'])",
@@ -1019,3 +1023,108 @@ t_ok(strpos($mgApp2, 'function closeMailQueue') === false,
      'the Close button that emptied the tab is gone');
 t_contains($mgApp2, 'function showAllQueue', 'replaced by a filter reset');
 t_contains($mgHtml2, 'onclick="showAllQueue()"', 'which the button calls');
+
+// ── Mail Queue, as its own section ──────────────────────────────────────────
+//
+// Prior art: ConfigServer Mail Queue, discontinued and GPL-3.0. No code from
+// it is used here — this product is not GPL, and copying would make it so.
+// What IS reused is knowledge nobody owns: which exim command does what, and
+// which questions an operator needs to ask of a queue.
+
+// Parsing `exim -bp`. The sample covers the three things a naive parser gets
+// wrong: a frozen marker, an empty envelope sender, and the "D " prefix.
+$bp = implode("\n", [
+  ' 25m  2.5K 1abcDe-0001AB-XY <sender@example.com>',
+  '          recipient@elsewhere.com',
+  '        D already@elsewhere.com',
+  '',
+  '  3h  14K 1abcDf-0002AB-XY <> frozen',
+  '          bounced@example.com',
+  '',
+  '  2d 1.1M 1abcDg-0003AB-XY <shop@mydomain.test>',
+  '          customer@mydomain.test',
+  '',
+]);
+$parsed = MailQueue::parseQueue($bp);
+t_eq(3, $parsed['total'], 'three messages parsed from exim -bp');
+
+$m = $parsed['messages'][0];
+t_eq('1abcDe-0001AB-XY', $m['id'], 'the message id is read');
+t_eq('sender@example.com', $m['sender'], 'and the envelope sender');
+t_eq(2, count($m['recipients']), 'both recipients are kept');
+t_ok(empty($m['recipients'][0]['delivered']), 'a pending recipient is pending');
+t_ok(!empty($m['recipients'][1]['delivered']),
+     'THE "D " PREFIX: a recipient already delivered to is marked, not listed '
+   . 'as pending — showing it as pending tells the operator the opposite of '
+   . 'the truth');
+
+$f = $parsed['messages'][1];
+t_ok(!empty($f['frozen']), 'a frozen message is recognised');
+t_ok(!empty($f['bounce']),
+     'and an empty envelope sender is recognised as a bounce, which is a '
+   . 'different problem from a queue full of outbound mail');
+t_eq('<>', $f['sender'], 'with the sender shown as <>');
+
+// Ages, so "older than" means something.
+t_eq(25,   MailQueue::ageMinutes('25m'), 'minutes');
+t_eq(180,  MailQueue::ageMinutes('3h'),  'hours');
+t_eq(2880, MailQueue::ageMinutes('2d'),  'days');
+t_eq(0,    MailQueue::ageMinutes(''),    'and nothing unparseable becomes a number');
+
+// Sizes, for "largest first".
+t_eq(2560,    MailQueue::sizeBytes('2.5K'), 'K');
+t_eq(1153433, MailQueue::sizeBytes('1.1M'), 'M');
+t_eq(0,       MailQueue::sizeBytes('junk'), 'and junk is zero, not a crash');
+
+// Direction. Without /etc/localdomains we cannot tell, and guessing would be
+// worse than saying so.
+$dir = MailQueue::directionOf([['address' => 'a@nowhere.invalid']]);
+t_ok(in_array($dir, ['outbound', 'unknown'], true),
+     'direction is outbound or honestly unknown, never a guess');
+
+// Everything that touches the queue is bounded.
+$mqSrc = t_code(dirname(__DIR__) . '/backend/lib/MailQueue.php');
+t_contains($mqSrc, 'CACHE_TTL',
+     'the snapshot is cached, so refining a search does not re-run exim -bp '
+   . 'on a large queue');
+t_contains($mqSrc, 'MAX_MESSAGES',  'parsing is capped');
+t_contains($mqSrc, 'MAX_DEEP_READS', 'and subject search is capped');
+t_contains($mqSrc, 'deep_truncated',
+     'with the cap REPORTED — a search that quietly examined only part of the '
+   . 'queue would be worse than one that refuses');
+t_contains($mqSrc, 'timeout ',
+     'exigrep runs under a timeout, because it scans the whole main log');
+t_contains($mqSrc, 'nice -n 19', 'and everything runs at low priority');
+
+// Actions reuse MailGuard rather than reimplementing the caps and the
+// "did it actually leave the queue" check. Two copies of a destructive path
+// is one too many.
+$mqRoute = t_fn_body((string)file_get_contents(dirname(__DIR__) . '/backend/api/index.php'),
+                     'routeMailQueue', 'php');
+t_ok($mqRoute !== '', 'there is a mailqueue route');
+t_contains($mqRoute, "Auth::requireRole('admin'", 'admin only');
+t_contains($mqRoute, 'MailGuard::deliverMessages',
+     'delivery reuses the bounded implementation');
+t_contains($mqRoute, 'MailGuard::deleteMessages', 'and so does deletion');
+t_contains($mqRoute, "empty(\$body['confirm'])", 'both are confirmed');
+t_contains($mqRoute, 'MailQueue::invalidate',
+     'and the cached snapshot is dropped afterwards, so the listing does not '
+   . 'show messages that are no longer there');
+
+// It is a SECTION, not a tab on Spam Monitor.
+$mqHtml = (string)file_get_contents(dirname(__DIR__) . '/frontend/index.html');
+$mqApp  = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
+t_contains($mqHtml, 'data-page="mailqueue"', 'Mail Queue has its own nav entry');
+t_contains($mqHtml, 'id="page-mailqueue"', 'and its own page');
+t_ok(strpos($mqHtml, 'data-mgtab="mailqueue"') === false,
+     'and is NOT a tab inside Spam Monitor');
+t_contains($mqApp, "mailqueue:  ['Loading mail queue…'",
+     'with a page loader, so it fills on open');
+t_contains($mqApp, 'function loadMailQueue', 'behind a real function');
+
+// Bulk buttons enable BY CLASS, the lesson from the dead bulk button in 4.13.
+$bar = t_fn_body($mqApp, 'mqUpdateBar');
+t_contains($bar, "querySelectorAll('.mq-action')",
+     'bulk actions enable by class, so one added later works without anybody '
+   . 'editing a list');
+t_contains($bar, 'ids.length === 0', 'driven by the selection');

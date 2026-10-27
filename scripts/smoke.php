@@ -71,6 +71,10 @@ $routes = [
     // verdicts/list stat()s and re-hashes every cleared file to report drift,
     // so it touches the filesystem on a route the Scanner page loads on open.
     ['GET', 'verdicts/list'],
+    // The queue section. summary() builds or reads the cached snapshot,
+    // which is the expensive path on this page.
+    ['GET', 'mailqueue/summary'],
+    ['GET', 'mailqueue/search'],
 ];
 
 $php = PHP_BINARY;

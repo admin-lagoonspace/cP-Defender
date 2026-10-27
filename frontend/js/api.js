@@ -373,6 +373,17 @@ const API = (() => {
     mgView:    (id)        => req('GET',  'mailguard/view?id='
                                   + encodeURIComponent(id)),
     mgFlagged: ()          => req('GET',  'mailguard/flagged'),
+
+    // Mail Queue. Search runs against a server-side snapshot, so refining a
+    // filter or paging does not re-run  on a large queue.
+    mqSummary: ()      => req('GET', 'mailqueue/summary'),
+    mqSearch:  (f)     => req('GET', 'mailqueue/search?'
+                              + Object.keys(f).map(k =>
+                                  encodeURIComponent(k) + '='
+                                  + encodeURIComponent(f[k])).join('&')),
+    mqLog:     (id)    => req('GET', 'mailqueue/log?id=' + encodeURIComponent(id)),
+    mqDeliver: (ids)   => req('POST', 'mailqueue/deliver', { ids, confirm: true }),
+    mqDelete:  (ids)   => req('POST', 'mailqueue/delete',  { ids, confirm: true }),
     mgFlagAttachment: (id, filename, sha256, content_type, bytes) =>
         req('POST', 'mailguard/flag-attachment',
             { id, filename, sha256, content_type, bytes }),
