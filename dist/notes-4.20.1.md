@@ -8,15 +8,15 @@
   *"57 of 57 matching"*.
 
   Text was only honoured when a **Field** had also been chosen, and the default
-  Field was *"â€” no text search â€”"*. So the obvious action â€” type a word, press
-  Search â€” matched everything and reported a number that looked like a result.
+  Field was *"— no text search —"*. So the obvious action — type a word, press
+  Search — matched everything and reported a number that looked like a result.
   A filter that ignores what you typed is worse than no filter: it answers a
   question you did not ask and looks like it worked.
 
   The default is now **Sender, recipient or ID**, all of which are already in
   the snapshot and cost nothing extra. Text with no field selected searches
   those rather than being discarded. Subject stays an explicit choice and is
-  labelled *"slower â€” reads each message"*, because it is a file read per
+  labelled *"slower — reads each message"*, because it is a file read per
   message.
 
 ### Removed
@@ -26,14 +26,14 @@
   an operator met first. Finding a message among thousands is now one job in
   one place.
 
-  The QUEUE and FROZEN cards still work â€” they cross to Mail Queue, carrying
+  The QUEUE and FROZEN cards still work — they cross to Mail Queue, carrying
   the frozen filter with them. `reloadMailQueue()`, `openMailQueue()`,
   `showAllQueue()`, `toggleAllQueue()`, `deliverSelectedQueue()` and
   `deleteSelectedQueue()` are deleted rather than left orphaned.
 
 ### Changed
 
-- Spam Monitor's tabs are now **Findings Â· Settings Â· Logs**. With the queue
+- Spam Monitor's tabs are now **Findings · Settings · Logs**. With the queue
   gone, "Mail view" held only the findings card, so the tab is named after what
   is actually on it.
 
