@@ -10,25 +10,25 @@
   Built after a live incident: one address took all eight cores of a server to
   **load 22 with 1.2% idle**, and this product reported nothing.
   `185.177.72.49` sent 1,963 of 2,000 requests on a single vhost, brute-forcing
-  filenames across *every* site on the box â€” `/.env`, `/.git/config`,
+  filenames across *every* site on the box — `/.env`, `/.git/config`,
   `/settings.py`, `~/.aws/credentials`.
 
   Every request was a **404**. No failed logins, no malware on disk, no error
-  spike â€” nothing any existing check watches. But WordPress serves 404s in PHP,
+  spike — nothing any existing check watches. But WordPress serves 404s in PHP,
   so each miss was a full framework boot plus database queries.
 
   **Why Bot Shield missed it**, both reasons now fixed here:
   1. it reads `/var/log/nginx/access.log`, which on a cPanel box carries almost
-     nothing â€” per-vhost traffic goes to `/var/log/nginx/domains/*`
+     nothing — per-vhost traffic goes to `/var/log/nginx/domains/*`
   2. it classifies by **user-agent**, and the attack had no distinctive one
 
   So this keys on shape instead:
 
   | shape | catches |
   |---|---|
-  | **404 storm** â€” one address, many misses, several sites | secret-hunting scanners |
-  | **Endpoint flood** â€” many addresses, one costly path | `/xmlrpc.php`, `/wp-login.php` |
-  | **Rate** â€” one address far above the rest | brute hammering |
+  | **404 storm** — one address, many misses, several sites | secret-hunting scanners |
+  | **Endpoint flood** — many addresses, one costly path | `/xmlrpc.php`, `/wp-login.php` |
+  | **Rate** — one address far above the rest | brute hammering |
 
   The endpoint detector exists because in the same incident ten addresses sent
   509 requests to `/xmlrpc.php` while **no single one** was busy enough to trip
@@ -43,14 +43,14 @@ defending has done more damage than the attack. Three rails, all tested:
 - **this server's own addresses**, read from the interfaces
 - **any address that has reached the panel** in the last 24 hours, recorded on
   every authenticated request. On the day this was built the operator's own
-  address appeared in the logs with 261 requests â€” inside some thresholds.
+  address appeared in the logs with 261 requests — inside some thresholds.
 
 Loopback and private ranges are never candidates. Thresholds are clamped, and
 the panel re-reads them from the server after saving so it cannot display a
 value the detector is not using. **Monitor-only** is available and reports what
 it *would* block.
 
-Bounded throughout â€” at most 25 logs, 4,000 lines and 4 MB each, tailed never
+Bounded throughout — at most 25 logs, 4,000 lines and 4 MB each, tailed never
 read whole. `/var/log/nginx/domains` was 5.4 GB on the server this was written
 for. Logs are chosen by **last write, not size**: during the incident, sorting
 by size picked files eleven days stale while the live attack sat in a smaller
