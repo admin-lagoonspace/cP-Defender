@@ -20,7 +20,7 @@
     that re-runs it for every search and page is unusable exactly when the
     queue is big enough to need searching. Refining a filter or paging reads
     the snapshot; **Rebuild snapshot** forces a fresh one.
-  - **Delivery log per message** via `exigrep`, under a timeout â€” it scans the
+  - **Delivery log per message** via `exigrep`, under a timeout — it scans the
     whole of `exim_mainlog`, which on a busy server is hundreds of megabytes.
     An empty result after a timeout is reported as *"may have been missed
     rather than absent"*, because those are not the same thing.
@@ -36,7 +36,7 @@
 ### Note on prior art
 
 Modelled on **ConfigServer Mail Queue**, now discontinued. cmq is **GPL-3.0**
-(Copyright 2006â€“2025 Jonathan Michaelson) and ServerScrub is not GPL, so **no
+(Copyright 2006–2025 Jonathan Michaelson) and ServerScrub is not GPL, so **no
 code from it is used**. What is reused is knowledge that is not anyone's to
 own: which `exim` command does what, and which questions an operator actually
 needs to ask of a queue.
