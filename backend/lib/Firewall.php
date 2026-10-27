@@ -145,14 +145,83 @@ class Firewall {
 
     // ── Rule Management ───────────────────────────────────────────────────────
 
-    public function getRules(): array {
-        return Database::fetchAll("SELECT * FROM firewall_rules ORDER BY priority ASC, id ASC");
+    /** 100 per page by default; 500 is as far as a browser should be pushed. */
+    public const RULES_MIN_PAGE = 25;
+    public const RULES_MAX_PAGE = 500;
+
+    /**
+     * One page of rules, WITH the total.
+     *
+     * This returned every row. On a live server that was 343,000 rules, and
+     * the panel turned all of them into table markup in one assignment — which
+     * is not slow, it is fatal: the tab stops responding long before the
+     * request finishes.
+     *
+     * Nothing needs all of them at once. An operator wants the rule they are
+     * looking for, which is what the search is for, or the first page.
+     *
+     * @return array{items:array,total:int,limit:int,offset:int,search:string}
+     */
+    public function getRules(int $limit = 100, int $offset = 0, string $search = ''): array {
+        $limit  = max(self::RULES_MIN_PAGE, min(self::RULES_MAX_PAGE, $limit));
+        $offset = max(0, $offset);
+        $search = trim($search);
+
+        $where  = '';
+        $params = [];
+        if ($search !== '') {
+            // Name, port and address are what somebody actually searches a
+            // firewall by.
+            $where = "WHERE name LIKE ? OR port LIKE ? OR source_ip LIKE ?
+                         OR dest_ip LIKE ? OR protocol LIKE ?";
+            $like  = '%' . $search . '%';
+            $params = [$like, $like, $like, $like, $like];
+        }
+
+        $total = (int) (Database::fetchOne(
+            "SELECT COUNT(*) AS c FROM firewall_rules $where", $params)['c'] ?? 0);
+
+        $rows = Database::fetchAll(
+            "SELECT * FROM firewall_rules $where
+              ORDER BY priority ASC, id ASC
+              LIMIT ? OFFSET ?",
+            array_merge($params, [$limit, $offset])
+        ) ?: [];
+
+        return ['items' => $rows, 'total' => $total, 'limit' => $limit,
+                'offset' => $offset, 'search' => $search];
     }
 
     public function addRule(array $data): array {
         $required = ['name', 'direction', 'action'];
         foreach ($required as $f) {
             if (empty($data[$f])) return ['success' => false, 'error' => "Missing field: $f"];
+        }
+
+        // firewall_rules now carries a unique index on the rule identity, so a
+        // plain insert of a rule that already exists raises a constraint error
+        // rather than silently adding a second copy. Adding the same rule twice
+        // is a no-op from the operator's side, so say so and hand back the rule
+        // they already have instead of a 500.
+        $existing = Database::fetchOne(
+            "SELECT id FROM firewall_rules
+              WHERE name = ? AND direction = ? AND COALESCE(protocol,'') = ?
+                AND COALESCE(port,'') = ? AND COALESCE(source_ip,'') = ?
+                AND COALESCE(dest_ip,'') = ? AND action = ?",
+            [
+                $data['name'],
+                $data['direction'],
+                (string)($data['protocol'] ?? 'tcp'),
+                (string)($data['port'] ?? ''),
+                (string)($data['source_ip'] ?? ''),
+                (string)($data['dest_ip'] ?? ''),
+                strtoupper($data['action']),
+            ]
+        );
+        if ($existing) {
+            return ['success' => true, 'id' => (int)$existing['id'],
+                    'duplicate' => true,
+                    'message' => 'That rule already exists.'];
         }
 
         $id = Database::insert('firewall_rules', [

@@ -615,7 +615,12 @@ function routeFirewall(string $action, string $method, array $body, array $q, ?s
     return match($action) {
         'status'     => ['success' => true, 'data' => $fw->getCSFStatus()],
         'stats'      => ['success' => true, 'data' => $fw->getStats()],
-        'rules'      => ['success' => true, 'data' => $fw->getRules()],
+        // Paged. This returned every row, and on a live server that was
+        // 343,000 of them — enough to lock the browser tab solid.
+        'rules'      => ['success' => true, 'data' => $fw->getRules(
+            (int)($q['limit'] ?? 100), (int)($q['offset'] ?? 0),
+            (string)($q['search'] ?? '')
+        )],
         'blocked'    => ['success' => true, 'data' => $fw->getBlockedIPs(
             (int)($q['limit'] ?? 100), (int)($q['offset'] ?? 0)
         )],

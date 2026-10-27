@@ -193,11 +193,17 @@ t_contains($fw, 'Stage 3', 'then the blocked list');
 
 // Each stage must fetch where it renders, not up front -- otherwise it is the
 // old all-at-once load with comments on it.
+// Stage 2 now delegates to the paged rules loader rather than fetching
+// inline: rendering EVERY rule is what made this page unusable on a server
+// with 343,000 of them. The intent of this check is unchanged — each stage
+// fetches where it renders — so it follows the one hop.
 $s1 = strpos($fw, 'API.fwStats()');
-$s2 = strpos($fw, 'API.fwRules()');
+$s2 = strpos($fw, 'loadFirewallRules()');
 $s3 = strpos($fw, 'API.fwBlocked()');
-t_ok($s1 !== false && $s2 !== false && $s3 !== false, 'all three calls are present');
+t_ok($s1 !== false && $s2 !== false && $s3 !== false, 'all three stages are present');
 t_ok($s1 < $s2 && $s2 < $s3, 'and issued in stage order');
+t_contains(t_fn_body($js, 'loadFirewallRules'), 'API.fwRules(',
+     'and the rules stage really does fetch, one page of it');
 t_ok(strpos($fw, 'Promise.all') === false,
     'they are no longer awaited together, which is what made one slow call blank the page');
 

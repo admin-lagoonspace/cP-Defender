@@ -324,6 +324,39 @@ class Database {
                 ON file_verdicts(file_path, sha256);
         ");
 
+        // Firewall rules: the seeding INSERT above says OR IGNORE, and until now
+        // there was nothing for it to ignore ON.
+        //
+        // FROM A LIVE SERVER. The Firewall page "took forever to load" and then
+        // killed the browser tab. The cause was 343,000 rules in a table the
+        // operator had added about a dozen entries to. firewall_rules has no
+        // UNIQUE constraint, so "INSERT OR IGNORE" had no conflict to ignore and
+        // the ten default rules were appended again on EVERY database open --
+        // which is every API request. 343,000 / 10 is roughly 34,000 page loads.
+        // The product was manufacturing its own rules, and paging the table only
+        // hides that.
+        //
+        // Give the rule identity a unique index so OR IGNORE has something to
+        // ignore, and collapse what has already piled up, keeping the earliest
+        // row of each set. port, source_ip and dest_ip are nullable and SQLite
+        // treats NULLs as distinct, so the index is on COALESCE'd expressions --
+        // otherwise BLOCK_NULL_PACKETS, whose port IS NULL, would go on
+        // duplicating straight past the index.
+        $hasFwIdx = $db->query(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_fw_identity'"
+        )->fetchColumn();
+        if ($hasFwIdx === false) {
+            $db->exec("DELETE FROM firewall_rules WHERE id NOT IN (
+                           SELECT MIN(id) FROM firewall_rules
+                            GROUP BY name, direction, COALESCE(protocol,''),
+                                     COALESCE(port,''), COALESCE(source_ip,''),
+                                     COALESCE(dest_ip,''), action)");
+            $db->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_fw_identity
+                           ON firewall_rules (name, direction, COALESCE(protocol,''),
+                                COALESCE(port,''), COALESCE(source_ip,''),
+                                COALESCE(dest_ip,''), action)");
+        }
+
         // Incremental migrations — safe to run on every boot (IF NOT EXISTS / IGNORE)
         // Add cpanel_user column to threats if missing (SQLite ALTER TABLE is append-only)
         $cols = array_column($db->query("PRAGMA table_info(threats)")->fetchAll(PDO::FETCH_ASSOC), 'name');

@@ -1460,29 +1460,9 @@ async function loadFirewallStages() {
       + ' · ' + ipt;
   }
 
-  // Stage 2 — the rules table.
-  const rules = Demo.active ? Demo.mockFWRules() : await API.fwRules().catch(() => null);
-
-  const tbody = document.getElementById('fw-rules-body');
-  if (tbody && rules?.data) {
-    tbody.innerHTML = rules.data.map(r => `
-      <tr>
-        <td class="primary">${r.name}</td>
-        <td>${r.direction}</td>
-        <td class="mono">${r.protocol || '—'}</td>
-        <td class="mono">${r.port || 'any'}</td>
-        <td>${actionBadge(r.action)}</td>
-        <td>
-          <label class="toggle">
-            <input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleRule(${r.id}, this.checked)">
-            <span class="toggle-slider"></span>
-          </label>
-        </td>
-        <td>
-          <button class="btn btn-ghost btn-xs" onclick="deleteRule(${r.id})">✕</button>
-        </td>
-      </tr>`).join('');
-  }
+  // Stage 2 — the rules table, ONE PAGE of it. Rendering every rule is what
+  // made this page unusable on a server with 343,000 of them.
+  await loadFirewallRules();
 
   // Stage 3 — recently blocked addresses. Last because it is the panel you
   // look at after the counts and the rules, so it is the one that can afford
@@ -2373,6 +2353,139 @@ function goMailQueue(frozen) {
   if (item) { item.click(); } else if (typeof showPage === 'function') { showPage('mailqueue'); }
 }
 
+
+
+// ── Firewall rules, paged ───────────────────────────────────────────────────
+//
+// This table used to render EVERY rule. On a live server that was 343,000 of
+// them, turned into table markup in one innerHTML assignment — which is not
+// slow, it is fatal: the tab stops responding long before the request
+// finishes, and the page "takes forever to load" with no clue why.
+//
+// Nothing needs all of them at once. 100 a page, loaded on request, and a
+// search — because with six figures of rules, paging to the one you want is
+// not a realistic way to find it.
+const FwRules = { offset: 0, limit: 100, total: 0, search: '' };
+const FW_RULES_KEY = 'sg.firewall.rulesPageSize';
+const FW_RULES_SIZES = [100, 250, 500];
+
+function fwRulesPageSize() {
+  let n = 0;
+  try { n = parseInt(sessionStorage.getItem(FW_RULES_KEY) || '', 10) || 0; }
+  catch (e) { n = 0; }
+  return FW_RULES_SIZES.includes(n) ? n : 100;
+}
+
+function fwRulesSetSize(v) {
+  const n = FW_RULES_SIZES.includes(Number(v)) ? Number(v) : 100;
+  try { sessionStorage.setItem(FW_RULES_KEY, String(n)); } catch (e) { /* not fatal */ }
+  FwRules.limit = n;
+  // Page 3 of 100 is not page 3 of 500; landing past the end shows nothing.
+  FwRules.offset = 0;
+  loadFirewallRules();
+}
+
+function fwRulesPage(dir) {
+  FwRules.offset = Math.max(0, FwRules.offset + dir * FwRules.limit);
+  loadFirewallRules();
+}
+
+function fwRulesSearch() {
+  FwRules.search = (g('fw-rules-search')?.value || '').trim();
+  FwRules.offset = 0;
+  loadFirewallRules();
+}
+
+function fwRulesReset() {
+  const box = g('fw-rules-search');
+  if (box) { box.value = ''; }
+  FwRules.search = '';
+  FwRules.offset = 0;
+  loadFirewallRules();
+}
+
+/**
+ * Fetch and render one page.
+ *
+ * Shows the product's own spinner while it runs. A table that simply sits
+ * there is indistinguishable from one that has broken — which is precisely
+ * how 343,000 rules presented itself.
+ */
+async function loadFirewallRules() {
+  const tbody = g('fw-rules-body');
+  if (!tbody) return;
+
+  FwRules.limit = fwRulesPageSize();
+  const sizeSel = g('fw-rules-size');
+  if (sizeSel) { sizeSel.value = String(FwRules.limit); }
+
+  tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:26px">'
+    + '<span class="sg-spin" aria-hidden="true"></span>'
+    + '<span class="dim" style="margin-left:9px">Loading rules…</span></td></tr>';
+
+  const res = Demo.active
+    ? Demo.mockFWRules()
+    : await API.fwRules(FwRules.limit, FwRules.offset, FwRules.search)
+              .catch(() => null);
+
+  // Demo still returns a bare array; accept both rather than break it.
+  const d = (res && res.data) || {};
+  const rows = Array.isArray(d) ? d : (d.items || []);
+  FwRules.total = Array.isArray(d) ? rows.length : Number(d.total || 0);
+
+  setText('fw-rules-count', FwRules.total
+    ? fmtNum(FwRules.total) + (FwRules.search ? ' matching' : ' rule(s)')
+    : '');
+
+  if (!res) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--red);'
+                    + 'padding:20px">Could not load rules.</td></tr>';
+    fwRulesNote(0);
+    return;
+  }
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--txt3);'
+      + 'padding:20px">' + (FwRules.search
+          ? 'No rule matches “' + esc(FwRules.search) + '”.'
+          : 'No rules.') + '</td></tr>';
+    fwRulesNote(0);
+    return;
+  }
+
+  // esc() on every field. A rule name is operator input, and on a server with
+  // an imported deny list it is whatever that list contained.
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td class="primary">${esc(r.name || '')}</td>
+      <td>${esc(r.direction || '')}</td>
+      <td class="mono">${esc(r.protocol || '—')}</td>
+      <td class="mono">${esc(r.port || 'any')}</td>
+      <td>${actionBadge(r.action)}</td>
+      <td>
+        <label class="toggle">
+          <input type="checkbox" ${r.enabled ? 'checked' : ''}
+                 onchange="toggleRule(${Number(r.id) || 0}, this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+      </td>
+      <td>
+        <button class="btn btn-ghost btn-xs" onclick="deleteRule(${Number(r.id) || 0})">✕</button>
+      </td>
+    </tr>`).join('');
+
+  fwRulesNote(rows.length);
+}
+
+function fwRulesNote(shown) {
+  const from = FwRules.total ? FwRules.offset + 1 : 0;
+  setText('fw-rules-note', FwRules.total
+    ? 'Showing ' + fmtNum(from) + '–' + fmtNum(FwRules.offset + shown)
+      + ' of ' + fmtNum(FwRules.total)
+    : '');
+  const prev = g('fw-rules-prev'), next = g('fw-rules-next');
+  if (prev) prev.disabled = FwRules.offset <= 0;
+  if (next) next.disabled = FwRules.offset + shown >= FwRules.total;
+}
 
 // ── Bot Shield paging ───────────────────────────────────────────────────────
 //

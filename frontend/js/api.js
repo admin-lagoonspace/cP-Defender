@@ -258,7 +258,11 @@ const API = (() => {
 
     // Firewall
     fwStats:      ()           => req('GET',  'firewall/stats'),
-    fwRules:      ()           => req('GET',  'firewall/rules'),
+    // Paged and searchable. This used to return every rule, and on a live
+    // server that was 343,000 of them.
+    fwRules: (limit, offset, search) => req('GET', 'firewall/rules?limit='
+                 + (limit || 100) + '&offset=' + (offset || 0)
+                 + '&search=' + encodeURIComponent(search || '')),
     fwBlocked:    ()           => req('GET',  'firewall/blocked'),
     fwBlockIP:    (ip, reason, permanent) => req('POST', 'firewall/block', { ip, reason, permanent }),
     fwUnblockIP:  (ip)         => req('POST', 'firewall/unblock', { ip }),
@@ -488,7 +492,7 @@ const Demo = {
         { id:1, severity:'critical', type:'SQL Injection',    source_ip:'185.220.101.47', target:'/wp-admin/login', description:'SQLi attempt blocked', timestamp: Date.now()/1000 - 120,  resolved:0 },
         { id:2, severity:'high',     type:'Brute Force SSH',  source_ip:'45.33.32.156',   target:'server:22',       description:'32 failed SSH attempts', timestamp: Date.now()/1000 - 300,  resolved:0 },
         { id:3, severity:'high',     type:'Malware Upload',   source_ip:'192.168.200.1',  target:'/uploads/',       description:'PHP webshell detected',  timestamp: Date.now()/1000 - 720,  resolved:0 },
-        { id:4, severity:'medium',   type:'XSS Attempt',      source_ip:'104.21.15.98',   target:'/contact.php',    description:'XSS payload in form',    timestamp: Date.now()/1000 - 1440, resolved:0 },
+        { id:4, severity:'medium',   type:'XSS Attempt',      source_ip:'104.21.25.98',   target:'/contact.php',    description:'XSS payload in form',    timestamp: Date.now()/1000 - 1440, resolved:0 },
         { id:5, severity:'medium',   type:'Suspicious Scan',  source_ip:'198.51.100.23',  target:'All ports',       description:'Port scan detected',     timestamp: Date.now()/1000 - 1860, resolved:1 },
         { id:6, severity:'low',      type:'Invalid Token',    source_ip:'203.0.113.47',   target:'/api/v1/auth',    description:'Invalid JWT token',      timestamp: Date.now()/1000 - 2700, resolved:1 },
       ],
@@ -550,7 +554,7 @@ const Demo = {
       { ip_address:'185.220.101.47', country:'RU', score:98, rbl_hits:'["spamhaus","sorbs"]', hits:3421, last_seen: Date.now()/1000 - 120 },
       { ip_address:'45.33.32.156',   country:'CN', score:91, rbl_hits:'["spamhaus"]',          hits:2889, last_seen: Date.now()/1000 - 300 },
       { ip_address:'192.168.200.1',  country:'UA', score:74, rbl_hits:'["barracuda"]',          hits:1204, last_seen: Date.now()/1000 - 720 },
-      { ip_address:'104.21.15.98',   country:'BR', score:55, rbl_hits:'[]',                    hits: 987, last_seen: Date.now()/1000 - 1440 },
+      { ip_address:'104.21.25.98',   country:'BR', score:55, rbl_hits:'[]',                    hits: 987, last_seen: Date.now()/1000 - 1440 },
       { ip_address:'198.51.100.23',  country:'DE', score:38, rbl_hits:'[]',                    hits: 442, last_seen: Date.now()/1000 - 3600 },
     ]};
   },

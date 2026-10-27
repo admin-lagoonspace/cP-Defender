@@ -266,14 +266,27 @@ def check_loaders(html, js):
             entry = loaders.get(pg, "")
             if re.search(r"\b%s\s*\(" % re.escape(fname), entry):
                 continue
-            # Or called by a function that IS in the entry.
-            via = False
-            for caller in re.findall(r"([A-Za-z_$][\w$]*)\s*\(", entry):
-                if caller in fns and re.search(
-                        r"\b%s\s*\(" % re.escape(fname), fns[caller]):
-                    via = True
-                    break
-            if via:
+            # Or REACHABLE from the entry, however many hops away.
+            #
+            # This followed exactly one call and so reported a false positive
+            # the first time a loader delegated twice: the firewall page goes
+            # loadFirewall -> loadFirewallStages -> loadFirewallRules, which is
+            # perfectly well wired and was flagged as dead. The rule being
+            # enforced is "reachable from the page loader", not "one call away
+            # from it", so it follows the chain.
+            def reaches(body, target, seen, depth=4):
+                if depth <= 0:
+                    return False
+                if re.search(r"\b%s\s*\(" % re.escape(target), body):
+                    return True
+                for callee in set(re.findall(r"([A-Za-z_$][\w$]*)\s*\(", body)):
+                    if callee in fns and callee not in seen:
+                        seen.add(callee)
+                        if reaches(fns[callee], target, seen, depth - 1):
+                            return True
+                return False
+
+            if reaches(entry, fname, set()):
                 continue
             if (fname, pg) in ALLOW:
                 continue
