@@ -8,14 +8,14 @@
   with a per-page selector offering **50 / 100 / 200 / 500** that is remembered
   for the browser session.
 
-  Each page carries its own total, so the tables now say *"Showing 51â€“100 of
+  Each page carries its own total, so the tables now say *"Showing 51–100 of
   137"* instead of filling with rows and leaving you to guess. Changing the
-  page size resets both tables to the first page â€” page 3 of 50 is not page 3
+  page size resets both tables to the first page — page 3 of 50 is not page 3
   of 500, and landing past the end would show an empty table.
 
   The size lives in `sessionStorage`: a reading preference, not server
   configuration. Every read and write is wrapped, because `sessionStorage`
-  throws in a private window and returns nothing with site data blocked â€”
+  throws in a private window and returns nothing with site data blocked —
   neither of which should break a table.
 
 ### Fixed
@@ -24,7 +24,7 @@
   route returned up to 100 rows and the renderer then did `events.slice(0, 50)`
   on top. A server with thousands of events displayed fifty and said nothing.
   A table that shows part of the data without saying so invites exactly the
-  wrong conclusion â€” that there is nothing more to see.
+  wrong conclusion — that there is nothing more to see.
 
 - **The blocked-address total counts addresses, not events.** That query groups
   by IP, so counting rows would have reported 137 where there were 7 addresses
@@ -32,8 +32,8 @@
 
 - **Log-derived text is now escaped.** Both tables interpolated `user_agent`,
   `uri` and `ip_address` straight into HTML and into a `title` attribute. Those
-  come from web logs, so the user-agent is whatever a stranger chose to send â€”
-  a request with `<img src=x onerror=â€¦>` as its UA would have put that into the
+  come from web logs, so the user-agent is whatever a stranger chose to send —
+  a request with `<img src=x onerror=…>` as its UA would have put that into the
   page. Verified with exactly that payload: it renders as text.
 
 - The Unblock button no longer interpolates an address into its `onclick`; it
