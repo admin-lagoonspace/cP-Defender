@@ -236,7 +236,8 @@ function openPage(name) {
     settings:   ['Loading settings…',  () => Promise.all([loadSettings(),
                                                           loadUpdateSettings(),
                                                           loadStorageStats()])],
-    botshield:  ['Loading bot shield…', () => loadBotShield()],
+    botshield:  ['Loading bot shield…', () => Promise.all([loadBotShield(),
+                                                          loadHttpFlood()])],
     cms:        ['Loading CMS Guard…', () => loadCMSGuard()],
     wpscan:     ['Loading WP database…', () => loadWPScan()],
     mailqueue:  ['Loading mail queue…', () => loadMailQueue()],
@@ -2370,6 +2371,192 @@ function goMailQueue(frozen) {
   if (st) { st.value = frozen ? 'frozen' : 'any'; }
   const item = document.querySelector('.sidebar-item[data-page="mailqueue"]');
   if (item) { item.click(); } else if (typeof showPage === 'function') { showPage('mailqueue'); }
+}
+
+
+// ── HTTP flood / scanner detection ──────────────────────────────────────────
+//
+// Built after a single address took all eight cores of a live server to load
+// 22 with 1.2% idle while this product reported nothing. Every request it sent
+// was a 404, so there were no failed logins, no malware on disk and no error
+// spike — but on WordPress a 404 is a full PHP boot.
+async function loadHttpFlood() {
+  const r = await API.hfStatus();
+  const d = (r && r.data) || {};
+
+  const set = (id, v) => { const e = g(id); if (e) e.value = v; };
+  const chk = (id, v) => { const e = g(id); if (e) e.checked = !!v; };
+  chk('hf-enabled', d.enabled);
+  chk('hf-monitor', d.monitor_only);
+  set('hf-window',    d.window || 300);
+  set('hf-miss',      d.miss_threshold || 100);
+  set('hf-rate',      d.rate_threshold || 600);
+  set('hf-endpoint',  d.endpoint_threshold || 200);
+  set('hf-blocksecs', d.block_secs || 3600);
+
+  const st = g('hf-state');
+  if (st) {
+    st.textContent = !d.enabled ? '— switched off'
+      : (d.monitor_only ? '— monitor only, nothing is blocked'
+                        : '— blocking enabled')
+        + (d.logs_found ? ' · ' + d.logs_found + ' log(s)' : ' · no web logs found')
+        + (d.last_run ? ' · last scan ' + reltime(d.last_run) : ' · never scanned');
+    st.style.color = !d.enabled ? 'var(--txt3)'
+      : (d.monitor_only || !d.logs_found) ? 'var(--amber)' : 'var(--ok)';
+  }
+
+  // State who can never be blocked. An automatic blocker that locks the
+  // administrator out of the server it defends has done more damage than the
+  // attack, so this is shown rather than assumed.
+  const prot = g('hf-protected');
+  if (prot) {
+    const list = d.protected || {};
+    const keys = Object.keys(list);
+    prot.innerHTML = keys.length
+      ? 'Never blocked: ' + keys.slice(0, 12).map(ip =>
+          '<span class="mono" title="' + esc(list[ip]) + '">' + esc(ip) + '</span>').join(', ')
+        + (keys.length > 12 ? ' and ' + (keys.length - 12) + ' more' : '')
+      : '<span style="color:var(--amber)">Nothing is protected from blocking — '
+        + 'add your own address to the Brute Force allow list before enabling '
+        + 'blocking.</span>';
+  }
+
+  await hfAnalyse();
+}
+
+async function hfAnalyse() {
+  const tb = g('hf-findings');
+  if (!tb) return;
+  const r = await API.hfAnalyse();
+  const d = (r && r.data) || {};
+  const rows = d.findings || [];
+  State.hfFindings = rows;
+
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="6" class="dim" style="text-align:center;padding:18px">'
+      + 'Nothing above the thresholds in the last '
+      + Math.round((d.window || 300) / 60) + ' minute(s)'
+      + (d.scanned ? ' (' + fmtNum(d.scanned) + ' requests read from '
+                     + (d.logs || 0) + ' log(s))' : '')
+      + '.</td></tr>';
+  } else {
+    tb.innerHTML = rows.map((f, i) => {
+      const badge = f.kind === 'scanner'
+        ? '<span class="badge badge-red">scanner</span>'
+        : '<span class="badge badge-amber">rate</span>';
+      return '<tr>'
+        + '<td class="mono">' + esc(f.ip) + '</td>'
+        + '<td>' + badge + '</td>'
+        + '<td style="font-size:.8rem">' + esc(f.reason) + '</td>'
+        + '<td>' + fmtNum(f.vhosts || 0) + '</td>'
+        + '<td>' + (d.monitor_only
+            ? '<span class="badge badge-gray" title="Monitor only is on, so '
+              + 'nothing is blocked">would block</span>'
+            : '<span class="badge badge-blue">will block</span>') + '</td>'
+        + '<td><button class="btn btn-ghost btn-xs" onclick="hfAllow(' + i + ')"'
+        + ' title="Add to the Brute Force allow list so it is never blocked">'
+        + 'Never block</button></td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  const ep = g('hf-endpoints');
+  if (ep) {
+    const list = d.endpoints || [];
+    ep.innerHTML = list.length
+      ? list.map(e =>
+          '<div style="padding:6px 0;border-bottom:1px solid var(--bd)">'
+          + '<span class="mono">' + esc(e.path) + '</span> — '
+          + '<strong>' + fmtNum(e.total) + '</strong> request(s) from '
+          + fmtNum(e.sources) + ' address(es)'
+          + '<div class="dim" style="font-size:.74rem">'
+          + Object.keys(e.top || {}).slice(0, 6).map(ip =>
+              esc(ip) + ' (' + e.top[ip] + ')').join(', ')
+          + '</div></div>').join('')
+      : '<span class="dim">None above the threshold. A distributed flood shows '
+        + 'here even when no single address is busy enough to stand out.</span>';
+  }
+}
+
+async function hfRun() {
+  const btn = g('hf-run');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+  const r = await API.hfRun();
+  if (btn) { btn.disabled = false; btn.textContent = 'Scan logs now'; }
+
+  if (!r || r.success === false) {
+    toast((r && r.error) || 'Scan failed', 'error', 8000);
+    return;
+  }
+  if (r.skipped) { toast(r.skipped, 'info', 6000); return; }
+
+  const bits = [fmtNum(r.scanned || 0) + ' request(s) read'];
+  if (r.findings)  bits.push(fmtNum(r.findings) + ' address(es) over threshold');
+  if (r.blocked)   bits.push(fmtNum(r.blocked) + ' blocked');
+  if (r.monitor_only && r.findings) bits.push('monitor only — nothing blocked');
+  toast(bits.join(', '), r.blocked ? 'success' : 'info', 9000);
+
+  // A refused block must never be silent. This product spent a week saying
+  // "Watching" against addresses it had never managed to block.
+  const failed = r.failed || [];
+  if (failed.length) {
+    await uiAlert({
+      title: 'Addresses that could not be blocked',
+      body: '<p style="margin:0 0 8px">The detection worked; the firewall did '
+          + 'not accept the rule. The message below is the firewall\'s own.</p>',
+      pre: failed.slice(0, 20).map(f => f.ip + '  ' + f.error).join('\n')
+    });
+  }
+  await loadHttpFlood();
+}
+
+async function hfSave() {
+  const num = (id, d) => parseInt(g(id)?.value, 10) || d;
+  const r = await API.hfSave({
+    hf_enabled:            g('hf-enabled')?.checked ? '1' : '0',
+    hf_monitor_only:       g('hf-monitor')?.checked ? '1' : '0',
+    hf_window:             String(num('hf-window', 300)),
+    hf_miss_threshold:     String(num('hf-miss', 100)),
+    hf_rate_threshold:     String(num('hf-rate', 600)),
+    hf_endpoint_threshold: String(num('hf-endpoint', 200)),
+    hf_block_secs:         String(num('hf-blocksecs', 3600)),
+  });
+  if (r && r.success) {
+    toast('Saved', 'success');
+    // Reload from the server: thresholds are clamped there, and the panel
+    // must never display a value the detector is not actually using.
+    await loadHttpFlood();
+  } else {
+    toast((r && r.error) || 'Could not save', 'error');
+  }
+}
+
+// Index, never an address interpolated into an attribute.
+async function hfAllow(index) {
+  const f = (State.hfFindings || [])[Number(index)];
+  if (!f) { toast('Could not resolve that row — refresh', 'error'); return; }
+
+  const ok = await uiConfirm({
+    title: 'Never block ' + f.ip + '?',
+    ok: 'Add to allow list',
+    body: '<p style="margin:0 0 8px">Adds it to the <strong>Brute Force allow '
+        + 'list</strong>, which governs both modules, so it will not be blocked '
+        + 'by either however it behaves.</p>'
+        + '<p style="margin:0;color:var(--txt3);font-size:.8rem">'
+        + esc(f.reason) + '</p>'
+  });
+  if (!ok) return;
+
+  const cur = await API.bfStats();
+  const existing = String((cur && cur.data && cur.data.whitelist) || '').trim();
+  const next = existing ? existing + ', ' + f.ip : f.ip;
+  const r = await API.bfSave({ bf_whitelist: next });
+  if (r && r.success) {
+    toast(f.ip + ' added to the allow list', 'success', 7000);
+    await loadHttpFlood();
+  } else {
+    toast((r && r.error) || 'Could not update the allow list', 'error');
+  }
 }
 
 // ── Mail Queue ──────────────────────────────────────────────────────────────

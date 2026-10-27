@@ -75,6 +75,9 @@ $routes = [
     // which is the expensive path on this page.
     ['GET', 'mailqueue/summary'],
     ['GET', 'mailqueue/search'],
+    // analyse() reads the web logs, which is the expensive path here.
+    ['GET', 'httpflood/status'],
+    ['GET', 'httpflood/analyse'],
 ];
 
 $php = PHP_BINARY;

@@ -376,6 +376,14 @@ const API = (() => {
 
     // Mail Queue. Search runs against a server-side snapshot, so refining a
     // filter or paging does not re-run  on a large queue.
+    // HTTP flood / scanner detection. analyse() is read-only; run() blocks.
+    hfStatus:  ()      => req('GET',  'httpflood/status'),
+    hfAnalyse: ()      => req('GET',  'httpflood/analyse'),
+    hfOffenders: ()    => req('GET',  'httpflood/offenders'),
+    hfRun:     ()      => req('POST', 'httpflood/run'),
+    hfRelease: (ip)    => req('POST', 'httpflood/release', { ip }),
+    hfSave:    (d)     => req('POST', 'httpflood/save', d),
+
     mqSummary: ()      => req('GET', 'mailqueue/summary'),
     mqSearch:  (f)     => req('GET', 'mailqueue/search?'
                               + Object.keys(f).map(k =>

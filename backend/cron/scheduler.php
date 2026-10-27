@@ -46,6 +46,7 @@ require_once SG_ROOT . '/backend/lib/License.php';
 require_once SG_ROOT . '/backend/lib/CMSGuard.php';
 require_once SG_ROOT . '/backend/lib/WPDatabaseScanner.php';
 require_once SG_ROOT . '/backend/lib/BotShield.php';
+require_once SG_ROOT . '/backend/lib/HttpFlood.php';
 require_once SG_ROOT . '/backend/lib/RootkitScanner.php';
 require_once SG_ROOT . '/backend/lib/RootkitEngine.php';
 require_once SG_ROOT . '/backend/lib/FileIntegrity.php';
@@ -516,6 +517,31 @@ $tasks = [
             $r = Firewall::refreshProbes();
             slog('  firewall probes: iptables=' . $r['iptables_rules']
                . ' csf=' . (($r['csf_status']['installed'] ?? false) ? 'installed' : 'absent'));
+        },
+    ],
+
+    // HTTP flood and scanner detection.
+    //
+    // Runs on every tick, like brute force, because the thing it catches is
+    // measured in minutes: the scanner that took a live server to load 22 did
+    // it inside the five-minute window this reads. A detector that runs hourly
+    // would have reported the attack after it finished.
+    'httpflood' => [
+        'schedule' => setting('hf_schedule', 'every'),
+        'time'     => '00:00',
+        'day'      => 0,
+        'run'      => function () {
+            $r = HttpFlood::enforce();
+            if (!empty($r['skipped'])) { slog('  http flood: ' . $r['skipped']); return; }
+            slog('  http flood: ' . (int) $r['scanned'] . ' request(s) read from '
+               . (int) $r['logs'] . ' log(s), ' . (int) $r['findings'] . ' over '
+               . 'threshold, ' . (int) $r['blocked'] . ' blocked'
+               . (!empty($r['monitor_only']) ? ' (monitor only)' : ''));
+            // A refused block is the failure that matters, so it is logged
+            // loudly rather than folded into a count.
+            foreach (($r['failed'] ?? []) as $f) {
+                slog('  http flood: COULD NOT BLOCK ' . $f['ip'] . ' — ' . $f['error']);
+            }
         },
     ],
 

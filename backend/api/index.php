@@ -57,6 +57,7 @@ require_once __DIR__ . '/../lib/Updater.php';
 require_once __DIR__ . '/../lib/NetworkGuard.php';
 require_once __DIR__ . '/../lib/MailGuard.php';
 require_once __DIR__ . '/../lib/MailQueue.php';
+require_once __DIR__ . '/../lib/HttpFlood.php';
 require_once __DIR__ . '/../lib/RootkitScanner.php';
 require_once __DIR__ . '/../lib/FileIntegrity.php';
 require_once __DIR__ . '/../lib/PHPHardening.php';
@@ -139,6 +140,18 @@ $user     = null;
 
 if (!isset($publicRoutes[$routeKey])) {
     $user = Auth::requireAuth();
+
+    // Remember where the operator reaches the panel from.
+    //
+    // The HTTP flood detector blocks addresses automatically, and an
+    // automatic blocker that locks the administrator out of the server it is
+    // defending has done more damage than the attack. On the day it was
+    // built, the operator's own address appeared in the web logs with 261
+    // requests in a 2,000-line sample — inside some of the thresholds.
+    //
+    // Cheap: this writes only when the address is new or the record is over
+    // an hour stale, not once per request.
+    HttpFlood::rememberAdminIp($clientIP);
 }
 
 // ── License gate ──────────────────────────────────────────────────────────────
@@ -188,6 +201,7 @@ try {
         'netguard'   => routeNetGuard($action, $method, $body, $query, $user),
         'mailguard'  => routeMailGuard($action, $method, $body, $query, $user),
         'mailqueue'  => routeMailQueue($action, $method, $body, $query, $user),
+        'httpflood'  => routeHttpFlood($action, $method, $body, $query, $user),
         'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
         'bruteforce' => routeBruteForce($action, $method, $body, $query, $user),
         'overview'   => routeOverview($action, $method, $query, $user),
@@ -1521,6 +1535,57 @@ function routeVerdicts(string $action, string $method, array $body, array $q, ?a
             ? (function () use ($user) {
                   Auth::requireRole('admin', $user);
                   return Verdicts::pruneMissing();
+              })()
+            : ['success' => false, 'code' => 405],
+
+        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// HTTP flood / scanner detection
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Built after a single address took all eight cores of a live server to load
+// 22 with 1.2% idle, and nothing in this product noticed: every one of its
+// requests was a 404, so there were no failed logins, no malware on disk and
+// no error-rate spike. On WordPress a 404 is a full PHP boot, which is why it
+// was both invisible and expensive.
+function routeHttpFlood(string $action, string $method, array $body, array $q, ?array $user): array {
+    Auth::requireRole('admin', $user);
+
+    return match($action) {
+        'status' => ['success' => true, 'data' => HttpFlood::status()],
+
+        // What it WOULD act on, without acting. The panel can show findings
+        // before anybody turns blocking on.
+        'analyse' => ['success' => true, 'data' => HttpFlood::analyse()],
+
+        'offenders' => ['success' => true,
+                        'data' => HttpFlood::offenders((int)($q['limit'] ?? 100))],
+
+        'run' => $method === 'POST'
+            ? HttpFlood::enforce()
+            : ['success' => false, 'code' => 405],
+
+        'release' => $method === 'POST'
+            ? HttpFlood::release((string)($body['ip'] ?? ''))
+            : ['success' => false, 'code' => 405],
+
+        'save' => $method === 'POST'
+            ? (function () use ($body) {
+                  foreach ([
+                      'hf_enabled', 'hf_monitor_only', 'hf_window',
+                      'hf_miss_threshold', 'hf_rate_threshold',
+                      'hf_endpoint_threshold', 'hf_block_secs',
+                  ] as $k) {
+                      if (array_key_exists($k, $body)) {
+                          Database::setSetting($k, (string) $body[$k]);
+                      }
+                  }
+                  // Report the EFFECTIVE values, clamped, so the panel never
+                  // shows a threshold the detector is not actually using.
+                  return ['success' => true, 'data' => HttpFlood::status()];
               })()
             : ['success' => false, 'code' => 405],
 
