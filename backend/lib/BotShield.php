@@ -76,21 +76,66 @@ class BotShield {
 
     // ── Event Fetching ────────────────────────────────────────────────────────
 
-    public function getBotEvents(int $limit = 100): array {
-        return Database::fetchAll(
-            "SELECT * FROM bot_events ORDER BY timestamp DESC LIMIT ?", [$limit]
-        );
+    /** 50 by default, 500 at most. Beyond that a page stops being a page. */
+    public const MIN_PAGE = 50;
+    public const MAX_PAGE = 500;
+
+    public static function clampPage(int $n): int
+    {
+        return max(self::MIN_PAGE, min(self::MAX_PAGE, $n));
     }
 
-    public function getBlockedBots(): array {
-        return Database::fetchAll(
+    /**
+     * One page of events, WITH the total.
+     *
+     * The total is the point. The previous version returned up to 100 rows and
+     * the front end then silently rendered the first 50 of them, so a server
+     * with thousands of events showed fifty and said nothing at all. A table
+     * that shows part of the data without saying so invites exactly the wrong
+     * conclusion -- that there is nothing more to see.
+     *
+     * @return array{items:array,total:int,limit:int,offset:int}
+     */
+    public function getBotEvents(int $limit = self::MIN_PAGE, int $offset = 0): array {
+        $limit  = self::clampPage($limit);
+        $offset = max(0, $offset);
+        $total  = (int) (Database::fetchOne(
+            'SELECT COUNT(*) AS c FROM bot_events')['c'] ?? 0);
+        $rows = Database::fetchAll(
+            'SELECT * FROM bot_events ORDER BY timestamp DESC LIMIT ? OFFSET ?',
+            [$limit, $offset]
+        ) ?: [];
+        return ['items' => $rows, 'total' => $total,
+                'limit' => $limit, 'offset' => $offset];
+    }
+
+    /**
+     * One page of blocked addresses, WITH the total.
+     *
+     * Counted over the grouped set, not the rows: this groups by address, so
+     * COUNT(*) on bot_events would report the number of EVENTS and the pager
+     * would offer pages that do not exist.
+     *
+     * @return array{items:array,total:int,limit:int,offset:int}
+     */
+    public function getBlockedBots(int $limit = self::MIN_PAGE, int $offset = 0): array {
+        $limit  = self::clampPage($limit);
+        $offset = max(0, $offset);
+        $total  = (int) (Database::fetchOne(
+            "SELECT COUNT(*) AS c FROM (
+                 SELECT ip_address FROM bot_events
+                  WHERE action = 'block' GROUP BY ip_address)")['c'] ?? 0);
+        $rows = Database::fetchAll(
             "SELECT ip_address, user_agent, SUM(hits) as hits, country,
                     MAX(timestamp) as last_seen
              FROM bot_events
              WHERE action = 'block'
              GROUP BY ip_address
-             ORDER BY last_seen DESC"
-        );
+             ORDER BY last_seen DESC
+             LIMIT ? OFFSET ?", [$limit, $offset]
+        ) ?: [];
+        return ['items' => $rows, 'total' => $total,
+                'limit' => $limit, 'offset' => $offset];
     }
 
     public function getWhitelistedBots(): array {

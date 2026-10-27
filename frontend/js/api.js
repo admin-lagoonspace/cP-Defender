@@ -320,8 +320,12 @@ const API = (() => {
 
     // Bot Shield
     botStats:           ()           => req('GET',  'botshield/stats'),
-    botEvents:          (limit)      => req('GET',  `botshield/events?limit=${limit||100}`),
-    botBlocked:         ()           => req('GET',  'botshield/blocked'),
+    // Paged. The response carries its own total so the table can say
+    // "50 of 1,284" instead of showing fifty rows and implying that is all.
+    botEvents:  (limit, offset) => req('GET', 'botshield/events?limit='
+                                   + (limit || 50) + '&offset=' + (offset || 0)),
+    botBlocked: (limit, offset) => req('GET', 'botshield/blocked?limit='
+                                   + (limit || 50) + '&offset=' + (offset || 0)),
     botWhitelist:       ()           => req('GET',  'botshield/whitelist'),
     botAddWhitelist:    (p, note)    => req('POST', 'botshield/whitelist',        { pattern: p, note }),
     botRemoveWhitelist: (id)         => req('POST', 'botshield/remove-whitelist', { id }),

@@ -2374,6 +2374,156 @@ function goMailQueue(frozen) {
 }
 
 
+// ── Bot Shield paging ───────────────────────────────────────────────────────
+//
+// Both tables used to fetch a fixed slab and render it. Recent Bot Events was
+// the worse of the two: the server returned up to 100 rows and the renderer
+// did `events.slice(0, 50)`, so a box with thousands of events showed fifty
+// and said nothing. A table that shows part of the data without saying so
+// invites the wrong conclusion — that there is nothing more to see.
+//
+// Page size is a READING preference, not server configuration, so it lives in
+// sessionStorage: it survives moving around the panel, and it is gone when the
+// browser session ends. Every access is wrapped, because sessionStorage throws
+// in a private window and returns nothing with site data blocked — neither of
+// which should break a table.
+const BOT_PAGE_KEY = 'sg.botshield.pagesize';
+const BOT_PAGE_SIZES = [50, 100, 200, 500];
+const BotPage = { blocked: { offset: 0, total: 0 }, events: { offset: 0, total: 0 } };
+
+function botPageSize() {
+  let n = 0;
+  try { n = parseInt(sessionStorage.getItem(BOT_PAGE_KEY) || '', 10) || 0; }
+  catch (e) { n = 0; }
+  // Clamped to the offered sizes, so a hand-edited value cannot ask the server
+  // for something it will refuse anyway.
+  return BOT_PAGE_SIZES.includes(n) ? n : 50;
+}
+
+function botSetPageSize(v) {
+  const n = BOT_PAGE_SIZES.includes(Number(v)) ? Number(v) : 50;
+  try { sessionStorage.setItem(BOT_PAGE_KEY, String(n)); } catch (e) { /* not fatal */ }
+  // Both selectors show the same value: one setting, two places to change it.
+  document.querySelectorAll('.bot-page-size').forEach(s => { s.value = String(n); });
+  // A size change invalidates the current offsets — page 3 of 50 is not page 3
+  // of 500, and landing past the end would show an empty table.
+  BotPage.blocked.offset = 0;
+  BotPage.events.offset = 0;
+  loadBotBlocked();
+  loadBotEvents();
+}
+
+function botSyncPageSelectors() {
+  const n = String(botPageSize());
+  document.querySelectorAll('.bot-page-size').forEach(s => { s.value = n; });
+}
+
+function botPagerNote(prefix, state, shown) {
+  const from = state.total ? state.offset + 1 : 0;
+  setText(prefix + '-note', state.total
+    ? 'Showing ' + fmtNum(from) + '–' + fmtNum(state.offset + shown)
+      + ' of ' + fmtNum(state.total)
+    : '');
+  const prev = g(prefix + '-prev'), next = g(prefix + '-next');
+  if (prev) prev.disabled = state.offset <= 0;
+  if (next) next.disabled = state.offset + shown >= state.total;
+}
+
+function botBlockedPage(dir) {
+  BotPage.blocked.offset = Math.max(0, BotPage.blocked.offset + dir * botPageSize());
+  loadBotBlocked();
+}
+
+function botEventsPage(dir) {
+  BotPage.events.offset = Math.max(0, BotPage.events.offset + dir * botPageSize());
+  loadBotEvents();
+}
+
+async function loadBotBlocked() {
+  const tbody = g('bot-blocked-body');
+  if (!tbody) return;
+  botSyncPageSelectors();
+
+  const res = Demo.active
+    ? { success: true, data: { items: [], total: 0 } }
+    : await API.botBlocked(botPageSize(), BotPage.blocked.offset);
+
+  const d = (res && res.data) || {};
+  const rows = d.items || [];
+  BotPage.blocked.total = Number(d.total || 0);
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--txt3);'
+                    + 'padding:20px">No blocked bots. Click "Analyze Logs".</td></tr>';
+    botPagerNote('botBlocked', BotPage.blocked, 0);
+    return;
+  }
+
+  // esc() on every field. These come from web logs, so the user-agent is
+  // whatever a stranger sent — interpolating it raw put attacker-controlled
+  // text straight into the page.
+  tbody.innerHTML = rows.map((b, i) => `
+    <tr>
+      <td class="mono">${esc(b.ip_address || '')}</td>
+      <td><span class="badge badge-red" style="font-size:.65rem">${esc(b.threat_type || 'bot')}</span></td>
+      <td>${fmtNum(b.hits || 1)}</td>
+      <td class="dim">${b.last_seen ? reltime(b.last_seen) : '-'}</td>
+      <td><button class="btn btn-ghost btn-xs"
+                  onclick="unblockBotAt(${i})">Unblock</button></td>
+    </tr>`).join('');
+
+  State.botBlockedRows = rows;
+  botPagerNote('botBlocked', BotPage.blocked, rows.length);
+}
+
+async function loadBotEvents() {
+  const tbody = g('bot-events-body');
+  if (!tbody) return;
+  botSyncPageSelectors();
+
+  const res = Demo.active
+    ? { success: true, data: { items: [], total: 0 } }
+    : await API.botEvents(botPageSize(), BotPage.events.offset);
+
+  const d = (res && res.data) || {};
+  const rows = d.items || [];
+  BotPage.events.total = Number(d.total || 0);
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--txt3);'
+                    + 'padding:20px">No events yet</td></tr>';
+    botPagerNote('botEvents', BotPage.events, 0);
+    return;
+  }
+
+  // No .slice() here. The server decides the page; truncating again in the
+  // browser is how fifty of a hundred rows went missing without a word.
+  tbody.innerHTML = rows.map(e => {
+    const ua = String(e.user_agent || '-');
+    return `
+    <tr>
+      <td class="mono">${esc(e.ip_address || '')}</td>
+      <td class="mono" style="font-size:.7rem;max-width:200px;overflow:hidden;
+          text-overflow:ellipsis;white-space:nowrap"
+          title="${esc(ua)}">${esc(ua.slice(0, 50))}</td>
+      <td><span class="badge badge-amber" style="font-size:.65rem">${esc(e.threat_type || 'scanner')}</span></td>
+      <td class="mono" style="font-size:.72rem">${esc(e.uri || '-')}</td>
+      <td class="dim">${reltime(e.timestamp)}</td>
+      <td><span class="badge ${e.action === 'block' ? 'badge-red' : 'badge-gray'}"
+                style="font-size:.65rem">${esc(e.action || 'block')}</span></td>
+    </tr>`;
+  }).join('');
+
+  botPagerNote('botEvents', BotPage.events, rows.length);
+}
+
+// Index, never an address interpolated into an attribute.
+async function unblockBotAt(index) {
+  const row = (State.botBlockedRows || [])[Number(index)];
+  if (!row) { toast('Could not resolve that row — refresh', 'error'); return; }
+  await unblockBot(row.ip_address);
+}
+
 // ── HTTP flood / scanner detection ──────────────────────────────────────────
 //
 // Built after a single address took all eight cores of a live server to load
@@ -4210,10 +4360,10 @@ async function changeAdminPassword() {
 
 // ── Bot Shield ────────────────────────────────────────────────────────────────
 async function loadBotShield() {
-  const [statsRes, blockedRes, eventsRes, whiteRes] = await Promise.all([
+  // The two paged tables fetch their own page, so a page change does not
+  // re-request the stats and the whitelist along with it.
+  const [statsRes, whiteRes] = await Promise.all([
     Demo.active ? { success: true, data: { bots_blocked_today: 142, total_blocked: 1048, whitelisted: 6, requests_analyzed: 284901 } } : API.botStats(),
-    Demo.active ? { success: true, data: [] } : API.botBlocked(),
-    Demo.active ? { success: true, data: [] } : API.botEvents(100),
     Demo.active ? { success: true, data: [] } : API.botWhitelist(),
   ]);
   if (statsRes?.success) {
@@ -4223,46 +4373,8 @@ async function loadBotShield() {
     document.getElementById('bot-stat-white').textContent    = fmtNum(d?.whitelisted || 0);
     document.getElementById('bot-stat-analyzed').textContent = fmtNum(d?.requests_analyzed || 0);
   }
-  loadBotBlocked(blockedRes);
-  renderBotEvents(eventsRes?.data || []);
   renderBotWhitelist(whiteRes?.data || []);
-}
-
-async function loadBotBlocked(cached) {
-  const res = cached || (Demo.active ? { success: true, data: [] } : await API.botBlocked());
-  const tbody = document.getElementById('bot-blocked-body');
-  if (!tbody) return;
-  const rows = res?.data || [];
-  if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--txt3);padding:20px">No blocked bots. Click "Analyze Logs".</td></tr>';
-    return;
-  }
-  tbody.innerHTML = rows.map(b => `
-    <tr>
-      <td class="mono">${b.ip_address}</td>
-      <td><span class="badge badge-red" style="font-size:.65rem">${b.threat_type || 'bot'}</span></td>
-      <td>${fmtNum(b.hits || 1)}</td>
-      <td class="dim">${b.last_seen ? reltime(b.last_seen) : '-'}</td>
-      <td><button class="btn btn-ghost btn-xs" onclick="unblockBot('${b.ip_address}')">Unblock</button></td>
-    </tr>`).join('');
-}
-
-function renderBotEvents(events) {
-  const tbody = document.getElementById('bot-events-body');
-  if (!tbody) return;
-  if (!events.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:20px">No events yet</td></tr>';
-    return;
-  }
-  tbody.innerHTML = events.slice(0, 50).map(e => `
-    <tr>
-      <td class="mono">${e.ip_address}</td>
-      <td class="mono" style="font-size:.7rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${e.user_agent||''}">${(e.user_agent||'-').slice(0,50)}</td>
-      <td><span class="badge badge-amber" style="font-size:.65rem">${e.threat_type||'scanner'}</span></td>
-      <td class="mono" style="font-size:.72rem">${e.uri||'-'}</td>
-      <td class="dim">${reltime(e.timestamp)}</td>
-      <td><span class="badge ${e.action==='block' ? 'badge-red' : 'badge-gray'}" style="font-size:.65rem">${e.action||'block'}</span></td>
-    </tr>`).join('');
+  await Promise.all([loadBotBlocked(), loadBotEvents()]);
 }
 
 function renderBotWhitelist(items) {

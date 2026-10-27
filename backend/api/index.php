@@ -1337,8 +1337,16 @@ function routeBotShield(string $action, string $method, array $body, array $q, ?
     $bs = new BotShield();
     return match($action) {
         'stats'           => ['success' => true, 'data' => $bs->getStats()],
-        'events'          => ['success' => true, 'data' => $bs->getBotEvents((int)($q['limit'] ?? 100))],
-        'blocked'         => ['success' => true, 'data' => $bs->getBlockedBots()],
+        // Paged, and the page carries its own total so the UI can say "50 of
+        // 1,284" rather than showing fifty rows and implying that is all.
+        'events'          => ['success' => true,
+                              'data' => $bs->getBotEvents(
+                                  (int)($q['limit'] ?? BotShield::MIN_PAGE),
+                                  (int)($q['offset'] ?? 0))],
+        'blocked'         => ['success' => true,
+                              'data' => $bs->getBlockedBots(
+                                  (int)($q['limit'] ?? BotShield::MIN_PAGE),
+                                  (int)($q['offset'] ?? 0))],
         'whitelist'       => $method === 'GET'
             ? ['success' => true, 'data' => $bs->getWhitelistedBots()]
             : ['success' => $bs->addWhitelist($body['pattern'] ?? '', $body['note'] ?? '')],
