@@ -12,8 +12,37 @@ class Firewall {
 
     // ── IP Management ─────────────────────────────────────────────────────────
 
-    public function blockIP(string $ip, string $reason = '', bool $permanent = false, int $ttl = 86400): array {
+    public function blockIP(string $ip, string $reason = '', bool $permanent = false,
+                           int $ttl = 86400, bool $force = false): array {
         $this->validateIP($ip);
+
+        // A shared proxy is not a visitor.
+        //
+        // Two Cloudflare edge addresses reached csf.deny on a live server
+        // because a site behind Cloudflare logs the EDGE as its client, so a
+        // few hundred failed logins through one edge looked like one attacker.
+        // Blocking it stops nothing -- the attacker returns through another of
+        // thousands of edges -- and drops every genuine visitor routed that
+        // way, invisibly, because those requests never reach this server.
+        //
+        // This sits in blockIP() rather than in each detector because every
+        // block in the product comes through here: brute force, HTTP flood,
+        // the API and the CLI. A guard that each caller has to remember is a
+        // guard that the next caller will not have.
+        require_once __DIR__ . '/ProxyRanges.php';
+        $proxy = ProxyRanges::nameFor($ip);
+        if ($proxy !== null && !$force) {
+            // Kept under 200 characters on purpose: brute_force_offenders
+            // truncates block_error to that, and a remedy cut off mid-sentence
+            // is not a remedy.
+            $why = $ip . ' is a ' . $proxy . ' proxy address, not a visitor. '
+                 . 'Blocking it drops real visitors and stops nothing. Log the '
+                 . 'real client (mod_remoteip / CF-Connecting-IP) to identify '
+                 . 'the attacker.';
+            Logger::warn('Firewall: declined to block ' . $ip . ' — ' . $proxy . ' proxy address');
+            return ['success' => false, 'error' => $why, 'proxy' => $proxy,
+                    'backend' => FirewallEngine::detect()];
+        }
 
         // Delegate to the built-in engine. It picks the right backend
         // (CSF / firewalld / nftables / iptables), keeps our rules inside a

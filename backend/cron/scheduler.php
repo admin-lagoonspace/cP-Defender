@@ -46,6 +46,7 @@ require_once SG_ROOT . '/backend/lib/License.php';
 require_once SG_ROOT . '/backend/lib/CMSGuard.php';
 require_once SG_ROOT . '/backend/lib/WPDatabaseScanner.php';
 require_once SG_ROOT . '/backend/lib/BotShield.php';
+require_once SG_ROOT . '/backend/lib/ProxyRanges.php';
 require_once SG_ROOT . '/backend/lib/HttpFlood.php';
 require_once SG_ROOT . '/backend/lib/RootkitScanner.php';
 require_once SG_ROOT . '/backend/lib/RootkitEngine.php';
@@ -91,6 +92,53 @@ if (!$status && !License::protectionAllowed()) {
     $s = License::status();
     slog("skipped: license {$s['status']} — {$s['message']}");
     exit(0);
+}
+
+// ── One scheduler at a time ──────────────────────────────────────────────────
+//
+// FROM A LIVE SERVER. 49 of 141 addresses in /etc/csf/csf.deny had been written
+// TWICE, the pairs 0-1 seconds apart, always on a quarter hour. The cron is
+// `*/15 scheduler.php`, so that is one tick overlapping the next: a run that
+// takes longer than fifteen minutes is still going when the following one
+// starts, and then both parse the auth logs, both read the mail queue, and both
+// block the same offenders.
+//
+// The duplicate deny lines were only the visible part. The cost is that on a
+// busy server -- which is exactly when a run overruns -- this product quietly
+// does all of its work twice, and the overlap grows the busier the box gets.
+// scan.php has guarded itself since 3.x; this, the entry point that runs
+// everything else, never did.
+//
+// The kernel holds the lock for the lifetime of the process, so a run killed
+// mid-flight cannot leave a stale one behind.
+//
+// --status and --dry-run do no work and take no lock: refusing to answer "is
+// my nightly scan running?" because a scan is running would hide the one fact
+// the operator asked for.
+if (!$status && !$dryRun) {
+    if (!is_dir(SG_TMP)) { @mkdir(SG_TMP, 0750, true); }
+    $schedLock = @fopen(SG_TMP . '/scheduler.lock', 'c');
+    if ($schedLock === false) {
+        // Not fatal. A scheduler that refuses to run because it cannot create
+        // a lock file is worse than one that occasionally overlaps.
+        Logger::warn('scheduler: could not open its lock file; running unguarded');
+    } elseif (!@flock($schedLock, LOCK_EX | LOCK_NB)) {
+        $holder = trim((string) @fread($schedLock, 32));
+        slog('skipped: another scheduler run is still going'
+           . ($holder !== '' ? ' (pid ' . $holder . ')' : '')
+           . ' — declining to run everything twice');
+        @fclose($schedLock);
+        // Exit 0: standing aside is the correct outcome, and a cron that
+        // reported failure for it would page somebody every quarter hour.
+        exit(0);
+    } else {
+        // Kept in a global purely so the handle is not garbage collected:
+        // closing it releases the lock.
+        $GLOBALS['__sg_sched_lock'] = $schedLock;
+        @ftruncate($schedLock, 0);
+        @fwrite($schedLock, (string) getmypid());
+        @fflush($schedLock);
+    }
 }
 
 $now = time();

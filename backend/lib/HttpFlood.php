@@ -44,6 +44,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/ProxyRanges.php';
+
 class HttpFlood
 {
     /** Per-vhost logs, which is where cPanel actually records traffic. */
@@ -291,8 +293,29 @@ class HttpFlood
         }
         $ts = strtotime(str_replace(':', ' ', substr($m[2], 0, 11)) . substr($m[2], 11));
         if ($ts === false) { $ts = 0; }
-        return ['ip' => $m[1], 'ts' => $ts, 'method' => $m[3],
-                'path' => $m[4], 'status' => (int) $m[5]];
+
+        // Who actually sent this request.
+        //
+        // When a site is behind a CDN the first field is the CDN's edge, not a
+        // visitor, and counting requests by that field merges thousands of
+        // unrelated people into one apparent attacker. On a live server that
+        // put two Cloudflare edges into csf.deny.
+        //
+        // If the proxy recorded the originating address in the line, act on
+        // that. If it did not, keep the edge: the block gate declines proxy
+        // addresses and says why, which tells the operator their logs need
+        // real-client addresses — far more useful than discarding the line and
+        // showing nothing at all.
+        $ip    = $m[1];
+        $proxy = ProxyRanges::nameFor($ip);
+        if ($proxy !== null) {
+            $real = ProxyRanges::clientFromLine($line);
+            if ($real !== null) { $ip = $real; }
+        }
+
+        return ['ip' => $ip, 'ts' => $ts, 'method' => $m[3],
+                'path' => $m[4], 'status' => (int) $m[5],
+                'via' => $proxy];
     }
 
     // ── Detection ───────────────────────────────────────────────────────────

@@ -505,8 +505,15 @@ class BruteForce
                     // csf.deny, or CSF is in TESTING mode and flushing every
                     // rule it writes. Any of those is actionable; "refused"
                     // is not.
-                    $csfWhy = ExternalDefence::explainRefusal($ip);
-                    if ($csfWhy !== '') { $why = $csfWhy; }
+                    //
+                    // Except when WE declined. A proxy address we refused is
+                    // usually already in csf.deny from before this guard
+                    // existed, so CSF would answer "already in csf.deny" and
+                    // bury the only reason the operator can act on.
+                    if (empty($res['proxy'])) {
+                        $csfWhy = ExternalDefence::explainRefusal($ip);
+                        if ($csfWhy !== '') { $why = $csfWhy; }
+                    }
                     Database::query(
                         'UPDATE brute_force_offenders
                             SET block_error = ?, block_tried_at = ?

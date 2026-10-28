@@ -281,8 +281,12 @@ FirewallEngine::setRunner(null);
 FirewallEngine::resetBackend();
 
 // 3. A refused block must not be recorded as a block.
+// The whole function, not a fixed window of it. A 2000-character substr()
+// passed until blockIP() grew a proxy guard at the top, which pushed the
+// insert past the end of the window and failed an assertion about code that
+// had not changed.
 $fwLib = t_code(dirname(__DIR__) . '/backend/lib/Firewall.php');
-$blk   = substr($fwLib, (int)strpos($fwLib, 'function blockIP'), 2000);
+$blk   = t_fn_body($fwLib, 'blockIP', 'php');
 $failAt = strpos($blk, 'if ($code !== 0)');
 $dbAt   = strpos($blk, "Database::insert('blocked_ips'");
 t_ok($failAt !== false && $dbAt !== false && $failAt < $dbAt,
