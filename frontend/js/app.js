@@ -2578,7 +2578,11 @@ async function loadBotBlocked() {
   tbody.innerHTML = rows.map((b, i) => `
     <tr>
       <td class="mono">${esc(b.ip_address || '')}</td>
-      <td><span class="badge badge-red" style="font-size:.65rem">${esc(b.threat_type || 'bot')}</span></td>
+      <td>
+        <span class="badge badge-red" style="font-size:.65rem">${esc(b.threat_type || 'unclassified')}</span>
+        <div class="dim" style="font-size:.68rem;margin-top:3px;line-height:1.3"
+             title="${esc(b.user_agent || 'no user agent')}">${esc(b.description || '')}</div>
+      </td>
       <td>${fmtNum(b.hits || 1)}</td>
       <td class="dim">${b.last_seen ? reltime(b.last_seen) : '-'}</td>
       <td><button class="btn btn-ghost btn-xs"
@@ -2619,7 +2623,8 @@ async function loadBotEvents() {
       <td class="mono" style="font-size:.7rem;max-width:200px;overflow:hidden;
           text-overflow:ellipsis;white-space:nowrap"
           title="${esc(ua)}">${esc(ua.slice(0, 50))}</td>
-      <td><span class="badge badge-amber" style="font-size:.65rem">${esc(e.threat_type || 'scanner')}</span></td>
+      <td title="${esc(e.description || '')}"><span class="badge badge-amber"
+          style="font-size:.65rem">${esc(e.threat_type || 'unclassified')}</span></td>
       <td class="mono" style="font-size:.72rem">${esc(e.uri || '-')}</td>
       <td class="dim">${reltime(e.timestamp)}</td>
       <td><span class="badge ${e.action === 'block' ? 'badge-red' : 'badge-gray'}"

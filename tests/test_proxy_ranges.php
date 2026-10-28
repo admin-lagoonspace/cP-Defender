@@ -125,3 +125,26 @@ $bf = t_fn_body((string)file_get_contents(dirname(__DIR__) . '/backend/lib/Brute
 t_contains($bf, "if (empty(\$res['proxy'])) {",
      'THE REASON THAT WOULD HAVE BEEN BURIED: CSF is only consulted when the '
    . 'refusal did not come from our own proxy guard');
+
+// ── Every blocking path goes through the gate ───────────────────────────────
+//
+// Bot Shield shelled out to `csf -d` itself, so it bypassed the guard
+// entirely: after 4.21.3 shipped it could still put a Cloudflare edge into
+// csf.deny. A guard each caller has to remember is a guard the next caller
+// will not have.
+$bsSrc = (string) file_get_contents(dirname(__DIR__) . '/backend/lib/BotShield.php');
+$blockBot = t_fn_body($bsSrc, 'blockBot', 'php');
+
+t_contains($blockBot, '$fw->blockIP(',
+     'THE HOLE: Bot Shield blocks through Firewall::blockIP(), the one gate');
+t_ok(strpos($blockBot, 'CSF_BIN') === false,
+     'and no longer shells out to csf directly, around every check');
+t_ok(strpos($blockBot, 'IPTABLES_BIN') === false, 'nor to iptables');
+
+// Order matters: ask the firewall, THEN record. The reverse is how a panel
+// comes to list an address as blocked while packets from it keep arriving.
+$askAt = strpos($blockBot, '$fw->blockIP(');
+$recAt = strpos($blockBot, "Database::insert('bot_events'");
+t_ok($askAt !== false && $recAt !== false && $askAt < $recAt,
+     'and asks before it records, so a refused block is not written down as '
+   . 'a block');

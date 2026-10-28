@@ -105,6 +105,11 @@ class BotShield {
             'SELECT * FROM bot_events ORDER BY timestamp DESC LIMIT ? OFFSET ?',
             [$limit, $offset]
         ) ?: [];
+        foreach ($rows as &$r) {
+            $r['description'] = self::describe($r['threat_type'] ?? null,
+                                               $r['user_agent'] ?? null);
+        }
+        unset($r);
         return ['items' => $rows, 'total' => $total,
                 'limit' => $limit, 'offset' => $offset];
     }
@@ -126,7 +131,11 @@ class BotShield {
                  SELECT ip_address FROM bot_events
                   WHERE action = 'block' GROUP BY ip_address)")['c'] ?? 0);
         $rows = Database::fetchAll(
-            "SELECT ip_address, user_agent, SUM(hits) as hits, country,
+            // threat_type was stored from the first version and never
+            // selected, so every row in the panel read "bot". With exactly one
+            // MAX() aggregate SQLite takes the bare columns from the matching
+            // row, so this is the type and agent of the most recent hit.
+            "SELECT ip_address, user_agent, threat_type, SUM(hits) as hits, country,
                     MAX(timestamp) as last_seen
              FROM bot_events
              WHERE action = 'block'
@@ -134,6 +143,11 @@ class BotShield {
              ORDER BY last_seen DESC
              LIMIT ? OFFSET ?", [$limit, $offset]
         ) ?: [];
+        foreach ($rows as &$r) {
+            $r['description'] = self::describe($r['threat_type'] ?? null,
+                                               $r['user_agent'] ?? null);
+        }
+        unset($r);
         return ['items' => $rows, 'total' => $total,
                 'limit' => $limit, 'offset' => $offset];
     }
@@ -211,6 +225,29 @@ class BotShield {
 
     public function blockBot(string $ip, string $ua, string $reason): bool {
         try {
+            // Through the firewall gate, not around it.
+            //
+            // This used to shell out to `csf -d` itself, which meant it
+            // bypassed every check Firewall::blockIP() performs — including
+            // the proxy guard added in 4.21.3, so Bot Shield could still put a
+            // Cloudflare edge into csf.deny after that guard shipped. A guard
+            // that each caller has to remember is a guard the next caller will
+            // not have.
+            //
+            // The firewall is asked FIRST and the row is written only if it
+            // agrees, for the same reason blockIP() checks before writing
+            // blocked_ips: a panel listing an address as blocked while packets
+            // from it keep arriving is the most expensive kind of wrong a
+            // security tool can be.
+            require_once __DIR__ . '/Firewall.php';
+            $fw  = new Firewall();
+            $res = $fw->blockIP($ip, 'Bot Shield: ' . $reason);
+            if (empty($res['success'])) {
+                $why = trim((string) ($res['error'] ?? '')) ?: 'the firewall refused the block';
+                Logger::warn("BotShield: could NOT block {$ip} — {$why}");
+                return false;
+            }
+
             // Upsert bot_events — increment hits if already present
             $existing = Database::fetchOne(
                 "SELECT id, hits FROM bot_events WHERE ip_address = ? AND action = 'block'", [$ip]
@@ -228,13 +265,6 @@ class BotShield {
                     'threat_type' => $reason,
                     'action'      => 'block',
                 ]);
-            }
-
-            // Enforce at the network level
-            if (file_exists(CSF_BIN)) {
-                exec(CSF_BIN . " -d " . escapeshellarg($ip) . " 2>/dev/null", $out, $code);
-            } else {
-                exec(IPTABLES_BIN . " -I INPUT -s " . escapeshellarg($ip) . " -j DROP 2>/dev/null", $out, $code);
             }
 
             Logger::info("BotShield: blocked bot IP $ip — $reason");
@@ -346,6 +376,82 @@ class BotShield {
             }
         }
         return false;
+    }
+
+    /**
+     * The tools behind the user agents we block, in the words an operator
+     * would use. Keyed on a lowercase fragment of the user agent.
+     *
+     * Deliberately short labels: this ends up on one line of a narrow table,
+     * and a description that wraps to three lines is a description nobody
+     * reads.
+     */
+    private const TOOL_LABELS = [
+        'sqlmap'          => 'sqlmap',
+        'nuclei'          => 'nuclei',
+        'nikto'           => 'Nikto',
+        'nmap'            => 'Nmap',
+        'masscan'         => 'masscan',
+        'zgrab'           => 'ZGrab',
+        'dirbuster'       => 'DirBuster',
+        'gobuster'        => 'Gobuster',
+        'wfuzz'           => 'Wfuzz',
+        'hydra'           => 'Hydra',
+        'acunetix'        => 'Acunetix',
+        'nessus'          => 'Nessus',
+        'qualys'          => 'Qualys',
+        'ahrefsbot'       => 'AhrefsBot',
+        'semrushbot'      => 'SemrushBot',
+        'dataforseobot'   => 'DataForSeoBot',
+        'blexbot'         => 'BLEXBot',
+        'petalbot'        => 'PetalBot',
+        'mj12bot'         => 'MJ12bot',
+        'dotbot'          => 'DotBot',
+        'python-requests' => 'a Python script',
+        'go-http-client'  => 'a Go program',
+        'curl'            => 'curl',
+    ];
+
+    /** The recognisable tool in a user agent, or '' if none stands out. */
+    public static function toolLabel(?string $ua): string
+    {
+        $ua = strtolower(trim((string) $ua));
+        if ($ua === '' || $ua === '-') { return ''; }
+        foreach (self::TOOL_LABELS as $needle => $label) {
+            if (strpos($ua, $needle) !== false) { return $label; }
+        }
+        return '';
+    }
+
+    /**
+     * One line saying what this bot was doing.
+     *
+     * The table used to show the word "bot" on every row — the type was being
+     * stored and never selected, so the column said nothing at all. An
+     * operator looking at a list of blocked addresses needs to know whether
+     * they stopped a vulnerability scanner or an SEO crawler, because those
+     * warrant completely different reactions.
+     */
+    public static function describe(?string $type, ?string $ua): string
+    {
+        $tool = self::toolLabel($ua);
+        $via  = $tool !== '' ? ' (' . $tool . ')' : '';
+
+        switch ((string) $type) {
+            case 'scanner':
+                return 'Scanning for known vulnerabilities' . $via;
+            case 'scraper':
+                return 'Crawling the site for its own index' . $via;
+            case 'exploit':
+                return 'Attacking WordPress login or XML-RPC' . $via;
+        }
+
+        // Older rows predate the type being recorded, and an empty user agent
+        // is itself worth saying out loud: ordinary browsers always send one.
+        if (trim((string) $ua) === '' || trim((string) $ua) === '-') {
+            return 'Automated client that sent no user agent';
+        }
+        return 'Automated client' . $via;
     }
 
     private function detectThreatType(string $ua, string $uri): ?string {
