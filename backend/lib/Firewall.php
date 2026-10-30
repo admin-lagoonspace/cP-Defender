@@ -30,6 +30,31 @@ class Firewall {
         // the API and the CLI. A guard that each caller has to remember is a
         // guard that the next caller will not have.
         require_once __DIR__ . '/ProxyRanges.php';
+        require_once __DIR__ . '/GoodBots.php';
+
+        // Search engine crawlers, verified by address.
+        //
+        // This product put Googlebot in csf.deny at 00:15 on 30 Oct. Bot
+        // Shield has a good-bot check, but it matches the USER AGENT and
+        // exists only there -- HttpFlood and BruteForce had no concept of one,
+        // so a crawler working through a site with dead links tripped the
+        // not-found threshold and was blocked.
+        //
+        // The cost is asymmetric, which is the whole argument for putting it
+        // ahead of the attacker case: blocking a crawler drops a customer's
+        // pages out of the search index, which they notice weeks later as lost
+        // traffic and cannot attribute to anything. Declining to block one
+        // costs a few requests.
+        $crawler = GoodBots::nameFor($ip);
+        if ($crawler !== null && !$force) {
+            $why = $ip . ' is ' . $crawler . ', confirmed by forward-checked '
+                 . 'reverse DNS. Blocking it removes this server from search '
+                 . 'results. Use the allow list if this is genuinely abusive.';
+            Logger::warn('Firewall: declined to block ' . $ip . ' — verified ' . $crawler);
+            return ['success' => false, 'error' => $why, 'crawler' => $crawler,
+                    'backend' => FirewallEngine::detect()];
+        }
+
         $proxy = ProxyRanges::nameFor($ip);
         if ($proxy !== null && !$force) {
             // Kept under 200 characters on purpose: brute_force_offenders

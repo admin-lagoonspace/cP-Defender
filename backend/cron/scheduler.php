@@ -47,6 +47,7 @@ require_once SG_ROOT . '/backend/lib/CMSGuard.php';
 require_once SG_ROOT . '/backend/lib/WPDatabaseScanner.php';
 require_once SG_ROOT . '/backend/lib/BotShield.php';
 require_once SG_ROOT . '/backend/lib/ProxyRanges.php';
+require_once SG_ROOT . '/backend/lib/GoodBots.php';
 require_once SG_ROOT . '/backend/lib/HttpFlood.php';
 require_once SG_ROOT . '/backend/lib/RootkitScanner.php';
 require_once SG_ROOT . '/backend/lib/RootkitEngine.php';
