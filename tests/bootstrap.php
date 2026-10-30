@@ -33,7 +33,7 @@ foreach ([
     'Database', 'Auth', 'Logger', 'Scanner', 'Firewall', 'WAF', 'IPReputation',
     'RealTimeMonitor', 'BotShield', 'CMSGuard', 'RootkitScanner', 'FileIntegrity',
     'PHPHardening', 'UpdateChecker', 'License', 'FirewallEngine', 'RootkitEngine',
-    'BlocklistRegistry', 'WAFInstaller', 'UserReport', 'BruteForce', 'Schedule',
+    'BlocklistRegistry', 'WAFInstaller', 'UserReport', 'UserScanRequest', 'BruteForce', 'Schedule',
     'Heuristics', 'WPDatabaseScanner', 'Updater', 'Dependencies', 'NetworkGuard', 'MailGuard',
     'Verdicts', 'ThreatStore', 'ExternalDefence', 'MailQueue', 'ProxyRanges', 'GoodBots', 'HttpFlood',
 ] as $lib) {

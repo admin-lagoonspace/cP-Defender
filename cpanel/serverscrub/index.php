@@ -31,6 +31,44 @@ if ($home === '' && function_exists('posix_getpwnam') && $user !== '') {
     $home = is_array($pw) ? ($pw['dir'] ?? '') : '';
 }
 
+/**
+ * "Scan my account now".
+ *
+ * All this does is leave a timestamp in the caller's own home. The privileged
+ * side reads it on its next tick, decides whether to honour it, and starts the
+ * scan itself -- this page cannot start one, and must not be able to.
+ *
+ * The cooldown is displayed here but enforced there. A customer who edits this
+ * file by hand gains nothing except a request that is declined slightly later.
+ *
+ * No CSRF token of our own: cpsrvd rejects a request that does not carry the
+ * session token it put in the URL, so a cross-site POST never reaches this
+ * code. And the worst a forged one could achieve is a scan of the victim's own
+ * account, rate-limited, which is what the button does anyway.
+ */
+$requested = false;
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST'
+    && isset($_POST['scan_now']) && $home !== '') {
+    $dir = rtrim($home, '/') . '/.serverscrub';
+    if (!is_dir($dir)) { @mkdir($dir, 0700, true); }
+    if (is_dir($dir) && !is_link($dir)) {
+        $tmp = $dir . '/.scan-request.' . getmypid();
+        $ok  = @file_put_contents($tmp, json_encode([
+            'requested_at' => time(),
+            'source'       => 'cpanel-plugin',
+        ]));
+        // Written aside and moved into place, so the privileged side never
+        // reads a half-written file and discards the request as malformed.
+        if ($ok !== false) {
+            @chmod($tmp, 0600);
+            @rename($tmp, $dir . '/scan-request.json');
+            $requested = true;
+        } else {
+            @unlink($tmp);
+        }
+    }
+}
+
 $report = null;
 $error  = '';
 if ($home === '') {
@@ -109,6 +147,10 @@ $s = $report['summary'] ?? [];
   .ok { padding:22px 14px; color:var(--dim); text-align:center; }
   .note { border:1px solid var(--line); border-radius:8px; padding:16px; color:var(--dim); }
   .foot { color:var(--dim); font-size:.74rem; margin-top:8px; }
+  .btn { font:inherit; font-weight:600; font-size:.82rem; padding:8px 16px; border-radius:6px;
+         border:1px solid var(--blue); background:var(--blue); color:#fff; cursor:pointer; }
+  .btn:hover:not(:disabled) { filter:brightness(1.08); }
+  .btn:disabled { background:var(--chip); color:var(--dim); border-color:var(--line); cursor:default; }
   @media (max-width:560px) { body{padding:12px} .hide-sm{display:none} }
 </style>
 </head>
@@ -154,6 +196,47 @@ $s = $report['summary'] ?? [];
       <div class="l">Changed files</div>
     </div>
   </div>
+
+  <?php
+    $sr       = $report['scan_request'] ?? [];
+    $srOn     = !empty($sr['enabled']);
+    $srWait   = (int)($sr['retry_in'] ?? 0);
+    $srQueued = $requested || !empty($sr['pending']);
+    function hms(int $s): string {
+        if ($s <= 0)    { return 'now'; }
+        if ($s < 3600)  { return 'in ' . max(1, intdiv($s, 60)) . ' minute(s)'; }
+        return 'in ' . intdiv($s, 3600) . ' hour(s)';
+    }
+  ?>
+  <?php if ($srOn): ?>
+  <div class="card">
+    <h2>Scan my account</h2>
+    <div style="padding:14px">
+      <?php if ($srQueued): ?>
+        <div class="tag green">Queued</div>
+        <div class="foot" style="margin-top:7px">
+          Your scan is waiting to run. Scans are started a few at a time so they
+          do not slow the server down for everyone, so this can take a little
+          while. This page will show the results once it has finished.
+        </div>
+      <?php elseif ($srWait > 0): ?>
+        <button class="btn" disabled>Scan my account</button>
+        <div class="foot" style="margin-top:7px">
+          You can request another scan <?= e(hms($srWait)) ?>.
+          Last scan of your account: <?= e(ago((int)($sr['last_run_at'] ?? 0))) ?>.
+        </div>
+      <?php else: ?>
+        <form method="post" style="margin:0">
+          <button class="btn" type="submit" name="scan_now" value="1">Scan my account</button>
+        </form>
+        <div class="foot" style="margin-top:7px">
+          Checks the files in your home directory for malware. It runs in the
+          background; you do not need to keep this page open.
+        </div>
+      <?php endif; ?>
+    </div>
+  </div>
+  <?php endif; ?>
 
   <?php $threats = $report['threats'] ?? []; ?>
   <div class="card">
@@ -239,8 +322,8 @@ $s = $report['summary'] ?? [];
   <div class="foot">
     Report generated <?= e(ago((int)($report['generated_at'] ?? 0))) ?>
     from the server scan that ran <?= e(ago((int)($report['last_scan_at'] ?? 0))) ?>.
-    Scans are scheduled by your hosting provider; contact them to have one run sooner,
-    or to act on anything listed here.
+    Scans are scheduled by your hosting provider. Contact them to act on anything
+    listed here.
   </div>
 
 <?php endif; ?>

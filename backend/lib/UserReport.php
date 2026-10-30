@@ -233,6 +233,11 @@ class UserReport
             'threats'      => $threats,
             'cms'          => $cms,
             'file_changes' => $changes,
+            // What the page needs to render the Scan button honestly: whether
+            // the feature is on, whether this account already has a request
+            // waiting, and how long until it may ask again. Computed here as
+            // root, because the page cannot read any of it.
+            'scan_request' => UserScanRequest::statusFor($user),
         ];
     }
 
