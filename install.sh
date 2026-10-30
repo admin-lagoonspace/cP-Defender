@@ -1498,17 +1498,30 @@ JSONEOF
       DYNUI_DIR="${CPANEL_THEME_BASE}/dynamicui"
       if [[ -d "${DYNUI_DIR}" ]]; then
         DYNUI_CONF="${DYNUI_DIR}/dynamicui_serverscrub.conf"
+        # THE FORMAT, which is not the obvious one.
+        #
+        # This file was written as `key=value` lines for a long time and the
+        # icon never appeared -- no error anywhere, because cPanel's dynamicui
+        # parser simply does not read that shape. It wants ONE line of
+        # comma-separated `key=>value` pairs, Perl-hash style.
+        #
+        # Taken from cPGuard's conf on a live server, which renders correctly
+        # in the same Security group on the same cPanel:
+        #
+        #   description=>$LANG{'cPGuard'},feature=>cPGuard,file=>cpguard,
+        #   group=>security,height=>48,imgtype=>icon,itemdesc=>$LANG{'cPGuard'},
+        #   itemorder=>999,subtype=>img,type=>image,url=>cpguard/index.live.php,
+        #   width=>48
+        #
+        # url is RELATIVE to the theme directory. An absolute /frontend/... path
+        # is the other half of why nothing rendered.
+        #
+        # No feature=> key: cPGuard gates on one, and gating is exactly what hid
+        # this entry from every account on a reseller's own feature list before.
+        # An item without a feature is shown to everybody, which is what was
+        # asked for.
         cat > "${DYNUI_CONF}" << DYNEOF
-group=security
-groupdesc=Security
-grouporder=30
-name=serverscrub
-itemdesc=ServerScrub Security
-imgtype=icon
-icon=serverscrub.png
-url=/frontend/${CPANEL_THEME}/serverscrub/index.php
-target=_blank
-itemorder=1
+description=>ServerScrub Security,file=>serverscrub,group=>security,height=>48,imgtype=>icon,itemdesc=>ServerScrub Security,itemorder=>1,subtype=>img,type=>image,url=>serverscrub/index.php,width=>48
 DYNEOF
         chmod 644 "${DYNUI_CONF}"
         ok "  DynamicUI conf: ${DYNUI_CONF}"
@@ -1578,15 +1591,21 @@ CPANELEOF
       echo "FEATURE_FLAG_LEGACY=${_LEGACY_FEAT}/default" >> "${MANIFEST}"
     fi
 
-    # ── Step 8: Restart cpsrvd if register_appconfig didn't already do it ────
-    # register_appconfig normally handles this, but we restart explicitly as a
-    # safety net in case the binary was missing or the conf was copied manually.
-    if ! $_REG_OK; then
-      info "  Manually restarting cpsrvd (register_appconfig fallback)…"
-      if [[ -x /usr/local/cpanel/scripts/restartsrv_cpsrvd ]]; then
-        /usr/local/cpanel/scripts/restartsrv_cpsrvd 2>&1 | tail -4 | sed 's/^/    /'
-        ok "  cpsrvd restarted"
-      fi
+    # ── Step 8: Restart cpsrvd ───────────────────────────────────────────────
+    # ALWAYS, not only when register_appconfig failed.
+    #
+    # register_appconfig restarts cpsrvd for the AppConfig it just registered,
+    # and knows nothing about the dynamicui conf -- that is theme data, cached
+    # separately. So a SUCCESSFUL registration used to skip the restart, and
+    # the restart is what makes the user-level icon appear. The icon was
+    # therefore missing on every install where everything else went right,
+    # which is the only kind of install anybody has.
+    info "  Restarting cpsrvd so the theme picks up the menu entry…"
+    if [[ -x /usr/local/cpanel/scripts/restartsrv_cpsrvd ]]; then
+      /usr/local/cpanel/scripts/restartsrv_cpsrvd 2>&1 | tail -4 | sed 's/^/    /'
+      ok "  cpsrvd restarted"
+    else
+      warn "  restartsrv_cpsrvd not found — the icon may not appear until cpsrvd restarts"
     fi
 
     # ── Step 9: Post-registration verification ────────────────────────────────

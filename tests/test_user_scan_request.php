@@ -149,6 +149,6 @@ t_ok($coolAt !== false && ($clearAt === false || $clearAt > $coolAt),
 $install = (string) file_get_contents($repo . '/install.sh');
 t_contains($install, 'if [[ ! -d /usr/local/cpanel ]]; then',
      'the whole cPanel integration is skipped where cPanel is not installed');
-t_contains($install, 'group=security', 'and the menu entry sits in the Security group');
+t_contains($install, 'group=>security', 'and the menu entry sits in the Security group');
 t_contains($install, 'features=any',
      'visible to every cPanel account, not only those on the default feature list');

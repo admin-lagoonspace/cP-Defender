@@ -82,7 +82,10 @@ t_ok(strpos($src, "header('Location:") === false,
 // -- Registration: visible for every user ------------------------------------
 $install = file_get_contents($repo . '/install.sh');
 t_contains($install, '"group_id": "security"', 'the entry is registered in the Security group');
-t_contains($install, 'group=security', 'and in the dynamicui group of the same name');
+// group=>security, with the arrow. The bare `group=security` this once
+// asserted was the broken format: cPanel's parser ignored the whole file,
+// so the test passed while no icon ever appeared.
+t_contains($install, 'group=>security', 'and in the dynamicui group of the same name');
 
 // The feature gate hid it from every account not on the default feature list.
 $jsonBlock = substr($install, strpos($install, '"id":       "serverscrub"'), 400);
