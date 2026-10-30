@@ -21,7 +21,17 @@ class Auth {
     }
 
     /**
-     * Validate via WHM API token (for WHM-level access)
+     * Does this WHM API token belong to this WHM user?
+     *
+     * AUTHENTICATION ONLY. It establishes identity and nothing else: the
+     * endpoint it calls, /json-api/version, answers for every WHM account,
+     * resellers included. A caller that reads a `true` here as "this is an
+     * administrator" is wrong, and one of them was -- the login route handed
+     * every valid token the 'root' role, so a reseller's token outranked the
+     * same reseller's password.
+     *
+     * Decide privilege from the username this returns true FOR, never from
+     * the fact that it returned true.
      */
     public static function validateWhmToken(string $user, string $token): bool {
         $url = 'https://localhost:2087/json-api/version';
@@ -134,7 +144,21 @@ class Auth {
         }
     }
 
+    /**
+     * Refuse the request and stop.
+     *
+     * exit() is right in production -- there is nothing further to do once a
+     * caller has been refused, and returning would leave every call site
+     * responsible for noticing. It also made the refusal untestable: a test
+     * that asserts "a reseller is denied" cannot assert anything after the
+     * process has gone. SG_TEST is defined only by tests/bootstrap.php, and
+     * tests/ is excluded from the release zip (scripts/build.py asserts its
+     * absence), so this seam cannot exist on a server.
+     */
     private static function deny(string $msg, int $code = 401): void {
+        if (defined('SG_TEST') && SG_TEST) {
+            throw new RuntimeException('DENIED ' . $code . ': ' . $msg);
+        }
         http_response_code($code);
         echo json_encode(['success' => false, 'error' => $msg]);
         exit;

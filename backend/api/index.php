@@ -270,8 +270,20 @@ function routeAuth(string $action, string $method, array $body, ?array $user): a
                 if ($u === 'demo' && $p === 'demo') {
                     $ok = true; $role = 'admin';
                 } elseif (!empty($body['token'])) {
+                    // A valid token proves WHO is calling, not WHAT they may do.
+                    //
+                    // validateWhmToken() asks WHM whether the token works at
+                    // all, and /json-api/version answers for every WHM account
+                    // including resellers. This branch then handed out 'root',
+                    // the top of the hierarchy -- so a reseller with an API
+                    // token could change server-wide settings, while the SAME
+                    // reseller signing in with a password correctly got 'user'
+                    // from the branch directly below. Two paths to one panel
+                    // that disagreed about who you are.
+                    //
+                    // The identity rule is now the same on both.
                     $ok   = Auth::validateWhmToken($u, $body['token']);
-                    $role = 'root';
+                    $role = ($u === 'root' || $u === 'cpanel') ? 'root' : 'user';
                 } else {
                     $ok   = Auth::validateCpanel($u, $p);
                     $role = ($u === 'root' || $u === 'cpanel') ? 'admin' : 'user';
