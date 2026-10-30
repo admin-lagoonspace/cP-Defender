@@ -192,5 +192,16 @@ info "  mirror. Install it per the header of scripts/cdn-sync.sh."
 
 echo ""
 ok "Published ${TAG}. CDN will pick it up within ~10 min."
-echo -e "  Install command now live:"
-echo -e "  ${BOLD}bash <(curl -fsSL https://raw.githubusercontent.com/${SLUG}/main/get.sh)${NC}"
+
+# UPGRADE FIRST, install second.
+#
+# This script used to print only the get.sh line, which is for a FRESH install.
+# Every existing server -- which is every server that matters after the first
+# release -- needs update.sh instead, and four consecutive releases went out
+# reporting the wrong one because this is the text everybody copies from.
+# The command an operator actually needs is the one printed first.
+echo -e "  ${BOLD}Upgrade an existing server:${NC}"
+echo -e "  ${BOLD}bash /usr/local/serverscrub/update.sh --yes${NC}"
+echo ""
+echo -e "  Fresh install (new server only):"
+echo -e "  bash <(curl -fsSL https://raw.githubusercontent.com/${SLUG}/main/get.sh)"
