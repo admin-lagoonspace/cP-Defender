@@ -3,13 +3,32 @@
    uploaded to a cPanel docroot; adding a toolchain to that would be a cost
    with nothing on the other side of it. */
 
+/* The palette is the LOGO's, sampled from frontend/images/logo.png rather
+ * than chosen. Counting pixels by hue family gave:
+ *
+ *   green  10,948 px  #00b038 / #00b040   the word "Scrub" and the swoosh
+ *   navy   21,096 px  #000820 / #000828   the shield body
+ *   blue               #009cf0 / #0090f0  the shield highlight
+ *   grey    2,361 px  #708098             the metallic word "Server"
+ *
+ * An earlier version of this file used #1668b3, which appears nowhere in the
+ * artwork. A brand colour is not a judgement call when the logo is sitting
+ * right there to be measured. */
 :root {
-  --ink:#0f1720; --ink-2:#3b4754; --dim:#6b7784; --line:#e2e7ec;
-  --bg:#ffffff; --bg-2:#f6f8fa; --bg-3:#eef2f6;
-  --brand:#1668b3; --brand-dk:#0f4d85; --brand-lt:#e8f1fa;
-  --good:#15794f; --warn:#b26a00; --bad:#c0392b;
+  --ink:#0b1420; --ink-2:#36434f; --dim:#6b7784; --line:#dde4ec;
+  --bg:#ffffff; --bg-2:#f5f8fb; --bg-3:#e9eff6;
+
+  --navy:#001a3d;          /* shield body — headers, footers, code blocks */
+  --navy-2:#002a5e;
+  --brand:#0090f0;         /* shield highlight — links, primary actions */
+  --brand-dk:#0074c8;
+  --brand-lt:#e6f4fe;
+  --green:#00b03c;         /* "Scrub" — success, confirmation, the CTA accent */
+  --green-dk:#009432;
+
+  --good:#00b03c; --warn:#b26a00; --bad:#d93a2b;
   --radius:10px; --maxw:1120px;
-  --shadow:0 1px 2px rgba(15,23,32,.05), 0 8px 24px rgba(15,23,32,.06);
+  --shadow:0 1px 2px rgba(0,26,61,.06), 0 8px 24px rgba(0,26,61,.08);
 }
 
 * { box-sizing:border-box; }
@@ -30,10 +49,23 @@ header {
   backdrop-filter:saturate(180%) blur(8px); border-bottom:1px solid var(--line);
 }
 .nav { display:flex; align-items:center; gap:28px; height:64px; }
-.brand { display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.08rem;
-         color:var(--ink); letter-spacing:-.01em; }
+/* The header uses the MARK plus a text wordmark, not the full lockup.
+ *
+ * logo.png is a 480x304 lockup whose wordmark fills the lower half. Scaled to
+ * a 38px-tall header it renders the word "ServerScrub" at roughly six pixels
+ * and reads as a smudge -- which is what the first version of this did. The
+ * shield alone survives being small; the words are set in type instead, in the
+ * logo's own colours. The full lockup is kept for the footer, where it has the
+ * width to be legible. */
+.brand { display:inline-flex; align-items:center; gap:9px; }
 .brand:hover { text-decoration:none; }
-.brand svg { width:28px; height:28px; }
+.brand img { height:34px; width:34px; display:block; }
+.brand .wm { font-size:1.16rem; font-weight:700; letter-spacing:-.02em;
+             color:var(--navy); line-height:1; white-space:nowrap; }
+.brand .wm b { color:var(--green); font-weight:700; }
+
+footer .brand { display:block; }
+footer .brand img { height:auto; width:168px; }
 .nav nav { display:flex; gap:22px; margin-left:auto; align-items:center; }
 .nav nav a { color:var(--ink-2); font-size:.94rem; font-weight:500; }
 .nav nav a:hover { color:var(--brand); text-decoration:none; }
@@ -44,19 +76,20 @@ header {
   border-radius:8px; border:1px solid transparent; cursor:pointer; transition:.15s;
 }
 .btn:hover { text-decoration:none; transform:translateY(-1px); }
-.btn-primary { background:var(--brand); color:#fff; border-color:var(--brand); }
-.btn-primary:hover { background:var(--brand-dk); color:#fff; }
+.btn-primary { background:var(--green); color:#fff; border-color:var(--green); }
+.btn-primary:hover { background:var(--green-dk); color:#fff; }
 .btn-ghost { background:#fff; color:var(--ink); border-color:var(--line); }
 .btn-ghost:hover { border-color:var(--brand); color:var(--brand); }
 .btn-lg { font-size:1.02rem; padding:14px 30px; }
 
 /* ── Hero ─────────────────────────────────────────────────────────────── */
-.hero { padding:76px 0 64px; background:linear-gradient(180deg,var(--brand-lt) 0%,#fff 72%); }
+.hero { padding:76px 0 64px;
+        background:linear-gradient(170deg,var(--brand-lt) 0%, #f7fbff 48%, #fff 100%); }
 .hero-grid { display:grid; grid-template-columns:1.05fr .95fr; gap:52px; align-items:center; }
 .eyebrow {
   display:inline-block; font-size:.76rem; font-weight:700; letter-spacing:.09em;
-  text-transform:uppercase; color:var(--brand-dk); background:#fff;
-  border:1px solid #cfe2f3; padding:5px 12px; border-radius:999px; margin-bottom:18px;
+  text-transform:uppercase; color:var(--navy); background:#fff;
+  border:1px solid #c7e2f7; padding:5px 12px; border-radius:999px; margin-bottom:18px;
 }
 h1 { font-size:2.9rem; line-height:1.12; letter-spacing:-.025em; margin:0 0 18px; }
 .lede { font-size:1.14rem; color:var(--ink-2); margin:0 0 28px; max-width:34em; }
@@ -95,7 +128,7 @@ section.alt { background:var(--bg-2); border-block:1px solid var(--line); }
 
 /* ── Pricing ──────────────────────────────────────────────────────────── */
 .price-card {
-  max-width:460px; margin:0 auto; background:#fff; border:2px solid var(--brand);
+  max-width:460px; margin:0 auto; background:#fff; border:2px solid var(--green);
   border-radius:14px; padding:38px 34px; text-align:center; box-shadow:var(--shadow);
 }
 .price { font-size:3.5rem; font-weight:700; letter-spacing:-.03em; line-height:1; }
@@ -104,13 +137,13 @@ section.alt { background:var(--bg-2); border-block:1px solid var(--line); }
 .price-card li { padding:7px 0 7px 28px; position:relative; color:var(--ink-2); font-size:.95rem; }
 .price-card li::before {
   content:""; position:absolute; left:2px; top:14px; width:13px; height:7px;
-  border-left:2.5px solid var(--good); border-bottom:2.5px solid var(--good);
+  border-left:2.5px solid var(--green); border-bottom:2.5px solid var(--green);
   transform:rotate(-45deg);
 }
 
 /* ── Code blocks ──────────────────────────────────────────────────────── */
 pre {
-  background:#0f1720; color:#e6edf3; padding:18px 20px; border-radius:var(--radius);
+  background:var(--navy); color:#dbe9f7; padding:18px 20px; border-radius:var(--radius);
   overflow-x:auto; font:13.5px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   margin:0 0 18px;
 }
@@ -121,18 +154,19 @@ pre code { background:none; padding:0; }
 
 /* ── Stats strip ──────────────────────────────────────────────────────── */
 .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:20px; text-align:center; }
-.stat .n { font-size:2.1rem; font-weight:700; letter-spacing:-.02em; color:var(--brand); }
+.stat .n { font-size:2.1rem; font-weight:700; letter-spacing:-.02em; color:var(--navy); }
 .stat .l { font-size:.86rem; color:var(--dim); }
 
 /* ── Footer ───────────────────────────────────────────────────────────── */
-footer { background:var(--bg-2); border-top:1px solid var(--line); padding:46px 0 34px;
-         font-size:.9rem; color:var(--dim); }
+footer { background:var(--navy); border-top:0; padding:46px 0 34px;
+         font-size:.9rem; color:#9db4cd; }
 .foot-grid { display:flex; gap:40px; flex-wrap:wrap; justify-content:space-between;
              margin-bottom:28px; }
-footer h4 { color:var(--ink); font-size:.86rem; text-transform:uppercase;
+footer h4 { color:#fff; font-size:.86rem; text-transform:uppercase;
             letter-spacing:.06em; margin:0 0 12px; }
-footer a { color:var(--ink-2); display:block; padding:3px 0; }
-.foot-bot { border-top:1px solid var(--line); padding-top:20px; }
+footer a { color:#c3d6e8; display:block; padding:3px 0; }
+footer a:hover { color:#fff; }
+.foot-bot { border-top:1px solid rgba(255,255,255,.14); padding-top:20px; color:#8aa4bf; }
 
 /* ── Responsive ───────────────────────────────────────────────────────── */
 @media (max-width:900px) {

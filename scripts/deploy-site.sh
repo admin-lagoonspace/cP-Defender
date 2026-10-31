@@ -37,7 +37,7 @@ REPO_RAW="https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/w
 
 # ── Where the site files come from ────────────────────────────────────────────
 PAGES=(index.html features.html pricing.html install.html)
-ASSETS=(assets/css/site.css assets/img/logo.svg assets/img/hero.svg)
+ASSETS=(assets/css/site.css assets/img/hero.svg assets/img/logo.png \n        assets/img/icon-180.png assets/img/favicon.png assets/img/mark-64.png)
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

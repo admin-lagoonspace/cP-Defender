@@ -113,3 +113,74 @@ $whm = @getimagesize($repo . '/whm/serverscrub.png');
 t_ok(($whm[0] ?? 0) > 48,
      'and is still the large version — WHM serves it straight from '
    . 'addon_plugins, where size does not matter');
+
+// ── Branding comes from the logo, not from taste ────────────────────────────
+//
+// The first version of both the plugin header and the marketing site used a
+// hand-drawn SVG shield and #1668b3 / #1976b6 / #1d7a46 — colours that appear
+// nowhere in the product's artwork. Counting pixels by hue family in
+// frontend/images/logo.png gives the real palette:
+//
+//   green  10,948 px  #00b038   the word "Scrub" and the swoosh
+//   navy   21,096 px  #000820   the shield body
+//   blue               #0090f0  the shield highlight
+//
+// A brand colour is not a judgement call when the logo is sitting there to be
+// measured.
+$plugin = (string) file_get_contents($repo . '/cpanel/serverscrub/index.live.php');
+
+t_contains($plugin, '--green:#00b03c', 'the plugin page uses the logo green');
+t_contains($plugin, '--navy:#001a3d', 'and the logo navy');
+t_contains($plugin, '--blue:#0090f0', 'and the logo blue');
+
+// Strip comments before judging: the comment explaining the change names the
+// colours it replaced, and a plain search would flag that explanation as the
+// thing it warns about.
+$pcode = (string) preg_replace(['~/\*.*?\*/~s', '~//[^\n]*~'], '', $plugin);
+foreach (['#1668b3', '#1976b6', '#1d7a46'] as $invented) {
+    t_ok(strpos($pcode, $invented) === false,
+         'no invented colour ' . $invented . ' remains in the plugin page');
+}
+
+t_contains($plugin, '<img src="serverscrub.png"',
+     'THE REAL MARK: the header uses the icon the installer already places '
+   . 'beside the page, not a hand-drawn lookalike');
+t_ok(strpos($pcode, 'M32 3 56 12v20c0 14-10 25-24 29') === false,
+     'and the hand-drawn shield path is gone');
+
+// ── The marketing site, same rule ───────────────────────────────────────────
+$css = (string) file_get_contents($repo . '/website/assets/css/site.css');
+$ccode = (string) preg_replace(['~/\*.*?\*/~s'], '', $css);
+t_contains($css, '--green:#00b03c', 'the site uses the logo green');
+t_contains($css, '--navy:#001a3d', 'and the logo navy');
+t_ok(strpos($ccode, '#1668b3') === false, 'and none of the invented blue');
+
+t_ok(is_file($repo . '/website/assets/img/logo.png'),
+     'the real logo ships with the site');
+t_ok(!is_file($repo . '/website/assets/img/logo.svg'),
+     'and the hand-drawn one is gone');
+
+// The header uses the MARK, not the full lockup.
+//
+// logo.png is a 480x304 lockup whose wordmark fills the lower half; scaled to
+// a 38px header it rendered "ServerScrub" at about six pixels and read as a
+// smudge. The shield survives being small; the words are set in type.
+$idx = (string) file_get_contents($repo . '/website/index.html');
+t_contains($idx, 'src="/assets/img/mark-64.png"',
+     'THE LEGIBILITY FIX: the header uses the shield mark');
+t_contains($idx, '<span class="wm">Server<b>Scrub</b></span>',
+     'with the wordmark set in type, in the logo\'s own two colours');
+t_contains($idx, 'footer', 'and the full lockup is kept for the footer');
+
+$mark = @getimagesize($repo . '/website/assets/img/mark-64.png');
+t_eq(64, $mark[0] ?? 0, 'the mark is square and small enough to stay sharp');
+
+// Everything the deploy script uploads has to exist.
+$dep = (string) file_get_contents($repo . '/scripts/deploy-site.sh');
+foreach (['logo.png', 'icon-180.png', 'favicon.png', 'mark-64.png', 'hero.svg'] as $a) {
+    t_contains($dep, $a, 'deploy-site.sh publishes ' . $a);
+    t_ok(is_file($repo . '/website/assets/img/' . $a),
+         'and ' . $a . ' exists to be published');
+}
+t_ok(strpos($dep, 'logo.svg') === false,
+     'and no longer tries to publish a file that was deleted');

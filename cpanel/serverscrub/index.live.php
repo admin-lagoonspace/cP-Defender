@@ -141,8 +141,13 @@ ob_start();
     /* cPanel's palette, not ours. These values are taken from Jupiter's own
      * panels and buttons so the page reads as part of the control panel
      * rather than as something embedded in it. */
+    /* Sampled from the product logo (frontend/images/logo.png), not chosen:
+     * navy #001a3d is the shield body, #0090f0 its highlight, and #00b03c the
+     * green of the word "Scrub". An earlier version used #1976b6 and #1d7a46,
+     * which appear nowhere in the artwork. */
     --dim:#687079; --line:#dfe3e8; --chip:#f6f7f9;
-    --blue:#1976b6; --red:#c0392b; --amber:#b9770e; --green:#1d7a46;
+    --navy:#001a3d;
+    --blue:#0090f0; --red:#d93a2b; --amber:#b9770e; --green:#00b03c;
     background:transparent; color:inherit;
     /* No font stack. cPanel sets one on its own body and inheriting it is the
      * single biggest thing that makes an embedded page look native. */
@@ -195,9 +200,9 @@ ob_start();
     padding:0 0 14px; border-bottom:2px solid var(--line); margin-bottom:18px;
   }
   .sscrub .ss-brand { display:flex; align-items:center; gap:9px;
-                      font-size:1.22rem; letter-spacing:-.02em; color:var(--blue); }
-  .sscrub .ss-brand svg { width:30px; height:30px; flex:none; }
-  .sscrub .ss-brand strong { font-weight:700; }
+                      font-size:1.22rem; letter-spacing:-.02em; color:var(--navy); }
+  .sscrub .ss-brand img { width:30px; height:30px; flex:none; display:block; }
+  .sscrub .ss-brand strong { font-weight:700; color:var(--green); }
 
   .sscrub .ss-tabs { display:flex; align-items:center; gap:4px;
                      margin-left:auto; flex-wrap:wrap; }
@@ -209,7 +214,7 @@ ob_start();
   }
   .sscrub .ss-tabs > a:hover, .sscrub .ss-drop > a:hover { color:var(--blue); }
   .sscrub .ss-tabs > a.on, .sscrub .ss-drop.on > a {
-    color:var(--blue); border-color:var(--blue);
+    color:var(--navy); border-color:var(--navy);
   }
 
   /* Hover/focus dropdown, no script. focus-within keeps it reachable by
@@ -285,13 +290,10 @@ ob_start();
 
 <div class="ss-head">
   <div class="ss-brand">
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M32 3 56 12v20c0 14-10 25-24 29C18 57 8 46 8 32V12z" fill="#1668b3"/>
-      <rect x="19" y="22" width="26" height="7" rx="2.2" fill="#fff" opacity=".95"/>
-      <rect x="19" y="32" width="26" height="7" rx="2.2" fill="#fff" opacity=".75"/>
-      <path d="M28.5 44.5l4.2 4.2 9-9.4" fill="none" stroke="#7fe3b0" stroke-width="4"
-            stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
+    <!-- The real mark, which the installer already places beside this page.
+         It was a hand-drawn SVG shield that resembled the product's logo
+         without being it. -->
+    <img src="serverscrub.png" alt="" width="48" height="48">
     <span>Server<strong>Scrub</strong></span>
   </div>
 
