@@ -546,6 +546,7 @@ chmod -R 700 "$INSTALL_DIR/quarantine"
 chmod -R 700 "$INSTALL_DIR/logs"
 chmod +x "$INSTALL_DIR/backend/cron/scan.php"
 chmod +x "$INSTALL_DIR/backend/cron/scheduler.php" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/backend/cron/user-scans.php" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/backend/daemon/monitor.py"
 [[ -f "$INSTALL_DIR/backend/cli/serverscrub.php" ]] && chmod +x "$INSTALL_DIR/backend/cli/serverscrub.php"
 ok "Permissions set"
@@ -863,6 +864,20 @@ MAILTO=""
 # 15 min; exits silently when nothing is due. Schedules are changed in the UI,
 # NOT by editing this file.
 */15 * * * * root ${SG_PHP} ${INSTALL_DIR}/backend/cron/scheduler.php >> ${LOG_DIR}/cron.log 2>&1
+#
+# Customer scan requests, every minute.
+#
+# A cPanel user presses "Scan my account" and the page leaves a request file in
+# their own home; it cannot start a scan itself. This notices. It used to be
+# the scheduler's job, which meant pressing the button and watching nothing
+# happen for up to fifteen minutes -- long enough to press it again and then
+# open a ticket.
+#
+# Cheap by design: a glob and one stat per account, and on the common tick
+# there is nothing to do. It does not scan -- it asks Scanner::startScan(),
+# which still enforces scan_max_concurrent and refuses while a backup is
+# running, so a minute interval cannot pile work onto a busy server.
+* * * * * root ${SG_PHP} ${INSTALL_DIR}/backend/cron/user-scans.php >> ${LOG_DIR}/cron.log 2>&1
 #
 # There is deliberately NO separate update-check entry here any more. There used
 # to be one at 08:00 that only cached a notice, while the scheduler's

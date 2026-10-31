@@ -37,24 +37,32 @@ class UserScanRequest
     /** A request file should be a few dozen bytes. */
     private const MAX_BYTES = 4096;
 
-    /** Defaults; both are operator-settable. */
-    private const DEFAULT_COOLDOWN_HOURS = 6;
-    private const DEFAULT_MAX_PER_RUN    = 1;
+    /** Defaults; both operator-settable. Two scans per twelve hours. */
+    private const DEFAULT_WINDOW_HOURS = 12;
+    private const DEFAULT_PER_WINDOW   = 2;
 
-    public static function cooldownSeconds(): int
+    /**
+     * The length of the rolling window.
+     *
+     * This replaced a single cooldown between scans. A cooldown forces an even
+     * spacing the customer did not ask for: somebody who scans, finds
+     * something, cleans it and wants to confirm is made to wait the full gap
+     * for a scan that costs the same as the one they just ran. A window of two
+     * lets them do exactly that and still bounds the cost per account.
+     */
+    public static function windowSeconds(): int
     {
-        $h = (int) Database::setting('user_scan_cooldown_hours',
-                                     (string) self::DEFAULT_COOLDOWN_HOURS);
-        // One minute floor: zero would make the cap the only limit, and a
-        // customer holding the button down would then start a scan every tick.
-        return max(60, min(7 * 86400, $h * 3600));
+        $h = (int) Database::setting('user_scan_window_hours',
+                                     (string) self::DEFAULT_WINDOW_HOURS);
+        return max(600, min(7 * 86400, $h * 3600));
     }
 
-    public static function maxPerRun(): int
+    /** How many scans one account may start inside that window. */
+    public static function perWindow(): int
     {
-        $n = (int) Database::setting('user_scan_max_per_run',
-                                     (string) self::DEFAULT_MAX_PER_RUN);
-        return max(1, min(10, $n));
+        $n = (int) Database::setting('user_scan_per_window',
+                                     (string) self::DEFAULT_PER_WINDOW);
+        return max(1, min(24, $n));
     }
 
     /** Is the feature switched on at all? */
@@ -112,16 +120,69 @@ class UserScanRequest
         if ($path !== null && !is_link($path) && is_file($path)) { @unlink($path); }
     }
 
+    /**
+     * The start times still inside the window, oldest first.
+     *
+     * Kept as a list rather than a count so the page can say WHEN the next
+     * scan becomes available. A counter would have to be reset by something,
+     * and whatever did the resetting would be another thing to get wrong.
+     *
+     * @return int[]
+     */
+    public static function recentStarts(string $user, ?int $now = null): array
+    {
+        $now = $now ?? time();
+        $raw = (string) Database::setting('user_scan_starts_' . $user, '');
+        $all = $raw === '' ? [] : json_decode($raw, true);
+        if (!is_array($all)) { $all = []; }
+
+        $cut  = $now - self::windowSeconds();
+        $keep = [];
+        foreach ($all as $t) {
+            $t = (int) $t;
+            // A timestamp in the future would never expire, so it would lock
+            // the account out permanently. Clock changes happen.
+            if ($t > $cut && $t <= $now + 300) { $keep[] = $t; }
+        }
+        sort($keep);
+        return $keep;
+    }
+
+    /** Record that a scan started now. */
+    private static function recordStart(string $user): void
+    {
+        $starts   = self::recentStarts($user);
+        $starts[] = time();
+        // Never store more than the window allows plus a little slack.
+        $starts = array_slice($starts, -max(2, self::perWindow() * 2));
+        Database::setSetting('user_scan_starts_' . $user, (string) json_encode($starts));
+    }
+
     /** When this account last had a requested scan started. */
     public static function lastRunAt(string $user): int
     {
-        return (int) Database::setting('user_scan_last_' . $user, '0');
+        $s = self::recentStarts($user);
+        return $s === [] ? 0 : (int) end($s);
     }
 
-    public static function coolingDown(string $user, ?int $now = null): bool
+    /** Has this account used up its allowance for the window? */
+    public static function atLimit(string $user, ?int $now = null): bool
     {
-        $now = $now ?? time();
-        return ($now - self::lastRunAt($user)) < self::cooldownSeconds();
+        return count(self::recentStarts($user, $now)) >= self::perWindow();
+    }
+
+    /**
+     * Seconds until another scan is allowed; 0 when one is allowed now.
+     *
+     * The oldest start in the window is the one whose expiry frees a slot.
+     */
+    public static function retryIn(string $user, ?int $now = null): int
+    {
+        $now    = $now ?? time();
+        $starts = self::recentStarts($user, $now);
+        if (count($starts) < self::perWindow()) { return 0; }
+        $oldest = (int) $starts[0];
+        return max(0, ($oldest + self::windowSeconds()) - $now);
     }
 
     /**
@@ -139,10 +200,6 @@ class UserScanRequest
         $out = ['started' => [], 'skipped' => [], 'errors' => []];
         if (!self::enabled()) { return $out; }
 
-        // When the privileged side last looked at requests. The page cannot
-        // know this -- it has no access to cron, the database or the
-        // scheduler -- and without it the only honest thing it can say is
-        // "queued", which reads like nothing is happening.
         Database::setSetting('user_scan_last_check', (string) time());
 
         $pending = [];
@@ -152,34 +209,26 @@ class UserScanRequest
         }
         if ($pending === []) { return $out; }
 
+        // Oldest first. There is no cap any more, but Scanner::startScan()
+        // still refuses once scan_max_concurrent is reached, so on a busy
+        // server some of these will not start this time round -- and the one
+        // that has waited longest should be the one that gets the slot.
         usort($pending, static function ($a, $b) {
             return $a['requested_at'] <=> $b['requested_at'];
         });
 
-        $cap      = self::maxPerRun();
-        $started  = 0;
-        $position = 1;   // how many are ahead, for the ones that must wait
-
         foreach ($pending as $req) {
             $user = $req['user'];
 
-            if (self::coolingDown($user)) {
-                $wait = self::cooldownSeconds() - (time() - self::lastRunAt($user));
-                $out['skipped'][] = ['user' => $user, 'reason' => 'cooling down',
-                                     'retry_in' => max(0, $wait)];
-                self::note($user, 'cooldown', 0);
-                // The request is KEPT. The customer asked, the answer is "not
-                // yet", and discarding it would mean their click did nothing
-                // and they would click again.
+            // The allowance, and the only thing that makes a customer wait by
+            // our choice rather than the server's.
+            if (self::atLimit($user)) {
+                $out['skipped'][] = ['user' => $user, 'reason' => 'at limit',
+                                     'retry_in' => self::retryIn($user)];
+                self::note($user, 'at_limit', 0);
+                // Kept: the customer asked, the answer is "not yet", and
+                // discarding it would mean their click did nothing.
                 continue;
-            }
-
-            if ($started >= $cap) {
-                $out['skipped'][] = ['user' => $user, 'reason' => 'queued',
-                                     'position' => $position];
-                self::note($user, 'waiting_turn', $position);
-                $position++;
-                continue;   // kept, picked up on the next tick
             }
 
             $home = UserReport::homeDir($user);
@@ -193,15 +242,15 @@ class UserScanRequest
                 // The path comes from passwd, never from the request file.
                 $scanner = new Scanner();
                 $jobId   = $scanner->startScan($home, 'quick');
-                Database::setSetting('user_scan_last_' . $user, (string) time());
+                self::recordStart($user);
                 self::note($user, 'started', 0);
                 self::clear($user);
-                $started++;
                 $out['started'][] = ['user' => $user, 'job' => $jobId];
                 Logger::info("User scan: started job {$jobId} for {$user} on {$home}");
             } catch (Throwable $e) {
-                // startScan() refuses while a backup is running, which is a
-                // reason to wait rather than to lose the request.
+                // startScan() refuses while a backup is running, and once
+                // scan_max_concurrent scans are already going. Both are
+                // reasons to wait rather than to lose the request.
                 $out['errors'][] = ['user' => $user, 'error' => $e->getMessage()];
                 self::note($user, 'blocked', 0, $e->getMessage());
                 Logger::warn("User scan: could not start for {$user} - " . $e->getMessage());
@@ -215,11 +264,11 @@ class UserScanRequest
      * Record why this account's request is in the state it is.
      *
      * Written here, as root, because every reason lives on this side: the
-     * cap, the cooldown, the backup that refused the scan. The page has none
-     * of it, and a page that can only say "queued" leaves the customer
-     * deciding between "it is working" and "it is broken" with no evidence
-     * either way -- which is how a working feature generates a support
-     * ticket.
+     * allowance, and the backup or concurrency limit that refused the scan.
+     * The page has none of it, and a page that can only say "queued" leaves
+     * the customer deciding between "it is working" and "it is broken" with
+     * no evidence either way -- which is how a working feature generates a
+     * support ticket.
      */
     private static function note(string $user, string $state, int $position,
                                  string $detail = ''): void
@@ -248,19 +297,19 @@ class UserScanRequest
      */
     public static function statusFor(string $user): array
     {
-        $now  = time();
-        $last = self::lastRunAt($user);
+        $starts = self::recentStarts($user);
         return [
-            'enabled'          => self::enabled(),
-            'pending'          => self::read($user) !== null,
-            'cooldown_seconds' => self::cooldownSeconds(),
-            'last_run_at'      => $last,
-            'retry_in'         => max(0, self::cooldownSeconds() - ($now - $last)),
-            // Everything below exists so the page can explain a wait instead
-            // of just announcing one.
-            'last_check_at'    => (int) Database::setting('user_scan_last_check', '0'),
-            'per_check'        => self::maxPerRun(),
-            'note'             => self::noteFor($user),
+            'enabled'       => self::enabled(),
+            'pending'       => self::read($user) !== null,
+            'last_run_at'   => self::lastRunAt($user),
+            'retry_in'      => self::retryIn($user),
+            // The allowance, so the page can say "1 of 2 used" rather than
+            // simply refusing.
+            'window_hours'  => (int) round(self::windowSeconds() / 3600),
+            'per_window'    => self::perWindow(),
+            'used'          => count($starts),
+            'last_check_at' => (int) Database::setting('user_scan_last_check', '0'),
+            'note'          => self::noteFor($user),
         ];
     }
 }

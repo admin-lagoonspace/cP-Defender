@@ -31,48 +31,28 @@ t_ok(UserScanRequest::requestPath('') === null, 'nor does an empty username');
 
 // ── Limits: enforced as root, not in the page ───────────────────────────────
 
-Database::setSetting('user_scan_cooldown_hours', '6');
-t_eq(6 * 3600, UserScanRequest::cooldownSeconds(), 'the cooldown is read from settings');
-
-Database::setSetting('user_scan_cooldown_hours', '0');
-t_eq(60, UserScanRequest::cooldownSeconds(),
-     'THE OPEN DOOR: a zero cooldown clamps to a minute. Zero would leave the '
-   . 'per-run cap as the only limit, and a customer holding the button down '
-   . 'would start a scan every single tick');
-
-Database::setSetting('user_scan_cooldown_hours', '99999');
-t_eq(7 * 86400, UserScanRequest::cooldownSeconds(), 'and an absurd one clamps down');
-Database::setSetting('user_scan_cooldown_hours', '6');
-
-Database::setSetting('user_scan_max_per_run', '0');
-t_eq(1, UserScanRequest::maxPerRun(), 'the per-tick cap is at least one');
-Database::setSetting('user_scan_max_per_run', '500');
-t_eq(10, UserScanRequest::maxPerRun(),
-     'and at most ten — this runs on an 8-core server whose recurring problem '
-   . 'is load, and ClamAV is not cheap');
-Database::setSetting('user_scan_max_per_run', '1');
-
-// ── The cooldown is per account ─────────────────────────────────────────────
-
-Database::setSetting('user_scan_last_alice', (string) time());
-t_ok(UserScanRequest::coolingDown('alice'), 'an account that just scanned is cooling down');
-t_ok(!UserScanRequest::coolingDown('bob'),
-     'while another account is unaffected — one customer cannot consume '
-   . 'another customer\'s turn');
-
-Database::setSetting('user_scan_last_alice', (string) (time() - 7 * 3600));
-t_ok(!UserScanRequest::coolingDown('alice'), 'and it lapses once the window passes');
+// The allowance moved from a single cooldown plus a per-tick cap to a rolling
+// window of two scans per twelve hours. It is covered in full by
+// test_user_scan_window.php; this file keeps to the request file, the
+// privilege boundary and the page.
+t_eq(2, UserScanRequest::perWindow(), 'two scans per window');
+t_eq(12 * 3600, UserScanRequest::windowSeconds(), 'and the window is twelve hours');
+t_ok(!UserScanRequest::atLimit('alice'), 'a fresh account is not at its limit');
 
 // ── Status, which is what the page renders ──────────────────────────────────
 
 $st = UserScanRequest::statusFor('alice');
 t_ok($st['enabled'], 'the feature reports as enabled by default');
-t_eq(0, $st['retry_in'], 'with no wait once the cooldown has lapsed');
+t_eq(0, $st['retry_in'], 'with no wait while the allowance is unspent');
+t_eq(2, $st['per_window'], 'and the allowance is reported');
 
-Database::setSetting('user_scan_last_alice', (string) time());
+$n = time();
+Database::setSetting('user_scan_starts_alice', json_encode([$n - 3600, $n - 60]));
 $st = UserScanRequest::statusFor('alice');
-t_ok($st['retry_in'] > 0, 'and a wait while it has not');
-t_ok($st['retry_in'] <= 6 * 3600, 'that never exceeds the window');
+t_ok($st['retry_in'] > 0, 'a spent allowance reports a wait');
+t_ok($st['retry_in'] <= 12 * 3600, 'that never exceeds the window');
+t_eq(2, $st['used'], 'and says how much has been used');
+Database::query("DELETE FROM settings WHERE key = 'user_scan_starts_alice'");
 
 Database::setSetting('user_scan_enabled', '0');
 t_ok(!UserScanRequest::enabled(), 'the operator can switch the whole feature off');
@@ -142,8 +122,9 @@ t_contains($proc, 'usort(',
    . 'bites');
 
 // A declined request is kept, not thrown away.
-t_contains($proc, "'reason' => 'cooling down'", 'a cooling-down request is reported');
-$coolAt  = strpos($proc, "'cooling down'");
+t_contains($proc, "'reason' => 'at limit'",
+     'a request from an account that has spent its allowance is reported');
+$coolAt  = strpos($proc, "'at limit'");
 $clearAt = strpos($proc, 'self::clear($user);');
 t_ok($coolAt !== false && ($clearAt === false || $clearAt > $coolAt),
      'and is NOT cleared, or the customer\'s click would vanish silently and '
@@ -172,19 +153,20 @@ t_ok(UserScanRequest::noteFor('nobody') === null, 'no note when nothing has happ
 $src2 = (string) file_get_contents($repo . '/backend/lib/UserScanRequest.php');
 $proc2 = t_fn_body($src2, 'process', 'php');
 
-t_contains($proc2, "self::note(\$user, 'waiting_turn', \$position)",
-     'an account waiting for a slot records its position, so the page can say '
-   . 'how many are ahead rather than just "waiting"');
+t_contains($proc2, "self::note(\$user, 'at_limit', 0)",
+     'an account that has spent its allowance records that, so the page can '
+   . 'say so rather than just "waiting"');
 t_contains($proc2, "self::note(\$user, 'blocked', 0, \$e->getMessage())",
      'THE REASON THAT MATTERED MOST: a refused start records WHY — "a backup '
    . 'is running" is something a customer can understand, an unexplained wait '
    . 'is not');
-t_contains($proc2, "self::note(\$user, 'cooldown', 0)", 'a cooldown hold is recorded');
+t_ok(strpos($proc2, 'waiting_turn') === false,
+     'and nothing records a queue position any more — there is no queue');
 t_contains($proc2, "Database::setSetting('user_scan_last_check'",
      'and the time of the last check, which the page cannot know on its own');
 
 $st2 = UserScanRequest::statusFor('alice');
-foreach (['last_check_at', 'per_check', 'note'] as $k) {
+foreach (['last_check_at', 'per_window', 'used', 'note'] as $k) {
     t_ok(array_key_exists($k, $st2), 'status carries ' . $k);
 }
 
@@ -199,11 +181,20 @@ t_contains($page2, "'/.serverscrub/scan-request.json'",
    . 'file rather than the report, which is rewritten only every quarter '
    . 'hour — otherwise somebody who clicks and reloads is told nothing was '
    . 'requested');
-t_contains($page2, 'ahead of you in the queue', 'it says how many are ahead');
+t_contains($page2, 'It usually starts within a minute',
+     'it tells the customer how long, now that a dedicated cron picks requests '
+   . 'up every minute rather than the 15-minute scheduler');
+t_ok(strpos($page2, 'ahead of you in the queue') === false,
+     'and says nothing about a queue, because there no longer is one');
 t_contains($page2, 'could not start it yet', 'and surfaces a blocking reason');
 t_contains($page2, 'you do not need to ask again',
      'telling the customer not to retry, which is what they would otherwise do');
-t_contains($page2, 'last checked', 'and when the server last looked');
+t_contains($page2, 'has not checked for scan requests',
+     'THE SILENT STALL: if the minute-by-minute pickup is not running, '
+   . 'the promise of a start within a minute is a lie — so the page says so, '
+   . 'and tells the customer it is worth raising with their host');
+t_contains($page2, '$checkAge > 300',
+     'warned only when the check is genuinely stale, not on every page view');
 t_contains($page2, 'Nothing is wrong',
      'with a plain fallback when there is no recorded reason, because silence '
    . 'reads as failure');

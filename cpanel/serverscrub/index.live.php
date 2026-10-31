@@ -38,7 +38,7 @@ if ($home === '' && function_exists('posix_getpwnam') && $user !== '') {
  * side reads it on its next tick, decides whether to honour it, and starts the
  * scan itself -- this page cannot start one, and must not be able to.
  *
- * The cooldown is displayed here but enforced there. A customer who edits this
+ * The allowance is displayed here but enforced there. A customer who edits this
  * file by hand gains nothing except a request that is declined slightly later.
  *
  * No CSRF token of our own: cpsrvd rejects a request that does not carry the
@@ -337,6 +337,10 @@ ob_start();
   $srOn     = !empty($sr['enabled']);
   $srWait   = (int)($sr['retry_in'] ?? 0);
   $srQueued = $requested || !empty($sr['pending']);
+  $srPer    = max(1, (int)($sr['per_window'] ?? 2));
+  $srHours  = max(1, (int)($sr['window_hours'] ?? 12));
+  $srUsed   = min($srPer, (int)($sr['used'] ?? 0));
+  $srLeft   = max(0, $srPer - $srUsed);
   function hms(int $s): string {
       if ($s <= 0)    { return 'now'; }
       if ($s < 3600)  { return 'in ' . max(1, intdiv($s, 60)) . ' minute(s)'; }
@@ -365,13 +369,13 @@ ob_start();
   if ($reqAt > 0 && (int) ($note['at'] ?? 0) < $reqAt) { $noteState = ''; }
 
   $lastCheck = (int) ($sr['last_check_at'] ?? 0);
-  $perCheck  = max(1, (int) ($sr['per_check'] ?? 1));
 ?>
 
 <?php
 // ── The scan panel, shown on Home and on Virus scanner ──────────────────────
 $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
-                                   $noteState, $note, $perCheck, $lastCheck) {
+                                   $noteState, $note, $lastCheck,
+                                   $srPer, $srHours, $srUsed, $srLeft) {
     if (!$srOn) { return; }
 ?>
   <div class="card">
@@ -389,34 +393,37 @@ $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
           <?php if ($noteState === 'blocked' && !empty($note['detail'])): ?>
             The server could not start it yet: <?= e(rtrim($note['detail'], '.')) ?>.
             It will start automatically once that clears — you do not need to ask again.
-          <?php elseif ($noteState === 'waiting_turn'): ?>
-            <?php $pos = (int) ($note['position'] ?? 0); ?>
-            <?= $pos > 1
-                  ? 'There ' . ($pos - 1 === 1 ? 'is 1 account' : 'are ' . ($pos - 1) . ' accounts')
-                    . ' ahead of you in the queue.'
-                  : 'Yours is next in the queue.' ?>
-            The server starts <?= (int) $perCheck ?> scan<?= $perCheck === 1 ? '' : 's' ?>
-            each time it checks, so that other customers' sites stay fast while scans run.
-          <?php elseif ($noteState === 'cooldown'): ?>
-            This account has been scanned recently, so this request is held until the
-            next one is allowed.
+          <?php elseif ($noteState === 'at_limit'): ?>
+            This account has already used its <?= (int) $srPer ?> scans for the
+            last <?= (int) $srHours ?> hours, so this request is held until the next
+            one is allowed.
           <?php else: ?>
-            Nothing is wrong — the server picks up scan requests on a schedule rather
-            than the instant you click, so there is a short wait before it begins.
+            It usually starts within a minute.
           <?php endif; ?>
 
-          <?php if ($lastCheck > 0): ?>
-            The server last checked for new requests <?= e(ago($lastCheck)) ?>,
-            and checks regularly.
+          <?php
+            // If the pickup is not running, "within a minute" is a lie and the
+            // customer waits with no clue why. It runs every minute, so
+            // anything past five is a signal rather than noise -- and the
+            // customer can act on it, by telling their host.
+            $checkAge = $lastCheck > 0 ? (time() - $lastCheck) : -1;
+          ?>
+          <?php if ($lastCheck <= 0 || $checkAge > 300): ?>
+            <br><strong>Note:</strong> the server has not checked for scan requests
+            <?= $lastCheck > 0 ? 'since ' . e(ago($lastCheck)) : 'at all yet' ?>.
+            Your request is saved, but it may not start until your hosting provider
+            looks at this — it is worth telling them.
           <?php endif; ?>
 
-          Your scan then runs in the background. You can close this page; the results
+          Your scan runs in the background. You can close this page; the results
           appear here when it has finished.
         </div>
       <?php elseif ($srWait > 0): ?>
         <button class="btn" disabled>Scan my account</button>
         <div class="foot" style="margin-top:7px">
-          You can request another scan <?= e(hms($srWait)) ?>.
+          You have used both of your <?= (int) $srPer ?> scans for the last
+          <?= (int) $srHours ?> hours. The next one is available
+          <?= e(hms($srWait)) ?>.
           Last scan of your account: <?= e(ago((int)($sr['last_run_at'] ?? 0))) ?>.
         </div>
       <?php else: ?>
@@ -424,8 +431,14 @@ $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
           <button class="btn" type="submit" name="scan_now" value="1">Scan my account</button>
         </form>
         <div class="foot" style="margin-top:7px">
-          Checks the files in your home directory for malware. It runs in the
-          background; you do not need to keep this page open.
+          Checks the files in your home directory for malware. It starts within a
+          minute and runs in the background; you do not need to keep this page open.
+          <?php if ($srUsed > 0): ?>
+            You have <?= (int) $srLeft ?> of <?= (int) $srPer ?> scans left for the
+            next <?= (int) $srHours ?> hours.
+          <?php else: ?>
+            You can run <?= (int) $srPer ?> scans every <?= (int) $srHours ?> hours.
+          <?php endif; ?>
         </div>
       <?php endif; ?>
     </div>
