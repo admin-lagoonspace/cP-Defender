@@ -82,7 +82,7 @@ Database::setSetting('user_scan_enabled', '1');
 
 // ── The page ────────────────────────────────────────────────────────────────
 
-$page = (string) file_get_contents($repo . '/cpanel/serverscrub/index.php');
+$page = (string) file_get_contents($repo . '/cpanel/serverscrub/index.live.php');
 
 t_contains($page, "name=\"scan_now\"", 'the page offers a scan button');
 t_contains($page, "REQUEST_METHOD'] ?? 'GET') === 'POST'",

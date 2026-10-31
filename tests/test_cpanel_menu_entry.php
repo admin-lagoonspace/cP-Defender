@@ -40,7 +40,7 @@ foreach (['description', 'file', 'group', 'height', 'imgtype', 'itemdesc',
 
 t_contains($line, 'group=>security',
      'and lands in the Security group, which is where it was asked for');
-t_contains($line, 'url=>serverscrub/index.php',
+t_contains($line, 'url=>serverscrub/index.live.php',
      'THE OTHER HALF: the url is RELATIVE to the theme directory. An absolute '
    . '/frontend/<theme>/... path does not resolve');
 t_ok(strpos($line, 'url=>/frontend') === false, 'never an absolute url');
@@ -64,7 +64,7 @@ t_contains($step8, 'restartsrv_cpsrvd', 'it is restarted');
 t_contains($step8, 'warn ', 'and says so when the script is missing, rather than silently not restarting');
 
 // ── The page it points at has to exist in the package ───────────────────────
-t_ok(is_file($repo . '/cpanel/serverscrub/index.php'),
+t_ok(is_file($repo . '/cpanel/serverscrub/index.live.php'),
      'the page the entry points at is in the repo');
 
 $mk = (string) file_get_contents($repo . '/scripts/make-release.sh');

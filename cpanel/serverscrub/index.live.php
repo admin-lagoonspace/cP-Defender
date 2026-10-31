@@ -104,58 +104,81 @@ function ago(int $ts): string {
 
 $s = $report['summary'] ?? [];
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerScrub</title>
+<?php
+/**
+ * Rendered inside cPanel's own frame, not as a page of its own.
+ *
+ * This used to emit a complete HTML document, so clicking the menu entry
+ * replaced cPanel with a bare page -- no left-hand menu, no way back except
+ * the browser's Back button. A plugin that throws the customer out of the
+ * control panel does not look like part of it.
+ *
+ * cPanel's LiveAPI supplies the surrounding chrome: $cpanel->header() emits
+ * everything up to the content area and ->footer() closes it. The page body
+ * therefore carries no doctype, <html>, <head> or <body> of its own -- it is
+ * buffered here and handed to whichever wrapper applies.
+ *
+ * The standalone wrapper is kept as a fallback for when the LiveAPI class is
+ * not loadable (a theme that does not provide it, or this file opened
+ * directly during development). Rendering nothing at all because the chrome
+ * is unavailable would be worse than rendering without it.
+ */
+ob_start();
+?>
 <style>
-  :root {
-    --bg:#fff; --fg:#33383c; --dim:#7d8792; --line:#e3e7ea;
+  /* Everything is scoped to .sscrub.
+   *
+   * This block used to define its variables on :root and style `body` and `*`
+   * directly, which was fine while the page was a document of its own. Inside
+   * cPanel's frame those selectors reach cPanel's markup: --bg, --fg and
+   * --line are generic enough to collide with the theme's own, and `*` would
+   * reset box-sizing for the whole control panel.
+   *
+   * The container takes no background and inherits its colour, so the panel
+   * sits on whatever cPanel is using rather than painting a rectangle of a
+   * different shade in the middle of it. */
+  .sscrub {
+    --dim:#7d8792; --line:#e3e7ea;
     --blue:#1178b3; --red:#c0392b; --amber:#c87f0a; --green:#1d7a46;
     --chip:#f5f7f8;
+    background:transparent; color:inherit;
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg:#1b1f23; --fg:#e6e9ec; --dim:#98a2ad; --line:#2d333a;
-      --chip:#22272c;
-    }
+    .sscrub { --dim:#98a2ad; --line:#2d333a; --chip:#22272c; }
   }
-  * { box-sizing:border-box; }
-  body { margin:0; padding:16px; background:var(--bg); color:var(--fg);
-         font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
-  h1 { font-size:1.35rem; margin:0 0 2px; font-weight:600; }
-  .sub { color:var(--dim); font-size:.82rem; margin-bottom:18px; }
-  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:22px; }
-  .tile { border:1px solid var(--line); border-radius:8px; padding:12px 14px; background:var(--chip); }
-  .tile .n { font-size:1.6rem; font-weight:600; line-height:1.15; }
-  .tile .l { color:var(--dim); font-size:.75rem; text-transform:uppercase; letter-spacing:.03em; }
-  .card { border:1px solid var(--line); border-radius:8px; margin-bottom:20px; overflow:hidden; }
-  .card > h2 { font-size:.92rem; margin:0; padding:11px 14px; border-bottom:1px solid var(--line);
-               font-weight:600; background:var(--chip); }
-  table { width:100%; border-collapse:collapse; }
-  th, td { text-align:left; padding:9px 14px; border-bottom:1px solid var(--line); font-size:.82rem;
-           vertical-align:top; }
-  th { color:var(--dim); font-weight:600; font-size:.74rem; text-transform:uppercase; letter-spacing:.03em; }
-  tr:last-child td { border-bottom:0; }
-  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem;
-          word-break:break-all; }
-  .tag { display:inline-block; padding:1px 7px; border-radius:10px; font-size:.7rem; font-weight:600;
-         border:1px solid currentColor; }
-  .red{color:var(--red)} .amber{color:var(--amber)} .green{color:var(--green)} .dimc{color:var(--dim)}
-  .ok { padding:22px 14px; color:var(--dim); text-align:center; }
-  .note { border:1px solid var(--line); border-radius:8px; padding:16px; color:var(--dim); }
-  .foot { color:var(--dim); font-size:.74rem; margin-top:8px; }
-  .btn { font:inherit; font-weight:600; font-size:.82rem; padding:8px 16px; border-radius:6px;
-         border:1px solid var(--blue); background:var(--blue); color:#fff; cursor:pointer; }
-  .btn:hover:not(:disabled) { filter:brightness(1.08); }
-  .btn:disabled { background:var(--chip); color:var(--dim); border-color:var(--line); cursor:default; }
-  @media (max-width:560px) { body{padding:12px} .hide-sm{display:none} }
-</style>
-</head>
-<body>
+  .sscrub *, .sscrub *::before, .sscrub *::after { box-sizing:border-box; }
 
+  .sscrub h1 { font-size:1.35rem; margin:0 0 2px; font-weight:600; }
+  .sscrub .sub { color:var(--dim); font-size:.82rem; margin-bottom:18px; }
+  .sscrub .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:22px; }
+  .sscrub .tile { border:1px solid var(--line); border-radius:8px; padding:12px 14px; background:var(--chip); }
+  .sscrub .tile .n { font-size:1.6rem; font-weight:600; line-height:1.15; }
+  .sscrub .tile .l { color:var(--dim); font-size:.75rem; text-transform:uppercase; letter-spacing:.03em; }
+  .sscrub .card { border:1px solid var(--line); border-radius:8px; margin-bottom:20px; overflow:hidden; }
+  .sscrub .card > h2 { font-size:.92rem; margin:0; padding:11px 14px; border-bottom:1px solid var(--line);
+               font-weight:600; background:var(--chip); }
+  .sscrub table { width:100%; border-collapse:collapse; }
+  .sscrub th, td { text-align:left; padding:9px 14px; border-bottom:1px solid var(--line); font-size:.82rem;
+           vertical-align:top; }
+  .sscrub th { color:var(--dim); font-weight:600; font-size:.74rem; text-transform:uppercase; letter-spacing:.03em; }
+  .sscrub tr:last-child td { border-bottom:0; }
+  .sscrub .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem;
+          word-break:break-all; }
+  .sscrub .tag { display:inline-block; padding:1px 7px; border-radius:10px; font-size:.7rem; font-weight:600;
+         border:1px solid currentColor; }
+  .sscrub .red{color:var(--red)} .sscrub .amber{color:var(--amber)} .sscrub .green{color:var(--green)} .sscrub .dimc{color:var(--dim)}
+  .sscrub .ok { padding:22px 14px; color:var(--dim); text-align:center; }
+  .sscrub .note { border:1px solid var(--line); border-radius:8px; padding:16px; color:var(--dim); }
+  .sscrub .foot { color:var(--dim); font-size:.74rem; margin-top:8px; }
+  .sscrub .btn { font:inherit; font-weight:600; font-size:.82rem; padding:8px 16px; border-radius:6px;
+         border:1px solid var(--blue); background:var(--blue); color:#fff; cursor:pointer; }
+  .sscrub .btn:hover:not(:disabled) { filter:brightness(1.08); }
+  .sscrub .btn:disabled { background:var(--chip); color:var(--dim); border-color:var(--line); cursor:default; }
+  @media (max-width:560px) { .sscrub .hide-sm{display:none} }
+</style>
+
+<div class="sscrub">
 <h1>ServerScrub</h1>
 <div class="sub">
   Security findings for <strong><?= e($user !== '' ? $user : 'your account') ?></strong>
@@ -328,5 +351,41 @@ $s = $report['summary'] ?? [];
 
 <?php endif; ?>
 
+</div>
+<?php
+$content = ob_get_clean();
+
+// LiveAPI if it is there. require_once is guarded because this file is also
+// linted and read by the test suite on machines that have no cPanel at all.
+$cp = null;
+if (@is_readable('/usr/local/cpanel/php/cpanel.php')) {
+    require_once '/usr/local/cpanel/php/cpanel.php';
+    if (class_exists('CPANEL')) {
+        try { $cp = new CPANEL(); } catch (Throwable $e) { $cp = null; }
+    }
+}
+
+if ($cp !== null) {
+    echo $cp->header('ServerScrub Security');
+    echo $content;
+    echo $cp->footer();
+    $cp->end();
+} else {
+    echo "<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+"
+       . "<meta charset=\"utf-8\">
+"
+       . "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+"
+       . "<title>ServerScrub</title>
+</head>
+<body>
+"
+       . $content
+       . "
 </body>
 </html>
+";
+}

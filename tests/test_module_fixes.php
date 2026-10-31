@@ -198,5 +198,5 @@ t_contains($update, '--register-only',
 // cPanel user cannot authenticate to. It is now a real page shipped from the
 // repo, so what matters is that the installer copies the current one on every
 // registration -- including the --register-only pass an update performs.
-t_contains($install, 'cpanel/serverscrub/index.php',
+t_contains($install, 'cpanel/serverscrub/index.live.php',
     'the cPanel user page is copied from the package on every registration');

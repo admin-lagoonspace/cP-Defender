@@ -85,7 +85,7 @@ foreach ([
     // The page every cPanel user opens. If this is missing from the archive the
     // installer has nothing to copy, and the Security menu entry leads to a
     // blank page for every customer on the server.
-    'serverscrub/cpanel/serverscrub/index.php',
+    'serverscrub/cpanel/serverscrub/index.live.php',
 ] as $required) {
     t_ok(in_array($required, $names, true), "packaged: " . basename($required));
 }

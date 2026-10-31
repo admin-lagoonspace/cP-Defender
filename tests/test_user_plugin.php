@@ -62,7 +62,7 @@ t_eq('public_html/bad.php', $report['threats'][0]['relative_path'] ?? '',
     'the path is shown relative to the account home');
 
 // -- The page itself ---------------------------------------------------------
-$page = $repo . '/cpanel/serverscrub/index.php';
+$page = $repo . '/cpanel/serverscrub/index.live.php';
 t_ok(is_file($page), 'the cPanel user page ships as a real file in the repo');
 
 $src = t_code($page);
@@ -101,7 +101,7 @@ t_contains($install, 'for CPANEL_THEME in paper_lantern jupiter',
     'the plugin is installed for both cPanel themes');
 
 // The page has to be copied in, not generated as a redirect.
-t_contains($install, 'cpanel/serverscrub/index.php',
+t_contains($install, 'cpanel/serverscrub/index.live.php',
     'the installer copies the real page');
 
 // -- It must be packaged, or the installer copies nothing --------------------

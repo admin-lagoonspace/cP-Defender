@@ -1443,15 +1443,19 @@ APPEOF
       # place, with no login of its own and no access to the server-wide
       # database (which is 0700 root, and must stay that way).
       #
-      # Keeping it in the repo as cpanel/serverscrub/index.php means php -l,
+      # Keeping it in the repo as cpanel/serverscrub/index.live.php means php -l,
       # the preflight gates and the test suite all see it; a heredoc inside an
       # installer is invisible to every one of them.
-      if [[ -f "${SCRIPT_DIR}/cpanel/serverscrub/index.php" ]]; then
-        cp -f "${SCRIPT_DIR}/cpanel/serverscrub/index.php" "${CPANEL_PLUGIN_DIR}/index.php"
+      if [[ -f "${SCRIPT_DIR}/cpanel/serverscrub/index.live.php" ]]; then
+        cp -f "${SCRIPT_DIR}/cpanel/serverscrub/index.live.php" "${CPANEL_PLUGIN_DIR}/index.live.php"
+        # The page was index.php until 4.22.3. An upgraded server still
+        # has that file, and it renders the old standalone version to
+        # anyone who reaches the path directly.
+        rm -f "${CPANEL_PLUGIN_DIR}/index.php" 2>/dev/null || true
       else
         warn "  cPanel user page missing from the package — menu entry would be empty"
       fi
-      chmod 644 "${CPANEL_PLUGIN_DIR}/index.php"
+      chmod 644 "${CPANEL_PLUGIN_DIR}/index.live.php"
 
       # The icon has to be BESIDE install.json, and named in it. Without it
       # install_plugin dies with
@@ -1472,7 +1476,7 @@ APPEOF
     "name":     "ServerScrub",
     "order":    100,
     "group_id": "security",
-    "uri":      "/frontend/${CPANEL_THEME}/serverscrub/index.php",
+    "uri":      "/frontend/${CPANEL_THEME}/serverscrub/index.live.php",
     "icon":     "serverscrub.png"
   }
 ]
@@ -1521,7 +1525,7 @@ JSONEOF
         # An item without a feature is shown to everybody, which is what was
         # asked for.
         cat > "${DYNUI_CONF}" << DYNEOF
-description=>ServerScrub Security,file=>serverscrub,group=>security,height=>48,imgtype=>icon,itemdesc=>ServerScrub Security,itemorder=>1,subtype=>img,type=>image,url=>serverscrub/index.php,width=>48
+description=>ServerScrub Security,file=>serverscrub,group=>security,height=>48,imgtype=>icon,itemdesc=>ServerScrub Security,itemorder=>1,subtype=>img,type=>image,url=>serverscrub/index.live.php,width=>48
 DYNEOF
         chmod 644 "${DYNUI_CONF}"
         ok "  DynamicUI conf: ${DYNUI_CONF}"
@@ -1537,7 +1541,7 @@ DYNEOF
     cat > "${CPANEL_APPCONF}" << CPANELEOF
 name=serverscrub_cpanel
 service=cpanel
-url=/frontend/jupiter/serverscrub/index.php
+url=/frontend/jupiter/serverscrub/index.live.php
 features=any
 displayname=ServerScrub Security
 CPANELEOF
