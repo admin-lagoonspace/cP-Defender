@@ -139,6 +139,12 @@ class UserScanRequest
         $out = ['started' => [], 'skipped' => [], 'errors' => []];
         if (!self::enabled()) { return $out; }
 
+        // When the privileged side last looked at requests. The page cannot
+        // know this -- it has no access to cron, the database or the
+        // scheduler -- and without it the only honest thing it can say is
+        // "queued", which reads like nothing is happening.
+        Database::setSetting('user_scan_last_check', (string) time());
+
         $pending = [];
         foreach (UserReport::listUsers() as $user) {
             $req = self::read($user);
@@ -150,8 +156,9 @@ class UserScanRequest
             return $a['requested_at'] <=> $b['requested_at'];
         });
 
-        $cap     = self::maxPerRun();
-        $started = 0;
+        $cap      = self::maxPerRun();
+        $started  = 0;
+        $position = 1;   // how many are ahead, for the ones that must wait
 
         foreach ($pending as $req) {
             $user = $req['user'];
@@ -160,6 +167,7 @@ class UserScanRequest
                 $wait = self::cooldownSeconds() - (time() - self::lastRunAt($user));
                 $out['skipped'][] = ['user' => $user, 'reason' => 'cooling down',
                                      'retry_in' => max(0, $wait)];
+                self::note($user, 'cooldown', 0);
                 // The request is KEPT. The customer asked, the answer is "not
                 // yet", and discarding it would mean their click did nothing
                 // and they would click again.
@@ -167,7 +175,10 @@ class UserScanRequest
             }
 
             if ($started >= $cap) {
-                $out['skipped'][] = ['user' => $user, 'reason' => 'queued'];
+                $out['skipped'][] = ['user' => $user, 'reason' => 'queued',
+                                     'position' => $position];
+                self::note($user, 'waiting_turn', $position);
+                $position++;
                 continue;   // kept, picked up on the next tick
             }
 
@@ -183,6 +194,7 @@ class UserScanRequest
                 $scanner = new Scanner();
                 $jobId   = $scanner->startScan($home, 'quick');
                 Database::setSetting('user_scan_last_' . $user, (string) time());
+                self::note($user, 'started', 0);
                 self::clear($user);
                 $started++;
                 $out['started'][] = ['user' => $user, 'job' => $jobId];
@@ -191,11 +203,42 @@ class UserScanRequest
                 // startScan() refuses while a backup is running, which is a
                 // reason to wait rather than to lose the request.
                 $out['errors'][] = ['user' => $user, 'error' => $e->getMessage()];
+                self::note($user, 'blocked', 0, $e->getMessage());
                 Logger::warn("User scan: could not start for {$user} - " . $e->getMessage());
             }
         }
 
         return $out;
+    }
+
+    /**
+     * Record why this account's request is in the state it is.
+     *
+     * Written here, as root, because every reason lives on this side: the
+     * cap, the cooldown, the backup that refused the scan. The page has none
+     * of it, and a page that can only say "queued" leaves the customer
+     * deciding between "it is working" and "it is broken" with no evidence
+     * either way -- which is how a working feature generates a support
+     * ticket.
+     */
+    private static function note(string $user, string $state, int $position,
+                                 string $detail = ''): void
+    {
+        Database::setSetting('user_scan_note_' . $user, (string) json_encode([
+            'at'       => time(),
+            'state'    => $state,
+            'position' => $position,
+            'detail'   => mb_substr($detail, 0, 200),
+        ]));
+    }
+
+    /** The recorded note, or null. */
+    public static function noteFor(string $user): ?array
+    {
+        $raw = (string) Database::setting('user_scan_note_' . $user, '');
+        if ($raw === '') { return null; }
+        $d = json_decode($raw, true);
+        return is_array($d) && isset($d['state']) ? $d : null;
     }
 
     /**
@@ -213,6 +256,11 @@ class UserScanRequest
             'cooldown_seconds' => self::cooldownSeconds(),
             'last_run_at'      => $last,
             'retry_in'         => max(0, self::cooldownSeconds() - ($now - $last)),
+            // Everything below exists so the page can explain a wait instead
+            // of just announcing one.
+            'last_check_at'    => (int) Database::setting('user_scan_last_check', '0'),
+            'per_check'        => self::maxPerRun(),
+            'note'             => self::noteFor($user),
         ];
     }
 }

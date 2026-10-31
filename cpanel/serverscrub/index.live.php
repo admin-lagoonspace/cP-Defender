@@ -239,6 +239,31 @@ ob_start();
         if ($s < 3600)  { return 'in ' . max(1, intdiv($s, 60)) . ' minute(s)'; }
         return 'in ' . intdiv($s, 3600) . ' hour(s)';
     }
+
+    // When this account asked, read from its OWN request file.
+    //
+    // The report is rewritten by the privileged side every quarter of an
+    // hour, so anything carried in it is up to that stale -- including
+    // whether a request exists at all. Somebody who clicks the button and
+    // reloads would otherwise be told nothing has been requested. The file
+    // is in this customer's home and this page runs as them, so the one fact
+    // that has to be fresh can be read directly.
+    $reqAt = 0;
+    if ($home !== '') {
+        $rp = rtrim($home, '/') . '/.serverscrub/scan-request.json';
+        if (is_file($rp)) {
+            $rj = json_decode((string) @file_get_contents($rp), true);
+            $reqAt = is_array($rj) ? (int) ($rj['requested_at'] ?? 0) : 0;
+        }
+    }
+
+    $note      = is_array($sr['note'] ?? null) ? $sr['note'] : [];
+    $noteState = (string) ($note['state'] ?? '');
+    // A note from before this request was made describes the previous one.
+    if ($reqAt > 0 && (int) ($note['at'] ?? 0) < $reqAt) { $noteState = ''; }
+
+    $lastCheck = (int) ($sr['last_check_at'] ?? 0);
+    $perCheck  = max(1, (int) ($sr['per_check'] ?? 1));
   ?>
   <?php if ($srOn): ?>
   <div class="card">
@@ -247,9 +272,38 @@ ob_start();
       <?php if ($srQueued): ?>
         <div class="tag green">Queued</div>
         <div class="foot" style="margin-top:7px">
-          Your scan is waiting to run. Scans are started a few at a time so they
-          do not slow the server down for everyone, so this can take a little
-          while. This page will show the results once it has finished.
+          <?php if ($reqAt > 0): ?>
+            <strong>Requested <?= e(ago($reqAt)) ?>.</strong>
+          <?php else: ?>
+            <strong>Your request has been received.</strong>
+          <?php endif; ?>
+
+          <?php if ($noteState === 'blocked' && !empty($note['detail'])): ?>
+            The server could not start it yet: <?= e(rtrim($note['detail'], '.')) ?>.
+            It will start automatically once that clears — you do not need to ask again.
+          <?php elseif ($noteState === 'waiting_turn'): ?>
+            <?php $pos = (int) ($note['position'] ?? 0); ?>
+            <?= $pos > 1
+                  ? 'There ' . ($pos - 1 === 1 ? 'is 1 account' : 'are ' . ($pos - 1) . ' accounts')
+                    . ' ahead of you in the queue.'
+                  : 'Yours is next in the queue.' ?>
+            The server starts <?= (int) $perCheck ?> scan<?= $perCheck === 1 ? '' : 's' ?>
+            each time it checks, so that other customers' sites stay fast while scans run.
+          <?php elseif ($noteState === 'cooldown'): ?>
+            This account has been scanned recently, so this request is held until the
+            next one is allowed.
+          <?php else: ?>
+            Nothing is wrong — the server picks up scan requests on a schedule rather
+            than the instant you click, so there is a short wait before it begins.
+          <?php endif; ?>
+
+          <?php if ($lastCheck > 0): ?>
+            The server last checked for new requests <?= e(ago($lastCheck)) ?>,
+            and checks regularly.
+          <?php endif; ?>
+
+          Your scan then runs in the background. You can close this page; the results
+          appear here when it has finished.
         </div>
       <?php elseif ($srWait > 0): ?>
         <button class="btn" disabled>Scan my account</button>

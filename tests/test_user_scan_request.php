@@ -152,3 +152,58 @@ t_contains($install, 'if [[ ! -d /usr/local/cpanel ]]; then',
 t_contains($install, 'group=>security', 'and the menu entry sits in the Security group');
 t_contains($install, 'features=any',
      'visible to every cPanel account, not only those on the default feature list');
+
+// ── A queued request has to explain itself ──────────────────────────────────
+//
+// It said: "Your scan is waiting to run. Scans are started a few at a time."
+// That tells a customer nothing they can act on and nothing that distinguishes
+// a working queue from a broken one, so a feature that was working correctly
+// produced "is this thing on?" Every reason for a wait lives on the privileged
+// side, so the privileged side now records it.
+
+Database::query("DELETE FROM settings WHERE key LIKE 'user_scan_note_%'");
+t_ok(UserScanRequest::noteFor('nobody') === null, 'no note when nothing has happened');
+
+$src2 = (string) file_get_contents($repo . '/backend/lib/UserScanRequest.php');
+$proc2 = t_fn_body($src2, 'process', 'php');
+
+t_contains($proc2, "self::note(\$user, 'waiting_turn', \$position)",
+     'an account waiting for a slot records its position, so the page can say '
+   . 'how many are ahead rather than just "waiting"');
+t_contains($proc2, "self::note(\$user, 'blocked', 0, \$e->getMessage())",
+     'THE REASON THAT MATTERED MOST: a refused start records WHY — "a backup '
+   . 'is running" is something a customer can understand, an unexplained wait '
+   . 'is not');
+t_contains($proc2, "self::note(\$user, 'cooldown', 0)", 'a cooldown hold is recorded');
+t_contains($proc2, "Database::setSetting('user_scan_last_check'",
+     'and the time of the last check, which the page cannot know on its own');
+
+$st2 = UserScanRequest::statusFor('alice');
+foreach (['last_check_at', 'per_check', 'note'] as $k) {
+    t_ok(array_key_exists($k, $st2), 'status carries ' . $k);
+}
+
+// ── The page ────────────────────────────────────────────────────────────────
+
+$page2 = (string) file_get_contents($repo . '/cpanel/serverscrub/index.live.php');
+
+t_contains($page2, 'Requested <?= e(ago($reqAt)) ?>',
+     'the page says WHEN the request was made');
+t_contains($page2, "'/.serverscrub/scan-request.json'",
+     'THE STALENESS TRAP: it reads the request time from the customer\'s own '
+   . 'file rather than the report, which is rewritten only every quarter '
+   . 'hour — otherwise somebody who clicks and reloads is told nothing was '
+   . 'requested');
+t_contains($page2, 'ahead of you in the queue', 'it says how many are ahead');
+t_contains($page2, 'could not start it yet', 'and surfaces a blocking reason');
+t_contains($page2, 'you do not need to ask again',
+     'telling the customer not to retry, which is what they would otherwise do');
+t_contains($page2, 'last checked', 'and when the server last looked');
+t_contains($page2, 'Nothing is wrong',
+     'with a plain fallback when there is no recorded reason, because silence '
+   . 'reads as failure');
+
+// A note older than the request describes the PREVIOUS request.
+t_contains($page2, "(int) (\$note['at'] ?? 0) < \$reqAt",
+     'a note from before this request is ignored, or a customer would be shown '
+   . 'the reason their LAST scan waited');
