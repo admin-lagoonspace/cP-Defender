@@ -149,6 +149,60 @@ trap on_error ERR
 # The manifest carries the full download URL, so the updater never has to guess
 # the asset filename (kills the old v-prefix / no-prefix naming mismatch).
 INSTALL_DIR="${SG_ROOT:-/usr/local/serverscrub}"
+
+# ── Never be the file you are overwriting ─────────────────────────────────────
+#
+# FROM A LIVE SERVER, 31 Oct 2026. An update applied cleanly and then died:
+#
+#     ✔  Updated: update.sh
+#     /usr/local/serverscrub/update.sh: line 642: ater: command not found
+#     ⚠  Update failed — rolling back
+#
+# "ater" is not in this file, or any file. update.sh is in UPDATE_FILES, so the
+# updater copies the new version over itself WHILE BASH IS STILL READING IT.
+# Bash does not slurp a script; it reads incrementally and remembers a byte
+# OFFSET. Replace the file underneath it and execution resumes at that offset
+# in different content -- landing mid-word, and running the tail of one as a
+# command.
+#
+# This has always been here. It only fired when a release changed the length of
+# this file enough to move the offset somewhere harmful, so every earlier
+# update survived on luck rather than on design. The failure is also maximally
+# confusing: the update itself worked, every file was copied, and the error
+# names a command nobody wrote.
+#
+# So: re-exec from a private copy before touching anything. The script bash is
+# reading then lives in /tmp, nothing overwrites it, and the offset stays
+# valid however much this file changes.
+#
+# The copy is unlinked immediately. On Linux an open file keeps its inode until
+# the descriptor closes, so bash reads on quite happily and nothing is left in
+# /tmp if the run is killed.
+if [[ "${SG_UPDATE_REEXEC:-0}" != "1" ]]; then
+    _self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    _inst="$(readlink -f "${INSTALL_DIR}/update.sh" 2>/dev/null || echo "${INSTALL_DIR}/update.sh")"
+    # Only when running the INSTALLED copy. Anything else -- upgrade.sh's
+    # fetched copy in /tmp, a checkout, a hand-placed file -- is not the file
+    # this run will replace, so leave it alone.
+    if [[ -n "$_self" && "$_self" == "$_inst" && -r "$_self" ]]; then
+        _tmp="$(mktemp /tmp/sg-updater.XXXXXX.sh 2>/dev/null || true)"
+        if [[ -n "$_tmp" ]] && cp -f "$_self" "$_tmp" 2>/dev/null; then
+            export SG_UPDATE_REEXEC=1
+            exec bash "$_tmp" "$@"
+        fi
+        # Could not make a copy: carry on rather than refuse to update at all.
+        # The old behaviour is a risk, not a certainty, and being unable to
+        # update is worse than running the way every previous release did.
+        echo "  [!] could not stage a private copy of the updater; continuing" >&2
+    fi
+fi
+# Re-executed: drop the temp copy now. The descriptor stays open, so bash keeps
+# reading it, and an interrupted run leaves nothing behind.
+if [[ "${SG_UPDATE_REEXEC:-0}" == "1" ]]; then
+    case "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)" in
+        /tmp/sg-updater.*) rm -f "$(readlink -f "${BASH_SOURCE[0]}")" 2>/dev/null || true ;;
+    esac
+fi
 # Repo is public, so updates are served straight from it — no separate channel,
 # no credentials on customer servers. Override via env if you ever split it out.
 RELEASES_REPO="${SG_RELEASES_REPO:-admin-lagoonspace/cP-Defender}"

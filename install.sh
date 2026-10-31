@@ -495,12 +495,25 @@ ok "Directories created under $INSTALL_DIR"
 
 # ── Copy plugin files ──────────────────────────────────────────────────────────
 section "Installing files"
-cp -r "${SCRIPT_DIR}/backend"  "$INSTALL_DIR/"
-cp -r "${SCRIPT_DIR}/frontend" "$INSTALL_DIR/"
-cp    "${SCRIPT_DIR}/VERSION"  "$INSTALL_DIR/"
-[[ -f "${SCRIPT_DIR}/install.sh"   ]] && cp "${SCRIPT_DIR}/install.sh"   "$INSTALL_DIR/"
-[[ -f "${SCRIPT_DIR}/update.sh"   ]] && cp "${SCRIPT_DIR}/update.sh"   "$INSTALL_DIR/"
-[[ -f "${SCRIPT_DIR}/uninstall.sh" ]] && cp "${SCRIPT_DIR}/uninstall.sh" "$INSTALL_DIR/"
+# Copying only makes sense when the source is somewhere else.
+#
+# --register-only runs this file FROM ${INSTALL_DIR}, so SCRIPT_DIR and
+# INSTALL_DIR are the same directory and every line below became
+#   cp: '/usr/local/serverscrub/install.sh' and '...' are the same file
+# on stderr. Harmless -- this script sets pipefail but not errexit, so it
+# carried on -- but it printed three copy errors during every single update,
+# which is exactly the kind of noise that trains an operator to ignore the
+# output of an updater.
+if [[ "$(readlink -f "${SCRIPT_DIR}" 2>/dev/null)" != "$(readlink -f "${INSTALL_DIR}" 2>/dev/null)" ]]; then
+  cp -r "${SCRIPT_DIR}/backend"  "$INSTALL_DIR/"
+  cp -r "${SCRIPT_DIR}/frontend" "$INSTALL_DIR/"
+  cp    "${SCRIPT_DIR}/VERSION"  "$INSTALL_DIR/"
+  [[ -f "${SCRIPT_DIR}/install.sh"   ]] && cp "${SCRIPT_DIR}/install.sh"   "$INSTALL_DIR/"
+  [[ -f "${SCRIPT_DIR}/update.sh"    ]] && cp "${SCRIPT_DIR}/update.sh"    "$INSTALL_DIR/"
+  [[ -f "${SCRIPT_DIR}/uninstall.sh" ]] && cp "${SCRIPT_DIR}/uninstall.sh" "$INSTALL_DIR/"
+else
+  info "Running from ${INSTALL_DIR} — files are already in place, not copying"
+fi
 # The WHM appconfig is generated below, not copied from the tree.
 # Keep SG_VERSION constant in config.php in sync with the VERSION file.
 #
