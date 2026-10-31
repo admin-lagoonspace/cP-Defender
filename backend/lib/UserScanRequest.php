@@ -241,16 +241,20 @@ class UserScanRequest
             try {
                 // The path comes from passwd, never from the request file.
                 $scanner = new Scanner();
-                $jobId   = $scanner->startScan($home, 'quick');
+                // Third argument: do not stand down for JetBackup, rsync or
+                // anything else. A customer is sitting in front of the page
+                // waiting for this, and one account's quick scan is nothing
+                // like the server-wide sweep that gate was written for.
+                $jobId   = $scanner->startScan($home, 'quick', true);
                 self::recordStart($user);
                 self::note($user, 'started', 0);
                 self::clear($user);
                 $out['started'][] = ['user' => $user, 'job' => $jobId];
                 Logger::info("User scan: started job {$jobId} for {$user} on {$home}");
             } catch (Throwable $e) {
-                // startScan() refuses while a backup is running, and once
-                // scan_max_concurrent scans are already going. Both are
-                // reasons to wait rather than to lose the request.
+                // startScan() still refuses once scan_max_concurrent scans are
+                // already going -- a reason to wait rather than to lose the
+                // request. (It no longer refuses for a backup: see above.)
                 $out['errors'][] = ['user' => $user, 'error' => $e->getMessage()];
                 self::note($user, 'blocked', 0, $e->getMessage());
                 Logger::warn("User scan: could not start for {$user} - " . $e->getMessage());

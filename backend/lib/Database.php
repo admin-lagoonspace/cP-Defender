@@ -380,6 +380,14 @@ class Database {
             $db->exec("ALTER TABLE scan_jobs ADD COLUMN worker_pgid INTEGER");
         }
 
+        // A scan a customer asked for by hand does not stand down for a
+        // backup. It has to be on the job rather than decided by the worker,
+        // because the worker checks again between every batch and by then the
+        // only thing it knows about the scan is this row.
+        if (!in_array('ignore_backup', $jobCols)) {
+            $db->exec("ALTER TABLE scan_jobs ADD COLUMN ignore_backup INTEGER NOT NULL DEFAULT 0");
+        }
+
         // Where a quarantined file went, and when it may be deleted. The sweep
         // needs the exact path: guessing it from the threat's original name
         // would eventually delete the wrong thing.

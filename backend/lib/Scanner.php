@@ -553,7 +553,16 @@ class Scanner {
         }
     }
 
-    public function startScan(string $path = '/home', string $type = 'quick'): int {
+    /**
+     * @param bool $ignoreBackup Start even if a backup is running, and do not
+     *        pause for one that starts later. For a scan a human is waiting on
+     *        -- a cPanel customer pressing "Scan my account" -- where "come
+     *        back in four hours" is not an answer. One account's quick scan is
+     *        a far smaller claim on the disks than the server-wide sweep this
+     *        gate was written for.
+     */
+    public function startScan(string $path = '/home', string $type = 'quick',
+                              bool $ignoreBackup = false): int {
         // The type decides what gets walked. Resolved here, at the one place
         // every caller goes through -- the GUI, the scheduler and the CLI --
         // so all three mean the same thing by "quick".
@@ -576,7 +585,8 @@ class Scanner {
 
         // Starting a scan into a running backup is the same mistake as not
         // pausing one: two processes reading the whole filesystem at once.
-        if ((Database::setting('scan_pause_on_backup', '1') ?? '1') === '1') {
+        if (!$ignoreBackup
+            && (Database::setting('scan_pause_on_backup', '1') ?? '1') === '1') {
             $backups = self::backupRunning();
             if ($backups) {
                 throw new RuntimeException(
@@ -592,10 +602,11 @@ class Scanner {
         self::reapOrphanClamscans();
 
         $jobId = Database::insert('scan_jobs', [
-            'scan_type'  => $type,
-            'status'     => 'running',
-            'started_at' => time(),
-            'scan_path'  => $path,
+            'scan_type'     => $type,
+            'status'        => 'running',
+            'started_at'    => time(),
+            'scan_path'     => $path,
+            'ignore_backup' => $ignoreBackup ? 1 : 0,
         ]);
         Logger::info("Scan job {$jobId}: {$type} ({$res['note']}) on " . $path);
 
@@ -1649,6 +1660,21 @@ This file was removed and not kept. Restore it from your backups
     }
 
     /**
+     * Was this job started with the backup gate waived?
+     *
+     * Cached per job: waitOutBackup() asks once per batch, and the answer was
+     * fixed when the job was inserted.
+     */
+    public static function ignoresBackup(int $jobId): bool
+    {
+        static $seen = [];
+        if (array_key_exists($jobId, $seen)) { return $seen[$jobId]; }
+
+        $row = Database::fetchOne('SELECT ignore_backup FROM scan_jobs WHERE id=?', [$jobId]);
+        return $seen[$jobId] = ((int) ($row['ignore_backup'] ?? 0)) === 1;
+    }
+
+    /**
      * Hold the scan while a backup runs.
      *
      * Waiting rather than aborting: the scan resumes and finishes, and a
@@ -1666,6 +1692,15 @@ This file was removed and not kept. Restore it from your backups
         }
         $running = self::backupRunning();
         if (!$running) { return true; }
+
+        // Asked for by hand: run through it. The query sits behind the check
+        // above, so a server with no backup running never pays for it.
+        if (self::ignoresBackup($jobId)) {
+            Logger::info("Scan job {$jobId}: backup in progress ("
+                       . implode(', ', $running) . '), continuing anyway '
+                       . '-- this scan was requested by hand');
+            return true;
+        }
 
         $maxWait = max(60, min(86400,
             (int) (Database::setting('scan_backup_max_wait', '14400') ?? 14400)));

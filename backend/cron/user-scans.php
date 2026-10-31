@@ -18,9 +18,14 @@
  * common tick there are no requests and it exits having touched nothing.
  *
  * It does NOT scan. It asks Scanner::startScan(), which enforces
- * scan_max_concurrent and refuses while a backup is running -- so a minute
- * interval cannot pile work onto a busy server. The worst a flood of requests
- * can do is get refused quickly and politely.
+ * scan_max_concurrent -- so a minute interval cannot pile work onto a busy
+ * server. The worst a flood of requests can do is get refused quickly and
+ * politely.
+ *
+ * A backup is NOT a reason to refuse one of these. The scheduled server-wide
+ * sweep still stands down for JetBackup or rsync, because nothing is waiting
+ * on it; a customer who has just pressed the button is waiting, and one
+ * account's quick scan is a far smaller claim on the disks.
  */
 
 if (PHP_SAPI !== 'cli') { fwrite(STDERR, "user-scans: CLI only\n"); exit(2); }

@@ -99,8 +99,7 @@ t_ok(strpos($src, 'cooldownSeconds') === false, 'the old cooldown is gone too');
 $proc = t_fn_body($src, 'process', 'php');
 t_contains($proc, 'startScan($home',
      'scans still go through Scanner::startScan(), which enforces '
-   . 'scan_max_concurrent and refuses during a backup — removing our cap did '
-   . 'not uncap ClamAV');
+   . 'scan_max_concurrent — removing our cap did not uncap ClamAV');
 t_contains($proc, "self::note(\$user, 'blocked'",
      'and a refusal is recorded with its reason rather than being silent');
 
