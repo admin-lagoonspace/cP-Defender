@@ -187,7 +187,7 @@ info "CDN mirrors automatically (server-side pull, every 10 min)."
 info "  Force an immediate sync on the server with:"
 info "    /home/lwss1/bin/cdn-sync.sh     (as the lwss1 user)"
 info "  If that path does not exist the CDN has never been set up: every"
-info "  defender.lws-s1.com URL 404s and installs fall back to the GitHub"
+info "  serverscrub.com URL 404s and installs fall back to the GitHub"
 info "  mirror. Install it per the header of scripts/cdn-sync.sh."
 
 echo ""

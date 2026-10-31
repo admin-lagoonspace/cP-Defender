@@ -48,7 +48,7 @@ RELEASES_BRANCH="${SG_RELEASES_BRANCH:-main}"
 # Same channel order as update.sh and UpdateChecker: our CDN first, because it
 # has no API rate limit and keeps working on servers whose firewall blocks
 # github.com; the GitHub raw mirror second.
-CDN_BASE="${SG_CDN_BASE:-https://defender.lws-s1.com/serverscrub/code}"
+CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/serverscrub/code}"
 GITHUB_BASE="https://raw.githubusercontent.com/${RELEASES_REPO}/${RELEASES_BRANCH}"
 CHANNELS=("$CDN_BASE" "$GITHUB_BASE")
 

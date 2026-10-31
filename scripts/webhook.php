@@ -15,11 +15,11 @@
  * ── INSTALL ──────────────────────────────────────────────────────────────────
  * 1. Generate a secret:      openssl rand -hex 32
  * 2. Save it OUTSIDE the docroot, readable only by this user:
- *      echo '<secret>' > /home/lwss1/.sg-webhook-secret
- *      chmod 600 /home/lwss1/.sg-webhook-secret
+ *      echo '<secret>' > /home/serversc/.sg-webhook-secret
+ *      chmod 600 /home/serversc/.sg-webhook-secret
  * 3. Copy this file to  <docroot>/webhook.php
  * 4. GitHub → repo → Settings → Webhooks → Add webhook
- *      Payload URL : https://defender.lws-s1.com/serverscrub/code/webhook.php
+ *      Payload URL : https://serverscrub.com/serverscrub/code/webhook.php
  *      Content type: application/json
  *      Secret      : <the same secret>
  *      Events      : "Let me select individual events" → Releases  (and Pushes
@@ -29,10 +29,10 @@
 declare(strict_types=1);
 
 // ── Configuration ────────────────────────────────────────────────────────────
-$SECRET_FILE = getenv('SG_WEBHOOK_SECRET_FILE') ?: '/home/lwss1/.sg-webhook-secret';
-$SYNC_SCRIPT = getenv('SG_SYNC_SCRIPT')         ?: '/home/lwss1/bin/cdn-sync.sh';
-$TRIGGER     = getenv('SG_TRIGGER_FILE')        ?: '/home/lwss1/.sg-sync-trigger';
-$LOG         = getenv('SG_WEBHOOK_LOG')         ?: '/home/lwss1/logs/webhook.log';
+$SECRET_FILE = getenv('SG_WEBHOOK_SECRET_FILE') ?: '/home/serversc/.sg-webhook-secret';
+$SYNC_SCRIPT = getenv('SG_SYNC_SCRIPT')         ?: '/home/serversc/bin/cdn-sync.sh';
+$TRIGGER     = getenv('SG_TRIGGER_FILE')        ?: '/home/serversc/.sg-sync-trigger';
+$LOG         = getenv('SG_WEBHOOK_LOG')         ?: '/home/serversc/logs/webhook.log';
 $MAX_BODY    = 1024 * 1024;   // 1 MB — GitHub payloads are far smaller
 
 function logmsg(string $m): void {

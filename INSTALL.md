@@ -26,13 +26,13 @@ it; if not, pattern-based scanning is used until you install it.
 SSH in **as root** and run one line:
 
 ```bash
-bash <(curl -fsSL https://defender.lws-s1.com/serverscrub/code/get.sh)
+bash <(curl -fsSL https://serverscrub.com/serverscrub/code/get.sh)
 ```
 
 If the box has `wget` but not `curl`:
 
 ```bash
-bash <(wget -qO- https://defender.lws-s1.com/serverscrub/code/get.sh)
+bash <(wget -qO- https://serverscrub.com/serverscrub/code/get.sh)
 ```
 
 That is the whole install. It detects whether this is a cPanel server or a
@@ -79,7 +79,7 @@ Piping to `bash` makes the installer fully non-interactive — it detects the
 mode and never prompts:
 
 ```bash
-curl -fsSL https://defender.lws-s1.com/serverscrub/code/get.sh | bash
+curl -fsSL https://serverscrub.com/serverscrub/code/get.sh | bash
 ```
 
 Force a mode instead of auto-detecting:

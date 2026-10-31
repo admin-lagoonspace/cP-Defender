@@ -41,7 +41,7 @@ class UpdateChecker {
 
     private static function channels(): array
     {
-        $cdn  = getenv('SG_CDN_BASE') ?: 'https://defender.lws-s1.com/serverscrub/code';
+        $cdn  = getenv('SG_CDN_BASE') ?: 'https://serverscrub.com/serverscrub/code';
         $repo = getenv('SG_RELEASES_REPO') ?: 'admin-lagoonspace/cP-Defender';
         $raw  = 'https://raw.githubusercontent.com/' . $repo . '/'
               . (getenv('SG_RELEASES_BRANCH') ?: 'main');

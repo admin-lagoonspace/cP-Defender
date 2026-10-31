@@ -42,7 +42,7 @@ ITEMS = ["backend", "frontend", "whm", "cpanel", "install.sh", "uninstall.sh",
 SKIP_DIRS = {".git", "__pycache__", "node_modules", "tests", "scripts", "php", ".github"}
 NEVER_PACKAGE = ("/tests/", "/scripts/", "/php/", "/.github/", "/.git/")
 SKIP_FILES = {".DS_Store", "Thumbs.db"}
-CDN = "https://defender.lws-s1.com/serverscrub/code"
+CDN = "https://serverscrub.com/serverscrub/code"
 MIRROR = "https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main"
 GH_REPO = "https://github.com/admin-lagoonspace/cP-Defender"
 
@@ -193,7 +193,7 @@ def main():
         "sha256": sha,
         # GitHub, not the CDN. The panel renders ONE "Release Notes" link with
         # no fallback, and the CDN has never been populated -- every
-        # defender.lws-s1.com path 404s. The zip survives that because
+        # serverscrub.com path 404s. The zip survives that because
         # update.sh walks both channels; a single link in the UI does not.
         # Must match make-release.sh; tests/test_packaging.php asserts it.
         "notes": "%s/blob/main/dist/notes-%s.md" % (GH_REPO, version),

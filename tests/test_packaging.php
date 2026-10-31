@@ -221,7 +221,7 @@ t_contains($updateSh, "Database::setting('quarantine_dir'",
 // ── The release-notes link must point somewhere that exists ─────────────────
 //
 // The panel renders ONE "Release Notes" link and has no fallback. It pointed at
-// the CDN -- https://defender.lws-s1.com/serverscrub/code/v<version>/CHANGELOG.md
+// the CDN -- https://serverscrub.com/serverscrub/code/v<version>/CHANGELOG.md
 // -- which 404s, because that CDN has never been populated. The download
 // survives the same problem only because update.sh walks both channels.
 //
@@ -235,7 +235,7 @@ t_ok($mkNotes !== '', 'make-release.sh defines a notes url');
 t_ok($pyNotes !== '', 'build.py defines a notes url');
 
 foreach (['make-release.sh' => $mkNotes, 'build.py' => $pyNotes] as $who => $u) {
-    t_ok(strpos($u, 'defender.lws-s1.com') === false,
+    t_ok(strpos($u, 'serverscrub.com') === false,
          "$who does not point the notes link at the CDN, which is not populated");
     t_ok(strpos($u, 'CDN') === false,
          "$who does not interpolate the CDN variable into it either");
@@ -263,3 +263,42 @@ $appJs2 = (string)file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
 t_contains($appJs2, "relLink.style.display = 'none'",
      'the Release Notes link is hidden when there is no url, rather than '
    . 'sitting there dead');
+
+// ── The download host ───────────────────────────────────────────────────────
+//
+// Moved from defender.lws-s1.com to serverscrub.com when the product got its
+// own domain and cPanel account. The risk in a move like this is not the new
+// URL, it is the servers already running: each has the OLD host baked into
+// the update.sh on its disk and only learns the new one by taking an update.
+$repoRoot = dirname(__DIR__);
+
+foreach (['get.sh', 'update.sh', 'upgrade.sh', 'backend/lib/UpdateChecker.php'] as $f) {
+    $src = (string) file_get_contents($repoRoot . '/' . $f);
+    t_contains($src, 'https://serverscrub.com/serverscrub/code',
+         $f . ' points at the product\'s own domain');
+}
+
+// The legacy host stays reachable as a CHANNEL, not as the primary.
+$upd = (string) file_get_contents($repoRoot . '/update.sh');
+t_contains($upd, 'CHANNELS=("$CDN_BASE" "$LEGACY_BASE" "$GITHUB_BASE")',
+     'THE TRANSITION: the old host is still tried, after the new one, so a '
+   . 'server that has taken this update is not stranded on a day the new host '
+   . 'is unreachable');
+$cdnAt    = strpos($upd, '$CDN_BASE" "$LEGACY_BASE');
+t_ok($cdnAt !== false, 'and the new host is first, so it is the one that is actually used');
+
+// The CDN-side scripts follow the account, not just the domain.
+$sync = (string) file_get_contents($repoRoot . '/scripts/cdn-sync.sh');
+t_contains($sync, '/home/serversc/public_html/serverscrub/code',
+     'the sync script writes into the new account\'s docroot');
+t_ok(strpos($sync, '/home/lwss1') === false, 'and no path still names the old account');
+
+$hook = (string) file_get_contents($repoRoot . '/scripts/webhook.php');
+t_ok(strpos($hook, '/home/lwss1') === false,
+     'nor does the webhook — its secret, trigger and log all moved with it');
+
+// History is left alone.
+$chg = (string) file_get_contents($repoRoot . '/CHANGELOG.md');
+t_ok(strpos($chg, 'defender.lws-s1.com') !== false,
+     'the changelog still records the old host where releases genuinely used '
+   . 'it — rewriting history to match a later move would make the record lie');

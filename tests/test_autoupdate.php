@@ -266,7 +266,7 @@ t_contains($up, 'latest.json',
      'update.sh reads the same manifest');
 
 // Both must try the CDN and the GitHub raw mirror, in that order.
-foreach (['defender.lws-s1.com' => 'the CDN',
+foreach (['serverscrub.com' => 'the CDN',
           'raw.githubusercontent.com' => 'the GitHub raw mirror'] as $host => $what) {
     t_contains($uc, $host, "UpdateChecker knows about $what");
     t_contains($up, $host, "update.sh knows about $what");

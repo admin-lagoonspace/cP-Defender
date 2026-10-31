@@ -17,7 +17,7 @@ nothing to download or configure beforehand.
 | **Operating system** | Any Linux. cPanel hosts are RHEL-family — AlmaLinux, CloudLinux, CentOS, RHEL |
 | **PHP** | 8.0 or newer, with the `sqlite3` and `pdo` extensions |
 | **Disk space** | ~50 MB, plus room for quarantine and logs |
-| **Network** | Outbound HTTPS to `defender.lws-s1.com` |
+| **Network** | Outbound HTTPS to `serverscrub.com` |
 
 You do **not** need to install ClamAV, CSF, ModSecurity or rkhunter first.
 ServerScrub installs what it needs and includes its own engines where no
@@ -30,13 +30,13 @@ third-party tool is present.
 Log in over SSH as **root** and run:
 
 ```bash
-bash <(curl -fsSL https://defender.lws-s1.com/serverscrub/code/get.sh)
+bash <(curl -fsSL https://serverscrub.com/serverscrub/code/get.sh)
 ```
 
 If the server has `wget` but not `curl`:
 
 ```bash
-bash <(wget -qO- https://defender.lws-s1.com/serverscrub/code/get.sh)
+bash <(wget -qO- https://serverscrub.com/serverscrub/code/get.sh)
 ```
 
 Installation takes one to three minutes.
@@ -152,7 +152,7 @@ Piping the installer to `bash` makes it fully non-interactive. It detects the
 server type and never prompts:
 
 ```bash
-curl -fsSL https://defender.lws-s1.com/serverscrub/code/get.sh | bash
+curl -fsSL https://serverscrub.com/serverscrub/code/get.sh | bash
 ```
 
 Force a particular mode instead of auto-detecting:

@@ -156,9 +156,19 @@ RELEASES_BRANCH="${SG_RELEASES_BRANCH:-main}"
 # Primary channel is our own CDN — no API rate limits, and it keeps working on
 # servers whose firewall blocks github.com (the exact failure that broke v3.3.6
 # updates in the field). GitHub raw stays as an automatic fallback.
-CDN_BASE="${SG_CDN_BASE:-https://defender.lws-s1.com/serverscrub/code}"
+CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/serverscrub/code}"
 GITHUB_BASE="https://raw.githubusercontent.com/${RELEASES_REPO}/${RELEASES_BRANCH}"
-CHANNELS=("$CDN_BASE" "$GITHUB_BASE")
+# The old download host, kept as a channel through the move to
+# serverscrub.com.
+#
+# Every server already installed has the OLD url baked into the update.sh
+# sitting on its disk, and only learns the new one by taking an update. That
+# direction is covered by the old host continuing to serve. This covers the
+# other direction: a server that HAS taken this update, on a day the new host
+# is not yet reachable, still has somewhere to go. Remove it once no
+# installation predates the move.
+LEGACY_BASE="https://defender.lws-s1.com/serverscrub/code"
+CHANNELS=("$CDN_BASE" "$LEGACY_BASE" "$GITHUB_BASE")
 # Explicit override wins and disables channel rotation
 [[ -n "${SG_MANIFEST_URL:-}" ]] && CHANNELS=("${SG_MANIFEST_URL%/latest.json}")
 MANIFEST_URL="${CHANNELS[0]}/latest.json"

@@ -7,10 +7,10 @@
 #
 # ── INSTALL (one line, as root) ───────────────────────────────────────────────
 # curl — present by default on RHEL/CentOS/AlmaLinux/CloudLinux (all cPanel hosts):
-#   bash <(curl -fsSL https://defender.lws-s1.com/serverscrub/code/get.sh)
+#   bash <(curl -fsSL https://serverscrub.com/serverscrub/code/get.sh)
 #
 # wget — present by default on Debian/Ubuntu:
-#   bash <(wget -qO- https://defender.lws-s1.com/serverscrub/code/get.sh)
+#   bash <(wget -qO- https://serverscrub.com/serverscrub/code/get.sh)
 #
 # Both forms behave identically. Once this script is running it uses whichever of
 # curl/wget exists, so only the bootstrap line differs.
@@ -36,8 +36,9 @@
 #
 # ── CHANNELS ──────────────────────────────────────────────────────────────────
 # Tried in order; the sha256 in latest.json is verified regardless of source:
-#   1. https://defender.lws-s1.com/serverscrub/code   (primary)
-#   2. raw.githubusercontent.com/<repo>/main            (mirror)
+#   1. https://serverscrub.com/serverscrub/code          (primary)
+#   2. https://defender.lws-s1.com/serverscrub/code      (legacy, during the move)
+#   3. raw.githubusercontent.com/<repo>/main             (mirror)
 # Override with SG_BASE_URL=<base> (pins to that one channel).
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -51,9 +52,11 @@ PIN_VERSION="${SG_VERSION:-}"
 # Primary is our own CDN: no API rate limits, and it stays reachable on servers
 # whose firewall blocks github.com / api.github.com. GitHub raw is the fallback.
 # Each base must serve:  <base>/latest.json  and  <base>/dist/serverscrub-<v>.zip
-PRIMARY_BASE="${SG_BASE_URL:-https://defender.lws-s1.com/serverscrub/code}"
+PRIMARY_BASE="${SG_BASE_URL:-https://serverscrub.com/serverscrub/code}"
 GITHUB_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
-MIRRORS=("$PRIMARY_BASE" "$GITHUB_BASE")
+# Kept through the move to serverscrub.com; see update.sh for why.
+LEGACY_BASE="https://defender.lws-s1.com/serverscrub/code"
+MIRRORS=("$PRIMARY_BASE" "$LEGACY_BASE" "$GITHUB_BASE")
 
 # Explicit override wins and disables mirror rotation
 [[ -n "${SG_MANIFEST_URL:-}" ]] && MIRRORS=("${SG_MANIFEST_URL%/latest.json}")

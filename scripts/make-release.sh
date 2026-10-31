@@ -221,7 +221,7 @@ fi
 # ── Manifest ──────────────────────────────────────────────────────────────────
 # Primary download is our own CDN (no API limits, reachable when GitHub is
 # firewalled); get.sh/update.sh fall back to the GitHub raw mirror on failure.
-CDN_BASE="${SG_CDN_BASE:-https://defender.lws-s1.com/serverscrub/code}"
+CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/serverscrub/code}"
 DL_URL="${CDN_BASE}/dist/${ZIP_NAME}"
 MIRROR_URL="https://raw.githubusercontent.com/${RELEASES_REPO}/${RELEASES_BRANCH}/dist/${ZIP_NAME}"
 # Notes point at THIS version's notes, not the full history. A user opening the
@@ -230,7 +230,7 @@ MIRROR_URL="https://raw.githubusercontent.com/${RELEASES_REPO}/${RELEASES_BRANCH
 # ON GITHUB, NOT THE CDN, and unlike the download there is no fallback here:
 # the panel renders ONE url as a "Release Notes" link, so it has to be one that
 # exists. It pointed at ${CDN_BASE}/v<version>/CHANGELOG.md, which 404s --
-# the CDN has never been populated, so every defender.lws-s1.com path is empty.
+# the CDN has never been populated, so every serverscrub.com path is empty.
 # The zip survives that because update.sh walks both channels; a single link in
 # the UI does not.
 #

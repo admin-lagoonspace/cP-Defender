@@ -8,10 +8,10 @@
 #
 # ── INSTALL ───────────────────────────────────────────────────────────────────
 #   1. Copy this script onto the server, e.g.
-#        /home/lwss1/bin/cdn-sync.sh
-#   2. chmod +x /home/lwss1/bin/cdn-sync.sh
+#        /home/serversc/bin/cdn-sync.sh
+#   2. chmod +x /home/serversc/bin/cdn-sync.sh
 #   3. Add to the cPanel user's crontab (crontab -e):
-#        */10 * * * * /home/lwss1/bin/cdn-sync.sh >> /home/lwss1/logs/cdn-sync.log 2>&1
+#        */10 * * * * /home/serversc/bin/cdn-sync.sh >> /home/serversc/logs/cdn-sync.log 2>&1
 #
 # ── COST ──────────────────────────────────────────────────────────────────────
 # The common case is a single ~300 byte GET of latest.json. The release zip is
@@ -30,7 +30,7 @@
 set -uo pipefail
 
 # ── Config (override via environment) ─────────────────────────────────────────
-DOCROOT="${SG_DOCROOT:-/home/lwss1/public_html/defender.lws-s1.com/serverscrub/code}"
+DOCROOT="${SG_DOCROOT:-/home/serversc/public_html/serverscrub/code}"
 REPO="${SG_REPO:-admin-lagoonspace/cP-Defender}"
 BRANCH="${SG_BRANCH:-main}"
 SRC="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
