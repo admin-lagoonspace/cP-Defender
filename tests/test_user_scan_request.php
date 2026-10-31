@@ -95,7 +95,12 @@ t_contains($page, '@rename(',
 // The page must still not reach anything privileged. This is the rule the
 // original user-plugin test exists to enforce, and a new button is exactly
 // how it would get broken.
-foreach (['SG_DB', 'Database::', 'serverscrub.db', 'backend/api', 'PDO', 'Scanner'] as $forbidden) {
+// Each entry is a CODE reference, not a word. 'Scanner' alone used to be in
+// this list to catch the Scanner class, and it failed the moment the page
+// gained a "Scanner logs" tab -- an assertion matching prose rather than the
+// thing it is guarding.
+foreach (['SG_DB', 'Database::', 'serverscrub.db', 'backend/api',
+          'new PDO', 'Scanner::', 'new Scanner'] as $forbidden) {
     t_ok(strpos($page, $forbidden) === false,
          'the page still cannot reach ' . $forbidden
        . ' — it runs as the customer, and the database is 0700 root');
@@ -207,3 +212,69 @@ t_contains($page2, 'Nothing is wrong',
 t_contains($page2, "(int) (\$note['at'] ?? 0) < \$reqAt",
      'a note from before this request is ignored, or a customer would be shown '
    . 'the reason their LAST scan waited');
+
+// ── The tabbed panel ────────────────────────────────────────────────────────
+//
+// Asked for: the same shape cPGuard gives a cPanel user — a branded header, a
+// dashboard, and tabs for the scanner, its logs, CMS threats, the WAF and
+// attacks.
+//
+// The tabs are SERVER-SIDE. The page already runs PHP and already renders the
+// panels, so a ?tab= link survives a reload, a bookmark, the back button and a
+// browser with scripting off. Client-side tabs would buy nothing here and
+// could only fail.
+
+t_contains($page2, "\$TABS = [", 'the panels are a whitelist');
+foreach (['home', 'scanner', 'logs', 'cms', 'waf', 'attacks', 'files'] as $t) {
+    t_contains($page2, "'" . $t . "'", 'there is a ' . $t . ' panel');
+}
+t_contains($page2, "if (!isset(\$TABS[\$tab])) { \$tab = 'home'; }",
+     'THE INJECTION GUARD: an unknown tab falls back to home rather than '
+   . 'reaching a template branch or being echoed into the nav');
+
+t_ok(strpos($page2, 'addEventListener') === false
+     && strpos($page2, '<script') === false,
+     'and no JavaScript is involved — nothing to break, nothing to cache');
+
+// cPanel's session lives in the URL PATH, so links must stay relative.
+t_contains($page2, "basename((string) (\$_SERVER['SCRIPT_NAME']",
+     'links are relative, so cPanel\'s /cpsessNNN/ prefix is preserved');
+t_contains($page2, 'rawurlencode($t)', 'and the tab name is encoded into the query');
+
+// The dropdown has to work without script and without hover, or a touch user
+// cannot reach the scanner at all.
+t_contains($page2, '.ss-drop:focus-within .ss-menu',
+     'the Virus scanner menu opens on keyboard focus as well as hover');
+t_contains($page2, 'class="ss-drop', 'the menu exists');
+$dropAt = strpos($page2, 'class="ss-drop');
+$parentLink = substr($page2, $dropAt, 300);
+t_contains($parentLink, "\$link('scanner')",
+     'and its PARENT is itself a link to the scanner — on a touch device, '
+   . 'where there is no hover, the menu is a shortcut rather than the only '
+   . 'way in');
+
+// Per-account data, which is the whole constraint this page lives under.
+t_contains($page2, "\$report['waf']", 'the WAF panel reads the report');
+t_contains($page2, "\$report['attacks']", 'as does the attacks panel');
+t_contains($page2, "\$report['scans']", 'and the scanner logs');
+t_contains($page2, 'Only events that name one of your own domains',
+     'and the attacks panel says plainly that it shows only this account\'s '
+   . 'domains, rather than implying the customer is seeing the whole server');
+
+// ── The report has to carry it, or the panels are empty ─────────────────────
+$ur = (string) file_get_contents($repo . '/backend/lib/UserReport.php');
+t_contains($ur, 'public static function domainsFor',
+     'the privileged side resolves the account\'s domains — a WAF event is '
+   . 'keyed on a HOST, which is the only thing tying it to a customer');
+t_contains($ur, "preg_match('/^DNS\d*=(.+)\$/'",
+     'read from the account\'s own cPanel file, DNS= and DNS1..n');
+t_contains($ur, "preg_match('/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\$/', \$d)",
+     'and every value validated as a hostname — this feeds SQL placeholders '
+   . 'and a page, from a file cPanel writes rather than us');
+
+t_contains($ur, 'private static function inClause',
+     'THE EMPTY-IN TRAP: an account with no domains gets no query at all. '
+   . '"host IN ()" is a syntax error and "IN (NULL)" matches nothing while '
+   . 'looking like it worked');
+$ucBody = t_fn_body($ur, 'inClause', 'php');
+t_contains($ucBody, 'if ($values === []) { return null; }', 'which is what null means here');

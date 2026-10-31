@@ -104,6 +104,59 @@ class UserReport
         return rtrim($home, '/');
     }
 
+    /**
+     * Every domain this account owns.
+     *
+     * Needed because the interesting per-account security data is keyed on a
+     * DOMAIN, not a username: a WAF event knows the host it was aimed at, and
+     * nothing else ties it to a customer. Read from the account's own cPanel
+     * file, where DNS= is the main domain and DNS1..DNSn are the addon,
+     * parked and sub domains.
+     *
+     * Bounded, and every value validated. This feeds SQL placeholders and a
+     * page, and the file is writable by cPanel rather than by us.
+     *
+     * @return string[]
+     */
+    public static function domainsFor(string $user): array
+    {
+        if (!self::validUsername($user)) { return []; }
+        $path = '/var/cpanel/users/' . $user;
+        if (is_link($path) || !is_file($path) || !is_readable($path)) { return []; }
+        if ((int) @filesize($path) > 262144) { return []; }
+
+        $out = [];
+        foreach (preg_split('/
+?
+/', (string) @file_get_contents($path)) ?: [] as $line) {
+            if (!preg_match('/^DNS\d*=(.+)$/', trim($line), $m)) { continue; }
+            $d = strtolower(trim($m[1]));
+            // A hostname, and nothing that could be a wildcard or a pattern.
+            if ($d === '' || strlen($d) > 253) { continue; }
+            if (!preg_match('/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/', $d)) { continue; }
+            $out[$d] = true;
+            if (count($out) >= 200) { break; }
+        }
+        return array_keys($out);
+    }
+
+    /**
+     * Placeholders and parameters for "host IN (...)", or null when the
+     * account has no domains.
+     *
+     * Returning null rather than an empty IN list matters: "host IN ()" is a
+     * syntax error in SQLite, and "WHERE host IN (NULL)" silently matches
+     * nothing while looking like it works.
+     *
+     * @return array{0:string,1:array}|null
+     */
+    private static function inClause(array $values): ?array
+    {
+        $values = array_values(array_filter($values, 'strlen'));
+        if ($values === []) { return null; }
+        return [implode(',', array_fill(0, count($values), '?')), $values];
+    }
+
     /** The report's path for a user, or null if the home is unusable. */
     public static function reportPath(string $user): ?string
     {
@@ -217,6 +270,74 @@ class UserReport
         }
         unset($ch);
 
+        // ── The per-domain data ────────────────────────────────────────────
+        //
+        // WAF events and security events are keyed on a HOST, which is the
+        // only thing that ties them to a customer. An account with no domains
+        // gets empty lists rather than a query with an empty IN clause --
+        // "host IN ()" is a syntax error, and "IN (NULL)" matches nothing
+        // while looking like it worked.
+        $domains = self::domainsFor($user);
+        $in      = self::inClause($domains);
+        $since30 = time() - (30 * 86400);
+
+        $waf = [];
+        $attacks = [];
+        if ($in !== null) {
+            [$ph, $args] = $in;
+            $waf = self::safeFetch(
+                "SELECT rule_id, rule_msg, severity, ip_address, uri, method,
+                        host, action, timestamp
+                   FROM waf_events
+                  WHERE host IN ($ph)
+                  ORDER BY timestamp DESC
+                  LIMIT " . self::LIMIT,
+                $args
+            );
+            $attacks = self::safeFetch(
+                "SELECT type, severity, source_ip, target, description, timestamp
+                   FROM security_events
+                  WHERE target IN ($ph)
+                  ORDER BY timestamp DESC
+                  LIMIT " . self::LIMIT,
+                $args
+            );
+        }
+
+        // Scan history for THIS account. scan_path is the directory a job
+        // covered, so a job over the whole of /home counts for everybody and a
+        // job over one home counts for that account only.
+        $scans = self::safeFetch(
+            "SELECT id, scan_type, status, started_at, finished_at,
+                    files_scanned, threats_found, scan_path
+               FROM scan_jobs
+              WHERE scan_path = ? OR scan_path = ? OR ? LIKE scan_path || '%'
+              ORDER BY COALESCE(started_at, created_at) DESC
+              LIMIT 25",
+            [rtrim($prefix, '/'), $prefix, rtrim($prefix, '/')]
+        );
+
+        // Thirty-day counters for the dashboard tiles.
+        $cnt = static function (string $sql, array $a): int {
+            $r = self::safeFetch($sql, $a);
+            return (int) ($r[0]['c'] ?? 0);
+        };
+        $threats30 = $cnt(
+            "SELECT COUNT(*) AS c FROM threats
+              WHERE (cpanel_user = ? OR file_path LIKE ?)
+                AND status != 'deleted' AND detected_at >= ?",
+            [$user, $prefix . '%', $since30]
+        );
+        $attacks30 = 0;
+        if ($in !== null) {
+            [$ph, $args] = $in;
+            $attacks30 = $cnt(
+                "SELECT COUNT(*) AS c FROM waf_events
+                  WHERE host IN ($ph) AND timestamp >= ?",
+                array_merge($args, [$since30])
+            );
+        }
+
         return [
             'schema'       => 1,
             'user'         => $user,
@@ -238,6 +359,15 @@ class UserReport
             // waiting, and how long until it may ask again. Computed here as
             // root, because the page cannot read any of it.
             'scan_request' => UserScanRequest::statusFor($user),
+            'domains'      => $domains,
+            'waf'          => $waf,
+            'attacks'      => $attacks,
+            'scans'        => $scans,
+            'stats30'      => [
+                'threats'    => $threats30,
+                'attacks'    => $attacks30,
+                'cms_issues' => $outdated,
+            ],
         ];
     }
 

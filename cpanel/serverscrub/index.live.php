@@ -185,12 +185,137 @@ ob_start();
   .sscrub .btn:hover:not(:disabled) { filter:brightness(1.08); }
   .sscrub .btn:disabled { background:var(--chip); color:var(--dim); border-color:var(--line); cursor:default; }
   @media (max-width:560px) { .sscrub .hide-sm{display:none} }
+
+  /* ── Branded header and tabs ──────────────────────────────────────────
+   * The nav is server-side: each tab is a real link to ?tab=<name>, so it
+   * survives a reload, a bookmark and the back button, and works with
+   * scripting off. There is nothing here for JavaScript to do. */
+  .sscrub .ss-head {
+    display:flex; align-items:center; gap:22px; flex-wrap:wrap;
+    padding:0 0 14px; border-bottom:2px solid var(--line); margin-bottom:18px;
+  }
+  .sscrub .ss-brand { display:flex; align-items:center; gap:9px;
+                      font-size:1.22rem; letter-spacing:-.02em; color:var(--blue); }
+  .sscrub .ss-brand svg { width:30px; height:30px; flex:none; }
+  .sscrub .ss-brand strong { font-weight:700; }
+
+  .sscrub .ss-tabs { display:flex; align-items:center; gap:4px;
+                     margin-left:auto; flex-wrap:wrap; }
+  .sscrub .ss-tabs > a, .sscrub .ss-drop > a {
+    display:inline-block; padding:8px 14px; border-radius:4px;
+    font-size:.84rem; font-weight:600; letter-spacing:.02em;
+    text-transform:uppercase; color:var(--dim); text-decoration:none;
+    border:1px solid transparent; white-space:nowrap;
+  }
+  .sscrub .ss-tabs > a:hover, .sscrub .ss-drop > a:hover { color:var(--blue); }
+  .sscrub .ss-tabs > a.on, .sscrub .ss-drop.on > a {
+    color:var(--blue); border-color:var(--blue);
+  }
+
+  /* Hover/focus dropdown, no script. focus-within keeps it reachable by
+   * keyboard; on a touch device the parent link itself still goes to the
+   * scanner page, so the menu is a shortcut and never the only way in. */
+  .sscrub .ss-drop { position:relative; display:inline-block; }
+  .sscrub .ss-drop i { font-style:normal; font-size:.8em; opacity:.7; }
+  .sscrub .ss-menu {
+    display:none; position:absolute; top:100%; left:0; z-index:30;
+    min-width:190px; background:#fff; border:1px solid var(--line);
+    border-radius:4px; box-shadow:0 6px 20px rgba(15,23,32,.14); padding:5px 0;
+  }
+  .sscrub .ss-drop:hover .ss-menu, .sscrub .ss-drop:focus-within .ss-menu { display:block; }
+  .sscrub .ss-menu a {
+    display:block; padding:9px 16px; font-size:.82rem; font-weight:600;
+    text-transform:uppercase; letter-spacing:.02em; color:var(--dim);
+    text-decoration:none; white-space:nowrap;
+  }
+  .sscrub .ss-menu a:hover { background:var(--chip); color:var(--blue); }
+
+  .sscrub .ss-title { display:flex; align-items:baseline; gap:12px; margin-bottom:18px; }
+  .sscrub .ss-title h1 { margin:0; }
+  .sscrub .ss-title .sub { margin:0; }
+
+  .sscrub .tile .t { color:var(--dim); font-size:.68rem; margin-top:2px; }
+
+  @media (max-width:760px) {
+    .sscrub .ss-head { gap:10px; }
+    .sscrub .ss-tabs { margin-left:0; width:100%; }
+    .sscrub .ss-tabs > a, .sscrub .ss-drop > a { padding:7px 10px; font-size:.78rem; }
+  }
 </style>
 
 <div class="sscrub">
-<h1>ServerScrub</h1>
-<div class="sub">
-  Security findings for <strong><?= e($user !== '' ? $user : 'your account') ?></strong>
+<?php
+  // ── Which panel ─────────────────────────────────────────────────────────
+  //
+  // Server-side, not JavaScript. The page already runs PHP, the panels are
+  // already rendered by it, and a ?tab= link survives a reload, a bookmark,
+  // the back button and a browser with scripting disabled. Client-side tabs
+  // would buy nothing and could only fail.
+  //
+  // Whitelisted, because this value picks a template branch and is echoed
+  // into the nav as the current item.
+  $TABS = [
+      'home'    => 'Home',
+      'scanner' => 'Virus scanner',
+      'logs'    => 'Scanner logs',
+      'cms'     => 'CMS threats',
+      'waf'     => 'WAF',
+      'attacks' => 'Attacks',
+      'files'   => 'File changes',
+  ];
+  $tab = (string) ($_GET['tab'] ?? 'home');
+  if (!isset($TABS[$tab])) { $tab = 'home'; }
+
+  // Keep cPanel's session path. The links are relative so the /cpsessNNN/
+  // prefix is preserved automatically; only the query is replaced.
+  $self = basename((string) ($_SERVER['SCRIPT_NAME'] ?? 'index.live.php'));
+  $link = static function (string $t) use ($self): string {
+      return $self . '?tab=' . rawurlencode($t);
+  };
+
+  $s        = $report['summary'] ?? [];
+  $st30     = $report['stats30'] ?? [];
+  $threats  = $report['threats'] ?? [];
+  $cmsList  = $report['cms'] ?? [];
+  $changes  = $report['file_changes'] ?? [];
+  $wafRows  = $report['waf'] ?? [];
+  $atkRows  = $report['attacks'] ?? [];
+  $scanRows = $report['scans'] ?? [];
+?>
+
+<div class="ss-head">
+  <div class="ss-brand">
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M32 3 56 12v20c0 14-10 25-24 29C18 57 8 46 8 32V12z" fill="#1668b3"/>
+      <rect x="19" y="22" width="26" height="7" rx="2.2" fill="#fff" opacity=".95"/>
+      <rect x="19" y="32" width="26" height="7" rx="2.2" fill="#fff" opacity=".75"/>
+      <path d="M28.5 44.5l4.2 4.2 9-9.4" fill="none" stroke="#7fe3b0" stroke-width="4"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span>Server<strong>Scrub</strong></span>
+  </div>
+
+  <nav class="ss-tabs">
+    <a class="<?= $tab === 'home' ? 'on' : '' ?>" href="<?= e($link('home')) ?>">Home</a>
+
+    <span class="ss-drop<?= in_array($tab, ['scanner', 'logs'], true) ? ' on' : '' ?>">
+      <a href="<?= e($link('scanner')) ?>">Virus scanner <i>&#9662;</i></a>
+      <span class="ss-menu">
+        <a href="<?= e($link('scanner')) ?>">Manual scan</a>
+        <a href="<?= e($link('logs')) ?>">Scanner logs</a>
+      </span>
+    </span>
+
+    <a class="<?= $tab === 'cms' ? 'on' : '' ?>" href="<?= e($link('cms')) ?>">CMS threats</a>
+    <a class="<?= $tab === 'waf' ? 'on' : '' ?>" href="<?= e($link('waf')) ?>">WAF</a>
+    <a class="<?= $tab === 'attacks' ? 'on' : '' ?>" href="<?= e($link('attacks')) ?>">Attacks</a>
+    <a class="<?= $tab === 'files' ? 'on' : '' ?>" href="<?= e($link('files')) ?>">File changes</a>
+  </nav>
+</div>
+
+<div class="ss-title">
+  <h1><?= e($TABS[$tab]) ?></h1>
+  <span class="sub"><?= e($user !== '' ? $user : 'your account') ?></span>
 </div>
 
 <?php if ($report === null): ?>
@@ -204,68 +329,49 @@ ob_start();
   </div>
 <?php else: ?>
 
-  <div class="tiles">
-    <div class="tile">
-      <div class="n <?= ((int)($s['threats_active'] ?? 0)) ? 'red' : 'green' ?>">
-        <?= (int)($s['threats_active'] ?? 0) ?>
-      </div>
-      <div class="l">Active threats</div>
-    </div>
-    <div class="tile">
-      <div class="n <?= ((int)($s['cms_outdated'] ?? 0)) ? 'amber' : 'green' ?>">
-        <?= (int)($s['cms_outdated'] ?? 0) ?>
-      </div>
-      <div class="l">Outdated apps</div>
-    </div>
-    <div class="tile">
-      <div class="n"><?= (int)($s['cms_installs'] ?? 0) ?></div>
-      <div class="l">Applications</div>
-    </div>
-    <div class="tile">
-      <div class="n <?= ((int)($s['file_changes'] ?? 0)) ? 'amber' : 'green' ?>">
-        <?= (int)($s['file_changes'] ?? 0) ?>
-      </div>
-      <div class="l">Changed files</div>
-    </div>
-  </div>
+<?php
+  // The scan-request state is needed on more than one panel.
+  $sr       = $report['scan_request'] ?? [];
+  $srOn     = !empty($sr['enabled']);
+  $srWait   = (int)($sr['retry_in'] ?? 0);
+  $srQueued = $requested || !empty($sr['pending']);
+  function hms(int $s): string {
+      if ($s <= 0)    { return 'now'; }
+      if ($s < 3600)  { return 'in ' . max(1, intdiv($s, 60)) . ' minute(s)'; }
+      return 'in ' . intdiv($s, 3600) . ' hour(s)';
+  }
 
-  <?php
-    $sr       = $report['scan_request'] ?? [];
-    $srOn     = !empty($sr['enabled']);
-    $srWait   = (int)($sr['retry_in'] ?? 0);
-    $srQueued = $requested || !empty($sr['pending']);
-    function hms(int $s): string {
-        if ($s <= 0)    { return 'now'; }
-        if ($s < 3600)  { return 'in ' . max(1, intdiv($s, 60)) . ' minute(s)'; }
-        return 'in ' . intdiv($s, 3600) . ' hour(s)';
-    }
+  // When this account asked, read from its OWN request file.
+  //
+  // The report is rewritten by the privileged side every quarter of an hour,
+  // so anything carried in it is up to that stale -- including whether a
+  // request exists at all. Somebody who clicks the button and reloads would
+  // otherwise be told nothing has been requested. The file is in this
+  // customer's home and this page runs as them, so the one fact that has to
+  // be fresh can be read directly.
+  $reqAt = 0;
+  if ($home !== '') {
+      $rp = rtrim($home, '/') . '/.serverscrub/scan-request.json';
+      if (is_file($rp)) {
+          $rj = json_decode((string) @file_get_contents($rp), true);
+          $reqAt = is_array($rj) ? (int) ($rj['requested_at'] ?? 0) : 0;
+      }
+  }
 
-    // When this account asked, read from its OWN request file.
-    //
-    // The report is rewritten by the privileged side every quarter of an
-    // hour, so anything carried in it is up to that stale -- including
-    // whether a request exists at all. Somebody who clicks the button and
-    // reloads would otherwise be told nothing has been requested. The file
-    // is in this customer's home and this page runs as them, so the one fact
-    // that has to be fresh can be read directly.
-    $reqAt = 0;
-    if ($home !== '') {
-        $rp = rtrim($home, '/') . '/.serverscrub/scan-request.json';
-        if (is_file($rp)) {
-            $rj = json_decode((string) @file_get_contents($rp), true);
-            $reqAt = is_array($rj) ? (int) ($rj['requested_at'] ?? 0) : 0;
-        }
-    }
+  $note      = is_array($sr['note'] ?? null) ? $sr['note'] : [];
+  $noteState = (string) ($note['state'] ?? '');
+  if ($reqAt > 0 && (int) ($note['at'] ?? 0) < $reqAt) { $noteState = ''; }
 
-    $note      = is_array($sr['note'] ?? null) ? $sr['note'] : [];
-    $noteState = (string) ($note['state'] ?? '');
-    // A note from before this request was made describes the previous one.
-    if ($reqAt > 0 && (int) ($note['at'] ?? 0) < $reqAt) { $noteState = ''; }
+  $lastCheck = (int) ($sr['last_check_at'] ?? 0);
+  $perCheck  = max(1, (int) ($sr['per_check'] ?? 1));
+?>
 
-    $lastCheck = (int) ($sr['last_check_at'] ?? 0);
-    $perCheck  = max(1, (int) ($sr['per_check'] ?? 1));
-  ?>
-  <?php if ($srOn): ?>
+<?php
+// ── The scan panel, shown on Home and on Virus scanner ──────────────────────
+$renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
+                                   $noteState, $note, $perCheck, $lastCheck) {
+    if (!$srOn) { return; }
+?>
   <div class="card">
     <h2>Scan my account</h2>
     <div style="padding:14px">
@@ -322,12 +428,15 @@ ob_start();
       <?php endif; ?>
     </div>
   </div>
-  <?php endif; ?>
+<?php
+};
 
-  <?php $threats = $report['threats'] ?? []; ?>
+// ── The threats table, shown on Home and on Virus scanner ───────────────────
+$renderThreats = function (array $rows) {
+?>
   <div class="card">
     <h2>Detected threats</h2>
-    <?php if (!$threats): ?>
+    <?php if (!$rows): ?>
       <div class="ok">No threats have been found in your account.</div>
     <?php else: ?>
       <table>
@@ -336,7 +445,7 @@ ob_start();
           <th class="hide-sm">Status</th><th class="hide-sm">Found</th>
         </tr></thead>
         <tbody>
-        <?php foreach ($threats as $t):
+        <?php foreach ($rows as $t):
           $sev = strtolower((string)($t['severity'] ?? ''));
           $cls = $sev === 'critical' || $sev === 'high' ? 'red' : ($sev === 'medium' ? 'amber' : 'dimc');
         ?>
@@ -352,11 +461,110 @@ ob_start();
       </table>
     <?php endif; ?>
   </div>
+<?php
+};
+?>
 
-  <?php $cms = $report['cms'] ?? []; ?>
+<?php /* ── HOME ─────────────────────────────────────────────────────────── */ ?>
+<?php if ($tab === 'home'): ?>
+
+  <div class="tiles">
+    <div class="tile">
+      <div class="n <?= ((int)($st30['threats'] ?? 0)) ? 'red' : 'green' ?>">
+        <?= (int)($st30['threats'] ?? 0) ?>
+      </div>
+      <div class="l">Threats found</div>
+      <div class="t">last 30 days</div>
+    </div>
+    <div class="tile">
+      <div class="n <?= ((int)($st30['attacks'] ?? 0)) ? 'amber' : 'green' ?>">
+        <?= (int)($st30['attacks'] ?? 0) ?>
+      </div>
+      <div class="l">Attacks blocked</div>
+      <div class="t">last 30 days</div>
+    </div>
+    <div class="tile">
+      <div class="n <?= ((int)($st30['cms_issues'] ?? 0)) ? 'amber' : 'green' ?>">
+        <?= (int)($st30['cms_issues'] ?? 0) ?>
+      </div>
+      <div class="l">CMS issues</div>
+      <div class="t">needing an update</div>
+    </div>
+    <div class="tile">
+      <div class="n <?= ((int)($s['threats_active'] ?? 0)) ? 'red' : 'green' ?>">
+        <?= (int)($s['threats_active'] ?? 0) ?>
+      </div>
+      <div class="l">Active now</div>
+      <div class="t">not yet cleaned</div>
+    </div>
+  </div>
+
+  <?php $renderScanCard(); ?>
+  <?php $renderThreats(array_slice($threats, 0, 10)); ?>
+
+  <?php if (count($threats) > 10): ?>
+    <div class="foot" style="margin-bottom:16px">
+      Showing the 10 most recent of <?= count($threats) ?>.
+      <a href="<?= e($link('scanner')) ?>">See them all in Virus scanner</a>.
+    </div>
+  <?php endif; ?>
+
+<?php /* ── VIRUS SCANNER ────────────────────────────────────────────────── */ ?>
+<?php elseif ($tab === 'scanner'): ?>
+
+  <?php $renderScanCard(); ?>
+  <?php $renderThreats($threats); ?>
+
+<?php /* ── SCANNER LOGS ─────────────────────────────────────────────────── */ ?>
+<?php elseif ($tab === 'logs'): ?>
+
+  <div class="card">
+    <h2>Scanner logs</h2>
+    <?php if (!$scanRows): ?>
+      <div class="ok">
+        No scan has covered your account yet. Scans are scheduled by your hosting
+        provider, and you can request one from the Virus scanner page.
+      </div>
+    <?php else: ?>
+      <table>
+        <thead><tr>
+          <th>Started</th><th>Type</th><th>Status</th>
+          <th class="hide-sm">Files</th><th>Threats</th><th class="hide-sm">Took</th>
+        </tr></thead>
+        <tbody>
+        <?php foreach ($scanRows as $j):
+          $started  = (int)($j['started_at'] ?? 0);
+          $finished = (int)($j['finished_at'] ?? 0);
+          $found    = (int)($j['threats_found'] ?? 0);
+          $status   = (string)($j['status'] ?? '');
+          $scls     = $status === 'completed' ? 'green'
+                    : ($status === 'running' || $status === 'pending' ? 'amber' : 'dimc');
+          $dur      = ($started > 0 && $finished > $started)
+                    ? ($finished - $started < 60
+                        ? ($finished - $started) . 's'
+                        : intdiv($finished - $started, 60) . 'm')
+                    : '—';
+        ?>
+          <tr>
+            <td class="dimc"><?= e(ago($started)) ?></td>
+            <td><?= e($j['scan_type'] ?? '') ?></td>
+            <td><span class="tag <?= $scls ?>"><?= e($status) ?></span></td>
+            <td class="hide-sm"><?= number_format((int)($j['files_scanned'] ?? 0)) ?></td>
+            <td class="<?= $found ? 'red' : 'green' ?>"><?= $found ?></td>
+            <td class="hide-sm dimc"><?= e($dur) ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    <?php endif; ?>
+  </div>
+
+<?php /* ── CMS THREATS ──────────────────────────────────────────────────── */ ?>
+<?php elseif ($tab === 'cms'): ?>
+
   <div class="card">
     <h2>Applications</h2>
-    <?php if (!$cms): ?>
+    <?php if (!$cmsList): ?>
       <div class="ok">No WordPress, Joomla or Drupal installations were found in your account.</div>
     <?php else: ?>
       <table>
@@ -364,7 +572,7 @@ ob_start();
           <th>Application</th><th>Version</th><th>Location</th><th class="hide-sm">Notes</th>
         </tr></thead>
         <tbody>
-        <?php foreach ($cms as $c):
+        <?php foreach ($cmsList as $c):
           $names = ['wordpress' => 'WordPress', 'joomla' => 'Joomla', 'drupal' => 'Drupal'];
           $type  = (string)($c['cms_type'] ?? '');
           $out   = (int)($c['outdated'] ?? 0) === 1;
@@ -386,24 +594,106 @@ ob_start();
     <?php endif; ?>
   </div>
 
-  <?php $changes = $report['file_changes'] ?? []; ?>
-  <?php if ($changes): ?>
+<?php /* ── WAF ──────────────────────────────────────────────────────────── */ ?>
+<?php elseif ($tab === 'waf'): ?>
+
+  <div class="card">
+    <h2>Web application firewall</h2>
+    <?php if (!$wafRows): ?>
+      <div class="ok">
+        No web application firewall events for your domains.
+        <div class="foot" style="margin-top:8px">
+          Requests that match a firewall rule are blocked before they reach your
+          site, and are listed here when they do.
+        </div>
+      </div>
+    <?php else: ?>
+      <table>
+        <thead><tr>
+          <th>When</th><th>Domain</th><th>Rule</th>
+          <th class="hide-sm">From</th><th class="hide-sm">Path</th><th>Action</th>
+        </tr></thead>
+        <tbody>
+        <?php foreach ($wafRows as $w):
+          $sev  = strtolower((string)($w['severity'] ?? ''));
+          $acls = ((string)($w['action'] ?? '')) === 'block' ? 'red' : 'amber';
+        ?>
+          <tr>
+            <td class="dimc"><?= e(ago((int)($w['timestamp'] ?? 0))) ?></td>
+            <td class="mono"><?= e($w['host'] ?? '') ?></td>
+            <td><?= e($w['rule_msg'] ?? $w['rule_id'] ?? 'rule') ?></td>
+            <td class="hide-sm mono"><?= e($w['ip_address'] ?? '') ?></td>
+            <td class="hide-sm mono"><?= e(mb_substr((string)($w['uri'] ?? ''), 0, 60)) ?></td>
+            <td><span class="tag <?= $acls ?>"><?= e($w['action'] ?? '') ?></span></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    <?php endif; ?>
+  </div>
+
+<?php /* ── ATTACKS ──────────────────────────────────────────────────────── */ ?>
+<?php elseif ($tab === 'attacks'): ?>
+
+  <div class="card">
+    <h2>Attacks on your domains</h2>
+    <?php if (!$atkRows): ?>
+      <div class="ok">
+        No attacks have been recorded against your domains.
+        <div class="foot" style="margin-top:8px">
+          Only events that name one of your own domains appear here. Attacks on
+          the server as a whole are handled by your hosting provider and are not
+          shown.
+        </div>
+      </div>
+    <?php else: ?>
+      <table>
+        <thead><tr>
+          <th>When</th><th>Type</th><th>Severity</th>
+          <th class="hide-sm">From</th><th>Target</th>
+        </tr></thead>
+        <tbody>
+        <?php foreach ($atkRows as $a):
+          $sev = strtolower((string)($a['severity'] ?? ''));
+          $cls = $sev === 'critical' || $sev === 'high' ? 'red' : ($sev === 'medium' ? 'amber' : 'dimc');
+        ?>
+          <tr>
+            <td class="dimc"><?= e(ago((int)($a['timestamp'] ?? 0))) ?></td>
+            <td><?= e(str_replace('_', ' ', (string)($a['type'] ?? ''))) ?></td>
+            <td><span class="tag <?= $cls ?>"><?= e($a['severity'] ?? '?') ?></span></td>
+            <td class="hide-sm mono"><?= e($a['source_ip'] ?? '') ?></td>
+            <td class="mono"><?= e($a['target'] ?? '') ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    <?php endif; ?>
+  </div>
+
+<?php /* ── FILE CHANGES ─────────────────────────────────────────────────── */ ?>
+<?php elseif ($tab === 'files'): ?>
+
   <div class="card">
     <h2>Changed files</h2>
-    <table>
-      <thead><tr><th>File</th><th>Change</th><th class="hide-sm">Noticed</th></tr></thead>
-      <tbody>
-      <?php foreach ($changes as $ch): ?>
-        <tr>
-          <td class="mono"><?= e($ch['relative_path'] ?? $ch['file_path'] ?? '') ?></td>
-          <td><?= e($ch['status'] ?? '') ?></td>
-          <td class="hide-sm dimc"><?= e(ago((int)($ch['last_check'] ?? 0))) ?></td>
-        </tr>
-      <?php endforeach; ?>
-      </tbody>
-    </table>
+    <?php if (!$changes): ?>
+      <div class="ok">No unexpected file changes have been noticed in your account.</div>
+    <?php else: ?>
+      <table>
+        <thead><tr><th>File</th><th>Change</th><th class="hide-sm">Noticed</th></tr></thead>
+        <tbody>
+        <?php foreach ($changes as $ch): ?>
+          <tr>
+            <td class="mono"><?= e($ch['relative_path'] ?? $ch['file_path'] ?? '') ?></td>
+            <td><?= e($ch['status'] ?? '') ?></td>
+            <td class="hide-sm dimc"><?= e(ago((int)($ch['last_check'] ?? 0))) ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    <?php endif; ?>
   </div>
-  <?php endif; ?>
+
+<?php endif; ?>
 
   <div class="foot">
     Report generated <?= e(ago((int)($report['generated_at'] ?? 0))) ?>
