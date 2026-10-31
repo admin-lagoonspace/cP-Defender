@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pricing — ServerScrub</title>
+<meta name="description" content="ServerScrub is $10 per server per month. Unlimited cPanel accounts, every module included, no per-account charges.">
+<link rel="icon" href="/assets/img/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/css/site.css">
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/">
+      <img src="/assets/img/logo.svg" alt="" width="28" height="28">ServerScrub
+    </a>
+    <nav>
+      <a href="/features.html">Features</a>
+      <a href="/pricing.html">Pricing</a>
+      <a href="/install.html" class="hide-sm">Install</a>
+      <a class="btn btn-primary" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero" style="padding:58px 0 40px">
+  <div class="wrap" style="max-width:700px;text-align:center;margin:0 auto">
+    <span class="eyebrow">Pricing</span>
+    <h1 style="font-size:2.5rem">One price. Per server.</h1>
+    <p class="lede" style="margin-inline:auto">
+      No per-account tier, no counting sites, no upgrade when a customer adds a domain.
+      If it runs on the server, it is covered.
+    </p>
+  </div>
+</div>
+
+<section style="padding-top:34px">
+  <div class="wrap">
+    <div class="price-card">
+      <div style="font-size:.8rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#6b7784">
+        ServerScrub
+      </div>
+      <div class="price" style="margin-top:12px">$10<span> / month</span></div>
+      <div style="color:#6b7784;font-size:.95rem;margin-top:4px">per server</div>
+
+      <ul>
+        <li>Unlimited cPanel accounts on that server</li>
+        <li>Malware scanning, quarantine and verdicts</li>
+        <li>Firewall with CSF integration</li>
+        <li>Brute force protection and bot shield</li>
+        <li>Web application firewall (OWASP CRS)</li>
+        <li>Mail queue and outbound spam monitoring</li>
+        <li>Rootkit, file integrity and CMS version checks</li>
+        <li>A security page for every cPanel user</li>
+        <li>Updates in place, settings preserved</li>
+      </ul>
+
+      <a class="btn btn-primary btn-lg" style="display:block" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
+      <p style="font-size:.84rem;color:#6b7784;margin:14px 0 0">
+        Billed monthly. One licence per server.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap" style="max-width:760px">
+    <div class="sec-head"><h2>Questions worth asking first</h2></div>
+
+    <div class="feat">
+      <div></div>
+      <div>
+        <h3>Is it really unlimited accounts?</h3>
+        <p>Yes. The licence is per server. A server with 300 accounts costs the same as
+           one with 10, because the work ServerScrub does is per server — it scans the
+           disks, reads the logs and manages the firewall once, not once per customer.</p>
+      </div>
+    </div>
+
+    <div class="feat">
+      <div></div>
+      <div>
+        <h3>What do I need on the server?</h3>
+        <p>cPanel or WHM on a RHEL-family system — AlmaLinux, Rocky, CloudLinux or
+           CentOS. If CSF is installed, ServerScrub uses it; if not, it manages
+           nftables, firewalld or iptables itself.</p>
+      </div>
+    </div>
+
+    <div class="feat">
+      <div></div>
+      <div>
+        <h3>Will it fight my existing setup?</h3>
+        <p>It is built not to. It uses CSF rather than replacing it, keeps its own rules
+           in a namespaced chain so nothing else is disturbed, reconciles with cPHulk
+           rather than duplicating it, and stands aside while JetBackup or another backup
+           is running rather than competing for the same disks.</p>
+      </div>
+    </div>
+
+    <div class="feat">
+      <div></div>
+      <div>
+        <h3>What happens to my data when I update?</h3>
+        <p>Nothing. Updates overlay the code and preserve the database, your settings,
+           the quarantine, the logs and any custom signatures. Quarantined files are
+           evidence, and they are never removed by an upgrade.</p>
+      </div>
+    </div>
+
+    <div class="feat">
+      <div></div>
+      <div>
+        <h3>Can my customers see each other's findings?</h3>
+        <p>No, and not because of a filter that could be got wrong. Each account's report
+           is written into that account's own home directory and owned by that user, so
+           one customer's process cannot open another's. It is impossible by
+           construction.</p>
+      </div>
+    </div>
+
+    <div class="feat">
+      <div></div>
+      <div>
+        <h3>How do I remove it?</h3>
+        <p><code>uninstall.sh</code> removes the application, its cron entries and its
+           WHM and cPanel registrations. Your quarantine is left in place, because
+           deleting the evidence of a compromise on the way out is not a decision an
+           uninstaller should make for you.</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="wrap" style="text-align:center">
+    <div class="sec-head center">
+      <h2>Ready when you are</h2>
+      <p>Install takes about a minute, and the first scan starts on its own.</p>
+    </div>
+    <a class="btn btn-primary btn-lg" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now — $10/month</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div style="max-width:300px">
+        <a class="brand" href="/" style="margin-bottom:10px">
+          <img src="/assets/img/logo.svg" alt="" width="28" height="28">ServerScrub
+        </a>
+        <p style="margin:0">Server security for cPanel and WHM. One agent, every account.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <a href="/features.html">Features</a>
+        <a href="/pricing.html">Pricing</a>
+        <a href="/install.html">Installation</a>
+      </div>
+      <div>
+        <h4>Get started</h4>
+        <a href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
+        <a href="https://clientarea.lagoonspace.net/">Client area</a>
+      </div>
+    </div>
+    <div class="foot-bot">&copy; 2026 ServerScrub. All rights reserved.</div>
+  </div>
+</footer>
+
+</body>
+</html>

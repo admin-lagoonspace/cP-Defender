@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installation — ServerScrub</title>
+<meta name="description" content="Install ServerScrub on a cPanel server with one command, update it in place, and remove it cleanly.">
+<link rel="icon" href="/assets/img/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/css/site.css">
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/">
+      <img src="/assets/img/logo.svg" alt="" width="28" height="28">ServerScrub
+    </a>
+    <nav>
+      <a href="/features.html">Features</a>
+      <a href="/pricing.html">Pricing</a>
+      <a href="/install.html" class="hide-sm">Install</a>
+      <a class="btn btn-primary" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero" style="padding:58px 0 40px">
+  <div class="wrap" style="max-width:760px">
+    <span class="eyebrow">Installation</span>
+    <h1 style="font-size:2.45rem">One command, as root.</h1>
+    <p class="lede">
+      The installer detects cPanel, installs its dependencies, registers itself in WHM
+      and in every cPanel account, writes its cron entries and starts the first scan.
+    </p>
+  </div>
+</div>
+
+<section style="padding-top:24px">
+  <div class="wrap" style="max-width:760px">
+
+    <div class="sec-head"><h2>Before you start</h2></div>
+    <ul style="color:#3b4754;font-size:.97rem">
+      <li>cPanel or WHM on a RHEL-family system — AlmaLinux, Rocky, CloudLinux or CentOS</li>
+      <li>Root shell access</li>
+      <li>A licence key from your order</li>
+    </ul>
+
+    <div class="sec-head" style="margin-top:42px"><h2>Install</h2></div>
+<pre><code><span class="c"># as root</span>
+bash &lt;(curl -fsSL https://serverscrub.com/serverscrub/code/get.sh)</code></pre>
+    <p style="color:#3b4754;font-size:.96rem">
+      When it finishes, open <strong>WHM &rarr; Plugins &rarr; ServerScrub</strong> and
+      enter your licence key. Every cPanel account on the server also gains a
+      <strong>ServerScrub Security</strong> entry in its own Security section, with no
+      further work.
+    </p>
+
+    <div class="sec-head" style="margin-top:42px"><h2>Update</h2></div>
+<pre><code>bash /usr/local/serverscrub/update.sh --yes</code></pre>
+    <p style="color:#3b4754;font-size:.96rem">
+      Updates overlay the code and preserve everything else: the database, your
+      settings, the quarantine, the logs and any custom signatures. ServerScrub also
+      checks for updates on its own and can apply them for you if you let it.
+    </p>
+
+    <div class="sec-head" style="margin-top:42px"><h2>Check it is running</h2></div>
+<pre><code><span class="c"># what version is installed</span>
+grep SG_VERSION /usr/local/serverscrub/backend/config/config.php
+
+<span class="c"># what the scheduler is doing</span>
+php /usr/local/serverscrub/backend/cron/scheduler.php --status</code></pre>
+
+    <div class="sec-head" style="margin-top:42px"><h2>Remove</h2></div>
+<pre><code>bash /usr/local/serverscrub/uninstall.sh</code></pre>
+    <p style="color:#3b4754;font-size:.96rem">
+      This removes the application, its cron entries and its WHM and cPanel
+      registrations. The quarantine is deliberately left behind — deleting the evidence
+      of a compromise on the way out is not a decision an uninstaller should make for
+      you. Remove <code>/home/malscan_quarantine</code> yourself once you are satisfied
+      you no longer need it.
+    </p>
+
+    <div class="sec-head" style="margin-top:42px"><h2>If the install cannot reach us</h2></div>
+    <p style="color:#3b4754;font-size:.96rem">
+      Some servers block outbound access to GitHub, and some block everything except a
+      short allow list. The installer tries our own download host first and falls back
+      to a GitHub mirror, so one being unreachable is not fatal. If both are blocked,
+      allow <code>serverscrub.com</code> on port 443 and run it again.
+    </p>
+
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap" style="text-align:center">
+    <div class="sec-head center">
+      <h2>Not licensed yet?</h2>
+      <p>$10 per month, per server, with every account on it covered.</p>
+    </div>
+    <a class="btn btn-primary btn-lg" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div style="max-width:300px">
+        <a class="brand" href="/" style="margin-bottom:10px">
+          <img src="/assets/img/logo.svg" alt="" width="28" height="28">ServerScrub
+        </a>
+        <p style="margin:0">Server security for cPanel and WHM. One agent, every account.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <a href="/features.html">Features</a>
+        <a href="/pricing.html">Pricing</a>
+        <a href="/install.html">Installation</a>
+      </div>
+      <div>
+        <h4>Get started</h4>
+        <a href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
+        <a href="https://clientarea.lagoonspace.net/">Client area</a>
+      </div>
+    </div>
+    <div class="foot-bot">&copy; 2026 ServerScrub. All rights reserved.</div>
+  </div>
+</footer>
+
+</body>
+</html>

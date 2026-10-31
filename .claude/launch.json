@@ -6,6 +6,12 @@
       "runtimeExecutable": "python/python.exe",
       "runtimeArgs": ["-m", "http.server", "8777", "--directory", "frontend"],
       "port": 8777
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "C:/Users/rohan/OneDrive/code/cP-Defender/python/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8900", "--directory", "C:/Users/rohan/OneDrive/code/cP-Defender/website"],
+      "port": 8900
     }
   ]
 }
