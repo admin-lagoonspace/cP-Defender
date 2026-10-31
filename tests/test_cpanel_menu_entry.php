@@ -77,3 +77,39 @@ t_contains($up, 'UPDATE_DIRS=( backend frontend whm cpanel )',
      'and updates overlay it, so a fix to the page reaches existing servers');
 t_contains($up, '--register-only',
      'and re-run registration, so a fix to the CONF reaches them too');
+
+// ── The icon has to be 48x48 ────────────────────────────────────────────────
+//
+// The installer copied the WHM artwork: 256x256, 87KB. install_plugin
+// accepted it, placed it correctly in assets/application_icons/, reported
+// "Plugin installed ok" -- and Jupiter drew nothing. Every icon it renders
+// from that directory is 48x48 (cPGuard's is 48x48, 967 bytes), and an
+// oversized one is silently ignored rather than scaled. Nothing anywhere
+// reported a problem, which is why this took five attempts to find.
+$icon = $repo . '/cpanel/serverscrub/serverscrub.png';
+t_ok(is_file($icon), 'a cPanel-sized icon ships beside the page');
+
+$size = @getimagesize($icon);
+t_eq(48, $size[0] ?? 0, 'THE SILENT REJECTION: it is 48 wide, the only size '
+   . 'Jupiter renders from assets/application_icons/');
+t_eq(48, $size[1] ?? 0, 'and 48 tall');
+t_eq('image/png', $size['mime'] ?? '', 'and a PNG, as cPGuard\'s is');
+
+t_ok(filesize($icon) < 20000,
+     'and small — the 87KB original was the clue that this was the WHM '
+   . 'artwork rather than an icon');
+
+// The installer must prefer it, and fall back rather than break.
+$iconBlock = substr($install, (int) strpos($install, '48x48, and that is not a detail'), 1400);
+t_contains($iconBlock, 'cpanel/serverscrub/serverscrub.png',
+     'the installer copies the cPanel-sized icon');
+t_contains($iconBlock, '_ICON_SRC="${SCRIPT_DIR}/whm/serverscrub.png"',
+     'falling back to the WHM one if it is absent, so a missing asset costs '
+   . 'an icon rather than the whole registration');
+
+// WHM keeps the large one: it serves the file directly and is not constrained.
+t_ok(is_file($repo . '/whm/serverscrub.png'), 'the WHM artwork is still shipped');
+$whm = @getimagesize($repo . '/whm/serverscrub.png');
+t_ok(($whm[0] ?? 0) > 48,
+     'and is still the large version — WHM serves it straight from '
+   . 'addon_plugins, where size does not matter');

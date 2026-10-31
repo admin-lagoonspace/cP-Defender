@@ -1462,8 +1462,25 @@ APPEOF
       #   Cpanel::Exception::MissingParameter ... lacks the required parameter "icon"
       # for both themes, and the plugin only ever appeared through the legacy
       # dynamicui fallback.
-      if [[ -f "${SCRIPT_DIR}/whm/serverscrub.png" ]]; then
-        cp -f "${SCRIPT_DIR}/whm/serverscrub.png" "${CPANEL_PLUGIN_DIR}/serverscrub.png"
+      #
+      # 48x48, and that is not a detail.
+      #
+      # This copied the WHM artwork, which is 256x256 and 87KB. install_plugin
+      # accepted it, placed it correctly in
+      # assets/application_icons/serverscrub.png, reported success -- and
+      # Jupiter drew nothing. Every icon it renders in that directory is 48x48
+      # (cPGuard's is 48x48 and 967 bytes), and an oversized one is silently
+      # ignored rather than scaled.
+      #
+      # So cpanel/serverscrub/serverscrub.png is a 48x48 copy kept beside the
+      # page, and WHM keeps using the large one -- WHM serves the file
+      # directly from addon_plugins and is not size-constrained. Same artwork,
+      # two sizes, because the two panels resolve icons by completely
+      # different mechanisms.
+      _ICON_SRC="${SCRIPT_DIR}/cpanel/serverscrub/serverscrub.png"
+      [[ -f "${_ICON_SRC}" ]] || _ICON_SRC="${SCRIPT_DIR}/whm/serverscrub.png"
+      if [[ -f "${_ICON_SRC}" ]]; then
+        cp -f "${_ICON_SRC}" "${CPANEL_PLUGIN_DIR}/serverscrub.png"
         chmod 644 "${CPANEL_PLUGIN_DIR}/serverscrub.png"
       fi
 

@@ -138,24 +138,33 @@ ob_start();
    * sits on whatever cPanel is using rather than painting a rectangle of a
    * different shade in the middle of it. */
   .sscrub {
-    --dim:#7d8792; --line:#e3e7ea;
-    --blue:#1178b3; --red:#c0392b; --amber:#c87f0a; --green:#1d7a46;
-    --chip:#f5f7f8;
+    /* cPanel's palette, not ours. These values are taken from Jupiter's own
+     * panels and buttons so the page reads as part of the control panel
+     * rather than as something embedded in it. */
+    --dim:#687079; --line:#dfe3e8; --chip:#f6f7f9;
+    --blue:#1976b6; --red:#c0392b; --amber:#b9770e; --green:#1d7a46;
     background:transparent; color:inherit;
-    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    /* No font stack. cPanel sets one on its own body and inheriting it is the
+     * single biggest thing that makes an embedded page look native. */
   }
-  @media (prefers-color-scheme: dark) {
-    .sscrub { --dim:#98a2ad; --line:#2d333a; --chip:#22272c; }
-  }
+
+  /* NO dark-mode block.
+   *
+   * There was one, keyed on prefers-color-scheme, and it is why the page
+   * rendered dark inside cPanel's light panel: the customer's OS said dark,
+   * cPanel said light, and we sided with the OS. A plugin does not get a
+   * vote on the control panel's theme -- cPanel owns it, and if it gains a
+   * dark mode this page follows it for free by inheriting. */
   .sscrub *, .sscrub *::before, .sscrub *::after { box-sizing:border-box; }
 
   .sscrub h1 { font-size:1.35rem; margin:0 0 2px; font-weight:600; }
   .sscrub .sub { color:var(--dim); font-size:.82rem; margin-bottom:18px; }
   .sscrub .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:22px; }
-  .sscrub .tile { border:1px solid var(--line); border-radius:8px; padding:12px 14px; background:var(--chip); }
+  .sscrub .tile { border:1px solid var(--line); border-radius:4px; padding:12px 14px; background:#fff; }
   .sscrub .tile .n { font-size:1.6rem; font-weight:600; line-height:1.15; }
   .sscrub .tile .l { color:var(--dim); font-size:.75rem; text-transform:uppercase; letter-spacing:.03em; }
-  .sscrub .card { border:1px solid var(--line); border-radius:8px; margin-bottom:20px; overflow:hidden; }
+  .sscrub .card { border:1px solid var(--line); border-radius:4px; margin-bottom:18px;
+                  overflow:hidden; background:#fff; }
   .sscrub .card > h2 { font-size:.92rem; margin:0; padding:11px 14px; border-bottom:1px solid var(--line);
                font-weight:600; background:var(--chip); }
   .sscrub table { width:100%; border-collapse:collapse; }
@@ -171,7 +180,7 @@ ob_start();
   .sscrub .ok { padding:22px 14px; color:var(--dim); text-align:center; }
   .sscrub .note { border:1px solid var(--line); border-radius:8px; padding:16px; color:var(--dim); }
   .sscrub .foot { color:var(--dim); font-size:.74rem; margin-top:8px; }
-  .sscrub .btn { font:inherit; font-weight:600; font-size:.82rem; padding:8px 16px; border-radius:6px;
+  .sscrub .btn { font:inherit; font-weight:400; font-size:.9rem; padding:6px 14px; border-radius:3px;
          border:1px solid var(--blue); background:var(--blue); color:#fff; cursor:pointer; }
   .sscrub .btn:hover:not(:disabled) { filter:brightness(1.08); }
   .sscrub .btn:disabled { background:var(--chip); color:var(--dim); border-color:var(--line); cursor:default; }
