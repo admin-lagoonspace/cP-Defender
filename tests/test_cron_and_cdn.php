@@ -63,9 +63,18 @@ t_ok(strpos($block, '${LOG_DIR}') === false,
    . 'unset redirects every cron run to /cron.log');
 
 // ── The release asks the CDN instead of assuming ────────────────────────────
-t_contains($pub, 'latest.json" 2>/dev/null || echo 000',
+t_contains($pub, 'curl -sS -o /dev/null -w',
      'THE SILENT 404: publish.sh asks the CDN whether it is actually serving '
    . 'anything, rather than printing "CDN mirrors automatically" and stopping');
+t_ok(strpos($pub, "-fsS -o /dev/null -w '%{http_code}'") === false,
+     'and asks WITHOUT -f: with it curl exits non-zero on a 404, a fallback '
+   . 'fires as well, and the two concatenate into "404000"');
+t_contains($pub, '[[ "$_cdn_code" =~ ^[0-9]{3}$ ]] || _cdn_code=000',
+     'anything that is not a three-digit status reads as unreachable');
+t_contains($pub, 'Installs will use the GitHub mirror (CDN is not serving)',
+     'THE CONTRADICTION: the closing line does not promise "CDN will pick it '
+   . 'up" directly underneath "CDN IS NOT SERVING ANYTHING" — printing both '
+   . 'is how the 404 stayed invisible for so long');
 t_contains($pub, 'CDN IS NOT SERVING ANYTHING',
      'and says so in plain words when it is not');
 t_contains($pub, 'they fall back to the GitHub mirror',

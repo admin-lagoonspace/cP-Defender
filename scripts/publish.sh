@@ -189,7 +189,10 @@ fi
 CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/serverscrub/code}"
 CDN_ACCT="${SG_CDN_ACCOUNT:-serversc}"
 info "Checking the CDN…"
-_cdn_code="$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 12              "${CDN_BASE}/latest.json" 2>/dev/null || echo 000)"
+# No -f. With it, curl exits non-zero on a 404, the `|| echo 000` fires as
+# well, and the two concatenate into "404000".
+_cdn_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12              "${CDN_BASE}/latest.json" 2>/dev/null)"
+[[ "$_cdn_code" =~ ^[0-9]{3}$ ]] || _cdn_code=000
 if [[ "$_cdn_code" == "200" ]]; then
   _cdn_ver="$(curl -fsS --max-time 12 "${CDN_BASE}/latest.json" 2>/dev/null               | grep -o '"version"[^,]*' | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
   if [[ "$_cdn_ver" == "$VER" ]]; then
@@ -213,7 +216,13 @@ else
 fi
 
 echo ""
-ok "Published ${TAG}. CDN will pick it up within ~10 min."
+# Only promise the CDN when the CDN answered. Saying "CDN will pick it up"
+# directly under "CDN IS NOT SERVING ANYTHING" is how the 404 stayed invisible.
+if [[ "$_cdn_code" == "200" ]]; then
+  ok "Published ${TAG}. CDN will pick it up within ~10 min."
+else
+  ok "Published ${TAG}. Installs will use the GitHub mirror (CDN is not serving)."
+fi
 
 # UPGRADE FIRST, install second.
 #
