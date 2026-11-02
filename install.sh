@@ -888,7 +888,32 @@ MAILTO=""
 # old line still in place.
 CRONEOF
 chmod 644 "${CRON_FILE}"
-ok "Cron jobs installed to ${CRON_FILE}"
+
+# Verify what was actually written, rather than announcing success.
+#
+# A live server was found with no user-scans line in this file at all. Every
+# customer who pressed "Scan my account" got a card saying "Queued" and
+# nothing else, for eight hours, because the one thing that picks requests up
+# was not scheduled -- and the installer had cheerfully printed "Cron jobs
+# installed" on its way past. The write is the easy part; whether the line is
+# there afterwards is the part worth checking.
+_cron_missing=""
+for _need in scheduler.php user-scans.php; do
+  grep -q "cron/${_need}" "${CRON_FILE}" 2>/dev/null || _cron_missing="${_cron_missing} ${_need}"
+done
+if [[ -n "$_cron_missing" ]]; then
+  warn "Cron file written but these entries are MISSING:${_cron_missing}"
+  warn "  ${CRON_FILE} is not scheduling them. Customer scan requests and"
+  warn "  scheduled scans will not run. Check that file by hand."
+else
+  ok "Cron jobs installed to ${CRON_FILE} (scheduler + customer scan pickup)"
+fi
+
+# The PHP the cron lines will use, verified now rather than at 03:00.
+if [[ ! -x "$SG_PHP" ]]; then
+  warn "Cron entries reference ${SG_PHP}, which is not executable."
+  warn "  Every scheduled task will fail silently. Fix SG_PHP and re-run."
+fi
 
 # On SELinux-enforcing hosts (CloudLinux/RHEL) a freshly written /etc/cron.d
 # file lacks the system_cron_spool_t context and crond will refuse to run it.

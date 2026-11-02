@@ -11,13 +11,13 @@
 # cPanel hosting — this is what actually starts the sync, which is why the
 # webhook does not depend on exec() being enabled.
 #
-#   * * * * * /home/lwss1/bin/cdn-trigger-watch.sh >> /home/lwss1/logs/cdn-sync.log 2>&1
+#   * * * * * /home/serversc/bin/cdn-trigger-watch.sh >> /home/serversc/logs/cdn-sync.log 2>&1
 # ═══════════════════════════════════════════════════════════════════════════════
 
 set -uo pipefail
 
-TRIGGER="${SG_TRIGGER_FILE:-/home/lwss1/.sg-sync-trigger}"
-SYNC="${SG_SYNC_SCRIPT:-/home/lwss1/bin/cdn-sync.sh}"
+TRIGGER="${SG_TRIGGER_FILE:-/home/serversc/.sg-sync-trigger}"
+SYNC="${SG_SYNC_SCRIPT:-/home/serversc/bin/cdn-sync.sh}"
 
 [ -f "$TRIGGER" ] || exit 0
 

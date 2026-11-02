@@ -809,6 +809,52 @@ else
     warn "install.sh not found in install dir — skipping re-registration"
 fi
 
+# ── Did the cron entries actually land? ───────────────────────────────────────
+#
+# A live server was found running a current version with NO user-scans line in
+# /etc/cron.d/serverscrub. Every customer who pressed "Scan my account" saw
+# "Queued" and nothing else, for eight hours, because nothing was scheduled to
+# pick the request up -- and every update had reported success on its way past.
+#
+# So: check, and repair rather than merely complain. An update that can see the
+# line is missing and leaves it missing has told the operator about a problem
+# it could have fixed.
+if [[ -f "$CRON_FILE" ]] && [[ -n "${_SG_PHP:-}" ]]; then
+    # LOG_DIR is set further down, for the systemd unit. Derive it here rather
+    # than reading it empty: "${LOG_DIR}/cron.log" with LOG_DIR unset writes
+    # the cron output to /cron.log, at the filesystem root.
+    _cron_log="${INSTALL_DIR}/logs/cron.log"
+    _added=0
+    if ! grep -q 'cron/user-scans\.php' "$CRON_FILE" 2>/dev/null; then
+        cp -a "$CRON_FILE" "${CRON_FILE}.pre-cronfix" 2>/dev/null || true
+        {
+            echo "#"
+            echo "# Customer scan requests, every minute. Added by update.sh because this"
+            echo "# line was missing: without it a cPanel user's scan request is never"
+            echo "# picked up and their page shows \"Queued\" indefinitely."
+            echo "* * * * * root ${_SG_PHP} ${INSTALL_DIR}/backend/cron/user-scans.php >> ${_cron_log} 2>&1"
+        } >> "$CRON_FILE"
+        _added=1
+    fi
+    if ! grep -q 'cron/scheduler\.php' "$CRON_FILE" 2>/dev/null; then
+        cp -a "$CRON_FILE" "${CRON_FILE}.pre-cronfix" 2>/dev/null || true
+        {
+            echo "#"
+            echo "# Task scheduler. Added by update.sh because this line was missing."
+            echo "*/15 * * * * root ${_SG_PHP} ${INSTALL_DIR}/backend/cron/scheduler.php >> ${_cron_log} 2>&1"
+        } >> "$CRON_FILE"
+        _added=1
+    fi
+    if [[ $_added -eq 1 ]]; then
+        chmod 644 "$CRON_FILE" 2>/dev/null || true
+        command -v restorecon >/dev/null 2>&1 && restorecon -F "$CRON_FILE" 2>/dev/null || true
+        warn "Cron entries were MISSING and have been restored in ${CRON_FILE}"
+        warn "  Scheduled scans and customer scan requests were not running."
+    else
+        ok "Cron entries present (scheduler + customer scan pickup)"
+    fi
+fi
+
 # ── Fix permissions ───────────────────────────────────────────────────────────
 section "Fixing permissions"
 chown -R root:nobody "$INSTALL_DIR" 2>/dev/null || chown -R root:root "$INSTALL_DIR"

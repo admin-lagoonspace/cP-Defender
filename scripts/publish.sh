@@ -178,17 +178,39 @@ fi
 # The CDN no longer needs an FTP push from here. The server runs
 # scripts/cdn-sync.sh on a cron and PULLS this release from GitHub, so there is
 # nothing to upload and no credential to hold. See scripts/cdn-sync.sh.
-info "CDN mirrors automatically (server-side pull, every 10 min)."
-# The real path, not ~/bin. This message said "~/bin/cdn-sync.sh", which
-# resolves to /root/bin on the server and does not exist -- the script is
-# installed under the CDN account, per the header of scripts/cdn-sync.sh.
-# Being told to run a path that is not there costs the operator a round trip
-# and leaves them unsure whether the sync happened.
-info "  Force an immediate sync on the server with:"
-info "    /home/lwss1/bin/cdn-sync.sh     (as the lwss1 user)"
-info "  If that path does not exist the CDN has never been set up: every"
-info "  serverscrub.com URL 404s and installs fall back to the GitHub"
-info "  mirror. Install it per the header of scripts/cdn-sync.sh."
+#
+# ASK THE CDN, do not assume.
+#
+# This used to print "CDN mirrors automatically" and stop, which was a claim
+# nobody checked. The CDN had in fact never been populated under the current
+# account: every serverscrub.com URL 404d and every install silently fell back
+# to the GitHub mirror, for release after release, because nothing in the
+# release ever looked. One HTTP request settles it.
+CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/serverscrub/code}"
+CDN_ACCT="${SG_CDN_ACCOUNT:-serversc}"
+info "Checking the CDN…"
+_cdn_code="$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 12              "${CDN_BASE}/latest.json" 2>/dev/null || echo 000)"
+if [[ "$_cdn_code" == "200" ]]; then
+  _cdn_ver="$(curl -fsS --max-time 12 "${CDN_BASE}/latest.json" 2>/dev/null               | grep -o '"version"[^,]*' | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
+  if [[ "$_cdn_ver" == "$VER" ]]; then
+    ok "CDN already serving ${VER}"
+  else
+    info "CDN is live, serving ${_cdn_ver:-unknown} — it pulls ${VER} within ~10 min"
+    info "  Force it now:  /home/${CDN_ACCT}/bin/cdn-sync.sh   (as ${CDN_ACCT})"
+  fi
+else
+  warn "CDN IS NOT SERVING ANYTHING (${CDN_BASE}/latest.json → HTTP ${_cdn_code})."
+  warn "  Every serverscrub.com install and update URL 404s right now."
+  warn "  Installs still work -- they fall back to the GitHub mirror -- but the"
+  warn "  CDN is doing nothing until scripts/cdn-sync.sh is installed as the"
+  warn "  ${CDN_ACCT} user. One-time setup, per that script's header:"
+  warn "    mkdir -p /home/${CDN_ACCT}/bin /home/${CDN_ACCT}/logs"
+  warn "    curl -fsSL https://raw.githubusercontent.com/${SLUG}/main/scripts/cdn-sync.sh \\"
+  warn "      -o /home/${CDN_ACCT}/bin/cdn-sync.sh"
+  warn "    chmod +x /home/${CDN_ACCT}/bin/cdn-sync.sh"
+  warn "    chown -R ${CDN_ACCT}:${CDN_ACCT} /home/${CDN_ACCT}/bin /home/${CDN_ACCT}/logs"
+  warn "    su -s /bin/bash -c /home/${CDN_ACCT}/bin/cdn-sync.sh ${CDN_ACCT}"
+fi
 
 echo ""
 ok "Published ${TAG}. CDN will pick it up within ~10 min."
