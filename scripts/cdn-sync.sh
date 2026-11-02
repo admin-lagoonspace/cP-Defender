@@ -34,7 +34,34 @@ DOCROOT="${SG_DOCROOT:-/home/serversc/public_html/serverscrub/code}"
 REPO="${SG_REPO:-admin-lagoonspace/cP-Defender}"
 BRANCH="${SG_BRANCH:-main}"
 SRC="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
-LOCKFILE="${SG_LOCK:-/tmp/sg-cdn-sync.lock}"
+# -- Where this script keeps its own files ------------------------------------
+#
+# NOT /tmp. This runs as an unprivileged cPanel user on a shared machine, and
+# /tmp is shared, world-writable and sticky. Observed on the first live run:
+#
+#   /home/serversc/bin/cdn-sync.sh: line 53: /tmp/sg-cdn-sync.lock: Permission denied
+#
+# A fixed name in /tmp belongs to whoever created it first. If that was root --
+# or any other account on the box -- this user cannot open it for writing, and
+# the sync dies before doing anything, every ten minutes, for ever. Worse, any
+# account on the machine can create that name first, as a symlink, and redirect
+# whatever this script writes through it.
+#
+# So everything it writes goes in a directory this user owns.
+SG_WORK="${SG_WORK:-}"
+if [ -z "$SG_WORK" ]; then
+    if [ -n "${HOME:-}" ] && [ -d "${HOME}" ] && [ -w "${HOME}" ]; then
+        SG_WORK="${HOME}/.serverscrub-cdn"
+    else
+        # cron can run with no HOME. cdn-setup.sh installs this script into the
+        # user's own home, so its own directory is a safe second choice.
+        SG_WORK="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo .)/.serverscrub-cdn"
+    fi
+fi
+mkdir -p "$SG_WORK" 2>/dev/null
+chmod 700 "$SG_WORK" 2>/dev/null || true
+
+LOCKFILE="${SG_LOCK:-${SG_WORK}/sync.lock}"
 KEEP_VERSIONS="${SG_KEEP_VERSIONS:-0}"   # 0 = keep every version forever
 BUILDS_DIR="${SG_BUILDS_DIR:-${DOCROOT}/builds}"   # archive of every release zip
 LATEST_DIR="${SG_LATEST_DIR:-${DOCROOT}/latest}"   # newest build, extracted
@@ -122,15 +149,18 @@ if [ "$CUR_VER" = "$NEW_VER" ] \
     # downloads and it ships fixes of its own. Refreshing only on a version bump
     # meant a corrected get.sh sat unpublished until the next release. It is
     # ~17KB, so just fetch and compare on every run.
-    if fetch_to "${SRC}/get.sh" "/tmp/sg-get-check.$$" 2>/dev/null \
-       && [ -s "/tmp/sg-get-check.$$" ]; then
-        if ! cmp -s "/tmp/sg-get-check.$$" "${DOCROOT}/get.sh" 2>/dev/null; then
-            install -m 644 "/tmp/sg-get-check.$$" "${DOCROOT}/get.sh.tmp" \
+    # In SG_WORK for the same reason as the lock: a predictable name in a
+    # shared directory is not this script's to assume it owns.
+    _gcheck="${SG_WORK}/get.sh.check"
+    if fetch_to "${SRC}/get.sh" "$_gcheck" 2>/dev/null \
+       && [ -s "$_gcheck" ]; then
+        if ! cmp -s "$_gcheck" "${DOCROOT}/get.sh" 2>/dev/null; then
+            install -m 644 "$_gcheck" "${DOCROOT}/get.sh.tmp" \
               && mv -f "${DOCROOT}/get.sh.tmp" "${DOCROOT}/get.sh" \
               && log "refreshed get.sh (bootstrap updated, version unchanged)"
         fi
     fi
-    rm -f "/tmp/sg-get-check.$$"
+    rm -f "$_gcheck"
 
     exit 0     # otherwise a silent no-op — keeps the cron log readable
 fi
@@ -139,7 +169,7 @@ log "sync needed: local='${CUR_VER:-none}' upstream='${NEW_VER}'"
 
 mkdir -p "${DOCROOT}/dist" "${DOCROOT}/v${NEW_VER}" || die "cannot create ${DOCROOT}"
 
-TMP="$(mktemp -d /tmp/sg-sync.XXXXXX)" || die "mktemp failed"
+TMP="$(mktemp -d "${SG_WORK}/sync.XXXXXX")" || die "mktemp -d failed under ${SG_WORK}"
 
 # ── Download the release zip ──────────────────────────────────────────────────
 GOT=false

@@ -80,7 +80,14 @@ BIN="${HOMEDIR}/bin"
 LOGS="${HOMEDIR}/logs"
 SYNC="${BIN}/cdn-sync.sh"
 SELF="${BIN}/cdn-setup.sh"
-CRON_LINE="*/10 * * * * SG_DOCROOT=${DOCROOT} ${SYNC} >> ${LOGS}/cdn-sync.log 2>&1"
+WORK="${HOMEDIR}/.serverscrub-cdn"
+
+# SG_WORK is pinned in the cron line, not left to the sync's own fallback.
+# cron frequently runs with no HOME, in which case the sync falls back to its
+# own directory -- so the cron run and the one-off run below would lock
+# different files and could not see each other at all. A lock two processes
+# cannot both see is not a lock.
+CRON_LINE="*/10 * * * * SG_WORK=${WORK} SG_DOCROOT=${DOCROOT} ${SYNC} >> ${LOGS}/cdn-sync.log 2>&1"
 
 # ── Verification, used after setup and by --check ─────────────────────────────
 #
@@ -175,10 +182,20 @@ else
 fi
 
 # ── First run, now, as the user ───────────────────────────────────────────────
+#
+# The same SG_WORK the cron line pins, for the same reason: `su -c` without
+# `-` does not reset HOME reliably, so leaving the sync to work it out means
+# this run and the cron run can lock different files.
+mkdir -p "$WORK"
+chown "${ACCT}:${ACCT}" "$WORK"
+chmod 700 "$WORK"
+
 say "Running the first sync — this downloads the current release…"
-if su -s /bin/bash -c "SG_DOCROOT='${DOCROOT}' '${SYNC}'" "$ACCT"; then
+SYNC_OK=true
+if su -s /bin/bash -c "SG_WORK='${WORK}' SG_DOCROOT='${DOCROOT}' '${SYNC}'" "$ACCT"; then
     ok "sync completed"
 else
+    SYNC_OK=false
     warn "the sync exited non-zero; its output is above, and ${LOGS}/cdn-sync.log has the rest"
 fi
 
@@ -196,9 +213,36 @@ if verify; then
 fi
 
 echo
-warn "The files are on disk at ${DOCROOT}, but the URL is not serving them."
-warn "The sync did its job; something between that directory and the web has not."
-warn "In order of likelihood:"
+
+# Which failure this is, before guessing at causes.
+#
+# The first version of this printed "The sync did its job; something between
+# that directory and the web has not" and then, four lines later, "latest.json
+# is NOT in ${DOCROOT} -- the sync did not publish". Both, in that order, in
+# the same output. Printing a diagnosis and its own contradiction underneath it
+# is exactly how the CDN 404 survived six releases; it does not get to happen
+# in the script written to end that.
+if [[ ! -s "${DOCROOT}/latest.json" ]]; then
+    warn "NOTHING WAS PUBLISHED. latest.json is not in ${DOCROOT}."
+    warn "The URL 404s because there is no file to serve — the web side is not"
+    warn "the problem, the sync is. Its error is in the output above, and in"
+    warn "  ${LOGS}/cdn-sync.log"
+    echo
+    warn "Run it again on its own to see the failure in isolation:"
+    warn "  su -s /bin/bash -c \"SG_WORK='${WORK}' SG_DOCROOT='${DOCROOT}' '${SYNC}'\" ${ACCT}"
+    exit 1
+fi
+
+if ! $SYNC_OK; then
+    warn "The sync exited non-zero, but ${DOCROOT}/latest.json exists — so a"
+    warn "previous run published and this one failed partway. Check the log"
+    warn "before trusting what is being served:  ${LOGS}/cdn-sync.log"
+    echo
+fi
+
+warn "The files ARE on disk at ${DOCROOT}, and the URL still does not serve"
+warn "them. The sync did its job; something between that directory and the web"
+warn "has not. In order of likelihood:"
 warn "  - ${DOMAIN} resolves somewhere other than this server"
 warn "      dig +short ${DOMAIN}        and compare with this box's IPs"
 warn "  - the vhost has no valid certificate, so https fails before a file is read"
@@ -207,6 +251,5 @@ warn "  - an .htaccess above the path rewrites or denies it"
 warn "      ls -la ${DOCROOT_BASE}/.htaccess"
 echo
 warn "What is on disk, for comparison:"
-ls -la "${DOCROOT}/latest.json" 2>/dev/null \
-  || warn "  latest.json is NOT in ${DOCROOT} — the sync did not publish"
+ls -la "${DOCROOT}/latest.json"
 exit 1

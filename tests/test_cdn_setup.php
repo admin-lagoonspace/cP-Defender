@@ -62,7 +62,7 @@ t_contains($sh, 'the cron line is NOT in ${ACCT}\'s crontab after writing it',
 
 // The cron must carry the docroot that was DERIVED, or the next run reverts to
 // cdn-sync.sh's own default and publishes somewhere else than the first run.
-t_contains($sh, 'CRON_LINE="*/10 * * * * SG_DOCROOT=${DOCROOT} ${SYNC}',
+t_contains($sh, 'SG_DOCROOT=${DOCROOT} ${SYNC} >> ${LOGS}/cdn-sync.log',
      'the derived docroot is carried into the cron, so every later run '
    . 'publishes where the first one did');
 
@@ -86,7 +86,7 @@ t_contains($sh, 'but the build it points at 404s',
      'and says so plainly when only half of it is there');
 
 // ── A failure explains what to look at ──────────────────────────────────────
-t_contains($sh, 'The files are on disk at ${DOCROOT}, but the URL is not serving them.',
+t_contains($sh, 'The files ARE on disk at ${DOCROOT}, and the URL still does not serve',
      'a sync that worked and a URL that does not are distinguished — they '
    . 'have completely different causes');
 t_contains($sh, 'dig +short ${DOMAIN}',
@@ -110,3 +110,74 @@ t_contains($pub, 'scripts/cdn-setup.sh)',
 t_ok(strpos($pub, 'mkdir -p /home/${CDN_ACCT}/bin') === false,
      'and no longer prints the hard-coded five commands, which assume the '
    . 'domain is the account\'s main domain and fail silently when it is not');
+
+// ── The sync does not keep its files in /tmp ────────────────────────────────
+//
+// The first live run died here, before doing anything at all:
+//
+//   /home/serversc/bin/cdn-sync.sh: line 53: /tmp/sg-cdn-sync.lock: Permission denied
+//   ERROR: cannot open lock /tmp/sg-cdn-sync.lock
+//
+// A fixed name in /tmp belongs to whoever created it first. This runs as an
+// unprivileged cPanel user on a machine full of other accounts; if root, or
+// any of them, got there first, this user cannot open it for writing -- and
+// the sync dies every ten minutes for ever, having published nothing.
+$sync = t_shell($repo . '/scripts/cdn-sync.sh');
+
+t_contains($sync, 'LOCKFILE="${SG_LOCK:-${SG_WORK}/sync.lock}"',
+     'THE UNWRITABLE LOCK: the lock lives in a directory this user owns, not '
+   . 'in a world-writable one where the name is first come, first served');
+t_ok(!preg_match('#(["\'= ])/tmp/#', $sync),
+     'and NOTHING of this script\'s is in /tmp — a predictable name in a '
+   . 'shared directory can also be pre-created as a symlink by another '
+   . 'account, and curl -o follows one that is already there');
+t_contains($sync, 'TMP="$(mktemp -d "${SG_WORK}/sync.XXXXXX")"',
+     'the download staging directory moved too, not just the lock');
+t_contains($sync, '_gcheck="${SG_WORK}/get.sh.check"',
+     'and so did the get.sh comparison file, which had "$$" in its name — '
+   . 'predictable enough to be squatted');
+
+t_contains($sync, 'if [ -n "${HOME:-}" ] && [ -d "${HOME}" ] && [ -w "${HOME}" ]; then',
+     'SG_WORK defaults under the home directory');
+t_contains($sync, 'SG_WORK="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo .)/.serverscrub-cdn"',
+     'with the script\'s own directory as the fallback, because cron can run '
+   . 'with no HOME at all');
+t_contains($sync, 'chmod 700 "$SG_WORK"',
+     'and it is not readable by the rest of the machine');
+
+// Both runs must lock the SAME file or the lock protects nothing.
+t_contains($sh, 'CRON_LINE="*/10 * * * * SG_WORK=${WORK} SG_DOCROOT=${DOCROOT}',
+     'THE TWO LOCKS: the cron line pins SG_WORK. Left to the fallback, a cron '
+   . 'run with no HOME would lock a different file from the one-off run, and '
+   . 'a lock two processes cannot both see is not a lock');
+t_contains($sh, 'su -s /bin/bash -c "SG_WORK=\'${WORK}\' SG_DOCROOT=\'${DOCROOT}\' \'${SYNC}\'" "$ACCT"',
+     'and the first run is given the same one');
+
+// set -u is on. A variable that is referenced but never assigned aborts the
+// script -- and this one is referenced only inside the failure path, so it
+// would abort exactly when it was trying to explain what went wrong.
+t_ok(strpos($sh, '${SG_WORK}') === false,
+     'NO UNBOUND VARIABLE: the setup script does not reference SG_WORK, which '
+   . 'it never sets. Under set -u that aborts, and it sits in the branch that '
+   . 'exists to report a failure');
+
+// ── A failure says WHICH failure ────────────────────────────────────────────
+//
+// The first version printed "The sync did its job; something between that
+// directory and the web has not" and then, four lines later, "latest.json is
+// NOT in <docroot> -- the sync did not publish". Both, in that order.
+t_contains($sh, 'if [[ ! -s "${DOCROOT}/latest.json" ]]; then',
+     'THE CONTRADICTION: nothing-was-published is distinguished from '
+   . 'published-but-not-served before any cause is suggested');
+t_contains($sh, 'NOTHING WAS PUBLISHED.',
+     'and said in plain words');
+t_contains($sh, 'the web side is not',
+     'with the right half of the system named — the two have completely '
+   . 'different causes, and sending someone to dig and openssl when the sync '
+   . 'never ran wastes the evening');
+
+$webAdvice = (int) strpos($sh, 'resolves somewhere other than this server');
+$notPub    = (int) strpos($sh, 'NOTHING WAS PUBLISHED.');
+t_ok($notPub > 0 && $notPub < $webAdvice,
+     'and it exits first, so the DNS and certificate advice cannot print '
+   . 'underneath it');
