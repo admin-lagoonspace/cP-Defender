@@ -294,3 +294,64 @@ t_contains($sh, "sed -E 's#^/var/cpanel/userdata/([^/]+)/.*#\\1#' | sort -u",
      'by reducing the paths to account names and deduplicating');
 t_contains($sh, '[[ "$_n" -gt 1 ]] && warn',
      'and only more than one is flagged');
+
+// ── The test that separates "this path" from "this disk" ───────────────────
+//
+// Where the live server landed, after everything else had been ruled out: the
+// vhost works (Apache returns 200 for /), the DocumentRoot in the RUNNING
+// config is right, every parent directory is traversable, one account owns the
+// domain, the file is on disk 644 -- and Apache 404s it.
+//
+// Reading those facts in turn does not distinguish "something is rewriting
+// this path" from "Apache is not looking at the same filesystem I am", and the
+// second is real on cPanel: with jailed Apache a vhost is served out of a
+// per-account bind mount under /home/virtfs, which can be stale or predate the
+// directory. Two brand-new files settle it in one step.
+t_contains($sh, 'say "5b. Two brand-new files: is it this path, or Apache\'s view of the disk?"',
+     'THE UNSEPARATED CAUSES: a file is written at the docroot root and '
+   . 'another in the published directory, and both are requested');
+t_contains($sh, '_pr1="${DOCROOT_BASE%/}/${_stamp}"',
+     'one beside the homepage that is known to work');
+t_contains($sh, '_pr2="${DOC}/${_stamp}"',
+     'and one where the publishing happens');
+
+// Three outcomes, three different problems.
+t_contains($sh, 'Both served. Apache CAN read new files in that directory',
+     'both served narrows it to the published files themselves');
+t_contains($sh, 'The docroot root works and ${SUBPATH} does not.',
+     'only the root served means something path-specific — an Alias, a '
+   . 'Location or a rewrite in the vhost include, and it says where to grep');
+t_contains($sh, 'A brand-new file beside the working homepage is ALSO 404.',
+     'NEITHER SERVED: Apache is not reading the directory being written to at '
+   . 'all, which no amount of inspecting that directory would ever reveal');
+t_contains($sh, 'if [[ -d "/home/virtfs/${ACCT}" ]]; then',
+     'and jailed Apache is confirmed by looking rather than asserted — '
+   . '/home/virtfs is where a per-account bind mount lives');
+t_contains($sh, '/scripts/clear_orphaned_virtfs_mounts',
+     'with the command that clears a stale one');
+t_contains($sh, 'findmnt -T \'${DOCROOT_BASE}\'',
+     'and a different next step when it is not VirtFS, rather than the same '
+   . 'advice regardless');
+
+// Probe files are written into a live customer document root.
+t_contains($sh, 'trap \'rm -f "$_pr1" "$_pr2" 2>/dev/null\' EXIT INT TERM',
+     'THE LITTER: the removal is registered BEFORE the first write, so a ^C '
+   . 'between creating a probe and deleting it cannot leave a stray file in '
+   . 'somebody\'s public_html');
+t_contains($sh, 'rm -f "$_pr1" "$_pr2"
+        trap - EXIT INT TERM',
+     'and the trap is released once they are gone');
+
+// The port is the one that actually answered, not the first one tried.
+t_contains($sh, '[[ -n "$APORT" ]] || APORT="$_port"',
+     'the probe uses the port Apache actually answered on — on this server '
+   . 'that was :81, which no list of likely ports would have guessed first');
+
+// ── A named file with nothing under it reads as "this file is fine" ────────
+t_contains($sh, "sed -n '1,40p' \"\${_p}/.htaccess\"",
+     'THE SILENT FILE: .htaccess files are printed, not grepped. The grep '
+   . 'looked for Rewrite, Deny and friends and matched nothing in a .htaccess '
+   . 'that was sitting right there — so the output named the file and then '
+   . 'said nothing about it, which reads as a clean bill of health');
+t_ok(strpos($sh, "grep -nE 'Rewrite|ErrorDocument|Deny|Require|Order|Redirect'") === false,
+     'the grep that could only ever hide things is gone');

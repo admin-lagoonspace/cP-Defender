@@ -249,8 +249,12 @@ if $DIAGNOSE; then
         if [[ -f "${_p}/.htaccess" ]]; then
             _found=true
             echo "    ${_p}/.htaccess"
-            grep -nE 'Rewrite|ErrorDocument|Deny|Require|Order|Redirect' "${_p}/.htaccess" 2>/dev/null \
-              | head -20 | sed 's/^/        /'
+            # Printed whole, not grepped. The grep was for Rewrite, Deny and
+            # friends, and it matched NOTHING in a .htaccess that was
+            # nevertheless sitting right there -- so the output named a file
+            # and then said nothing about it, which reads as "this file is
+            # fine". These are a few lines; show them.
+            sed -n '1,40p' "${_p}/.htaccess" 2>/dev/null | sed 's/^/        | /'
         fi
         [[ -n "$_segs" ]] || break
         _p="${_p}/${_segs%% *}"
@@ -273,6 +277,7 @@ if $DIAGNOSE; then
     # vhost for this Host at all, and the request is landing on the default
     # one. Those have entirely different fixes, and the first version of this
     # asked only about the file.
+    APORT=""
     for _port in ${_aport} 8080 80; do
         printf '    apache on :%-5s ' "$_port"
         _c="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
@@ -282,6 +287,7 @@ if $DIAGNOSE; then
             echo "no answer on this port"
             continue
         fi
+        [[ -n "$APORT" ]] || APORT="$_port"
         _r="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
                    -H "Host: ${DOMAIN}" "http://127.0.0.1:${_port}/" 2>/dev/null || true)"
         [[ "$_r" =~ ^[0-9]{3}$ ]] || _r=000
@@ -291,6 +297,81 @@ if $DIAGNOSE; then
             warn "        for ${DOMAIN}; this is not about the published path."
         fi
     done
+
+    # ── 5b. Is it this PATH, or everything Apache has not seen before? ───────
+    #
+    # The case this script kept landing in: the vhost works (/ is 200), the
+    # DocumentRoot is right, the permissions are right, the file is on disk --
+    # and Apache 404s it. Reading those five facts in turn does not separate
+    # "something is rewriting this path" from "Apache is not looking at the
+    # same filesystem I am", and that second one is real on cPanel: with
+    # jailed Apache the vhost is served out of a per-account bind mount under
+    # /home/virtfs, and a mount made before the directory existed, or gone
+    # stale, shows an older view of the home.
+    #
+    # Two files settle it. One at the docroot root beside the working
+    # homepage, one in the published directory. Both brand new, both removed
+    # straight afterwards.
+    if [[ -n "$APORT" ]]; then
+        echo
+        say "5b. Two brand-new files: is it this path, or Apache's view of the disk?"
+        _stamp="sg-probe-$$-$(date +%s).txt"
+        _pr1="${DOCROOT_BASE%/}/${_stamp}"
+        _pr2="${DOC}/${_stamp}"
+        _mk() { printf 'serverscrub probe\n' > "$1" 2>/dev/null \
+                && chown "${ACCT}:${ACCT}" "$1" 2>/dev/null \
+                && chmod 644 "$1" 2>/dev/null; }
+        _ask() {
+            local c
+            c="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+                      -H "Host: ${DOMAIN}" "http://127.0.0.1:${APORT}$1" 2>/dev/null || true)"
+            [[ "$c" =~ ^[0-9]{3}$ ]] || c=000
+            printf '%s' "$c"
+        }
+
+        # These are written into somebody's live public_html. A ^C between
+        # creating one and removing it would leave litter in a customer's
+        # document root, so the removal is registered before the first write
+        # rather than trusted to be reached.
+        trap 'rm -f "$_pr1" "$_pr2" 2>/dev/null' EXIT INT TERM
+
+        _a=skip; _b=skip
+        _mk "$_pr1" && _a="$(_ask "/${_stamp}")"
+        _mk "$_pr2" && _b="$(_ask "/${SUBPATH}/${_stamp}")"
+        rm -f "$_pr1" "$_pr2"
+        trap - EXIT INT TERM
+
+        echo "    new file at the docroot root     → HTTP ${_a}"
+        echo "    new file in ${SUBPATH} → HTTP ${_b}"
+        echo
+
+        if [[ "$_a" == "200" && "$_b" == "200" ]]; then
+            warn "    Both served. Apache CAN read new files in that directory, so"
+            warn "    the published files themselves are what it will not serve."
+            warn "    Compare their ownership and mode with the probe's (644 ${ACCT})."
+        elif [[ "$_a" == "200" && "$_b" != "200" ]]; then
+            warn "    The docroot root works and ${SUBPATH} does not."
+            warn "    Something is specific to that path: an Alias, a Location or a"
+            warn "    rewrite in the vhost include. Look there:"
+            warn "      grep -rn '${SUBPATH%%/*}' /etc/apache2/conf.d/userdata/ 2>/dev/null"
+            warn "      grep -rn '${SUBPATH%%/*}' /etc/apache2/conf/httpd.conf"
+        elif [[ "$_a" != "200" ]]; then
+            warn "    A brand-new file beside the working homepage is ALSO 404."
+            warn "    Apache is not reading the directory this script writes to."
+            warn "    That is the jailed-Apache case: the vhost is served from a"
+            warn "    per-account bind mount, and this one is stale or predates"
+            warn "    the directory."
+            if [[ -d "/home/virtfs/${ACCT}" ]]; then
+                warn "    /home/virtfs/${ACCT} exists — jailed Apache is in use here."
+                warn "    Fix:  /scripts/clear_orphaned_virtfs_mounts"
+                warn "          /usr/local/cpanel/scripts/rebuildhttpdconf"
+                warn "          /scripts/restartsrv_httpd"
+            else
+                warn "    No /home/virtfs/${ACCT}, so not VirtFS. Check for a chroot or"
+                warn "    a mount under the docroot:  findmnt -T '${DOCROOT_BASE}'"
+            fi
+        fi
+    fi
 
     echo
     say "6. The public URL, for comparison"
