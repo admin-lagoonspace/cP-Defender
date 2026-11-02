@@ -225,6 +225,7 @@ function openPage(name) {
     scanner:    ['Loading scanner…',   () => Promise.all([loadThreats(),
                                                           adoptRunningScan(),
                                                           loadExclusions(),
+                                                          loadScanJobs(),
                                                    loadVerdicts()])],
     firewall:   ['Loading firewall…',  () => loadFirewall()],
     waf:        ['Loading WAF…',       () => Promise.all([loadWAF(),
@@ -875,6 +876,10 @@ async function startScan() {
   State.scanJobId = res.job_id;
   document.getElementById('scan-progress-card').style.display = '';
   setScanButton(true);
+  // And into the log immediately, as 'running'. The log is the answer to
+  // "what is this server doing"; a scan missing from it for its whole
+  // duration is the one time that answer matters most.
+  loadScanJobs();
 
   // Name the target straight away rather than waiting for the first poll two
   // seconds later: the moment an operator most wants to know what they just
@@ -1012,6 +1017,9 @@ function followScan(jobId) {
       document.getElementById('scan-progress-text').textContent =
         `Scan complete — ${job.threats_found || 0} threats found`;
       loadThreats();
+      // The scan that just ended is a row in the log now. Leaving it out until
+      // the operator reloads the page is how a log stops being a log.
+      loadScanJobs();
       toast(`Scan complete. ${job.threats_found || 0} threats found.`, job.threats_found ? 'error' : 'success');
     }
   }, 2000);
@@ -1244,6 +1252,90 @@ async function loadScannerQuarantineState() {
   el.title = on
     ? 'Detected files are moved to the quarantine directory automatically.'
     : 'Threats are recorded but files are left in place. Turn this on in Settings.';
+}
+
+/* The scan log.
+ *
+ * There was no scan history on this side at all. The page showed the scan
+ * running at this moment and the threats it had found, and nothing about any
+ * scan before it -- so "did last night's sweep run, and did it finish?" had no
+ * answer short of opening the database. The customer-facing plugin has had a
+ * scan log for some time; the administrator of the server did not.
+ *
+ * requested_by is shown as-is here. On the customer page it is deliberately
+ * replaced by a role, because a scan of /home appears in every account's log
+ * and the name on it is often somebody else's. Root is the one place the
+ * actual name is both safe and useful.
+ */
+function scanTriggerLabel(by) {
+  by = String(by || '');
+  if (by === '@schedule') return ['Scheduled scan', 'var(--txt2)'];
+  if (by === '@operator') return ['WHM (this interface)', 'var(--txt2)'];
+  if (by === '@cli')      return ['Command line', 'var(--txt2)'];
+  /* Anything else is an account name: the customer pressed the button in
+   * cPanel. Empty means the job predates the column being recorded -- "—" is
+   * honest, and guessing "scheduled" would be wrong for every scan an
+   * operator ever started by hand. */
+  if (by === '')          return ['—', 'var(--txt3)'];
+  return [by + ' (cPanel user)', 'var(--txt1)'];
+}
+
+async function loadScanJobs() {
+  const body = document.getElementById('scanlog-body');
+  if (!body) return;
+
+  const res  = Demo.active ? Demo.mockScanJobs()
+                           : await API.get('scanner/jobs?limit=50');
+  const jobs = res?.data || [];
+  const note = document.getElementById('scanlog-note');
+
+  if (!jobs.length) {
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--txt3);padding:20px">No scans have run yet</td></tr>';
+    if (note) note.textContent = '';
+    return;
+  }
+  if (note) note.textContent = 'last ' + jobs.length + ' scan(s)';
+
+  const COLOR = { done: 'var(--green)', running: 'var(--amber)',
+                  pending: 'var(--amber)', cancelling: 'var(--amber)',
+                  error: 'var(--red)', interrupted: 'var(--red)' };
+
+  body.innerHTML = jobs.map(j => {
+    const [who, whoColor] = scanTriggerLabel(j.requested_by);
+    const started = Number(j.started_at) || 0;
+    const ended   = Number(j.finished_at) || 0;
+    /* A running scan has no finished_at, so its elapsed time is measured
+     * against now -- otherwise the one row anybody is actually watching is
+     * the one row with no duration on it. */
+    const until = ended > started ? ended
+                : (['running', 'pending', 'cancelling'].includes(j.status)
+                   ? Math.floor(Date.now() / 1000) : 0);
+    const secs  = until > started ? until - started : 0;
+    const took  = !secs ? '—'
+                : secs < 60 ? secs + 's'
+                : secs < 3600 ? Math.floor(secs / 60) + 'm'
+                : Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm';
+
+    /* A custom scan's path is a comma-separated list of homes and can be
+     * hundreds of characters. The column says how many; the full list is the
+     * title, for whoever needs it. */
+    const path  = String(j.scan_path || '');
+    const parts = path ? path.split(',') : [];
+    const scope = parts.length > 1 ? parts.length + ' accounts'
+                : (path || '—');
+
+    return '<tr>' +
+      '<td class="dim">' + esc(reltime(started)) + '</td>' +
+      '<td style="color:' + whoColor + '">' + esc(who) + '</td>' +
+      '<td>' + esc(j.scan_type || '') + '</td>' +
+      '<td class="mono" title="' + esc(path) + '">' + esc(scope) + '</td>' +
+      '<td style="color:' + (COLOR[j.status] || 'var(--txt3)') + '">' + esc(j.status || '') + '</td>' +
+      '<td>' + Number(j.files_scanned || 0).toLocaleString() + '</td>' +
+      '<td style="color:' + (Number(j.threats_found) > 0 ? 'var(--red)' : 'var(--green)') + '">' +
+        Number(j.threats_found || 0) + '</td>' +
+      '<td class="dim">' + esc(took) + '</td>' +
+      '</tr>';
+  }).join('');
 }
 
 async function loadThreats() {

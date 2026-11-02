@@ -121,6 +121,37 @@ $sg_pass = function (): void {
           WHERE requested_by <> '' AND status IN ('running','pending','cancelling')") as $row) {
         Scanner::publishUserStatus((int) $row['id']);
     }
+
+    // Rebuild the per-user reports when the set of running scans changes.
+    //
+    // The customer's Scanner logs page reads report.json, which is rebuilt
+    // hourly. That is fine for counts; it is not fine for the scan log. A scan
+    // that started two minutes ago -- the customer's own, or the server-wide
+    // sweep that covers their home -- was simply absent from the table, and
+    // stayed absent for up to an hour. The one thing a log must show is the
+    // thing that just happened.
+    //
+    // ON CHANGE, not every pass: this is a few queries and one small file per
+    // account, which is cheap once a scan starts or ends and wasteful every
+    // five seconds. Scans are rare events; their edges are what matter.
+    //
+    // Every job counts here, not just customer-requested ones. A root scan of
+    // /home covers every account, and those are precisely the rows a customer
+    // could not previously account for.
+    //
+    // The first pass only records. Without that, the minute cron -- a fresh
+    // process each time, with nothing to compare against -- would read its own
+    // startup as a change and rebuild every report every minute.
+    static $prevLive = null;
+    $nowLive = array_column(Database::fetchAll(
+        "SELECT id FROM scan_jobs WHERE status IN ('running','pending','cancelling')"), 'id');
+    sort($nowLive);
+    if ($prevLive !== null && $nowLive !== $prevLive) {
+        $w = UserReport::writeAll();
+        Logger::info('user-scans: scan set changed, rebuilt ' . $w['written']
+                   . ' user report(s)');
+    }
+    $prevLive = $nowLive;
 };
 
 if (!$watch) {

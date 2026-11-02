@@ -39,6 +39,11 @@ $routes = [
     ['GET', 'dashboard/stats'],
     ['GET', 'scanner/stats'],
     ['GET', 'scanner/threats'],
+    // The scan log. Its LIMIT is interpolated into the SQL after being
+    // clamped to an integer range; a route that never executes is a route
+    // whose clamp has never been proved to produce valid SQL.
+    ['GET', 'scanner/jobs'],
+    ['GET', 'scanner/jobs?limit=5'],
     ['GET', 'firewall/stats'],
     ['GET', 'firewall/rules'],
     ['GET', 'firewall/blocked'],

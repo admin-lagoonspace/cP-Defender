@@ -527,6 +527,27 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
             ? Scanner::stopScan(isset($body['job_id']) ? (int)$body['job_id'] : null)
             : ['success' => false, 'error' => 'POST required', 'code' => 405],
 
+        // GET scanner/jobs — the scan log.
+        //
+        // There was no such thing on this side. The operator could see the
+        // scan running RIGHT NOW and the threats it had found, and nothing
+        // whatever about the scans before it: not when they ran, not whether
+        // they finished, not who started them. The customer-facing page had a
+        // scan log; the server's own administrator did not.
+        //
+        // requested_by is passed through verbatim here, which it deliberately
+        // is NOT on the customer page. Root may see which account asked for a
+        // scan; one customer may not see another's name.
+        'jobs' => (function () use ($q) {
+            $limit = max(1, min(200, (int) ($q['limit'] ?? 50)));
+            return ['success' => true, 'data' => Database::fetchAll(
+                "SELECT id, scan_type, status, scan_path, started_at, finished_at,
+                        files_scanned, threats_found, requested_by, ignore_backup
+                   FROM scan_jobs
+                  ORDER BY COALESCE(started_at, created_at) DESC
+                  LIMIT {$limit}")];
+          })(),
+
         // GET scanner/running — what is in progress, so the UI can offer Stop
         'running' => ['success' => true, 'data' => Scanner::runningJob(),
                       'live' => Scanner::liveScans(), 'max' => Scanner::maxConcurrent()],

@@ -472,6 +472,25 @@ const API = (() => {
 const Demo = {
   active: false,
 
+  /* The scan log, for the demo. Without it the new Scanner logs card renders
+   * "No scans have run yet" next to a dashboard claiming 1,284,930 files
+   * scanned -- the demo contradicting itself on one page. */
+  mockScanJobs() {
+    const t = Math.floor(Date.now() / 1000);
+    return { success: true, data: [
+      { id: 812, scan_type: 'quick', status: 'done',      scan_path: '/home/acme',
+        started_at: t - 1800,   finished_at: t - 1655,   files_scanned: 18402,   threats_found: 0, requested_by: 'acme' },
+      { id: 811, scan_type: 'full',  status: 'done',      scan_path: '/home',
+        started_at: t - 36000,  finished_at: t - 21600,  files_scanned: 1284930, threats_found: 3, requested_by: '@schedule' },
+      { id: 810, scan_type: 'custom', status: 'done',     scan_path: '/home/acme,/home/bluefin,/home/cobalt',
+        started_at: t - 90000,  finished_at: t - 88100,  files_scanned: 61044,   threats_found: 0, requested_by: '@operator' },
+      { id: 809, scan_type: 'full',  status: 'cancelled', scan_path: '/home',
+        started_at: t - 122400, finished_at: t - 119900, files_scanned: 204118,  threats_found: 1, requested_by: '@schedule' },
+      { id: 808, scan_type: 'quick', status: 'done',      scan_path: '/home/bluefin',
+        started_at: t - 176400, finished_at: t - 176280, files_scanned: 9120,    threats_found: 0, requested_by: 'bluefin' },
+    ] };
+  },
+
   mockDashStats() {
     const rand = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
     return {

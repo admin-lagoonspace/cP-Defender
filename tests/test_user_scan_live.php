@@ -166,8 +166,12 @@ t_contains($sched, 'UserReport::writeAll()',
      'but it still writes the per-user reports, which is its job');
 
 // ── The page ────────────────────────────────────────────────────────────────
-t_contains($page, "if ((\$_GET['card'] ?? '') === 'scan')",
-     'the card can be fetched on its own');
+t_contains($page, "\$CARDS = ['scan' => \$renderScanCard, 'logs' => \$renderLogsCard];",
+     'each live region can be fetched on its own');
+t_contains($page, "if (isset(\$CARDS[\$want]))",
+     'and only a region named in that list is rendered — ?card= picks a '
+   . 'closure, so an unlisted value must fall through to the normal page '
+   . 'rather than reach anything');
 t_contains($page, 'while (ob_get_level() > 0) { ob_end_clean(); }',
      'and the buffered chrome is discarded rather than sent — this is a '
    . 'fragment, not a page, and cPanel\'s header must not wrap it');
