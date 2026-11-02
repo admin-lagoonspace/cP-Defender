@@ -205,14 +205,19 @@ else
   warn "CDN IS NOT SERVING ANYTHING (${CDN_BASE}/latest.json → HTTP ${_cdn_code})."
   warn "  Every serverscrub.com install and update URL 404s right now."
   warn "  Installs still work -- they fall back to the GitHub mirror -- but the"
-  warn "  CDN is doing nothing until scripts/cdn-sync.sh is installed as the"
-  warn "  ${CDN_ACCT} user. One-time setup, per that script's header:"
-  warn "    mkdir -p /home/${CDN_ACCT}/bin /home/${CDN_ACCT}/logs"
-  warn "    curl -fsSL https://raw.githubusercontent.com/${SLUG}/main/scripts/cdn-sync.sh \\"
-  warn "      -o /home/${CDN_ACCT}/bin/cdn-sync.sh"
-  warn "    chmod +x /home/${CDN_ACCT}/bin/cdn-sync.sh"
-  warn "    chown -R ${CDN_ACCT}:${CDN_ACCT} /home/${CDN_ACCT}/bin /home/${CDN_ACCT}/logs"
-  warn "    su -s /bin/bash -c /home/${CDN_ACCT}/bin/cdn-sync.sh ${CDN_ACCT}"
+  warn "  CDN is doing nothing until the sync is installed. One-time setup,"
+  warn "  as ROOT on the server that serves the domain:"
+  warn ""
+  warn "    bash <(curl -fsSL https://raw.githubusercontent.com/${SLUG}/main/scripts/cdn-setup.sh)"
+  warn ""
+  # Deliberately the setup script and not the five commands it replaces. Those
+  # hard-code /home/<acct>/public_html, which is the right docroot only if the
+  # domain is that account's MAIN domain; on an addon or subdomain cdn-sync.sh
+  # publishes into a directory no vhost serves, logs "published", and exits 0.
+  # cdn-setup.sh reads the docroot out of cPanel's own userdata and then checks
+  # the public URL, so it cannot report success over a CDN that still 404s.
+  warn "  It reads the docroot from cPanel, installs the 10-minute sync cron,"
+  warn "  runs it once, and then checks the public URL before claiming success."
 fi
 
 echo ""

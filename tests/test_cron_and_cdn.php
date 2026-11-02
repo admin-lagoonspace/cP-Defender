@@ -80,9 +80,12 @@ t_contains($pub, 'CDN IS NOT SERVING ANYTHING',
 t_contains($pub, 'they fall back to the GitHub mirror',
      'explaining why nothing appeared broken — which is exactly why this went '
    . 'unnoticed for release after release');
-t_contains($pub, 'cdn-sync.sh \\',
+t_contains($pub, 'scripts/cdn-setup.sh)',
      'and gives the one-time setup to fix it, rather than a pointer to a '
-   . 'script header');
+   . 'script header. It names the setup SCRIPT, not the five commands that '
+   . 'script replaces: those hard-code /home/<acct>/public_html, which is the '
+   . 'right docroot only when the domain is the MAIN domain of that account — '
+   . 'otherwise the sync publishes where no vhost serves and still succeeds');
 
 // ── Nothing still names the account the domain moved away from ──────────────
 foreach ([
