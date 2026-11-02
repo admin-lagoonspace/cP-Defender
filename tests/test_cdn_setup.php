@@ -207,7 +207,7 @@ t_ok(strpos($sh, 'echo "no answer"') === false,
      'NOT BOTH BRANCHES: the connection probe does not pair a -w line with an '
    . 'error fallback — curl prints the line and exits non-zero, so both fire '
    . 'and the output reads "HTTP 000" then "no answer"');
-t_contains($sh, '[[ "$_c" == "000" ]] && echo "no answer on this port" || echo "HTTP ${_c}"',
+t_contains($sh, 'echo "no answer on this port"',
      'one answer per port, decided from the status code');
 
 // A file the web server cannot traverse to is as absent as a missing one, and
@@ -217,11 +217,12 @@ t_contains($sh, 'say "2. Can the web server walk down to it?"',
    . 'parent without o+x makes the file unreachable and an ls of the file '
    . 'itself looks perfect');
 
-// Two vhosts claiming one domain is the quiet explanation for "the file is
-// there and Apache 404s" -- the winning vhost is not the one just published to.
-t_contains($sh, 'vhost files naming ${DOMAIN}',
-     'every vhost on the machine that claims the domain is counted, since the '
-   . 'one that wins may not be the one whose docroot was just published into');
+// Two ACCOUNTS claiming one domain is the quiet explanation for "the file is
+// there and Apache 404s" -- the winning vhost is not the one just published
+// to. (The count is asserted in detail further down; this is the heading.)
+t_contains($sh, 'say "3. What does cPanel think, and does anything else claim the domain?"',
+     'everything on the machine that claims the domain is examined, since the '
+   . 'vhost that wins may not be the one whose docroot was just published into');
 
 // The docroot's own .htaccess is the one most likely to hold the rewrite.
 t_contains($sh, '_p="${DOCROOT_BASE%/}"
@@ -238,3 +239,58 @@ t_contains($sh, 'bash ${SELF} --diagnose',
    . 'by hand');
 t_ok(strpos($sh, 'dig +short ${DOMAIN}        and compare') === false,
      'the hand-check list is gone — running the checks is the script\'s job');
+
+// ── The running config, not the source cPanel generates it from ─────────────
+//
+// The diagnostic's own blind spot, found on the live server. It printed
+// /var/cpanel/userdata as "what cPanel thinks" and stopped there -- and that
+// directory read perfectly while Apache 404d the site root. userdata is what
+// cPanel will GENERATE httpd.conf from; it is not what Apache is running. The
+// two diverge whenever the config has not been rebuilt since the domain was
+// created or moved, and then every source of truth agrees except the one
+// actually serving requests.
+//
+// Reading the source and calling it the state is the same mistake as writing a
+// cron and not reading it back -- which this script already refuses to make
+// twenty lines further up.
+t_contains($sh, 'say "3b. What is in Apache\'s RUNNING config, not cPanel\'s source for it"',
+     'THE REMAINING ASSUMPTION: the generated httpd.conf is read, not just '
+   . 'the userdata it is generated from');
+t_contains($sh, '/etc/apache2/conf/httpd.conf',
+     'at the EA4 path');
+t_contains($sh, 'inb && $1=="DocumentRoot" { rt=$2; gsub(/"/,"",rt) }',
+     'the DocumentRoot is taken from the vhost block for THIS ServerName, and '
+   . 'unquoted — Apache accepts it either way');
+t_contains($sh, 'NO VirtualHost for ${DOMAIN} in the running config.',
+     'a domain with no vhost at all is named as such: the request lands on '
+   . 'the default vhost, which 404s everything, and no amount of looking at '
+   . 'the published directory explains it');
+t_contains($sh, 'THIS DOES NOT MATCH cPanel\'s ${DOCROOT_BASE}.',
+     'and a stale DocumentRoot is compared against the one the files were '
+   . 'published into');
+t_contains($sh, '/scripts/rebuildhttpdconf && /scripts/restartsrv_httpd',
+     'with the command that fixes it, in both cases');
+
+// ── One number could not distinguish the two failures ───────────────────────
+t_contains($sh, 'HTTP ${_c} for the file, HTTP ${_r} for /',
+     'THE AMBIGUOUS 404: Apache is asked for the site root as well as the '
+   . 'file. A 404 for the file alone means that path is missing from a working '
+   . 'vhost; a 404 for both means there is no working vhost for this Host at '
+   . 'all. Same status code, unrelated fixes');
+t_contains($sh, 'Apache 404s the site root too',
+     'and the combination is called out rather than left to be noticed');
+
+// ── A normal account must not look like a finding ───────────────────────────
+//
+// Counting FILES printed "vhost files naming serverscrub.com: 2" for a
+// completely healthy account, because every domain has a plain vhost and an
+// _SSL one. A number that reads as a finding and is not is worse than no
+// number: it sends the reader after the wrong thing.
+t_contains($sh, 'accounts claiming ${DOMAIN}',
+     'THE FALSE FINDING: accounts are counted, not vhost files — every domain '
+   . 'has two of the latter, so the healthy case printed "2" and looked like '
+   . 'a collision');
+t_contains($sh, "sed -E 's#^/var/cpanel/userdata/([^/]+)/.*#\\1#' | sort -u",
+     'by reducing the paths to account names and deduplicating');
+t_contains($sh, '[[ "$_n" -gt 1 ]] && warn',
+     'and only more than one is flagged');

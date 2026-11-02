@@ -180,11 +180,62 @@ if $DIAGNOSE; then
         echo "    ${_f}"
         grep -E '^(documentroot|user|servername|serveralias):' "$_f" 2>/dev/null | sed 's/^/        /'
     done
-    # Two accounts claiming one domain is the quiet cause of "the file is there
-    # and Apache 404s": the vhost that wins is not the one whose docroot you
-    # just published into.
-    _claims="$(grep -rlE "^(servername|serveralias):.*(^| )${DOMAIN}( |$)" /var/cpanel/userdata/ 2>/dev/null | wc -l || true)"
-    echo "    vhost files naming ${DOMAIN}: ${_claims}"
+    # Two ACCOUNTS claiming one domain is the quiet cause of "the file is there
+    # and Apache 404s": the vhost that wins is not the one just published into.
+    # Counting FILES said "2" for a perfectly normal account, because every
+    # domain has both a plain and an _SSL vhost -- a number that looks like a
+    # finding and is not. Count the accounts.
+    _accts="$(grep -rlE "^(servername|serveralias):.*(^| )${DOMAIN}( |$)" \
+                   /var/cpanel/userdata/ 2>/dev/null \
+              | sed -E 's#^/var/cpanel/userdata/([^/]+)/.*#\1#' | sort -u || true)"
+    _n="$(printf '%s\n' "$_accts" | grep -c . || true)"
+    echo "    accounts claiming ${DOMAIN}: ${_n} ($(printf '%s' "$_accts" | tr '\n' ' '))"
+    [[ "$_n" -gt 1 ]] && warn "    MORE THAN ONE — the winning vhost may not be ${ACCT}'s"
+
+    echo
+    say "3b. What is in Apache's RUNNING config, not cPanel's source for it"
+    # THE GAP THIS SCRIPT HAD. /var/cpanel/userdata is what cPanel will GENERATE
+    # httpd.conf from; it is not what Apache is running. They diverge whenever
+    # the config has not been rebuilt since the domain was created or moved --
+    # and then the userdata reads perfectly while Apache serves something else,
+    # or no vhost for the domain at all and the request falls through to the
+    # default one, which 404s everything.
+    #
+    # Reading the source and calling it the state is the same mistake as
+    # writing a cron and not reading it back.
+    _conf=""
+    for _c in /etc/apache2/conf/httpd.conf /usr/local/apache/conf/httpd.conf; do
+        [[ -r "$_c" ]] && { _conf="$_c"; break; }
+    done
+    if [[ -z "$_conf" ]]; then
+        warn "    no httpd.conf found in the usual places — is this EA4?"
+    else
+        echo "    ${_conf}"
+        _live="$(awk -v d="$DOMAIN" '
+            /<VirtualHost/            { inb=1; nm=""; rt="" }
+            inb && $1=="ServerName"   { nm=$2 }
+            inb && $1=="DocumentRoot" { rt=$2; gsub(/"/,"",rt) }
+            /<\/VirtualHost>/         { if (inb && nm==d) print rt; inb=0 }
+        ' "$_conf" 2>/dev/null | sort -u || true)"
+        if [[ -z "$_live" ]]; then
+            warn "    NO VirtualHost for ${DOMAIN} in the running config."
+            warn "    Apache has nothing to match this Host against, so the request"
+            warn "    falls through to the default vhost and 404s whatever it is."
+            warn "    cPanel has the data (step 3); httpd.conf was never rebuilt from it."
+            warn ""
+            warn "    Fix:  /scripts/rebuildhttpdconf && /scripts/restartsrv_httpd"
+        else
+            printf '    DocumentRoot in the running config: %s\n' "$(printf '%s' "$_live" | tr '\n' ' ')"
+            if [[ "$_live" != "${DOCROOT_BASE%/}" ]]; then
+                warn "    THIS DOES NOT MATCH cPanel's ${DOCROOT_BASE}."
+                warn "    The published files are under cPanel's path; Apache is serving"
+                warn "    the other one. httpd.conf is stale."
+                warn "    Fix:  /scripts/rebuildhttpdconf && /scripts/restartsrv_httpd"
+            else
+                ok "    matches cPanel's docroot"
+            fi
+        fi
+    fi
 
     echo
     say "4. .htaccess between the docroot and the file"
@@ -216,12 +267,29 @@ if $DIAGNOSE; then
     # still prints its -w line, so both fire and the output reads
     # "HTTP 000" followed by "no answer". That is the same print-both-branches
     # bug that made publish.sh say "404000"; 000 already means no answer.
+    # Both the target AND the site root, because one number cannot tell the
+    # two apart: a 404 for the file alone means that path is missing from a
+    # vhost that otherwise works; a 404 for BOTH means Apache has no working
+    # vhost for this Host at all, and the request is landing on the default
+    # one. Those have entirely different fixes, and the first version of this
+    # asked only about the file.
     for _port in ${_aport} 8080 80; do
         printf '    apache on :%-5s ' "$_port"
         _c="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
                    -H "Host: ${DOMAIN}" "http://127.0.0.1:${_port}${TARGET}" 2>/dev/null || true)"
         [[ "$_c" =~ ^[0-9]{3}$ ]] || _c=000
-        [[ "$_c" == "000" ]] && echo "no answer on this port" || echo "HTTP ${_c}"
+        if [[ "$_c" == "000" ]]; then
+            echo "no answer on this port"
+            continue
+        fi
+        _r="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+                   -H "Host: ${DOMAIN}" "http://127.0.0.1:${_port}/" 2>/dev/null || true)"
+        [[ "$_r" =~ ^[0-9]{3}$ ]] || _r=000
+        echo "HTTP ${_c} for the file, HTTP ${_r} for /"
+        if [[ "$_c" == "404" && "$_r" == "404" ]]; then
+            warn "        Apache 404s the site root too — it has no working vhost"
+            warn "        for ${DOMAIN}; this is not about the published path."
+        fi
     done
 
     echo
