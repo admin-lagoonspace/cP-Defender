@@ -24,6 +24,8 @@
 #
 #   bash cdn-setup.sh            # set it up, then verify
 #   bash cdn-setup.sh --check    # verify only, change nothing
+#   bash cdn-setup.sh --diagnose # the files are published and the URL still
+#                                # 404s: find out where it is being lost
 #
 # Override with SG_CDN_ACCOUNT / SG_CDN_DOMAIN if either ever changes.
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -37,7 +39,11 @@ REPO="${SG_REPO:-admin-lagoonspace/cP-Defender}"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 
 CHECK_ONLY=false
-[[ "${1:-}" == "--check" ]] && CHECK_ONLY=true
+DIAGNOSE=false
+case "${1:-}" in
+    --check)    CHECK_ONLY=true ;;
+    --diagnose) DIAGNOSE=true ;;
+esac
 
 R=$'\033[0;31m'; G=$'\033[0;32m'; Y=$'\033[1;33m'
 C=$'\033[0;36m'; B=$'\033[1m';    N=$'\033[0m'
@@ -129,6 +135,116 @@ verify() {
     ok "and the build downloads: dist/serverscrub-${ver}.zip"
     return 0
 }
+
+# ── --diagnose: the files are there, the URL is not ──────────────────────────
+#
+# For the case this script's own failure message describes and cannot resolve:
+# the sync published, latest.json is on disk with the right owner and mode, and
+# the public URL still 404s. That is a web-server question, and the answer is
+# almost always one of four things. Each is checked rather than listed, because
+# a list of things to check is what the operator already has.
+#
+# The decisive one is asking APACHE directly, with the Host header, bypassing
+# whatever is in front of it. A 200 from Apache and a 404 from the public URL
+# means the proxy or its cache is the problem. A 404 from both means Apache is
+# not serving this directory, and its DocumentRoot is not what cPanel's
+# userdata says.
+if $DIAGNOSE; then
+    TARGET="/${SUBPATH}/latest.json"
+    DOC="${DOCROOT_BASE%/}/${SUBPATH}"
+
+    say "1. The file on disk"
+    if [[ -s "${DOC}/latest.json" ]]; then
+        ls -la "${DOC}/latest.json"
+    else
+        warn "${DOC}/latest.json is missing — run this script with no arguments first"
+    fi
+
+    # A file the web server cannot traverse to is as absent as one that is not
+    # there. Every directory from / down needs o+x, and this is invisible in an
+    # ls of the file itself.
+    echo
+    say "2. Can the web server walk down to it?"
+    _p=""
+    for _seg in $(echo "$DOC" | tr '/' ' '); do
+        _p="${_p}/${_seg}"
+        printf '    %s  ' "$(stat -c '%A %U:%G' "$_p" 2>/dev/null || echo '???')"
+        echo "$_p"
+    done
+    warn "    every one of those needs o+x (the x on the last triplet)"
+
+    echo
+    say "3. What does cPanel think, and does anything else claim the domain?"
+    for _f in /var/cpanel/userdata/*/"${DOMAIN}" /var/cpanel/userdata/*/"${DOMAIN}_SSL"; do
+        [[ -r "$_f" ]] || continue
+        echo "    ${_f}"
+        grep -E '^(documentroot|user|servername|serveralias):' "$_f" 2>/dev/null | sed 's/^/        /'
+    done
+    # Two accounts claiming one domain is the quiet cause of "the file is there
+    # and Apache 404s": the vhost that wins is not the one whose docroot you
+    # just published into.
+    _claims="$(grep -rlE "^(servername|serveralias):.*(^| )${DOMAIN}( |$)" /var/cpanel/userdata/ 2>/dev/null | wc -l || true)"
+    echo "    vhost files naming ${DOMAIN}: ${_claims}"
+
+    echo
+    say "4. .htaccess between the docroot and the file"
+    # The docroot's OWN .htaccess is checked first. An earlier version appended
+    # the first path segment before testing, so the one file most likely to
+    # contain the rewrite -- public_html/.htaccess -- was the one it skipped.
+    _found=false
+    _p="${DOCROOT_BASE%/}"
+    _segs="$(echo "${SUBPATH}" | tr '/' ' ')"
+    while :; do
+        if [[ -f "${_p}/.htaccess" ]]; then
+            _found=true
+            echo "    ${_p}/.htaccess"
+            grep -nE 'Rewrite|ErrorDocument|Deny|Require|Order|Redirect' "${_p}/.htaccess" 2>/dev/null \
+              | head -20 | sed 's/^/        /'
+        fi
+        [[ -n "$_segs" ]] || break
+        _p="${_p}/${_segs%% *}"
+        [[ "$_segs" == *" "* ]] && _segs="${_segs#* }" || _segs=""
+    done
+    $_found || echo "    none"
+
+    echo
+    say "5. Apache directly, bypassing whatever is in front of it"
+    # cPanel keeps Apache's real port here when a proxy is in front of it.
+    _aport="$(grep -E '^apache_port=' /var/cpanel/cpanel.config 2>/dev/null | tail -1 | sed -E 's/.*:([0-9]+)$|.*=([0-9]+)$/\1\2/' || true)"
+    [[ "$_aport" =~ ^[0-9]+$ ]] || _aport=""
+    # No `|| echo "no answer"`: curl exits non-zero when it cannot connect AND
+    # still prints its -w line, so both fire and the output reads
+    # "HTTP 000" followed by "no answer". That is the same print-both-branches
+    # bug that made publish.sh say "404000"; 000 already means no answer.
+    for _port in ${_aport} 8080 80; do
+        printf '    apache on :%-5s ' "$_port"
+        _c="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+                   -H "Host: ${DOMAIN}" "http://127.0.0.1:${_port}${TARGET}" 2>/dev/null || true)"
+        [[ "$_c" =~ ^[0-9]{3}$ ]] || _c=000
+        [[ "$_c" == "000" ]] && echo "no answer on this port" || echo "HTTP ${_c}"
+    done
+
+    echo
+    say "6. The public URL, for comparison"
+    printf '    %-22s ' "${DOMAIN}${TARGET}"
+    _c="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://${DOMAIN}${TARGET}" 2>/dev/null || true)"
+    [[ "$_c" =~ ^[0-9]{3}$ ]] || _c=000
+    echo "HTTP ${_c}"
+    printf '    %-22s ' "what is answering"
+    _srv="$(curl -sSI --max-time 20 "https://${DOMAIN}/" 2>/dev/null | grep -i '^server:' | head -1 | tr -d '\r' || true)"
+    echo "${_srv:-unknown}"
+
+    echo
+    warn "READING THIS:"
+    warn "  Apache 200, public 404  → the proxy in front of Apache, or its cache."
+    warn "                            On cPanel: WHM → NGINX Manager → clear cache,"
+    warn "                            or rebuild the vhost for ${ACCT}."
+    warn "  Apache 404, file present → Apache's DocumentRoot is not where the file"
+    warn "                            is. Compare step 3 with step 1; if two vhost"
+    warn "                            files name ${DOMAIN}, the wrong one is winning."
+    warn "  Directory without o+x    → chmod o+x it; the file is unreachable."
+    exit 0
+fi
 
 if $CHECK_ONLY; then
     say "Checking ${DOMAIN}…"
@@ -241,15 +357,15 @@ if ! $SYNC_OK; then
 fi
 
 warn "The files ARE on disk at ${DOCROOT}, and the URL still does not serve"
-warn "them. The sync did its job; something between that directory and the web"
-warn "has not. In order of likelihood:"
-warn "  - ${DOMAIN} resolves somewhere other than this server"
-warn "      dig +short ${DOMAIN}        and compare with this box's IPs"
-warn "  - the vhost has no valid certificate, so https fails before a file is read"
-warn "      curl -sSI https://${DOMAIN}/ | head -1"
-warn "  - an .htaccess above the path rewrites or denies it"
-warn "      ls -la ${DOCROOT_BASE}/.htaccess"
+warn "them. The sync did its job; the web server is not reaching what it wrote."
 echo
-warn "What is on disk, for comparison:"
+warn "What is on disk:"
 ls -la "${DOCROOT}/latest.json"
+echo
+# A list of things to go and check is what the operator already had. Run them.
+warn "Find out where it is being lost:"
+warn "  ${B}bash ${SELF} --diagnose${N}"
+warn "That asks Apache directly, bypassing anything in front of it, walks the"
+warn "directory permissions down to the file, and shows every vhost on this"
+warn "machine that claims ${DOMAIN}."
 exit 1

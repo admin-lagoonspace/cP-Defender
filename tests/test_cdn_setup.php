@@ -89,8 +89,9 @@ t_contains($sh, 'but the build it points at 404s',
 t_contains($sh, 'The files ARE on disk at ${DOCROOT}, and the URL still does not serve',
      'a sync that worked and a URL that does not are distinguished — they '
    . 'have completely different causes');
-t_contains($sh, 'dig +short ${DOMAIN}',
-     'with the next thing to check');
+t_contains($sh, 'bash ${SELF} --diagnose',
+     'with the next COMMAND to run, not a list of things to go and check — '
+   . 'the operator already had a list');
 
 // ── --check changes nothing ─────────────────────────────────────────────────
 t_contains($sh, 'if $CHECK_ONLY; then',
@@ -176,8 +177,64 @@ t_contains($sh, 'the web side is not',
    . 'different causes, and sending someone to dig and openssl when the sync '
    . 'never ran wastes the evening');
 
-$webAdvice = (int) strpos($sh, 'resolves somewhere other than this server');
+$webAdvice = (int) strpos($sh, 'the web server is not reaching what it wrote');
 $notPub    = (int) strpos($sh, 'NOTHING WAS PUBLISHED.');
-t_ok($notPub > 0 && $notPub < $webAdvice,
-     'and it exits first, so the DNS and certificate advice cannot print '
-   . 'underneath it');
+t_ok($notPub > 0 && $webAdvice > 0 && $notPub < $webAdvice,
+     'and it exits first, so the web-server diagnosis cannot print underneath '
+   . 'it — the two failures have nothing in common');
+
+// ── --diagnose: when the files are published and the URL still 404s ─────────
+//
+// Which is where this landed on the live server: the sync published, the file
+// was on disk with the right owner and mode, and https still returned 404 --
+// Apache's 404, behind an nginx header. The script's advice at that point was
+// three things to go and check, which is what the operator already had.
+t_contains($sh, 'if $DIAGNOSE; then',
+     'there is a diagnose mode for the one failure this script could report '
+   . 'and not resolve');
+
+t_contains($sh, '-H "Host: ${DOMAIN}" "http://127.0.0.1:${_port}${TARGET}"',
+     'THE DECISIVE TEST: Apache is asked directly, with the Host header, '
+   . 'bypassing whatever proxy is in front of it. 200 from Apache and 404 in '
+   . 'public means the proxy or its cache; 404 from both means Apache is not '
+   . 'serving that directory at all');
+t_contains($sh, "grep -E '^apache_port=' /var/cpanel/cpanel.config",
+     'and the port comes from cPanel rather than being guessed');
+
+// curl prints its -w line even when it cannot connect, and exits non-zero.
+// A `|| echo "no answer"` therefore prints BOTH. Same shape as "404000".
+t_ok(strpos($sh, 'echo "no answer"') === false,
+     'NOT BOTH BRANCHES: the connection probe does not pair a -w line with an '
+   . 'error fallback — curl prints the line and exits non-zero, so both fire '
+   . 'and the output reads "HTTP 000" then "no answer"');
+t_contains($sh, '[[ "$_c" == "000" ]] && echo "no answer on this port" || echo "HTTP ${_c}"',
+     'one answer per port, decided from the status code');
+
+// A file the web server cannot traverse to is as absent as a missing one, and
+// nothing about the file's own ls shows it.
+t_contains($sh, 'say "2. Can the web server walk down to it?"',
+     'THE INVISIBLE CAUSE: every directory from / down is listed, because a '
+   . 'parent without o+x makes the file unreachable and an ls of the file '
+   . 'itself looks perfect');
+
+// Two vhosts claiming one domain is the quiet explanation for "the file is
+// there and Apache 404s" -- the winning vhost is not the one just published to.
+t_contains($sh, 'vhost files naming ${DOMAIN}',
+     'every vhost on the machine that claims the domain is counted, since the '
+   . 'one that wins may not be the one whose docroot was just published into');
+
+// The docroot's own .htaccess is the one most likely to hold the rewrite.
+t_contains($sh, '_p="${DOCROOT_BASE%/}"
+    _segs="$(echo "${SUBPATH}" | tr \'/\' \' \')"',
+     'THE SKIPPED FILE: the walk tests the docroot BEFORE descending. The '
+   . 'first version appended a segment first, so public_html/.htaccess — the '
+   . 'likeliest culprit — was the one file it never looked at');
+t_contains($sh, '$_found || echo "    none"',
+     'and says so when there are none, rather than printing an empty heading');
+
+// The failure path must hand the operator the next command, not a reading list.
+t_contains($sh, 'bash ${SELF} --diagnose',
+     'and the failure message points at it instead of listing things to check '
+   . 'by hand');
+t_ok(strpos($sh, 'dig +short ${DOMAIN}        and compare') === false,
+     'the hand-check list is gone — running the checks is the script\'s job');
