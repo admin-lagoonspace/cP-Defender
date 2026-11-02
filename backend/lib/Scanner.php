@@ -272,6 +272,9 @@ class Scanner {
                 "UPDATE scan_jobs SET status='interrupted', finished_at=? WHERE id=?",
                 [time(), (int) $job['id']]
             );
+            // Otherwise the customer's page shows a scan still running that
+            // nothing is working on, forever.
+            self::publishUserStatus((int) $job['id']);
             Logger::warn('Scan job ' . $job['id'] . ' had no live worker - marked interrupted');
             $n++;
         }
@@ -560,9 +563,14 @@ class Scanner {
      *        back in four hours" is not an answer. One account's quick scan is
      *        a far smaller claim on the disks than the server-wide sweep this
      *        gate was written for.
+     * @param string $requestedBy The cPanel account that asked, if a customer
+     *        did. Progress is published into that account's home so their page
+     *        can show it, and only they may cancel it. Empty means the server
+     *        asked, and no customer can stop it.
      */
     public function startScan(string $path = '/home', string $type = 'quick',
-                              bool $ignoreBackup = false): int {
+                              bool $ignoreBackup = false,
+                              string $requestedBy = ''): int {
         // The type decides what gets walked. Resolved here, at the one place
         // every caller goes through -- the GUI, the scheduler and the CLI --
         // so all three mean the same thing by "quick".
@@ -607,7 +615,14 @@ class Scanner {
             'started_at'    => time(),
             'scan_path'     => $path,
             'ignore_backup' => $ignoreBackup ? 1 : 0,
+            'requested_by'  => $requestedBy,
         ]);
+
+        // Publish immediately. The worker is spawned below and may take a few
+        // seconds to record anything; without this the customer's page shows
+        // "queued" while the scan is already running, which is the confusion
+        // this whole mechanism exists to remove.
+        self::publishUserStatus($jobId);
         Logger::info("Scan job {$jobId}: {$type} ({$res['note']}) on " . $path);
 
         // Write job file so cron can pick it up
@@ -751,6 +766,59 @@ class Scanner {
             'UPDATE scan_jobs SET files_scanned = ?, threats_found = ? WHERE id = ?',
             [$filesScanned, $threatsFound, $jobId]
         );
+        self::publishUserStatus($jobId);
+    }
+
+    /**
+     * Mirror a job's state into the requesting account's home.
+     *
+     * The customer's cPanel page is a different process running as a different
+     * user, and the database directory is 0700 root -- deliberately, because a
+     * page every hosting customer can load must not be able to reach the whole
+     * server's security data. So the one job they are entitled to see has to be
+     * handed to them, and a file in their own home is the only channel that
+     * does not widen anything.
+     *
+     * Reported as: press the button, the page says "Queued", and it says that
+     * for as long as you leave it there -- while the scan runs and finishes.
+     *
+     * Does nothing for a server-initiated scan. There is nobody to tell, and
+     * writing one account's view of a server-wide sweep into their home would
+     * leak the existence of work done for everyone else.
+     */
+    public static function publishUserStatus(int $jobId): ?string
+    {
+        if ($jobId <= 0) { return null; }
+
+        $job = Database::fetchOne(
+            'SELECT id,status,scan_type,files_scanned,threats_found,'
+          . 'started_at,finished_at,requested_by FROM scan_jobs WHERE id=?', [$jobId]);
+        if (!$job) { return null; }
+
+        $user = trim((string) ($job['requested_by'] ?? ''));
+        if ($user === '') { return null; }
+
+        if (!class_exists('UserReport')) {
+            $lib = SG_ROOT . '/backend/lib/UserReport.php';
+            if (!is_file($lib)) { return null; }
+            require_once $lib;
+        }
+
+        $json = json_encode([
+            'job'           => (int) $job['id'],
+            'status'        => (string) $job['status'],
+            'scan_type'     => (string) $job['scan_type'],
+            'files_scanned' => (int) $job['files_scanned'],
+            'threats_found' => (int) $job['threats_found'],
+            'started_at'    => (int) $job['started_at'],
+            'finished_at'   => (int) $job['finished_at'],
+            // When this was written, so the page can tell a scan that is
+            // working from one whose worker died without saying so.
+            'updated_at'    => time(),
+        ], JSON_UNESCAPED_SLASHES);
+        if ($json === false) { return null; }
+
+        return UserReport::writeInHome($user, 'scan-status.json', $json);
     }
 
     /** Directories that are never worth scanning. */
@@ -1675,6 +1743,30 @@ This file was removed and not kept. Restore it from your backups
     }
 
     /**
+     * The cPanel account that asked for this scan, or '' if the server did.
+     *
+     * The authorisation check for a customer cancelling a scan. It is a
+     * string comparison against the row rather than a guess from the scan
+     * path, because /home/bob is a prefix of /home/bobby and "the scan covers
+     * your directory" is not the same claim as "you started it".
+     */
+    public static function jobOwner(int $jobId): string
+    {
+        $row = Database::fetchOne('SELECT requested_by FROM scan_jobs WHERE id=?', [$jobId]);
+        return trim((string) ($row['requested_by'] ?? ''));
+    }
+
+    /** The live job this account started, if any. */
+    public static function liveJobFor(string $user): ?array
+    {
+        if ($user === '') { return null; }
+        return Database::fetchOne(
+            "SELECT * FROM scan_jobs
+              WHERE requested_by = ? AND status IN ('running','pending','cancelling')
+           ORDER BY id DESC LIMIT 1", [$user]) ?: null;
+    }
+
+    /**
      * Hold the scan while a backup runs.
      *
      * Waiting rather than aborting: the scan resumes and finishes, and a
@@ -1829,6 +1921,7 @@ This file was removed and not kept. Restore it from your backups
             "UPDATE scan_jobs SET status='cancelled', finished_at=? WHERE id=?",
             [time(), $id]
         );
+        self::publishUserStatus($id);
 
         // Any clamscan left over from this group after a KILL is worth saying
         // out loud rather than reporting a clean stop.

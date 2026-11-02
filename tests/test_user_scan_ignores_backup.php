@@ -92,8 +92,8 @@ t_contains($wait, 'continuing anyway',
 
 // ── The customer path asks for it; nothing else does ────────────────────────
 $usr = (string) file_get_contents($repo . '/backend/lib/UserScanRequest.php');
-t_contains(t_fn_body($usr, 'process', 'php'), "startScan(\$home, 'quick', true)",
-     'the customer-initiated scan passes the waiver');
+t_contains(t_fn_body($usr, 'process', 'php'), "startScan(\$home, 'quick', true, \$user)",
+     'the customer-initiated scan passes the waiver, and says who asked');
 
 foreach ([
     '/backend/cron/scheduler.php'  => 'the scheduled sweep',

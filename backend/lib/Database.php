@@ -388,6 +388,15 @@ class Database {
             $db->exec("ALTER TABLE scan_jobs ADD COLUMN ignore_backup INTEGER NOT NULL DEFAULT 0");
         }
 
+        // Which cPanel account asked for this scan, if any. Two jobs depend on
+        // it: publishing progress into that account's home so their page can
+        // show it, and deciding whether a cancel request is theirs to make. An
+        // empty value means the server asked -- the scheduled sweep, the
+        // operator UI or the CLI -- and no customer may stop it.
+        if (!in_array('requested_by', $jobCols)) {
+            $db->exec("ALTER TABLE scan_jobs ADD COLUMN requested_by TEXT NOT NULL DEFAULT ''");
+        }
+
         // Where a quarantined file went, and when it may be deleted. The sweep
         // needs the exact path: guessing it from the threat's original name
         // would eventually delete the wrong thing.

@@ -46,26 +46,61 @@ if ($home === '' && function_exists('posix_getpwnam') && $user !== '') {
  * code. And the worst a forged one could achieve is a scan of the victim's own
  * account, rate-limited, which is what the button does anyway.
  */
-$requested = false;
-if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST'
-    && isset($_POST['scan_now']) && $home !== '') {
+
+/**
+ * Leave a file in this account's own ~/.serverscrub.
+ *
+ * Written aside and moved into place, so the privileged side never reads a
+ * half-written file and discards it as malformed.
+ */
+function sg_leave(string $home, string $name, array $data): bool {
     $dir = rtrim($home, '/') . '/.serverscrub';
     if (!is_dir($dir)) { @mkdir($dir, 0700, true); }
-    if (is_dir($dir) && !is_link($dir)) {
-        $tmp = $dir . '/.scan-request.' . getmypid();
-        $ok  = @file_put_contents($tmp, json_encode([
+    if (!is_dir($dir) || is_link($dir)) { return false; }
+
+    $tmp = $dir . '/.' . $name . '.' . getmypid();
+    if (@file_put_contents($tmp, json_encode($data)) === false) {
+        @unlink($tmp);
+        return false;
+    }
+    @chmod($tmp, 0600);
+    return @rename($tmp, $dir . '/' . $name);
+}
+
+$requested  = false;
+$cancelling = false;
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && $home !== '') {
+    if (isset($_POST['scan_now'])) {
+        $requested = sg_leave($home, 'scan-request.json', [
             'requested_at' => time(),
             'source'       => 'cpanel-plugin',
-        ]));
-        // Written aside and moved into place, so the privileged side never
-        // reads a half-written file and discards the request as malformed.
-        if ($ok !== false) {
-            @chmod($tmp, 0600);
-            @rename($tmp, $dir . '/scan-request.json');
-            $requested = true;
-        } else {
-            @unlink($tmp);
-        }
+        ]);
+    } elseif (isset($_POST['cancel_scan'])) {
+        /**
+         * Stopping a scan takes two steps, because there are two things it
+         * could be.
+         *
+         * A request that has not been picked up yet is cancelled by deleting
+         * it, which this page can do itself -- the file is in this account's
+         * home and owned by this account. That is instant, and it is the
+         * common case: most cancels happen in the first seconds.
+         *
+         * A scan already RUNNING belongs to a root process this page cannot
+         * touch. All it can do is leave the ask, which the privileged side
+         * picks up within the minute and checks against the job row before
+         * acting -- a customer may stop the scan they started and nothing
+         * else.
+         *
+         * Both, every time, in that order: between the click and this code
+         * the request may have become a running scan, and doing only one of
+         * the two would leave it running.
+         */
+        $cancelling = sg_leave($home, 'scan-cancel.json', [
+            'requested_at' => time(),
+            'source'       => 'cpanel-plugin',
+        ]);
+        $rq = rtrim($home, '/') . '/.serverscrub/scan-request.json';
+        if (!is_link($rq) && is_file($rq)) { @unlink($rq); }
     }
 }
 
@@ -189,6 +224,9 @@ ob_start();
          border:1px solid var(--blue); background:var(--blue); color:#fff; cursor:pointer; }
   .sscrub .btn:hover:not(:disabled) { filter:brightness(1.08); }
   .sscrub .btn:disabled { background:var(--chip); color:var(--dim); border-color:var(--line); cursor:default; }
+  /* Cancel is not the action we want someone to take by accident, so it does
+   * not get the filled primary treatment the Scan button has. */
+  .sscrub .btn-stop { background:#fff; color:var(--red); border-color:var(--red); }
   @media (max-width:560px) { .sscrub .hide-sm{display:none} }
 
   /* ── Branded header and tabs ──────────────────────────────────────────
@@ -369,21 +407,172 @@ ob_start();
   if ($reqAt > 0 && (int) ($note['at'] ?? 0) < $reqAt) { $noteState = ''; }
 
   $lastCheck = (int) ($sr['last_check_at'] ?? 0);
+
+  // ── The live scan, read fresh ─────────────────────────────────────────────
+  //
+  // Reported as: press the button, the card says "Queued", and it goes on
+  // saying that while the scan runs and finishes. It was true of every number
+  // on this page -- report.json is rebuilt hourly, so the card was showing an
+  // answer from before the click.
+  //
+  // scan-status.json is different: the privileged side rewrites it as the scan
+  // progresses, into this account's own home. It is the only thing here that
+  // is current, and it is what the poller below re-reads.
+  $live = [];
+  if ($home !== '') {
+      $lp = rtrim($home, '/') . '/.serverscrub/scan-status.json';
+      if (!is_link($lp) && is_file($lp)) {
+          $lj = json_decode((string) @file_get_contents($lp), true);
+          if (is_array($lj)) { $live = $lj; }
+      }
+  }
+
+  $liveStatus = (string) ($live['status'] ?? '');
+  $liveAt     = (int) ($live['updated_at'] ?? 0);
+  $liveStart  = (int) ($live['started_at'] ?? 0);
+
+  // A status file describing a scan that ended before this request was made is
+  // the PREVIOUS scan, and showing its result next to a fresh "Queued" would
+  // read as though the new one had already finished.
+  if ($reqAt > 0 && $liveStart > 0 && $liveStart < $reqAt) { $liveStatus = ''; }
+
+  $isRunning  = in_array($liveStatus, ['running', 'pending'], true);
+  $isStopping = $liveStatus === 'cancelling' || ($cancelling && $isRunning);
+
+  // A worker killed outright never writes a final state. The reaper marks the
+  // job interrupted and the minute cron carries that over, so anything older
+  // than a few minutes means neither is running -- and claiming a scan is in
+  // progress when nothing is working on it is the failure this card exists to
+  // prevent.
+  if ($isRunning && $liveAt > 0 && (time() - $liveAt) > 600) {
+      $isRunning  = false;
+      $liveStatus = 'stalled';
+  }
+
+  // Finished recently enough that the customer is still looking at the page
+  // they started it from.
+  $justDone = !$isRunning && !$isStopping
+           && in_array($liveStatus, ['done', 'cancelled', 'error', 'interrupted', 'skipped'], true)
+           && (int) ($live['finished_at'] ?? 0) > time() - 1800;
+
+  $srQueued = $srQueued && !$isRunning && !$isStopping && !$justDone;
+
+  // Anything moving is worth re-reading. Nothing moving is not.
+  //
+  // A stalled scan is explicitly NOT moving. Its request file may still be on
+  // disk, which would otherwise read as "queued" and have the page re-read a
+  // dead job every five seconds for as long as the customer leaves the tab
+  // open.
+  $polling = ($isRunning || $isStopping || $srQueued) && $liveStatus !== 'stalled';
+
+  $elapsed = function (int $from): string {
+      $d = max(0, time() - $from);
+      if ($d < 60) { return $d . 's'; }
+      return intdiv($d, 60) . 'm ' . ($d % 60) . 's';
+  };
 ?>
 
 <?php
 // ── The scan panel, shown on Home and on Virus scanner ──────────────────────
 $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
                                    $noteState, $note, $lastCheck,
-                                   $srPer, $srHours, $srUsed, $srLeft) {
+                                   $srPer, $srHours, $srUsed, $srLeft,
+                                   $live, $liveStatus, $isRunning, $isStopping,
+                                   $justDone, $polling, $elapsed, $cancelling) {
     if (!$srOn) { return; }
 ?>
-  <div class="card">
+  <div class="card" id="ss-scan" data-poll="<?= $polling ? '1' : '0' ?>">
     <h2>Scan my account</h2>
     <div style="padding:14px">
-      <?php if ($srQueued): ?>
-        <div class="tag green">Queued</div>
+      <?php if ($isStopping): ?>
+        <div class="tag amber">Stopping</div>
+        <button class="btn" disabled style="margin-left:10px">Cancelling…</button>
         <div class="foot" style="margin-top:7px">
+          Your scan is being stopped. This takes up to a minute — the files
+          already checked are kept, and anything found in them is listed below.
+        </div>
+
+      <?php elseif ($isRunning): ?>
+        <div class="tag green">Scanning now</div>
+        <form method="post" style="display:inline;margin:0 0 0 10px">
+          <button class="btn btn-stop" type="submit" name="cancel_scan" value="1">Cancel scan</button>
+        </form>
+        <div class="foot" style="margin-top:9px">
+          <strong><?= number_format((int) ($live['files_scanned'] ?? 0)) ?></strong>
+          file(s) checked
+          <?php if ((int) ($live['threats_found'] ?? 0) > 0): ?>
+            · <strong class="red"><?= (int) $live['threats_found'] ?></strong> threat(s) so far
+          <?php else: ?>
+            · nothing found so far
+          <?php endif; ?>
+          <?php if ((int) ($live['started_at'] ?? 0) > 0): ?>
+            · running for <?= e($elapsed((int) $live['started_at'])) ?>
+          <?php endif; ?>
+          <br>This updates on its own. You can close the page; it keeps going.
+        </div>
+
+      <?php elseif ($justDone): ?>
+        <?php
+          $fin  = (int) ($live['finished_at'] ?? 0);
+          $hits = (int) ($live['threats_found'] ?? 0);
+        ?>
+        <?php if ($liveStatus === 'done'): ?>
+          <div class="tag <?= $hits > 0 ? 'red' : 'green' ?>">
+            <?= $hits > 0 ? 'Threats found' : 'Clean' ?></div>
+          <div class="foot" style="margin-top:7px">
+            Scan finished <?= e(ago($fin)) ?> after checking
+            <strong><?= number_format((int) ($live['files_scanned'] ?? 0)) ?></strong> file(s).
+            <?php if ($hits > 0): ?>
+              <strong class="red"><?= $hits ?></strong> threat(s) found — they are listed below.
+            <?php else: ?>
+              Nothing harmful was found in your account.
+            <?php endif; ?>
+          </div>
+        <?php elseif ($liveStatus === 'cancelled'): ?>
+          <div class="tag dimc">Cancelled</div>
+          <div class="foot" style="margin-top:7px">
+            You stopped this scan <?= e(ago($fin)) ?>, after
+            <strong><?= number_format((int) ($live['files_scanned'] ?? 0)) ?></strong>
+            file(s). Anything found in those is listed below; the rest of your
+            account was not checked.
+          </div>
+        <?php elseif ($liveStatus === 'skipped'): ?>
+          <div class="tag amber">Not started</div>
+          <div class="foot" style="margin-top:7px">
+            The server was already running another scan, so yours did not
+            start. You can ask again below.
+          </div>
+        <?php else: ?>
+          <div class="tag amber">Did not finish</div>
+          <div class="foot" style="margin-top:7px">
+            This scan stopped before it was done (<?= e($liveStatus) ?>)
+            <?= e(ago($fin)) ?>. Anything it had found is listed below. If this
+            keeps happening it is worth telling your hosting provider.
+          </div>
+        <?php endif; ?>
+        <?php if ($srWait <= 0): ?>
+          <form method="post" style="margin:11px 0 0">
+            <button class="btn" type="submit" name="scan_now" value="1">Scan again</button>
+          </form>
+        <?php endif; ?>
+
+      <?php elseif ($liveStatus === 'stalled'): ?>
+        <div class="tag amber">Stopped responding</div>
+        <form method="post" style="display:inline;margin:0 0 0 10px">
+          <button class="btn" type="submit" name="scan_now" value="1">Try again</button>
+        </form>
+        <div class="foot" style="margin-top:9px">
+          Your scan has not reported progress for over ten minutes, so it is no
+          longer running. Please tell your hosting provider if this keeps
+          happening.
+        </div>
+
+      <?php elseif ($srQueued): ?>
+        <div class="tag green">Queued</div>
+        <form method="post" style="display:inline;margin:0 0 0 10px">
+          <button class="btn btn-stop" type="submit" name="cancel_scan" value="1">Cancel scan</button>
+        </form>
+        <div class="foot" style="margin-top:9px">
           <?php if ($reqAt > 0): ?>
             <strong>Requested <?= e(ago($reqAt)) ?>.</strong>
           <?php else: ?>
@@ -445,6 +634,26 @@ $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
   </div>
 <?php
 };
+
+/**
+ * The card on its own, for the poller.
+ *
+ * A full page reload every few seconds would work, and it is what this did
+ * first -- but inside cPanel's frame it reloads cPanel's chrome too, throws
+ * away the scroll position, and flickers. Returning the one card that changes
+ * costs a few hundred bytes and leaves the rest of the page alone.
+ *
+ * Everything above has already run, so the answer is as fresh as a full load.
+ * The buffered chrome is discarded rather than sent: this is a fragment, not
+ * a page, and the LiveAPI header must not be wrapped around it.
+ */
+if (($_GET['card'] ?? '') === 'scan') {
+    while (ob_get_level() > 0) { ob_end_clean(); }
+    header('Content-Type: text/html; charset=utf-8');
+    header('Cache-Control: no-store');
+    $renderScanCard();
+    exit;
+}
 
 // ── The threats table, shown on Home and on Virus scanner ───────────────────
 $renderThreats = function (array $rows) {
@@ -719,6 +928,69 @@ $renderThreats = function (array $rows) {
 
 <?php endif; ?>
 
+<script>
+/* Keep the scan card current.
+ *
+ * The card renders its own answer: data-poll="1" means something is moving and
+ * is worth re-reading. The replacement carries the same attribute, so the loop
+ * stops by itself the moment the scan finishes -- there is no state here
+ * deciding when to give up, and nothing to get out of step with the markup.
+ *
+ * Everything degrades: with scripting off the card is still correct on load,
+ * the buttons are real form submits, and the only thing lost is that it
+ * stops moving on its own.
+ */
+(function () {
+  var EVERY = 5000, MAX = 60 * 60 * 1000, began = Date.now(), armed = false;
+
+  /* One timer, ever. Coming back to the tab asks for an immediate read, and
+   * without this that would start a second chain alongside the first -- then
+   * a third, until the card is being re-read several times a second. */
+  function arm(ms) {
+    if (armed) { return; }
+    armed = true;
+    setTimeout(function () { armed = false; tick(); }, ms);
+  }
+
+  function url() {
+    var u = new URL(window.location.href);
+    u.searchParams.set('card', 'scan');
+    /* Cancels and scan requests are POSTs. Re-reading must not repeat one. */
+    return u.toString();
+  }
+
+  function tick() {
+    var card = document.getElementById('ss-scan');
+    if (!card || card.getAttribute('data-poll') !== '1') { return; }
+    if (Date.now() - began > MAX) { return; }
+
+    /* Nothing is read while the tab is in the background. The scan carries on
+     * server-side either way, and the card is refreshed on the way back. */
+    if (document.hidden) { arm(EVERY); return; }
+
+    fetch(url(), { credentials: 'same-origin', headers: { 'X-Requested-With': 'fetch' } })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (html) {
+        if (!html) { return; }
+        var box = document.createElement('div');
+        box.innerHTML = html;
+        var fresh = box.querySelector('#ss-scan');
+        var now   = document.getElementById('ss-scan');
+        /* A response without the card means something is wrong at the other
+         * end -- a session that has expired, most likely. Leaving what is on
+         * screen is better than blanking it. */
+        if (fresh && now) { now.replaceWith(fresh); }
+      })
+      .catch(function () { /* A dropped request is not worth a message. */ })
+      .then(function () { arm(EVERY); });
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { arm(150); }
+  });
+  arm(EVERY);
+})();
+</script>
 </div>
 <?php
 $content = ob_get_clean();

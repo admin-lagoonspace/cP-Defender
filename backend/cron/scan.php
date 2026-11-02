@@ -119,6 +119,7 @@ if ($lockFh === null) {
             "UPDATE scan_jobs SET status='skipped', finished_at=? WHERE id=?",
             [time(), $jobId]
         );
+        Scanner::publishUserStatus($jobId);
     }
     exit(0);
 }
@@ -215,6 +216,11 @@ try {
     );
     Database::setSetting('last_scan', (string)time());
 
+    // Tell the customer's page it has finished. Without this the last thing
+    // they were shown is the final progress update, and the card sits on
+    // "running" until the next report is built a quarter of an hour later.
+    Scanner::publishUserStatus($jobId);
+
     $msg = count($threats) . " threat(s) found in $files files";
     Logger::info("scan.php: Job $jobId done -- $msg ({$ms}ms)");
     Database::insert('cron_log', [
@@ -224,6 +230,8 @@ try {
 } catch (Throwable $e) {
     Logger::error("scan.php: Job $jobId failed -- " . $e->getMessage());
     Database::query('UPDATE scan_jobs SET status=?,finished_at=? WHERE id=?',['error',time(),$jobId]);
+    // A failure is still an answer. Leaving the page on "running" is not.
+    Scanner::publishUserStatus($jobId);
     Database::insert('cron_log', [
         'job_name'=>"scan_$jobId",'status'=>'error',
         'message'=>$e->getMessage(),

@@ -380,6 +380,43 @@ class UserReport
         if ($home === null) {
             return null;
         }
+        $json = json_encode(self::build($user, $home),
+                            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            return null;
+        }
+        return self::writeInHome($user, 'report.json', $json, $home);
+    }
+
+    /**
+     * Put a file in an account's ~/.serverscrub, safely.
+     *
+     * Split out of writeFor() so the live scan status can use the same path.
+     * It is the only part of this class that is genuinely dangerous -- root
+     * writing into a directory a hostile user can rearrange between one call
+     * and the next -- and having two copies of it would mean the second one
+     * eventually drifting from the first.
+     *
+     * Returns the path written, or null if anything looked wrong. Refuses
+     * rather than deleting: removing something in a customer's home because it
+     * is in our way is not a decision this class should make on its own.
+     *
+     * @param string      $name A bare filename. Never from user input.
+     * @param string|null $home Passed in when the caller already resolved it.
+     */
+    public static function writeInHome(string $user, string $name, string $data,
+                                       ?string $home = null): ?string
+    {
+        if (!self::validUsername($user)) { return null; }
+        if ($name === '' || strpbrk($name, "/\\\0") !== false || $name[0] === '.') {
+            // A name with a separator in it would escape the directory every
+            // check below is about.
+            Logger::warn("UserReport: refusing to write unsafe filename '{$name}'");
+            return null;
+        }
+
+        $home = $home ?? self::homeDir($user);
+        if ($home === null) { return null; }
 
         $dir = $home . '/' . self::DIR;
 
@@ -403,18 +440,13 @@ class UserReport
         if ($gid !== false) { @chgrp($dir, $gid); }
         @chmod($dir, 0700);
 
-        $path = $dir . '/report.json';
-        $tmp  = $dir . '/.report.json.' . getmypid();
-
-        $json = json_encode(self::build($user, $home), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-        if ($json === false) {
-            return null;
-        }
+        $path = $dir . '/' . $name;
+        $tmp  = $dir . '/.' . $name . '.' . getmypid();
 
         // Written to a temp file and renamed: a reader never sees a half-built
-        // report, and the rename replaces whatever report.json was -- including
-        // a symlink the user planted -- without ever opening it.
-        if (@file_put_contents($tmp, $json) === false) {
+        // file, and the rename replaces whatever was there -- including a
+        // symlink the user planted -- without ever opening it.
+        if (@file_put_contents($tmp, $data) === false) {
             return null;
         }
         if ($uid !== false) { @chown($tmp, $uid); }

@@ -61,6 +61,19 @@ $GLOBALS['__sg_user_scan_lock'] = $lock;
 
 $r = UserScanRequest::process();
 
+// Republish every live customer scan, once a minute.
+//
+// The worker publishes as it goes, which is what makes the page move. This is
+// the safety net for when it cannot: a worker killed outright never writes a
+// final state, and the customer's page would show a scan running forever. The
+// stale-job reaper marks those 'interrupted'; this is what carries that answer
+// into their home.
+foreach (Database::fetchAll(
+    "SELECT id FROM scan_jobs
+      WHERE requested_by <> '' AND status IN ('running','pending','cancelling')") as $row) {
+    Scanner::publishUserStatus((int) $row['id']);
+}
+
 // Silent on the common tick. A cron that logs "nothing to do" every minute
 // buries the lines that matter in its own noise.
 foreach ($r['started'] as $s) {
@@ -68,6 +81,9 @@ foreach ($r['started'] as $s) {
 }
 foreach ($r['errors'] as $e) {
     Logger::warn("user-scans: could not start for {$e['user']} - {$e['error']}");
+}
+foreach ($r['cancelled'] ?? [] as $c) {
+    Logger::info("user-scans: {$c['user']} cancelled job {$c['job']}");
 }
 
 exit(0);

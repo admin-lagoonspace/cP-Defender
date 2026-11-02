@@ -531,20 +531,13 @@ $tasks = [
         'time'     => setting('user_reports_time', '00:00'),
         'day'      => (int)setting('user_reports_day', '0'),
         'run'      => function () {
-            // Act on anything a customer asked for BEFORE writing reports,
-            // so a scan started now is reflected in the report this same tick
-            // rather than leaving the page saying nothing happened.
-            $q = UserScanRequest::process();
-            foreach ($q['started'] as $st) {
-                slog('  user scan: started job ' . $st['job'] . ' for ' . $st['user']);
-            }
-            foreach ($q['errors'] as $er) {
-                slog('  user scan: COULD NOT START for ' . $er['user'] . ' - ' . $er['error']);
-            }
-            if ($q['skipped']) {
-                slog('  user scan: ' . count($q['skipped']) . ' request(s) waiting');
-            }
-
+            // Customer scan requests are NOT picked up here any more.
+            //
+            // backend/cron/user-scans.php owns that, every minute. While both
+            // did it there were two processes with two different locks reading
+            // the same request file, so a request could be started twice --
+            // the second attempt refused by scan_max_concurrent and logged as
+            // a failure the customer had no way to understand.
             $r = UserReport::writeAll();
             slog('  per-user reports: ' . $r['written'] . ' written, '
                . $r['skipped'] . ' skipped');

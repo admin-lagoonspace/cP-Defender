@@ -106,7 +106,12 @@ t_contains($proc, 'UserReport::homeDir($user)',
 t_ok(strpos($proc, "\$req['path']") === false && strpos($proc, "\$req['dir']") === false,
      'and never read out of the request file');
 
-$read = t_fn_body($src, 'read', 'php');
+// These checks live in readStamp(), which read() and readCancel() both go
+// through. That is the point of it being one function: a cancel request is
+// root being asked to stop a job on the say-so of a file in a directory the
+// customer controls, and it needs every check a scan request needs. A second
+// copy of them would be the one that eventually falls behind.
+$read = t_fn_body($src, 'readStamp', 'php');
 t_contains($read, 'is_link($path)',
      'the request file is never followed as a symlink — root opening a path a '
    . 'hostile user can replace between calls');
@@ -114,6 +119,12 @@ t_contains($read, 'fileowner($path)',
      'and must be owned by the account it claims to come from, or one '
    . 'customer could plant a request in another\'s directory');
 t_contains($read, 'MAX_BYTES', 'the read is bounded');
+
+t_contains(t_fn_body($src, 'read', 'php'), 'self::readStamp(',
+     'the scan request goes through those checks');
+t_contains(t_fn_body($src, 'readCancel', 'php'), 'self::readStamp(',
+     'and so does the cancel request — the same file in the same '
+   . 'customer-controlled directory, asking root to do something');
 
 // Ordering, so the cap cannot starve anyone.
 t_contains($proc, 'usort(',
@@ -223,9 +234,25 @@ t_contains($page2, "if (!isset(\$TABS[\$tab])) { \$tab = 'home'; }",
      'THE INJECTION GUARD: an unknown tab falls back to home rather than '
    . 'reaching a template branch or being echoed into the nav');
 
-t_ok(strpos($page2, 'addEventListener') === false
-     && strpos($page2, '<script') === false,
-     'and no JavaScript is involved — nothing to break, nothing to cache');
+// There IS script on the page now: a scan that takes minutes has to show
+// itself moving, and the alternative was a card that said "Queued" until the
+// customer reloaded by hand. What matters is that it stays an enhancement.
+t_contains($page2, '<form method="post"',
+     'THE NO-JS FLOOR: every control is a real form submit, so the page works '
+   . 'with scripting off — the script only re-reads what the server already '
+   . 'rendered');
+t_ok(strpos($page2, 'onclick=') === false,
+     'and nothing is wired through inline handlers');
+
+$js = substr($page2, (int) strpos($page2, '<script'));
+t_contains($js, "getAttribute('data-poll')",
+     'the poller asks the SERVER whether to keep going, rather than deciding '
+   . 'for itself when a scan has finished');
+t_contains($js, 'document.hidden',
+     'and stops re-reading while the tab is in the background');
+t_contains($js, 'armed',
+     'one timer only — coming back to the tab would otherwise start a second '
+   . 'chain alongside the first');
 
 // cPanel's session lives in the URL PATH, so links must stay relative.
 t_contains($page2, "basename((string) (\$_SERVER['SCRIPT_NAME']",

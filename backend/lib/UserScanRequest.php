@@ -34,6 +34,9 @@ class UserScanRequest
     /** Lives beside report.json, in the directory UserReport already owns. */
     private const FILE = 'scan-request.json';
 
+    /** Left by the same page to stop a scan this account started. */
+    private const CANCEL = 'scan-cancel.json';
+
     /** A request file should be a few dozen bytes. */
     private const MAX_BYTES = 4096;
 
@@ -73,8 +76,19 @@ class UserScanRequest
 
     public static function requestPath(string $user): ?string
     {
+        return self::pathFor($user, self::FILE);
+    }
+
+    /** Where this account leaves a request to stop the scan it started. */
+    public static function cancelPath(string $user): ?string
+    {
+        return self::pathFor($user, self::CANCEL);
+    }
+
+    private static function pathFor(string $user, string $file): ?string
+    {
         $home = UserReport::homeDir($user);
-        return $home === null ? null : $home . '/.serverscrub/' . self::FILE;
+        return $home === null ? null : $home . '/.serverscrub/' . $file;
     }
 
     /**
@@ -86,7 +100,36 @@ class UserScanRequest
      */
     public static function read(string $user): ?array
     {
-        $path = self::requestPath($user);
+        $at = self::readStamp($user, self::FILE, 'requested_at');
+        return $at === null ? null : ['user' => $user, 'requested_at' => $at];
+    }
+
+    /**
+     * Read this account's request to stop its own scan, or null.
+     *
+     * Same checks as a scan request, and for the same reason: this is root
+     * about to act on a file sitting in a directory a hostile user controls.
+     * What it authorises is narrow -- stopping a job this same account
+     * started, which process() verifies against the job row -- but "narrow"
+     * is not "harmless", and the ownership check is what keeps one customer
+     * from leaving a file in another's home.
+     */
+    public static function readCancel(string $user): ?int
+    {
+        return self::readStamp($user, self::CANCEL, 'requested_at');
+    }
+
+    /** Remove a cancel request once it has been acted on. */
+    public static function clearCancel(string $user): void
+    {
+        $path = self::cancelPath($user);
+        if ($path !== null && !is_link($path) && is_file($path)) { @unlink($path); }
+    }
+
+    /** The timestamp inside one of these files, if it passes every check. */
+    private static function readStamp(string $user, string $file, string $key): ?int
+    {
+        $path = self::pathFor($user, $file);
         if ($path === null || is_link($path) || !is_file($path)) { return null; }
 
         // Owned by the account it claims to be from. Root acting on a file
@@ -102,7 +145,7 @@ class UserScanRequest
         $d   = $raw === false ? null : json_decode($raw, true);
         if (!is_array($d)) { return null; }
 
-        $at = (int) ($d['requested_at'] ?? 0);
+        $at = (int) ($d[$key] ?? 0);
         if ($at <= 0) { return null; }
 
         // A timestamp in the future, or older than a day, is not a request
@@ -110,7 +153,7 @@ class UserScanRequest
         $now = time();
         if ($at > $now + 300 || $at < $now - 86400) { return null; }
 
-        return ['user' => $user, 'requested_at' => $at];
+        return $at;
     }
 
     /** Remove a request once it has been acted on, or discarded. */
@@ -197,10 +240,18 @@ class UserScanRequest
      */
     public static function process(): array
     {
-        $out = ['started' => [], 'skipped' => [], 'errors' => []];
+        $out = ['started' => [], 'skipped' => [], 'errors' => [], 'cancelled' => []];
         if (!self::enabled()) { return $out; }
 
         Database::setSetting('user_scan_last_check', (string) time());
+
+        // Cancels first, and for every account, before anything is started.
+        //
+        // Order matters: a customer who presses Cancel and then has their own
+        // request honoured a moment later would watch the scan they just
+        // stopped begin. Doing this pass first means a cancel that arrives in
+        // the same minute as the start still wins.
+        $out['cancelled'] = self::processCancels();
 
         $pending = [];
         foreach (UserReport::listUsers() as $user) {
@@ -245,7 +296,7 @@ class UserScanRequest
                 // anything else. A customer is sitting in front of the page
                 // waiting for this, and one account's quick scan is nothing
                 // like the server-wide sweep that gate was written for.
-                $jobId   = $scanner->startScan($home, 'quick', true);
+                $jobId   = $scanner->startScan($home, 'quick', true, $user);
                 self::recordStart($user);
                 self::note($user, 'started', 0);
                 self::clear($user);
@@ -262,6 +313,73 @@ class UserScanRequest
         }
 
         return $out;
+    }
+
+    /**
+     * Honour "stop my scan" for every account that asked.
+     *
+     * WHAT A CUSTOMER IS ALLOWED TO STOP
+     *
+     * Only the job whose requested_by is their own account. Not the scheduled
+     * server-wide sweep, not another customer's scan, and not a scan an
+     * operator started from WHM -- all of which cover their files too, so
+     * "the scan is reading my directory" is deliberately NOT the test. The
+     * test is who asked for it, which is a string comparison against the job
+     * row that no amount of rearranging their own home can change.
+     *
+     * A cancel with no live job of their own is not an error: the scan
+     * finished between their click and this tick. The request is cleared and
+     * the page shows the result.
+     *
+     * @return array<int,array{user:string,job:int}>
+     */
+    private static function processCancels(): array
+    {
+        $done = [];
+        foreach (UserReport::listUsers() as $user) {
+            if (self::readCancel($user) === null) { continue; }
+
+            // Clear FIRST. If stopScan() throws, or the process is killed
+            // mid-signal, a cancel left on disk would be retried every minute
+            // -- and could land on a LATER scan the customer started, which
+            // they never asked to stop.
+            self::clearCancel($user);
+
+            // A queued-but-unstarted request is cancelled by dropping it.
+            // Their page does this itself and does not need us, but a request
+            // that arrived in the same tick is still sitting here.
+            self::clear($user);
+
+            $job = Scanner::liveJobFor($user);
+            if ($job === null) {
+                self::note($user, 'cancelled', 0);
+                continue;
+            }
+
+            $id = (int) $job['id'];
+
+            // Belt and braces. liveJobFor() already filters on requested_by,
+            // so this can only fail if that query is ever loosened -- which is
+            // exactly the change that would quietly hand one customer the
+            // ability to stop the server's own scan.
+            if (Scanner::jobOwner($id) !== $user) {
+                Logger::warn("User scan: {$user} tried to cancel job {$id}, "
+                           . 'which is not theirs - refused');
+                continue;
+            }
+
+            $r = Scanner::stopScan($id);
+            if (!empty($r['success'])) {
+                $done[] = ['user' => $user, 'job' => $id];
+                self::note($user, 'cancelled', 0);
+                Logger::info("User scan: {$user} cancelled their job {$id}");
+            } else {
+                self::note($user, 'cancel_failed', 0, (string) ($r['error'] ?? ''));
+                Logger::warn("User scan: could not cancel job {$id} for {$user} - "
+                           . ($r['error'] ?? 'unknown'));
+            }
+        }
+        return $done;
     }
 
     /**
