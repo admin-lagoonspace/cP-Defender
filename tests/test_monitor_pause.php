@@ -101,17 +101,20 @@ t_contains($rtm, "'last_gap_seconds'", 'and how long the last pause lasted');
 
 $js = file_get_contents($repo . '/frontend/js/app.js');
 t_contains($js, "d.suspended", 'the UI reads the suspended flag');
-t_contains($js, "'Paused'", 'and shows it as Paused');
+// "Scanning paused", not "Paused". What is paused is the scanning; the
+// service is still running, and the bare word left that to be guessed at
+// beside a service card reporting the unit active.
+t_contains($js, "'⏸ Scanning paused'", 'and shows it as Scanning paused');
 
 // The order of the badge branches is the whole point: a suspended monitor is
 // running, so a "running" check placed first would render it green -- claiming
 // protection that is deliberately paused.
-$badge = substr($js, strpos($js, "rt-status-badge"), 900);
+$badge = t_fn_body($js, 'scanStateLabel', 'js');
 $suspendedBranch = strpos($badge, 'd.suspended');
-$activeBranch    = strpos($badge, "'Active'");
+$activeBranch    = strpos($badge, "'● Scanning'");
 t_ok($suspendedBranch !== false && $activeBranch !== false
      && $suspendedBranch < $activeBranch,
-    'the suspended branch is tested before the Active one');
+    'the suspended branch is tested before the plain scanning one');
 
 // -- The settings are reachable and save with the card they live in ----------
 t_contains($html, 'id="set-rt-pause-backup"', 'the toggle exists');

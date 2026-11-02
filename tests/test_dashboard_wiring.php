@@ -87,15 +87,25 @@ t_contains($js, "dataset.ready !== '1'",
     'toggleMonitor refuses to act before the first status load');
 
 // ── 3. The monitor page badge must not claim protection it is not giving ────
-// Widened: loadMonitor() gained an explicit failure branch, which pushed the
-// badge logic past a fixed 1,200-character window.
-$lm = substr($js, strpos($js, 'async function loadMonitor()'), 3000);
-t_contains($lm, 'd.suspended', 'the monitor page reports a paused monitor');
+//
+// The branches moved. They used to be spelled out inside loadMonitor(); the
+// dashboard card spelled the same states out again in its own words, and the
+// two drifted -- one said "Paused", the other "Paused", the service card said
+// "Active", and on one screen that read as a contradiction. They now come
+// from scanStateLabel(), so this follows them there rather than asserting
+// against the place they happened to be written first.
+$lm = t_fn_body($js, 'scanStateLabel', 'js');
+t_contains($lm, 'd.suspended', 'the monitor badge reports a paused monitor');
 t_contains($lm, 'd.stale', 'and one that is running but doing nothing');
-$stopPos = strpos($lm, "'○ Stopped'");
-$greenPos = strpos($lm, "'● Running'");
+$stopPos  = strpos($lm, "'○ Stopped'");
+$greenPos = strpos($lm, "'● Scanning'");
 t_ok($stopPos !== false && $greenPos !== false && $stopPos < $greenPos,
-    'the plain green Running is the last branch, not the first');
+    'the plain green state is the last branch, not the first');
+
+// And the page actually uses it, or the above proves nothing about the page.
+$page = substr($js, (int) strpos($js, 'async function loadMonitor()'), 3000);
+t_contains($page, 'scanStateLabel(d)',
+    'and the monitor page renders its badge from that one function');
 
 // ── 4. Firewall: nothing on this path may hang the request ──────────────────
 // iptables -L takes the xtables lock. On a CSF box lfd rewrites rules

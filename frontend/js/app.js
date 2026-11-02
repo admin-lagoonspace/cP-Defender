@@ -2103,7 +2103,12 @@ function renderOverviewAlerts() {
   if (State.lastMonitor && !State.lastMonitor.running) {
     push('red', 'Real-time monitoring is not running', 'monitor');
   } else if (State.lastMonitor?.suspended) {
-    push('amber', 'Real-time scanning is paused for a backup', 'monitor');
+    // Names the process as still up, and names what is holding it. The bare
+    // version read as an outage next to a Services panel reporting the unit
+    // healthy -- which is the same mismatch the monitor page had.
+    push('amber', 'Real-time scanning is paused while '
+                + (State.lastMonitor.suspend_reason || 'a backup')
+                + ' runs — the service is still running', 'monitor');
   }
   if (State.lastDash?.scanner?.last_scan) {
     const age = (Date.now() / 1000) - Number(State.lastDash.scanner.last_scan);
@@ -4003,6 +4008,83 @@ async function runRootkitNow() {
 // ── Real-Time Monitor ─────────────────────────────────────────────────────────
 let monitorRunning = false;
 
+/* One vocabulary for two facts that are not the same fact.
+ *
+ * Reported from a live server: the Monitor Status card said "Paused — rsync"
+ * while the System Service card beside it said "Active", sub-state "running",
+ * with a PID. Both were correct and the page never said which was which, so
+ * they read as the product contradicting itself.
+ *
+ * They describe different things:
+ *
+ *   the SERVICE  — is the process up?            systemd's answer
+ *   the SCANNING — is it inspecting files?       the daemon's own answer
+ *
+ * During a backup the daemon deliberately keeps running and stops scanning.
+ * It does not exit, and it must not: a process that exited would need
+ * restarting, would lose its inotify watches, and would leave nothing to
+ * notice when the backup finished. The pause is a flag it sets on itself
+ * (see monitor.py::_suspend), which is exactly why systemd still reports it
+ * as healthy.
+ *
+ * So the words carry the subject. The service is "Running"; the scanning is
+ * "Scanning" or "Scanning paused". Nothing says a bare "Active" any more,
+ * because "active" is the word that invites the two to be compared.
+ */
+function scanStateLabel(d) {
+  if (!d)            { return { text: 'Status unknown',  cls: 'badge-red'   }; }
+  if (!d.running)    { return { text: '○ Stopped',       cls: 'badge-red'   }; }
+  if (d.suspended)   {
+    return { text: '⏸ Scanning paused' + (d.suspend_reason ? ' — ' + d.suspend_reason : ''),
+             cls: 'badge-amber' };
+  }
+  if (d.stale)       { return { text: '● Running, no activity', cls: 'badge-amber' }; }
+  return { text: '● Scanning', cls: 'badge-green' };
+}
+
+/* The service badge, which needs BOTH answers to avoid saying the misleading
+ * half of the truth. Called from loadServiceStatus() and from loadMonitor(),
+ * because on the monitor page those two run in parallel and either may land
+ * first; whichever does, this renders from whatever is known so far.
+ */
+function renderServiceBadge() {
+  const d = State.lastService;
+  if (!d) { return; }
+  const mon       = State.lastMonitor;
+  const active    = d.active_state === 'active';
+  const suspended = active && !!(mon && mon.running && mon.suspended);
+
+  const badge = document.getElementById('svc-state-badge');
+  if (badge) {
+    if (!active) {
+      badge.className   = 'badge ' + (d.active_state === 'failed' ? 'badge-red' : 'badge-yellow');
+      badge.textContent = '○ ' + (d.active_state || 'Unknown');
+    } else if (suspended) {
+      // Still green. The service IS healthy -- that is the point being made.
+      // Amber here would say the process has a problem, which it has not.
+      badge.className   = 'badge badge-green';
+      badge.textContent = '● Running · scanning paused';
+    } else {
+      badge.className   = 'badge badge-green';
+      badge.textContent = '● Running';
+    }
+  }
+
+  const note = document.getElementById('svc-pause-note');
+  if (note) {
+    if (suspended) {
+      note.innerHTML = '<span>⏸</span><span><strong>The service is running.</strong> '
+        + 'It stays up during a backup on purpose — only file scanning is paused, '
+        + 'because ' + esc(mon.suspend_reason || 'a backup') + ' is running. Stopping the '
+        + 'process instead would lose its watches and leave nothing to notice when the '
+        + 'backup finished. Scanning resumes on its own.</span>';
+      note.style.display = 'flex';
+    } else {
+      note.style.display = 'none';
+    }
+  }
+}
+
 async function loadMonitorStats() {
   const res = Demo.active ? Demo.mockMonitorStatus() : await API.monitorStatus();
   if (!res?.success) return;
@@ -4017,23 +4099,16 @@ async function loadMonitorStats() {
   // "Active" badge beside counters stuck at zero, which is the least useful
   // thing the card could say. The daemon stamps rt_last_activity as it works,
   // so silence is measurable — report it.
+  // The same words as the monitor page's badge, from the same function. Two
+  // cards describing one fact in two vocabularies is how "Paused" here and
+  // "Active" there came to sit on one screen.
   const badge = document.getElementById('rt-status-badge');
   if (badge) {
-    if (!d.running) {
-      badge.className = 'badge badge-red';   badge.textContent = 'Stopped';
-    } else if (d.suspended) {
-      // A third state, and it must not borrow either of the other two. The
-      // daemon IS running, so "Stopped" is wrong; it is deliberately not
-      // scanning, so "Active" is worse -- that claims protection that is
-      // currently paused.
-      badge.className = 'badge badge-amber';
-      badge.textContent = 'Paused' + (d.suspend_reason ? ' — ' + d.suspend_reason : '');
-    } else if (d.stale) {
-      badge.className = 'badge badge-amber'; badge.textContent = 'No activity';
-    } else {
-      badge.className = 'badge badge-green'; badge.textContent = 'Active';
-    }
+    const s = scanStateLabel(d);
+    badge.className = 'badge ' + s.cls;
+    badge.textContent = s.text;
   }
+  renderServiceBadge();
   const icon = document.getElementById('rt-icon');
   if (icon) icon.textContent = !d.running ? '⏸' : (d.suspended ? '⏸' : (d.stale ? '⚠️' : '🔍'));
 
@@ -4119,23 +4194,23 @@ async function loadMonitor() {
   }
   const d = res.data;
   monitorRunning = d.running;
+  // Needed by renderServiceBadge() and by the dashboard alerts, and this
+  // loader did not set it -- only loadMonitorStats() did. On the monitor page
+  // that one never runs, so the service card had no way to know the scanning
+  // was paused.
+  State.lastMonitor = d;
 
+  // Running/stopped alone is not the whole truth. A daemon that is up but
+  // scanning nothing, or deliberately paused for a backup, both rendered as a
+  // green "Running" -- claiming protection that is not happening.
   const badge = document.getElementById('monitor-status-badge');
   if (badge) {
-    // Running/stopped alone is not the whole truth. A daemon that is up but
-    // scanning nothing, or deliberately paused for a backup, both rendered as
-    // a green "Running" -- claiming protection that is not happening.
-    if (!d.running) {
-      badge.className = 'badge badge-red';   badge.textContent = '○ Stopped';
-    } else if (d.suspended) {
-      badge.className = 'badge badge-amber';
-      badge.textContent = '⏸ Paused' + (d.suspend_reason ? ' — ' + d.suspend_reason : '');
-    } else if (d.stale) {
-      badge.className = 'badge badge-amber'; badge.textContent = '● Running, no activity';
-    } else {
-      badge.className = 'badge badge-green'; badge.textContent = '● Running';
-    }
+    const s = scanStateLabel(d);
+    badge.className = 'badge ' + s.cls;
+    badge.textContent = s.text;
   }
+  // Either loader may land first on this page; re-render from what is known.
+  renderServiceBadge();
   const pgBtn = document.getElementById('monitor-page-toggle');
   if (pgBtn) pgBtn.textContent = d.running ? 'Stop Monitor' : 'Start Monitor';
 
@@ -4321,15 +4396,11 @@ async function loadServiceStatus() {
 
   if (!res?.success) return;
   const d = res.data;
+  State.lastService = d;
 
-  // State badge
-  const badge = document.getElementById('svc-state-badge');
-  if (badge) {
-    const active = d.active_state === 'active';
-    const color  = active ? 'badge-green' : (d.active_state === 'failed' ? 'badge-red' : 'badge-yellow');
-    badge.className   = 'badge ' + color;
-    badge.textContent = active ? '● Active' : ('○ ' + (d.active_state || 'Unknown'));
-  }
+  // The badge needs the daemon's answer as well as systemd's, so it is
+  // rendered in one place that has both.
+  renderServiceBadge();
 
   // Info cells
   setText('svc-installed',  d.installed ? (d.unit_file || 'Yes') : 'Not installed');
