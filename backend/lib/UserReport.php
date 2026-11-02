@@ -309,13 +309,48 @@ class UserReport
         // job over one home counts for that account only.
         $scans = self::safeFetch(
             "SELECT id, scan_type, status, started_at, finished_at,
-                    files_scanned, threats_found, scan_path
+                    files_scanned, threats_found, scan_path, requested_by
                FROM scan_jobs
               WHERE scan_path = ? OR scan_path = ? OR ? LIKE scan_path || '%'
               ORDER BY COALESCE(started_at, created_at) DESC
               LIMIT 25",
             [rtrim($prefix, '/'), $prefix, rtrim($prefix, '/')]
         );
+
+        /**
+         * Who started each scan, in words the account owner can act on.
+         *
+         * Asked for after a customer looked at this table and could not tell
+         * which rows were the nightly server sweep and which were their own
+         * -- every row said "full" and nothing said who.
+         *
+         * The row's raw requested_by NEVER reaches the page. This list can
+         * contain server-wide scans, because a scan of /home covers
+         * /home/thisuser, and printing the name on such a row would hand one
+         * customer another customer's account name. Anything that is not this
+         * account is described by its role instead.
+         */
+        foreach ($scans as $i => $row) {
+            $by = trim((string) ($row['requested_by'] ?? ''));
+            if ($by === $user && $by !== '') {
+                $who = 'you';
+            } elseif ($by === '@schedule') {
+                $who = 'schedule';
+            } elseif ($by === '@operator' || $by === '@cli') {
+                $who = 'provider';
+            } elseif ($by === '') {
+                // Rows from before this was recorded. "Unknown" is honest;
+                // guessing "schedule" would be wrong for every scan an
+                // operator ever started by hand.
+                $who = 'unknown';
+            } else {
+                // Another account's request. Its existence is already visible
+                // through the row; its name is not ours to pass on.
+                $who = 'provider';
+            }
+            $scans[$i]['triggered_by'] = $who;
+            unset($scans[$i]['requested_by']);
+        }
 
         // Thirty-day counters for the dashboard tiles.
         $cnt = static function (string $sql, array $a): int {

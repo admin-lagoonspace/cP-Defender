@@ -610,23 +610,40 @@ $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
             one is allowed.
           <?php else: ?>
             <?php
-              // "It usually starts within a minute" is only true if something
-              // is picking requests up. That runs every minute, so anything
-              // past five means it is not running -- and saying BOTH, as this
-              // card did, tells the customer their scan is fine and then that
-              // it is stuck, in consecutive sentences.
-              $stale = $lastCheck <= 0 || (time() - $lastCheck) > 300;
+              /* How long since anything looked for requests.
+               *
+               * THERE ARE THREE PICKUPS, not one, and a single threshold
+               * cannot describe them:
+               *
+               *   - a service, every ~5 seconds, which is the normal path;
+               *   - a cron entry, every minute, for hosts without systemd;
+               *   - the scheduler, every 15 minutes, as a floor under both.
+               *
+               * The first version of this warned at five minutes and said the
+               * scan "will not start on its own" -- which was simply untrue on
+               * a server running the 15-minute floor, and it said it for ten
+               * minutes out of every fifteen. Telling a customer their scan is
+               * broken when it is merely queued is its own bug, and it sends
+               * them to their host for nothing.
+               *
+               * So: a minute is normal. Up to twenty is the floor doing its
+               * job, and says so honestly without alarm. Past twenty, two
+               * scheduler cycles have been missed and nothing is running. */
+              $age = $lastCheck > 0 ? (time() - $lastCheck) : -1;
             ?>
-            <?php if (!$stale): ?>
-              It usually starts within a minute.
+            <?php if ($age >= 0 && $age <= 90): ?>
+              It starts within a few seconds.
+            <?php elseif ($age >= 0 && $age <= 1200): ?>
+              Scan requests are being picked up every 15 minutes on this
+              server, so yours will start shortly.
             <?php endif; ?>
           <?php endif; ?>
 
-          <?php if ($lastCheck <= 0 || (time() - $lastCheck) > 300): ?>
+          <?php if ($age < 0 || $age > 1200): ?>
             <br><strong class="red">Your scan has not started, and will not
             start on its own.</strong>
             The part of ServerScrub that picks up scan requests has not run
-            <?= $lastCheck > 0
+            <?= $age >= 0
                   ? 'for ' . e(str_replace(' ago', '', ago($lastCheck)))
                   : 'at all yet' ?>,
             so nothing has looked at this request. It is saved and will run the
@@ -782,7 +799,7 @@ $renderThreats = function (array $rows) {
     <?php else: ?>
       <table>
         <thead><tr>
-          <th>Started</th><th>Type</th><th>Status</th>
+          <th>Started</th><th>Started by</th><th>Type</th><th>Status</th>
           <th class="hide-sm">Files</th><th>Threats</th><th class="hide-sm">Took</th>
         </tr></thead>
         <tbody>
@@ -798,9 +815,27 @@ $renderThreats = function (array $rows) {
                         ? ($finished - $started) . 's'
                         : intdiv($finished - $started, 60) . 'm')
                     : '—';
+
+          /* Who started it.
+           *
+           * Asked for after this table was read and nothing distinguished the
+           * nightly server sweep from a scan the account owner asked for --
+           * every row said "full" and none said who. The label is computed on
+           * the privileged side; the raw account name never reaches here,
+           * because a scan of /home shows up in every customer's log and the
+           * name on it may not be theirs. */
+          $byMap = [
+              'you'      => ['You',                     ''],
+              'schedule' => ['Nightly scan',            'dimc'],
+              'provider' => ['Your hosting provider',   'dimc'],
+              'unknown'  => ['—',                       'dimc'],
+          ];
+          [$byTxt, $byCls] = $byMap[(string)($j['triggered_by'] ?? 'unknown')]
+                             ?? $byMap['unknown'];
         ?>
           <tr>
             <td class="dimc"><?= e(ago($started)) ?></td>
+            <td class="<?= $byCls ?>"><?= e($byTxt) ?></td>
             <td><?= e($j['scan_type'] ?? '') ?></td>
             <td><span class="tag <?= $scls ?>"><?= e($status) ?></span></td>
             <td class="hide-sm"><?= number_format((int)($j['files_scanned'] ?? 0)) ?></td>

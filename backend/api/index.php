@@ -490,7 +490,11 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
                 } else {
                     $path = (string) ($body['path'] ?? '/home');
                 }
-                return ['success' => true, 'job_id' => $scanner->startScan($path, $type)];
+                // '@operator': started from WHM by whoever is logged in there. Recorded
+                // so a customer's scan log can say the scan was their host's
+                // doing rather than leaving them to guess.
+                return ['success' => true,
+                        'job_id'  => $scanner->startScan($path, $type, false, '@operator')];
               })()
             : ['success' => false, 'error' => 'POST required', 'code' => 405],
 

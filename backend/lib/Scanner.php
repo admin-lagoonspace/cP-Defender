@@ -563,10 +563,17 @@ class Scanner {
      *        back in four hours" is not an answer. One account's quick scan is
      *        a far smaller claim on the disks than the server-wide sweep this
      *        gate was written for.
-     * @param string $requestedBy The cPanel account that asked, if a customer
-     *        did. Progress is published into that account's home so their page
-     *        can show it, and only they may cancel it. Empty means the server
-     *        asked, and no customer can stop it.
+     * @param string $requestedBy Who asked. Either a cPanel account name, or
+     *        one of the reserved markers '@schedule', '@operator', '@cli'.
+     *        Progress is published into an ACCOUNT's home so their page can
+     *        show it, and only that account may cancel it.
+     *
+     *        The '@' prefix cannot collide with a cPanel username --
+     *        UserReport::validUsername() requires an alphanumeric first
+     *        character -- so a marker can never be mistaken for an account,
+     *        and an account can never name itself '@schedule' to borrow its
+     *        privileges. Empty means an older row, from before this was
+     *        recorded.
      */
     public function startScan(string $path = '/home', string $type = 'quick',
                               bool $ignoreBackup = false,
@@ -796,7 +803,9 @@ class Scanner {
         if (!$job) { return null; }
 
         $user = trim((string) ($job['requested_by'] ?? ''));
-        if ($user === '') { return null; }
+        // '' is an older row; '@…' is the scheduler, an operator or the CLI.
+        // Neither is an account with a home to publish into.
+        if ($user === '' || $user[0] === '@') { return null; }
 
         if (!class_exists('UserReport')) {
             $lib = SG_ROOT . '/backend/lib/UserReport.php';
@@ -1759,7 +1768,10 @@ This file was removed and not kept. Restore it from your backups
     /** The live job this account started, if any. */
     public static function liveJobFor(string $user): ?array
     {
-        if ($user === '') { return null; }
+        // A marker is not an account. Refused explicitly so that a caller
+        // passing one through -- from a page, say -- cannot match the
+        // server's own scans.
+        if ($user === '' || $user[0] === '@') { return null; }
         return Database::fetchOne(
             "SELECT * FROM scan_jobs
               WHERE requested_by = ? AND status IN ('running','pending','cancelling')

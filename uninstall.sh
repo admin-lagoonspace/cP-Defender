@@ -45,6 +45,7 @@ CPANEL_PLUGIN_JUPITER=""
 CRON_FILE="/etc/cron.d/serverscrub"
 MONITOR_SERVICE="/etc/systemd/system/serverscrub-monitor.service"
 WEB_SERVICE="/etc/systemd/system/serverscrub-web.service"
+SCANS_SERVICE="/etc/systemd/system/serverscrub-scans.service"
 WEB_PID_FILE=""
 FIREWALL_TOOL=""
 SOURCE_DIR=""
@@ -76,6 +77,7 @@ if [[ -f "${MANIFEST}" ]]; then
             CRON_FILE)                  CRON_FILE="$VAL" ;;
             MONITOR_SERVICE)            MONITOR_SERVICE="$VAL" ;;
             WEB_SERVICE)                WEB_SERVICE="$VAL" ;;
+            SCANS_SERVICE)              SCANS_SERVICE="$VAL" ;;
             WEB_PID_FILE)               WEB_PID_FILE="$VAL" ;;
             FIREWALL_TOOL)              FIREWALL_TOOL="$VAL" ;;
             SOURCE_DIR)                 SOURCE_DIR="$VAL" ;;
@@ -124,6 +126,9 @@ stop_service() {
 stop_service "serverscrub-firewall" "/etc/systemd/system/serverscrub-firewall.service"
 stop_service "serverscrub-web"     "${WEB_SERVICE}"
 stop_service "serverscrub-monitor" "${MONITOR_SERVICE}"
+# Left running, this keeps a PHP process alive against a database that is
+# about to be deleted.
+stop_service "serverscrub-scans"   "${SCANS_SERVICE}"
 command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload 2>/dev/null || true
 
 # Kill any PID-file processes

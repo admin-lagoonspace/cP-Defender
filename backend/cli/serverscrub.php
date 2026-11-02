@@ -113,7 +113,7 @@ try {
         }
         if (!file_exists($path)) fail("path not found: $path");
         $sc  = new Scanner();
-        $job = $sc->startScan($path, $type);
+        $job = $sc->startScan($path, $type, false, '@cli');
         out(['started' => true, 'job_id' => $job, 'path' => $path, 'type' => $type,
              'hint' => "check progress: serverscrub status --json"]);
         break;

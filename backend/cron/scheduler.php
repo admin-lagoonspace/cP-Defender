@@ -206,7 +206,7 @@ $tasks = [
             // so three configured paths meant three workers and three clamscan
             // processes running at once, every scheduled run, by design.
             try {
-                $job = $sc->startScan(implode(',', $usable), $type);
+                $job = $sc->startScan(implode(',', $usable), $type, false, '@schedule');
                 slog("  started $type scan of " . implode(', ', $usable) . " (job $job)");
             } catch (Throwable $e) {
                 // Declining to stack a second scan is the correct outcome, not

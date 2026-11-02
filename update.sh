@@ -622,6 +622,9 @@ ok "Extracted to: $EXTRACTED_ROOT"
 section "Stopping services"
 if systemctl is-active --quiet serverscrub-monitor 2>/dev/null; then
     systemctl stop serverscrub-monitor 2>/dev/null && ok "Monitor daemon stopped" || true
+    # Holds the code it was started with, and the database this update is about
+    # to migrate. install.sh --register-only restarts it afterwards.
+    systemctl stop serverscrub-scans 2>/dev/null && ok "Scan pickup stopped" || true
 fi
 
 # ── Apply update — overlay files, skip user-data paths ───────────────────────

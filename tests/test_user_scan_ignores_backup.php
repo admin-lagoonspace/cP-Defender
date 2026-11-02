@@ -109,20 +109,33 @@ foreach ([
     }
 
     foreach ($m[0] as $hit) {
-        // Walk the call to its matching paren. A regex cannot do this:
-        // implode(',', $usable) has two commas of its own and would read as
-        // three arguments.
+        // Walk the call to its matching paren and split on TOP-LEVEL commas.
+        // A regex cannot do this: implode(',', $usable) has two commas of its
+        // own and would read as three arguments.
         $i = $hit[1] + strlen($hit[0]);
         $depth = 1;
-        $top    = 0;
+        $args  = [''];
         for ($n = strlen($other); $i < $n && $depth > 0; $i++) {
             $c = $other[$i];
             if ($c === '(') { $depth++; }
-            elseif ($c === ')') { $depth--; }
-            elseif ($c === ',' && $depth === 1) { $top++; }
+            elseif ($c === ')') { $depth--; if ($depth === 0) { break; } }
+            elseif ($c === ',' && $depth === 1) { $args[] = ''; continue; }
+            $args[count($args) - 1] .= $c;
         }
-        t_eq(1, $top,
-             $what . ' passes two arguments, not three, so it keeps the old '
-           . 'behaviour and still stands down for a backup');
+
+        // These callers DO pass a fourth argument now -- who triggered the
+        // scan -- so counting arguments no longer says anything. What matters
+        // is the third: the backup waiver, which must stay false for every
+        // scan nobody is sitting in front of.
+        $waiver = trim($args[2] ?? 'false');
+        t_eq('false', $waiver,
+             $what . ' does not waive the backup gate, so it still stands '
+           . 'down for JetBackup and rsync');
+
+        // And it must say who, or the customer's scan log cannot tell the
+        // nightly sweep from their own request.
+        $who = trim($args[3] ?? '');
+        t_ok($who !== '' && $who[1] === '@',
+             $what . ' records what triggered it: ' . $who);
     }
 }

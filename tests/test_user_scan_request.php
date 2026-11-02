@@ -192,9 +192,9 @@ t_contains($page2, "'/.serverscrub/scan-request.json'",
    . 'file rather than the report, which is rewritten only every quarter '
    . 'hour — otherwise somebody who clicks and reloads is told nothing was '
    . 'requested');
-t_contains($page2, 'It usually starts within a minute',
-     'it tells the customer how long, now that a dedicated cron picks requests '
-   . 'up every minute rather than the 15-minute scheduler');
+t_contains($page2, 'It starts within a few seconds',
+     'it tells the customer how long, now that a resident service picks '
+   . 'requests up every five seconds rather than a cron every minute');
 t_ok(strpos($page2, 'ahead of you in the queue') === false,
      'and says nothing about a queue, because there no longer is one');
 t_contains($page2, 'could not start it yet', 'and surfaces a blocking reason');
@@ -204,14 +204,17 @@ t_contains($page2, 'has not started, and will not',
      'THE SILENT STALL: if the minute-by-minute pickup is not running, the '
    . 'scan never starts — so the page says exactly that, as the FIRST thing '
    . 'it says');
-t_ok(strpos($page2, '$stale = $lastCheck <= 0') !== false,
-     'and the reassurance is suppressed rather than printed above the '
-   . 'warning. The card used to say "It usually starts within a minute" and '
-   . 'then, in the next sentence, that nothing had looked at the request for '
-   . 'eight hours — telling the customer their scan was fine and then that it '
-   . 'was stuck');
-t_contains($page2, 'time() - $lastCheck) > 300',
-     'warned only when the check is genuinely stale, not on every page view');
+t_contains($page2, 'It starts within a few seconds',
+     'and when the pickup IS current it promises seconds, which the resident '
+   . 'service delivers');
+t_contains($page2, 'picked up every 15 minutes on this',
+     'THE FALSE ALARM: between those, the card says the 15-minute floor is '
+   . 'doing its job rather than claiming the scan is broken. The first '
+   . 'version warned at five minutes and said the scan "will not start on '
+   . 'its own" — untrue on a server running that floor, and said for ten '
+   . 'minutes out of every fifteen');
+t_contains($page2, '$age > 1200',
+     'the alarm needs two whole scheduler cycles missed, not five minutes');
 t_contains($page2, 'Nothing is wrong',
      'with a plain fallback when there is no recorded reason, because silence '
    . 'reads as failure');

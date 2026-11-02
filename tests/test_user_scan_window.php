@@ -136,8 +136,10 @@ t_contains($ins, 'chmod +x "$INSTALL_DIR/backend/cron/user-scans.php"',
 
 // ── What the customer is told ───────────────────────────────────────────────
 $page = (string) file_get_contents($repo . '/cpanel/serverscrub/index.live.php');
-t_contains($page, 'It usually starts within a minute',
-     'the queued message promises a minute, which is now true');
+t_contains($page, 'It starts within a few seconds',
+     'the queued message promises seconds, which the resident pickup service '
+   . 'delivers — "within a minute" was the cron floor, and a customer is '
+   . 'sitting in front of this');
 t_ok(strpos($page, 'ahead of you in the queue') === false,
      'and no longer talks about a queue that does not exist');
 t_contains($page, 'scans left for the',

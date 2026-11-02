@@ -66,10 +66,14 @@ t_eq(null, Scanner::publishUserStatus($mine + 9999),
 
 // ── Progress is published into the right home, and only there ───────────────
 $pub = t_fn_body($src, 'publishUserStatus', 'php');
-t_contains($pub, "if (\$user === '') { return null; }",
+t_contains($pub, "\$user === '' || \$user[0] === '@'",
      'a server-initiated scan publishes nothing — there is nobody to tell, '
    . 'and writing one account a view of a server-wide sweep would leak that '
    . 'work is being done for everyone else');
+t_eq(null, Scanner::publishUserStatus((int) Database::insert('scan_jobs', [
+        'scan_type' => 'full', 'status' => 'running', 'started_at' => time(),
+        'scan_path' => '/home', 'requested_by' => '@schedule'])),
+     'and a marker like @schedule is not an account with a home to write to');
 t_contains($pub, "UserReport::writeInHome(\$user, 'scan-status.json'",
      'and a customer scan goes into that customer\'s own home');
 t_contains($pub, "'updated_at'",
@@ -221,3 +225,78 @@ $rPos = (int) strpos($page, '$reqAt = 0;');
 t_ok($rPos > 0 && $qPos > $rPos,
      'and the file is read BEFORE that decision, not after it — reading it '
    . 'afterwards is how the stale value survived');
+
+// ── "It should start right away" ────────────────────────────────────────────
+//
+// A cron is the wrong mechanism for something a person is sitting in front of:
+// a minute is its floor, and whether it runs at all depends on a file in
+// /etc/cron.d that an administrator can tidy away -- which is what was found
+// on a live server. So the normal path is a resident service.
+$usc = (string) file_get_contents($repo . '/backend/cron/user-scans.php');
+t_contains($usc, "if (\$a === '--watch')", 'the pickup can stay resident');
+t_contains($usc, '$interval = max(2, min(60,',
+     'with a bounded interval — a zero would spin a CPU, an hour would defeat '
+   . 'the point');
+
+// The licence check belongs in the pass, not before the loop. Checking once
+// at startup meant an unlicensed box exited immediately and systemd restarted
+// it every five seconds forever, and a licence renewed later was never seen.
+$passFn = substr($usc, (int) strpos($usc, '$sg_pass = function'));
+$passFn = substr($passFn, 0, (int) strpos($passFn, "\n};"));
+t_contains($passFn, 'License::protectionAllowed',
+     'THE RESIDENT LICENCE CHECK: asked every pass, so an expiry stops scans '
+   . 'without a restart and a renewal does not need one');
+$beforeLoop = substr($usc, 0, (int) strpos($usc, '$sg_pass = function'));
+t_ok(strpos($beforeLoop, 'License::protectionAllowed') === false,
+     'and NOT once at startup, which would exit immediately on an unlicensed '
+   . 'box and have systemd restart it every five seconds forever');
+
+t_contains($usc, 'pcntl_signal(SIGTERM',
+     'SIGTERM is handled, so systemd stopping it does not kill a pass '
+   . 'half-way through and leave a request neither started nor cleared');
+t_contains($usc, "Logger::error('user-scans: pass failed",
+     'and one bad pass does not end the watcher — that failure mode is '
+   . 'exactly what this file exists to prevent');
+t_contains($usc, 'recycling after',
+     'the process recycles rather than being trusted to run for weeks');
+
+$ins2 = t_shell($repo . '/install.sh');
+t_contains($ins2, 'user-scans.php --watch --interval=5',
+     'the service runs it resident, every five seconds');
+t_contains($ins2, 'Restart=always',
+     'and is restarted always, not on-failure — it exits 0 on purpose when '
+   . 'it recycles');
+t_contains($ins2, 'No systemd — customer scans are picked up by cron',
+     'a host without systemd still has the cron fallback, and is told so');
+
+$unin = t_shell($repo . '/uninstall.sh');
+t_contains($unin, 'stop_service "serverscrub-scans"',
+     'the uninstaller stops it — left running it holds a PHP process against '
+   . 'a database that is about to be deleted');
+t_contains($unin, 'SCANS_SERVICE)',
+     'and reads its path from the manifest rather than assuming');
+
+// ── Who started this scan ───────────────────────────────────────────────────
+//
+// Asked for after the scan log was read and nothing distinguished the nightly
+// server sweep from the account owner's own request: every row said "full".
+$ur = (string) file_get_contents($repo . '/backend/lib/UserReport.php');
+t_contains($ur, "'triggered_by'", 'each logged scan says what started it');
+t_contains($ur, "unset(\$scans[\$i]['requested_by'])",
+     'THE NAME LEAK: the raw account name is removed before the report is '
+   . 'written. A scan of /home appears in EVERY customer\'s log, and the name '
+   . 'on such a row is not theirs to see');
+
+$build = t_fn_body($ur, 'build', 'php');
+t_contains($build, "\$by === \$user && \$by !== ''",
+     'their own request is labelled as theirs');
+t_contains($build, "'unknown'",
+     'and a row from before this was recorded says so, rather than guessing '
+   . '"schedule" — which would be wrong for every scan an operator ever '
+   . 'started by hand');
+
+t_contains($page, "'Nightly scan'", 'the page names the scheduled sweep');
+t_contains($page, "'Your hosting provider'",
+     'and describes an operator by role');
+t_ok(strpos($page, "\$j['requested_by']") === false,
+     'the page never reads the raw name, because it is not in the report');

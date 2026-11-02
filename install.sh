@@ -778,6 +778,55 @@ SVCEOF
   fi
 fi
 
+# ── Customer scan pickup service ──────────────────────────────────────────────
+#
+# A cPanel user presses "Scan my account" and expects it to start, not to be
+# scheduled. A cron cannot do that: a minute is its floor, and whether it runs
+# at all depends on a file in /etc/cron.d that an administrator can tidy away
+# -- which is exactly what was found on a live server, where requests went
+# unpicked-up for eight hours and every customer saw "Queued" and nothing else.
+#
+# So this is a service, looking every five seconds. The cron entry stays as a
+# fallback for hosts without systemd, and the scheduler stays as a floor under
+# both. All three take the same lock inside UserScanRequest::process(), so
+# running all three at once is harmless.
+section "Customer scan pickup"
+if command -v systemctl >/dev/null 2>&1 && [[ -d /etc/systemd/system ]]; then
+  cat > /etc/systemd/system/serverscrub-scans.service << SCANEOF
+[Unit]
+Description=ServerScrub Customer Scan Pickup
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=${SG_PHP} ${INSTALL_DIR}/backend/cron/user-scans.php --watch --interval=5
+# Always, not on-failure: the script recycles itself hourly on purpose rather
+# than trusting a long-lived PHP process, and exits 0 when it does.
+Restart=always
+RestartSec=5
+StandardOutput=append:${LOG_DIR}/cron.log
+StandardError=append:${LOG_DIR}/cron.log
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
+SCANEOF
+  chmod 644 /etc/systemd/system/serverscrub-scans.service
+  systemctl daemon-reload
+  systemctl enable serverscrub-scans 2>/dev/null
+  if systemctl restart serverscrub-scans 2>/dev/null; then
+    ok "Scan pickup running (requests start within ~5 seconds)"
+  else
+    warn "Scan pickup service failed to start — the cron entry will still"
+    warn "  pick requests up within a minute. Check:"
+    warn "    journalctl -u serverscrub-scans -n 50"
+  fi
+else
+  info "No systemd — customer scans are picked up by cron, within a minute"
+fi
+
 # ── Write install manifest (uninstaller reads this) ───────────────────────────
 # This has to come BEFORE anything that appends to it. It used to sit after the
 # cron section, so the firewall section's two `>> "${MANIFEST}"` lines ran with
@@ -854,6 +903,12 @@ FWEOF
   echo "FIREWALL_SERVICE=/etc/systemd/system/serverscrub-firewall.service" >> "${MANIFEST}"
 fi
 echo "FIREWALL_BACKEND=${FW_INIT}" >> "${MANIFEST}"
+# Recorded here, not in the section that creates it: the manifest is written
+# below that section, with `>`, so a key appended earlier is truncated away and
+# the uninstaller never learns about the service it is supposed to remove.
+if [[ -f /etc/systemd/system/serverscrub-scans.service ]]; then
+  echo "SCANS_SERVICE=/etc/systemd/system/serverscrub-scans.service" >> "${MANIFEST}"
+fi
 
 # ── Cron jobs ──────────────────────────────────────────────────────────────────
 section "Cron jobs"
