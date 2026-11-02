@@ -11,6 +11,16 @@ Bumping Y for a fix inflates the version and hides what actually changed.
 `scripts/check-version-bump.sh` enforces this and `publish.sh` will refuse a
 release where the bump and the commits disagree.
 
+## [4.27.1] - 2026-11-02
+
+### Fixed
+
+- The CDN probe added in 4.26.2 printed `HTTP 404000`. `curl -f` exits
+  non-zero on a 404, so the `|| echo 000` fallback fired as well and the two
+  concatenated. It also printed "CDN will pick it up within ~10 min" directly
+  under "CDN IS NOT SERVING ANYTHING" — saying both is how the 404 stayed
+  invisible in the first place.
+
 ## [4.27.0] - 2026-11-02
 
 ### Added
