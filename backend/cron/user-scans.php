@@ -42,22 +42,12 @@ require_once SG_ROOT . '/backend/lib/UserScanRequest.php';
 // A licensing fault must not turn into a scan nobody authorised.
 if (!License::protectionAllowed()) { exit(0); }
 
-// One at a time. At a minute interval an overrun would otherwise stack, and
-// each instance would try to start the same request.
+// The lock is taken inside UserScanRequest::process(), not here.
 //
-// The kernel holds the lock for the life of the process, so a run that is
-// killed cannot leave a stale one behind.
-if (!is_dir(SG_TMP)) { @mkdir(SG_TMP, 0750, true); }
-$lock = @fopen(SG_TMP . '/user-scans.lock', 'c');
-if ($lock === false) {
-    Logger::warn('user-scans: could not open its lock file; exiting');
-    exit(0);
-}
-if (!@flock($lock, LOCK_EX | LOCK_NB)) {
-    // Not an error: the previous minute is still working.
-    exit(0);
-}
-$GLOBALS['__sg_user_scan_lock'] = $lock;
+// It has to be: the scheduler calls process() as well, hourly, so that a
+// server whose minute cron is missing or broken still picks requests up. Two
+// scripts each holding their OWN lock would not exclude each other at all.
+// One lock, in the one function both go through.
 
 $r = UserScanRequest::process();
 

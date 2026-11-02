@@ -374,7 +374,6 @@ ob_start();
   $sr       = $report['scan_request'] ?? [];
   $srOn     = !empty($sr['enabled']);
   $srWait   = (int)($sr['retry_in'] ?? 0);
-  $srQueued = $requested || !empty($sr['pending']);
   $srPer    = max(1, (int)($sr['per_window'] ?? 2));
   $srHours  = max(1, (int)($sr['window_hours'] ?? 12));
   $srUsed   = min($srPer, (int)($sr['used'] ?? 0));
@@ -396,11 +395,34 @@ ob_start();
   $reqAt = 0;
   if ($home !== '') {
       $rp = rtrim($home, '/') . '/.serverscrub/scan-request.json';
-      if (is_file($rp)) {
+      if (!is_link($rp) && is_file($rp)) {
           $rj = json_decode((string) @file_get_contents($rp), true);
           $reqAt = is_array($rj) ? (int) ($rj['requested_at'] ?? 0) : 0;
       }
   }
+
+  /**
+   * Queued, decided from the request FILE and nothing else.
+   *
+   * This used to be `$requested || !empty($sr['pending'])`, and $sr comes out
+   * of report.json, which is rebuilt HOURLY. Two consequences, both reported:
+   *
+   *   - Press Cancel. The page deletes the request file immediately -- it is
+   *     in this account's home and owned by this account -- and then rendered
+   *     "Queued" anyway, because the stale report still said pending. The
+   *     cancel HAD worked; the card was reading an hour-old answer and
+   *     putting the screen back the way it was. It would have kept doing that
+   *     until the next report.
+   *   - The same staleness made a scan that had already started, finished, or
+   *     been declined still read as queued.
+   *
+   * The file is the truth: the privileged side deletes it the moment it acts
+   * on it, and this page deletes it on cancel. $requested and $cancelling
+   * cover the same request within the POST that creates or removes it, where
+   * the filesystem is already right but this process read it a moment too
+   * early.
+   */
+  $srQueued = !$cancelling && ($requested || $reqAt > 0);
 
   $note      = is_array($sr['note'] ?? null) ? $sr['note'] : [];
   $noteState = (string) ($note['state'] ?? '');
@@ -587,25 +609,33 @@ $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
             last <?= (int) $srHours ?> hours, so this request is held until the next
             one is allowed.
           <?php else: ?>
-            It usually starts within a minute.
+            <?php
+              // "It usually starts within a minute" is only true if something
+              // is picking requests up. That runs every minute, so anything
+              // past five means it is not running -- and saying BOTH, as this
+              // card did, tells the customer their scan is fine and then that
+              // it is stuck, in consecutive sentences.
+              $stale = $lastCheck <= 0 || (time() - $lastCheck) > 300;
+            ?>
+            <?php if (!$stale): ?>
+              It usually starts within a minute.
+            <?php endif; ?>
           <?php endif; ?>
 
-          <?php
-            // If the pickup is not running, "within a minute" is a lie and the
-            // customer waits with no clue why. It runs every minute, so
-            // anything past five is a signal rather than noise -- and the
-            // customer can act on it, by telling their host.
-            $checkAge = $lastCheck > 0 ? (time() - $lastCheck) : -1;
-          ?>
-          <?php if ($lastCheck <= 0 || $checkAge > 300): ?>
-            <br><strong>Note:</strong> the server has not checked for scan requests
-            <?= $lastCheck > 0 ? 'since ' . e(ago($lastCheck)) : 'at all yet' ?>.
-            Your request is saved, but it may not start until your hosting provider
-            looks at this — it is worth telling them.
+          <?php if ($lastCheck <= 0 || (time() - $lastCheck) > 300): ?>
+            <br><strong class="red">Your scan has not started, and will not
+            start on its own.</strong>
+            The part of ServerScrub that picks up scan requests has not run
+            <?= $lastCheck > 0
+                  ? 'for ' . e(str_replace(' ago', '', ago($lastCheck)))
+                  : 'at all yet' ?>,
+            so nothing has looked at this request. It is saved and will run the
+            moment that is fixed. Please send your hosting provider this page —
+            it is their side, not yours, and they can check it in a minute.
+          <?php else: ?>
+            Your scan runs in the background. You can close this page; the
+            results appear here when it has finished.
           <?php endif; ?>
-
-          Your scan runs in the background. You can close this page; the results
-          appear here when it has finished.
         </div>
       <?php elseif ($srWait > 0): ?>
         <button class="btn" disabled>Scan my account</button>

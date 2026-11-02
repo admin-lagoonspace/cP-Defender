@@ -200,11 +200,17 @@ t_ok(strpos($page2, 'ahead of you in the queue') === false,
 t_contains($page2, 'could not start it yet', 'and surfaces a blocking reason');
 t_contains($page2, 'you do not need to ask again',
      'telling the customer not to retry, which is what they would otherwise do');
-t_contains($page2, 'has not checked for scan requests',
-     'THE SILENT STALL: if the minute-by-minute pickup is not running, '
-   . 'the promise of a start within a minute is a lie — so the page says so, '
-   . 'and tells the customer it is worth raising with their host');
-t_contains($page2, '$checkAge > 300',
+t_contains($page2, 'has not started, and will not',
+     'THE SILENT STALL: if the minute-by-minute pickup is not running, the '
+   . 'scan never starts — so the page says exactly that, as the FIRST thing '
+   . 'it says');
+t_ok(strpos($page2, '$stale = $lastCheck <= 0') !== false,
+     'and the reassurance is suppressed rather than printed above the '
+   . 'warning. The card used to say "It usually starts within a minute" and '
+   . 'then, in the next sentence, that nothing had looked at the request for '
+   . 'eight hours — telling the customer their scan was fine and then that it '
+   . 'was stuck');
+t_contains($page2, 'time() - $lastCheck) > 300',
      'warned only when the check is genuinely stale, not on every page view');
 t_contains($page2, 'Nothing is wrong',
      'with a plain fallback when there is no recorded reason, because silence '

@@ -243,6 +243,18 @@ class UserScanRequest
         $out = ['started' => [], 'skipped' => [], 'errors' => [], 'cancelled' => []];
         if (!self::enabled()) { return $out; }
 
+        // One at a time, whoever is calling.
+        //
+        // The lock lives HERE rather than in the cron script because there is
+        // more than one caller by design: the minute cron does this normally,
+        // and the scheduler repeats it hourly so that a server whose minute
+        // cron is missing or broken still picks requests up eventually. With
+        // the lock in the cron script those two held different locks, and the
+        // same request could be started twice -- the second refused by
+        // scan_max_concurrent and logged as a failure nobody could explain.
+        $lock = self::lock();
+        if ($lock === false) { return $out; }
+
         Database::setSetting('user_scan_last_check', (string) time());
 
         // Cancels first, and for every account, before anything is started.
@@ -313,6 +325,38 @@ class UserScanRequest
         }
 
         return $out;
+    }
+
+    /**
+     * Take the pickup lock, or report that someone else holds it.
+     *
+     * Returns the handle on success, which the caller must keep: the kernel
+     * holds the lock for as long as that handle is open, so letting it go out
+     * of scope releases it. Returns false only when another process is mid-run.
+     *
+     * A lock file that cannot be opened at all is NOT a reason to refuse. That
+     * would mean one unwritable temp directory silently stopping every
+     * customer scan on the server, which is a worse failure than the race it
+     * is guarding against -- and the race itself is bounded, because
+     * Scanner::startScan() refuses a second concurrent scan anyway.
+     *
+     * @return resource|false
+     */
+    private static function lock()
+    {
+        if (!is_dir(SG_TMP)) { @mkdir(SG_TMP, 0750, true); }
+        $fh = @fopen(SG_TMP . '/user-scans.lock', 'c');
+        if ($fh === false) {
+            Logger::warn('user scan: could not open the pickup lock; continuing');
+            return null;
+        }
+        if (!@flock($fh, LOCK_EX | LOCK_NB)) {
+            @fclose($fh);
+            return false;
+        }
+        // Kept alive deliberately: closing the handle drops the lock.
+        $GLOBALS['__sg_user_scan_lock'] = $fh;
+        return $fh;
     }
 
     /**

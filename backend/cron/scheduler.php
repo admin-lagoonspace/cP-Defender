@@ -531,13 +531,9 @@ $tasks = [
         'time'     => setting('user_reports_time', '00:00'),
         'day'      => (int)setting('user_reports_day', '0'),
         'run'      => function () {
-            // Customer scan requests are NOT picked up here any more.
-            //
-            // backend/cron/user-scans.php owns that, every minute. While both
-            // did it there were two processes with two different locks reading
-            // the same request file, so a request could be started twice --
-            // the second attempt refused by scan_max_concurrent and logged as
-            // a failure the customer had no way to understand.
+            // Customer scan requests are picked up unconditionally, before
+            // any of this -- see the dispatch section. They must not wait on
+            // a task schedule an operator can set to weekly.
             $r = UserReport::writeAll();
             slog('  per-user reports: ' . $r['written'] . ' written, '
                . $r['skipped'] . ' skipped');
@@ -680,6 +676,42 @@ $tasks = [
         },
     ],
 ];
+
+// ── Customer scan requests: a floor under the minute cron ────────────────────
+//
+// backend/cron/user-scans.php owns this normally, every minute. This is what
+// happens when that is not running: a cron file that never got written, a PHP
+// path that moved, an administrator who tidied /etc/cron.d. Without it such a
+// server picks requests up NEVER -- the customer presses the button, the card
+// says "Queued", and nothing happens for as long as they look at it. That was
+// reported from a live server, where the pickup had not run for eight hours.
+//
+// Unconditional, and before the task table, for two reasons. It is not an
+// operator's scheduled job -- it is a customer waiting, and it must not be
+// reachable by setting some schedule to weekly. And at a 15-minute scheduler
+// this is the worst case a customer sees, not the normal one.
+//
+// Both callers go through the one lock inside process(), so this cannot race
+// the minute cron. It costs a glob and one stat per account.
+// --dry-run and --status answer questions; they must not start a scan.
+if (!$status && !$dryRun && $force === null) {
+    try {
+        $q = UserScanRequest::process();
+        foreach ($q['started'] as $st) {
+            slog('user scan: started job ' . $st['job'] . ' for ' . $st['user']
+               . ' (fallback - the minute cron did not get to it)');
+        }
+        foreach ($q['errors'] as $er) {
+            slog('user scan: COULD NOT START for ' . $er['user'] . ' - ' . $er['error']);
+        }
+        foreach ($q['cancelled'] ?? [] as $c) {
+            slog('user scan: ' . $c['user'] . ' cancelled job ' . $c['job']);
+        }
+    } catch (Throwable $e) {
+        // One customer's request must not stop the scheduled work.
+        slog('user scan: pickup failed - ' . $e->getMessage());
+    }
+}
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 $ran = 0;

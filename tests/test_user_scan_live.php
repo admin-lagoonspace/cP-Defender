@@ -136,11 +136,28 @@ t_ok($cPos !== false && $sPos !== false && $cPos < $sPos,
 
 // ── One picker-up, not two ──────────────────────────────────────────────────
 $sched = (string) file_get_contents($repo . '/backend/cron/scheduler.php');
-t_ok(strpos($sched, 'UserScanRequest::process()') === false,
-     'THE DOUBLE START: the scheduler no longer picks requests up as well. '
-   . 'Two processes with two different locks were reading the same request '
-   . 'file, so one request could be started twice — the second refused by '
-   . 'scan_max_concurrent and logged as a failure nobody could explain');
+t_contains($sched, 'UserScanRequest::process()',
+     'THE FLOOR: the scheduler picks requests up too. This was removed once, '
+   . 'to stop a double start — and on a server whose minute cron was not '
+   . 'running, that left NOTHING picking requests up at all: the customer '
+   . 'presses the button, the card says "Queued", and nothing happens for as '
+   . 'long as they look at it. Reported from a live server with an 8h-stale '
+   . 'pickup. The double start is fixed by sharing one lock instead');
+
+// The fallback must not be reachable by a schedule setting. It is a customer
+// waiting, not an operator's nightly job.
+// From the task table to the start of the unconditional pickup block, which
+// sits just before Dispatch — slicing to '── Dispatch' would swallow that
+// block and the assertion would always fail.
+$tStart = (int) strpos($sched, '$tasks = [');
+$tEnd   = (int) strpos($sched, '── Customer scan requests');
+t_ok($tStart > 0 && $tEnd > $tStart, 'the task table is where this test thinks');
+$taskTable = substr($sched, $tStart, $tEnd - $tStart);
+t_ok(strpos($taskTable, 'UserScanRequest::process()') === false,
+     'and it is NOT inside a scheduled task, where setting that task to '
+   . 'weekly would push a waiting customer out by a week');
+t_contains($sched, "if (!\$status && !\$dryRun && \$force === null)",
+     'while --status and --dry-run still start nothing');
 t_contains($sched, 'UserReport::writeAll()',
      'but it still writes the per-user reports, which is its job');
 
@@ -174,3 +191,33 @@ t_contains($page, "\$liveStatus = 'stalled'",
 t_contains($page, "&& \$liveStatus !== 'stalled'",
      'and a stalled scan stops the poller, rather than re-reading a dead job '
    . 'every few seconds for as long as the tab is open');
+
+// ── "Cancel does nothing" ───────────────────────────────────────────────────
+//
+// Reported from the live server, and it was true from where the customer sat.
+// The cancel HAD worked -- the page deletes the request file, which it owns
+// and can do instantly -- but the card went on saying "Queued" afterwards,
+// because queued was decided like this:
+//
+//     $srQueued = $requested || !empty($sr['pending']);
+//
+// $sr comes out of report.json, which is rebuilt HOURLY. So the card was
+// reading an hour-old "pending" and putting the screen straight back the way
+// it was, and would have kept doing that until the next report. The fresh
+// request file WAS read, two lines further down, and then not used for this.
+// Comments stripped: the fix is explained in a comment that quotes the old
+// expression, and matching that prose would pass whatever the code did.
+$pageCode = t_code($repo . '/cpanel/serverscrub/index.live.php');
+t_ok(strpos($pageCode, "\$requested || !empty(\$sr['pending'])") === false,
+     'THE CANCEL THAT DID NOTHING: queued is no longer decided from the '
+   . 'hourly report, which could not reflect a click made seconds ago');
+t_contains($page, "\$srQueued = !\$cancelling && (\$requested || \$reqAt > 0)",
+     'it is decided from the request FILE, which the privileged side deletes '
+   . 'the moment it acts and this page deletes on cancel — the only thing '
+   . 'here that is current');
+
+$qPos = (int) strpos($page, '$srQueued =');
+$rPos = (int) strpos($page, '$reqAt = 0;');
+t_ok($rPos > 0 && $qPos > $rPos,
+     'and the file is read BEFORE that decision, not after it — reading it '
+   . 'afterwards is how the stale value survived');

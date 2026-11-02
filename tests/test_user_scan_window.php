@@ -111,9 +111,18 @@ t_contains($proc, 'usort(', 'pending requests are still served oldest first');
 $cron = $repo . '/backend/cron/user-scans.php';
 t_ok(is_file($cron), 'there is a dedicated pickup script');
 $cs = (string) file_get_contents($cron);
-t_contains($cs, 'LOCK_EX | LOCK_NB',
-     'which takes a lock — at a minute interval an overrun would otherwise '
-   . 'stack, and each instance would try to start the same request');
+// The lock moved into process(), because the scheduler calls it too as a
+// floor under this cron. Two scripts each holding their OWN lock would not
+// exclude each other at all.
+$us = (string) file_get_contents($repo . '/backend/lib/UserScanRequest.php');
+t_contains(t_fn_body($us, 'lock', 'php'), 'LOCK_EX | LOCK_NB',
+     'the pickup takes a lock — at a minute interval an overrun would '
+   . 'otherwise stack, and each instance would try to start the same request');
+t_contains(t_fn_body($us, 'process', 'php'), 'self::lock()',
+     'and every caller goes through it, not just this cron');
+t_ok(strpos($cs, 'flock(') === false,
+     'the cron does NOT take its own second lock, which would exclude only '
+   . 'other copies of itself');
 t_contains($cs, 'License::protectionAllowed',
      'and a licensing fault does not become a scan nobody authorised');
 t_contains($cs, 'UserScanRequest::process()', 'it does the one job');
