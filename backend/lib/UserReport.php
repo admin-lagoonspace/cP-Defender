@@ -352,6 +352,76 @@ class UserReport
             unset($scans[$i]['requested_by']);
         }
 
+        /**
+         * What each scan actually found IN THIS ACCOUNT.
+         *
+         * The log showed a Threats number and nothing behind it, so a
+         * customer could be told a scan found three things and had no way to
+         * learn which files, or what had become of them. "Detected" and
+         * "detected, quarantined, and here is where it went" are very
+         * different things to be told about your own website.
+         *
+         * TWO corrections happen here, and the second matters more.
+         *
+         * 1. The count. scan_jobs.threats_found is SERVER-WIDE. A nightly
+         *    /home sweep that found three webshells in three other people's
+         *    accounts showed this customer "3" -- a number about somebody
+         *    else, on their own page, with their name nowhere near it. The
+         *    count is recomputed from their own files.
+         *
+         * 2. The list. Which is why it is scoped the same way the threats
+         *    table above is, by cpanel_user or the home prefix. A /home scan
+         *    covers every account on the server; listing its findings
+         *    unfiltered would hand one customer the paths, filenames and
+         *    malware names inside another customer's site.
+         *
+         * Unlike the Detected-threats card this does NOT hide status
+         * 'deleted'. What happened to the file is half the question being
+         * asked, and a scan that found two and removed both would otherwise
+         * read as a scan that found nothing.
+         */
+        $byScan = [];
+        $jobIds = [];
+        foreach ($scans as $row) {
+            $jid = (int) ($row['id'] ?? 0);
+            if ($jid > 0) { $jobIds[] = $jid; $byScan[$jid] = []; }
+        }
+        if ($jobIds) {
+            $in = self::inClause($jobIds);
+            if ($in !== null) {
+                // Bounded: 25 scans are listed, and a single bad night can
+                // produce thousands of findings. This is written into every
+                // account's home on a schedule.
+                $rows = self::safeFetch(
+                    "SELECT scan_job_id, file_path, threat_name, threat_type,
+                            severity, status, detected_at, action_taken
+                       FROM threats
+                      WHERE scan_job_id " . $in['sql'] . "
+                        AND (cpanel_user = ? OR file_path LIKE ?)
+                      ORDER BY detected_at DESC
+                      LIMIT 200",
+                    array_merge($in['params'], [$user, $prefix . '%'])
+                );
+                foreach ($rows as $t) {
+                    $jid = (int) ($t['scan_job_id'] ?? 0);
+                    if (!isset($byScan[$jid])) { continue; }
+                    if (count($byScan[$jid]) >= 50) { continue; }
+                    unset($t['scan_job_id']);
+                    // The path is already inside this account; show it
+                    // relative to home so it reads like their own file tree.
+                    $t['relative_path'] = (strpos((string) $t['file_path'], $prefix) === 0)
+                        ? substr((string) $t['file_path'], strlen($prefix))
+                        : (string) $t['file_path'];
+                    $byScan[$jid][] = $t;
+                }
+            }
+        }
+        foreach ($scans as $i => $row) {
+            $jid = (int) ($row['id'] ?? 0);
+            $scans[$i]['threats_found'] = count($byScan[$jid] ?? []);
+        }
+        // Returned below, alongside 'scans'.
+
         // Thirty-day counters for the dashboard tiles.
         $cnt = static function (string $sql, array $a): int {
             $r = self::safeFetch($sql, $a);
@@ -398,6 +468,7 @@ class UserReport
             'waf'          => $waf,
             'attacks'      => $attacks,
             'scans'        => $scans,
+            'scan_threats' => $byScan,
             'stats30'      => [
                 'threats'    => $threats30,
                 'attacks'    => $attacks30,

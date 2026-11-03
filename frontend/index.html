@@ -4,18 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ServerScrub — Security Dashboard</title>
-<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.28.11">
-<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.28.11">
-<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.28.11">
+<link rel="icon" type="image/png" sizes="32x32" href="images/icon-32.png?v=4.29.0">
+<link rel="icon" type="image/png" sizes="64x64" href="images/icon-64.png?v=4.29.0">
+<link rel="apple-touch-icon" sizes="180x180" href="images/icon-180.png?v=4.29.0">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="css/app.css?v=4.28.11">
+<link rel="stylesheet" href="css/app.css?v=4.29.0">
 </head>
 <body>
 <!-- First-load splash. The full lockup, because this is the one moment the
      product introduces itself; everywhere else uses the icon alone. -->
 <div id="ss-splash">
-  <img src="images/logo.png?v=4.28.11" alt="ServerScrub">
+  <img src="images/logo.png?v=4.29.0" alt="ServerScrub">
   <div class="ss-cap">Loading…</div>
 </div>
 
@@ -62,7 +62,7 @@
 
     <!-- Logo -->
     <div class="login-logo" style="margin-bottom:20px">
-      <img src="images/logo.png?v=4.28.11" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
+      <img src="images/logo.png?v=4.29.0" alt="ServerScrub" style="height:72px;width:auto;margin:0 auto 10px;display:block;filter:drop-shadow(0 0 18px rgba(59,130,246,.35))">
       <div id="login-mode-sub" style="font-size:.75rem;color:var(--blue2);margin-top:5px;font-weight:600;letter-spacing:.03em">cPanel Security Suite</div>
     </div>
 
@@ -103,7 +103,7 @@
 <div id="activate-screen" class="hidden">
   <div class="activate-card">
     <div class="activate-mark">
-      <img src="images/icon-180.png?v=4.28.11" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
+      <img src="images/icon-180.png?v=4.29.0" alt="ServerScrub" style="width:52px;height:52px;object-fit:contain;display:block">
     </div>
 
     <div class="activate-title">Activate ServerScrub</div>
@@ -149,7 +149,7 @@
   <div class="topbar-brand">
     <!-- Shield icon mark — inline SVG so it renders crisp at any size with no background bleed -->
     <div class="brand-icon">
-      <img src="images/icon-64.png?v=4.28.11" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
+      <img src="images/icon-64.png?v=4.29.0" alt="" aria-hidden="true" style="width:34px;height:34px;object-fit:contain;display:block">
     </div>
     <div>
       <div class="brand-name">ServerScrub</div>
@@ -282,7 +282,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.28.11 · cPanel Plugin</div>
+      <div id="sidebar-mode-label" style="font-size:.72rem;color:var(--txt3);letter-spacing:.03em">v4.29.0 · cPanel Plugin</div>
       <div id="sidebar-update-dot" style="display:none;margin-top:6px">
         <button onclick="openPage('dashboard')" style="background:none;border:none;cursor:pointer;padding:0;display:flex;align-items:center;gap:6px;font-size:.7rem;color:#f59e0b;font-weight:600">
           <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;display:inline-block;animation:pulse 1.8s infinite"></span>
@@ -3207,11 +3207,11 @@
      as hard as one whose name never changes. icon-64.png held the
      old crop in 4.0.0 and the new mark in 4.1.0, so an updated
      server kept showing the old logo. -->
-<script>window.SG_ASSET_V = "4.28.11";</script>
+<script>window.SG_ASSET_V = "4.29.0";</script>
 <script src="config.js"></script>
-<script src="js/api.js?v=4.28.11"></script>
-<script src="js/charts.js?v=4.28.11"></script>
-<script src="js/app.js?v=4.28.11"></script>
+<script src="js/api.js?v=4.29.0"></script>
+<script src="js/charts.js?v=4.29.0"></script>
+<script src="js/app.js?v=4.29.0"></script>
 <script>
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -3369,7 +3369,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 <div id="sg-busy" role="status" aria-live="polite" aria-hidden="true">
   <div class="sg-busy-box">
     <div class="ss-load sm">
-      <img src="images/icon.png?v=4.28.11" alt="">
+      <img src="images/icon.png?v=4.29.0" alt="">
       <span class="ss-cap" id="sg-busy-text">Working…</span>
     </div>
   </div>
@@ -3395,6 +3395,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     padding: 11px 13px; font-size: .78rem; white-space: pre-wrap;
     word-break: break-word; max-height: 240px; overflow: auto;
     font-family: ui-monospace, monospace;
+  }
+  /* A class, so the next dialog is not invisible on arrival.
+   *
+   * Every rule below names each modal by id, in five separate selector lists.
+   * A new dialog that does not get added to all five renders as unstyled
+   * inline markup -- present in the DOM, correct in its content, and simply
+   * not on screen. That is exactly what happened to #scan-threats-modal: it
+   * opened, it was populated, and nothing appeared.
+   *
+   * The id lists are left alone rather than rewritten, because changing the
+   * selectors of five working dialogs to fix one new one is a poor trade.
+   * New dialogs use .wem-modal and need nothing else. */
+  .wem-modal {
+    position: fixed; inset: 0; z-index: 9000;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.55);
+    padding: 20px;
+  }
+  .wem-modal.hidden { display: none; }
+  .wem-modal .wem-box {
+    background: var(--card, #1b1f23);
+    border: 1px solid var(--line, #2d333a);
+    border-radius: 12px;
+    width: 100%; max-width: 760px;
+    max-height: 86vh; display: flex; flex-direction: column;
+    box-shadow: 0 18px 60px rgba(0,0,0,.5);
+  }
+  .wem-modal .wem-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 18px; border-bottom: 1px solid var(--line, #2d333a);
+  }
+  .wem-modal .wem-body { padding: 16px 18px; overflow: auto; }
+  .wem-modal .wem-foot {
+    display: flex; gap: 8px; justify-content: flex-end;
+    padding: 12px 18px; border-top: 1px solid var(--line, #2d333a);
+    flex-wrap: wrap;
   }
   #scan-accounts-modal,
   #notmalware-modal,
@@ -3460,6 +3496,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     #waf-event-modal dt { margin-top: 8px; }
   }
 </style>
+<!-- What a scan actually found.
+     The scan log showed "3" in the Threats column and nothing behind it. The
+     threats table is server-wide and sorted by time, so finding those three
+     meant reading past every other finding from that night. The count is a
+     link now, and this is where it lands — in the app, not a new tab. -->
+<div id="scan-threats-modal" class="wem-modal hidden" role="dialog" aria-modal="true"
+     aria-labelledby="stm-title" onclick="if(event.target===this)closeModal('scan-threats-modal')">
+  <div class="wem-box">
+    <div class="wem-head">
+      <div style="font-weight:700;font-size:.92rem" id="stm-title">Threats found by this scan</div>
+      <button class="btn btn-ghost btn-xs" style="margin-left:auto"
+              onclick="closeModal('scan-threats-modal')" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="wem-body">
+      <div class="dim" style="font-size:.76rem;margin-bottom:10px" id="stm-sub"></div>
+      <div id="stm-list">Loading&hellip;</div>
+    </div>
+    <div class="wem-foot">
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto"
+              onclick="closeModal('scan-threats-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="scan-accounts-modal" class="hidden" role="dialog" aria-modal="true"
      aria-labelledby="sam-title" onclick="if(event.target===this)closeModal('scan-accounts-modal')">
   <div class="wem-box">

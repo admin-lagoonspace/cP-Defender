@@ -491,6 +491,26 @@ const Demo = {
     ] };
   },
 
+  /* Findings for one scan, so the demo's Threats links open something. */
+  mockScanThreats(jobId) {
+    const t = Math.floor(Date.now() / 1000);
+    if (Number(jobId) !== 811) { return { success: true, data: [] }; }
+    return { success: true, data: [
+      { id: 91, scan_job_id: 811, file_path: '/home/acme/public_html/wp-content/uploads/2026/02/i.php',
+        threat_name: 'PHP.Webshell.Generic', threat_type: 'webshell', severity: 'critical',
+        status: 'quarantined', detected_at: t - 22000,
+        action_taken: 'moved to /usr/local/serverscrub/quarantine/91-i.php',
+        hash: '3f1a9c0b7e42d85a16c4b0f9d2e73a8c5b6d10e4f82a9c3b7d5e1f0a6c8b4d29' },
+      { id: 92, scan_job_id: 811, file_path: '/home/bluefin/public_html/.well-known/x.phtml',
+        threat_name: 'PHP.Backdoor.Obfuscated', threat_type: 'backdoor', severity: 'high',
+        status: 'deleted', detected_at: t - 21800,
+        action_taken: 'deleted after operator confirmation', hash: '' },
+      { id: 93, scan_job_id: 811, file_path: '/home/cobalt/public_html/vendor/cache/t.php',
+        threat_name: 'PHP.Obfuscated.Eval', threat_type: 'obfuscated', severity: 'medium',
+        status: 'active', detected_at: t - 21600, action_taken: '', hash: '' },
+    ] };
+  },
+
   mockDashStats() {
     const rand = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
     return {

@@ -1280,6 +1280,96 @@ function scanTriggerLabel(by) {
   return [by + ' (cPanel user)', 'var(--txt1)'];
 }
 
+/* The Threats count, as a way in rather than a dead number.
+ *
+ * The scan log said a scan found 3 and stopped there. The threats table is
+ * server-wide and ordered by time, so learning WHICH 3 meant reading past
+ * every other finding from that night -- the one question the column invites
+ * was the one it could not answer.
+ *
+ * Zero stays plain text. A link that opens an empty dialog is worse than no
+ * link: it promises something and then wastes the click.
+ */
+function threatCountCell(j) {
+  const n = Number(j.threats_found || 0);
+  if (!n) { return '<span style="color:var(--green)">0</span>'; }
+  return '<a href="#" style="color:var(--red);font-weight:600;text-decoration:underline"'
+       + ' title="Show the files this scan flagged"'
+       + ' onclick="showScanThreats(' + Number(j.id) + ',event);return false">' + n + '</a>';
+}
+
+/* What a scan found, in the app.
+ *
+ * Asked for explicitly as a dialog inside the app rather than a new tab or
+ * window: the operator is partway through reading a log, and losing that
+ * position to see three filenames is a bad trade.
+ */
+async function showScanThreats(jobId, ev) {
+  if (ev) { ev.preventDefault(); }
+  openModal('scan-threats-modal');
+  const list = document.getElementById('stm-list');
+  const sub  = document.getElementById('stm-sub');
+  if (sub)  { sub.textContent = 'Scan #' + jobId; }
+  if (list) { list.innerHTML = '<div class="dim" style="padding:14px">Loading…</div>'; }
+
+  const res = Demo.active ? Demo.mockScanThreats(jobId)
+                          : await API.get('scanner/threats?job_id=' + encodeURIComponent(jobId));
+  const rows = res?.data || [];
+
+  if (!list) { return; }
+  if (!rows.length) {
+    // Not an error. The rows may have been purged, or the count may predate
+    // threats being linked to the scan that found them.
+    list.innerHTML = '<div class="dim" style="padding:14px">No stored detail for this scan. '
+                   + 'The findings may have been cleared since.</div>';
+    return;
+  }
+  if (sub) { sub.textContent = 'Scan #' + jobId + ' — ' + rows.length + ' finding(s)'; }
+
+  /* What happened to the file is the half of the question that the Threats
+   * page does not answer either: "detected" and "detected, quarantined, and
+   * here is where the copy went" are very different things to be told. */
+  const WHAT = {
+    quarantined: ['Quarantined', 'var(--amber)'],
+    deleted:     ['Deleted',     'var(--red)'],
+    cleaned:     ['Cleaned',     'var(--green)'],
+    ignored:     ['Marked not malware', 'var(--txt2)'],
+    restored:    ['Restored',    'var(--txt2)'],
+    active:      ['Still on disk — no action taken', 'var(--red)'],
+  };
+
+  list.innerHTML = rows.map(t => {
+    const st = String(t.status || 'active').toLowerCase();
+    const [what, colour] = WHAT[st] || [st || 'unknown', 'var(--txt2)'];
+    const sev = String(t.severity || '').toLowerCase();
+    const sevCol = (sev === 'critical' || sev === 'high') ? 'var(--red)'
+                 : (sev === 'medium' ? 'var(--amber)' : 'var(--txt3)');
+    return '<div style="border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:10px">'
+      // The full path, selectable and wrapped. A truncated path is unusable:
+      // the operator's next step is to go and look at the file.
+      + '<div class="mono" style="font-size:.8rem;word-break:break-all;margin-bottom:8px">'
+      +   esc(t.file_path || '(path not recorded)') + '</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;font-size:.76rem">'
+      +   '<div><span class="dim">Detected as</span><br>' + esc(t.threat_name || t.threat_type || 'unknown') + '</div>'
+      +   '<div><span class="dim">Severity</span><br><span style="color:' + sevCol + '">'
+      +     esc(t.severity || '?') + '</span></div>'
+      +   '<div><span class="dim">What happened</span><br><span style="color:' + colour + '">'
+      +     esc(what) + '</span></div>'
+      +   '<div><span class="dim">Detected</span><br>' + esc(reltime(Number(t.detected_at) || 0)) + '</div>'
+      + '</div>'
+      // Where the copy went, when there is one. Without it "quarantined" is a
+      // claim the operator cannot check.
+      + (t.action_taken
+          ? '<div class="dim" style="font-size:.74rem;margin-top:8px">Action: '
+            + esc(t.action_taken) + '</div>'
+          : '')
+      + (t.hash
+          ? '<div class="dim mono" style="font-size:.7rem;margin-top:4px">sha256 ' + esc(t.hash) + '</div>'
+          : '')
+      + '</div>';
+  }).join('');
+}
+
 async function loadScanJobs() {
   const body = document.getElementById('scanlog-body');
   if (!body) return;
@@ -1331,8 +1421,7 @@ async function loadScanJobs() {
       '<td class="mono" title="' + esc(path) + '">' + esc(scope) + '</td>' +
       '<td style="color:' + (COLOR[j.status] || 'var(--txt3)') + '">' + esc(j.status || '') + '</td>' +
       '<td>' + Number(j.files_scanned || 0).toLocaleString() + '</td>' +
-      '<td style="color:' + (Number(j.threats_found) > 0 ? 'var(--red)' : 'var(--green)') + '">' +
-        Number(j.threats_found || 0) + '</td>' +
+      '<td>' + threatCountCell(j) + '</td>' +
       '<td class="dim">' + esc(took) + '</td>' +
       '</tr>';
   }).join('');

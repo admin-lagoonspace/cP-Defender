@@ -559,6 +559,23 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
             $status   = $q['status'] ?? null;
             $sqlWhere = $status ? 'WHERE status = ?' : '';
             $params   = $status ? [$status] : [];
+
+            // Narrow to one scan, for the drill-down behind the Threats count
+            // in the scan log. Without it the operator could see that a scan
+            // found three things and had no way at all to learn WHICH three:
+            // the threats table is server-wide and sorted by time, so a scan
+            // that ran overnight had its findings scattered through hundreds
+            // of other rows.
+            //
+            // Deliberately NOT filtered by status here. "What happened to it"
+            // is half the question being asked -- a quarantined or deleted
+            // finding is exactly what the operator wants to see, and hiding
+            // resolved rows would make a scan that found three and cleaned
+            // all three look like it found none.
+            if (isset($q['job_id']) && ctype_digit((string) $q['job_id'])) {
+                $sqlWhere = 'WHERE scan_job_id = ?';
+                $params   = [(int) $q['job_id']];
+            }
             $threats  = Database::fetchAll(
                 "SELECT * FROM threats $sqlWhere ORDER BY detected_at DESC LIMIT 200",
                 $params
