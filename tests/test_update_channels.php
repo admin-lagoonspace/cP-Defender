@@ -78,3 +78,49 @@ t_contains($upd, 'warn "Channel unreachable, trying next…"
 t_contains($upd, '[[ -n "${SG_MANIFEST_URL:-}" ]] && CHANNELS=("${SG_MANIFEST_URL%/latest.json}")',
      'SG_MANIFEST_URL still pins a single channel, which is what unblocks a '
    . 'server while a mirror is being repaired');
+
+// ── --yes does not authorise a rollback ────────────────────────────────────
+//
+// What actually happened on a live server, unasked:
+//
+//     ✔  Updated from v4.28.10 → v4.28.9
+//
+// The guard warned that the offered version was not newer, skipped its
+// confirmation prompt because --yes was given, and fell straight through to
+// the install. So a stale mirror plus `--yes` silently replaced a newer
+// install with an older one and reported success.
+//
+// --yes means "do not ask me the routine question". It does not mean "do
+// anything at all without asking". Installing an older build over a newer one
+// is a different act from updating, it is how a server quietly loses fixes,
+// and it has to be asked for by name.
+t_contains($upd, 'if [[ "$ALLOW_DOWNGRADE" == false ]]; then',
+     'THE SILENT ROLLBACK: a version that is not newer is refused unless a '
+   . 'downgrade was asked for explicitly');
+t_contains($upd, 'err "Refusing to replace a newer install with an older one."',
+     'and said plainly');
+t_contains($upd, '--allow-downgrade)  ALLOW_DOWNGRADE=true ;;',
+     'with a flag of its own, separate from --yes');
+t_contains($upd, 'ALLOW_DOWNGRADE=false',
+     'defaulting to refusing');
+
+// The refusal must END the run. Warning and continuing is what it did before.
+$guard = substr($upd, (int) strpos($upd, 'Refusing to replace a newer install'), 900);
+t_contains($guard, 'exit 1',
+     'THE FALL-THROUGH: it exits rather than warning and carrying on, which '
+   . 'is precisely what the previous version did');
+
+// A stale mirror is the likely cause, so the refusal says so and gives the
+// way out, rather than leaving the operator to guess.
+t_contains($upd, 'This usually means a mirror has fallen behind rather than that',
+     'the likely cause is named — a mirror behind the others, not a '
+   . 'withdrawn release');
+t_contains($upd, 'SG_MANIFEST_URL=${GITHUB_BASE}/latest.json bash $0 --yes',
+     'with the command that takes the newest build anyway');
+t_contains($upd, 'bash $0 --version ${LATEST_VERSION} --allow-downgrade',
+     'and the command for a rollback that IS intended');
+
+// When a rollback is intended and interactive, it must still say what it is.
+t_contains($upd, 'read -rp "  Replace v${CURRENT_VERSION} with OLDER v${LATEST_VERSION}? [y/N] " REPLY',
+     'an interactive rollback names both versions and the word OLDER, rather '
+   . 'than asking to "force reinstall"');

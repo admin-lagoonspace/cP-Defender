@@ -230,6 +230,7 @@ DIST_BASE="${CHANNELS[0]}/dist"
 BACKUP_ROOT="/var/backups/serverscrub"
 TMP_DIR="$(mktemp -d /tmp/sg-update.XXXXXX)"
 AUTO_YES=false
+ALLOW_DOWNGRADE=false
 FORCE_VERSION=""
 FORCE_URL=""
 EXPECTED_SHA256=""
@@ -238,6 +239,8 @@ EXPECTED_SHA256=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --yes)              AUTO_YES=true ;;
+        # Separate from --yes on purpose: see the downgrade guard below.
+        --allow-downgrade)  ALLOW_DOWNGRADE=true ;;
         --version)          shift; FORCE_VERSION="${1:-}"; FORCE_VERSION="${FORCE_VERSION#v}" ;;
         --version=*)        FORCE_VERSION="${1#--version=}"; FORCE_VERSION="${FORCE_VERSION#v}" ;;
         --url)              shift; FORCE_URL="${1:-}" ;;
@@ -486,10 +489,43 @@ except Exception:
         # Fallback: highest version via sort -V; newer iff latest sorts last and differs
         [[ "$latest" != "$current" && "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)" == "$latest" ]]
     }
+    # ── A downgrade is not something --yes authorises ─────────────────────
+    #
+    # This block used to warn, skip its prompt under --yes, and fall straight
+    # through. So `update.sh --yes` on a server running v4.28.10, against a
+    # channel still serving v4.28.9, REPLACED the newer install with the
+    # older one and reported "Update complete". Nobody asked for that.
+    #
+    # --yes means "do not ask me the routine question". It does not mean "do
+    # anything at all without asking". Installing an older build over a newer
+    # one is a different act from updating, it is how a server silently loses
+    # fixes, and it needs to be asked for by name.
+    #
+    # The trigger was a stale mirror, which is now handled separately -- but
+    # a mirror can always fall behind, and the updater must not treat that as
+    # an instruction to roll back.
     _is_newer "$LATEST_VERSION" "$CURRENT_VERSION" || {
-        warn "Latest GitHub release (v${LATEST_VERSION}) is not newer than current (v${CURRENT_VERSION})."
+        warn "The channel is offering v${LATEST_VERSION}, which is NOT newer than"
+        warn "the installed v${CURRENT_VERSION}."
+        if [[ "$ALLOW_DOWNGRADE" == false ]]; then
+            echo ""
+            err "Refusing to replace a newer install with an older one."
+            echo ""
+            echo -e "  This usually means a mirror has fallen behind rather than that"
+            echo -e "  a release was withdrawn. Check what each channel is serving:"
+            for _B in "${CHANNELS[@]}"; do echo "    ${_B}/latest.json"; done
+            echo ""
+            echo -e "  ${BOLD}To take the newest build from a specific channel:${NC}"
+            echo -e "    SG_MANIFEST_URL=${GITHUB_BASE}/latest.json bash $0 --yes"
+            echo ""
+            echo -e "  ${BOLD}If you really do mean to roll back:${NC}"
+            echo -e "    bash $0 --version ${LATEST_VERSION} --allow-downgrade"
+            echo ""
+            exit 1
+        fi
+        warn "--allow-downgrade was given, so this rollback will proceed."
         if [[ "$AUTO_YES" == false ]]; then
-            read -rp "  Force reinstall anyway? [y/N] " REPLY
+            read -rp "  Replace v${CURRENT_VERSION} with OLDER v${LATEST_VERSION}? [y/N] " REPLY
             [[ "${REPLY,,}" =~ ^y(es)?$ ]] || { info "Aborted."; exit 0; }
         fi
     }
