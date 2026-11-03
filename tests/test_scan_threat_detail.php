@@ -246,3 +246,37 @@ t_ok($row !== null && (int) $row['threats_found'] === 1,
 t_ok(json_encode($built, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) !== false,
      'and the whole report encodes to JSON, which is what writeFor() does '
    . 'before writing — a refusal there is another silent skip');
+
+// ── A skip has to say WHY ──────────────────────────────────────────────────
+//
+// writeAll() returned two integers, and the CLI announced that skipped
+// accounts "have no usable home directory, or one that is a symlink or owned
+// by another user" -- a cause it had no way to know.
+//
+// When build() threw Class "UserScanRequest" not found on all 132 accounts,
+// that invented sentence is what the operator was told. The real error went
+// to a log nobody was pointed at, and three rounds of debugging went looking
+// at home directories. A caught exception reported as a guess about the
+// filesystem is worse than no message: it is a confident wrong answer.
+$ur  = t_code($repo . '/backend/lib/UserReport.php');
+$cli = t_code($repo . '/backend/cli/serverscrub.php');
+
+t_contains($ur, "return ['written' => \$written, 'skipped' => \$skipped, 'reasons' => \$reasons];",
+     'THE INVENTED CAUSE: writeAll() returns why each account was skipped, '
+   . 'not just how many were');
+t_contains($ur, "\$note(\$user, get_class(\$e) . ': ' . \$e->getMessage()",
+     'a thrown error is recorded as itself — class, message, file and line');
+t_contains($ur, "'home is fine; the write into ~/.serverscrub was refused'",
+     'and a refusal with a good home is distinguished from a bad home, '
+   . 'because those have nothing to do with each other');
+t_contains($ur, 'if (count($reasons) < 50) { $reasons[] = $user',
+     'BOUNDED: capped, since this runs over every account on the server');
+
+t_contains($cli, 'echo PHP_EOL . "Why they were skipped:" . PHP_EOL;',
+     'the CLI prints the reasons instead of pointing at a log, which is a '
+   . 'round trip');
+t_contains($cli, 'if (isset($seen[$why])) { $seen[$why][] = $who; continue; }',
+     'grouped by distinct cause — 132 copies of one error is not more '
+   . 'informative than one, and would bury anything else');
+t_ok(strpos($cli, 'Skipped accounts have no usable home directory') === false,
+     'and the sentence that asserted a cause it could not know is gone');

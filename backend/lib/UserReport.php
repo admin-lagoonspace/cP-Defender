@@ -606,6 +606,21 @@ class UserReport
     {
         $written = 0;
         $skipped = 0;
+        // WHY each account was skipped, carried back to the caller.
+        //
+        // This used to return two integers, and the CLI then announced that
+        // skipped accounts "have no usable home directory, or one that is a
+        // symlink or owned by another user" -- a cause it had no way to know.
+        //
+        // When build() threw "Class UserScanRequest not found" on all 132
+        // accounts, that is what the operator was told. The real error was
+        // written to a log nobody was pointed at, and three rounds of
+        // debugging went looking at home directories. A caught exception
+        // reported as a guess about the filesystem is worse than no message.
+        $reasons = [];
+        $note = static function (string $user, string $why) use (&$reasons): void {
+            if (count($reasons) < 50) { $reasons[] = $user . ': ' . $why; }
+        };
         foreach (self::listUsers() as $user) {
             // One unusable home must not stop the rest of the server.
             try {
@@ -613,13 +628,18 @@ class UserReport
                     $written++;
                 } else {
                     $skipped++;
+                    $note($user, self::homeDir($user) === null
+                        ? 'no usable home directory (missing, a symlink, or owned by another user)'
+                        : 'home is fine; the write into ~/.serverscrub was refused');
                 }
             } catch (Throwable $e) {
                 $skipped++;
+                $note($user, get_class($e) . ': ' . $e->getMessage()
+                           . ' at ' . basename($e->getFile()) . ':' . $e->getLine());
                 Logger::warn('UserReport: ' . $user . ' — ' . $e->getMessage());
             }
         }
         Logger::info("UserReport: wrote {$written} report(s), skipped {$skipped}");
-        return ['written' => $written, 'skipped' => $skipped];
+        return ['written' => $written, 'skipped' => $skipped, 'reasons' => $reasons];
     }
 }

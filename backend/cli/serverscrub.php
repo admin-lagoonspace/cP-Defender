@@ -173,8 +173,25 @@ try {
         $r = UserReport::writeAll();
         echo "Per-user reports: {$r['written']} written, {$r['skipped']} skipped" . PHP_EOL;
         if ($r['skipped'] > 0) {
-            echo "Skipped accounts have no usable home directory, or one that is" . PHP_EOL;
-            echo "a symlink or owned by another user - see the log for which." . PHP_EOL;
+            // The actual reason, per account. Telling the operator to go and
+            // read a log is a round trip, and the guess this used to print
+            // sent three of them to the wrong place.
+            echo PHP_EOL . "Why they were skipped:" . PHP_EOL;
+            $seen = [];
+            foreach (($r['reasons'] ?? []) as $line) {
+                [$who, $why] = array_pad(explode(': ', $line, 2), 2, '');
+                // One line per distinct cause: 132 copies of the same error
+                // is not more informative than one, and buries anything else.
+                if (isset($seen[$why])) { $seen[$why][] = $who; continue; }
+                $seen[$why] = [$who];
+            }
+            foreach ($seen as $why => $who) {
+                echo '  ' . count($who) . ' account(s): ' . $why . PHP_EOL;
+                echo '    e.g. ' . implode(', ', array_slice($who, 0, 3)) . PHP_EOL;
+            }
+            if (!$seen) {
+                echo '  (no reasons recorded - see the log)' . PHP_EOL;
+            }
         }
         break;
     }
