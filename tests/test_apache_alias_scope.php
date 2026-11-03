@@ -125,3 +125,43 @@ t_ok($opens > 0 && $closes >= $opens,
      'and every --register-only skip opened before it has been closed, so '
    . 'the Apache config is rewritten on an upgrade and not only on a fresh '
    . 'install');
+
+// ── The self-test has to know which mode it is checking ────────────────────
+//
+// It did not, and so it failed on a healthy install. test.sh demanded
+// RewriteRule and SetHandler in the generated Apache config regardless of
+// mode; both live in the <Directory> block for the aliased API, which cPanel
+// installs stopped emitting here -- correctly, because the dashboard runs
+// under cpsrvd there and nothing routes to an aliased PHP directory.
+//
+// Result on a live server: "PASS: 47 FAIL: 2", a verification failure, and
+// advice to re-run install.sh -- which would have written exactly the same
+// file again. A check that cannot be satisfied is worse than no check: it
+// teaches the operator to ignore the suite.
+$tsh = t_shell($repo . '/test.sh');
+
+t_contains($tsh, 'if [[ "${INSTALL_MODE}" == "cpanel" ]]; then',
+     'THE UNSATISFIABLE CHECK: the Apache config test branches on the '
+   . 'install mode, instead of demanding of cPanel what only standalone has');
+t_contains($tsh, 'grep -q \'AliasMatch "\^/serverscrub/?\$"\' "$CANDIDATE"',
+     'cPanel is checked for the exact-path alias it actually gets');
+t_contains($tsh, 'fail "  SUBTREE alias present',
+     'AND FOR THE REGRESSION: a subtree alias reappearing is a FAILURE, '
+   . 'because that is what shadowed /serverscrub/* on every hosted site');
+t_contains($tsh, 'grep -q "RewriteRule" "$CANDIDATE"',
+     'standalone still requires the rewrite rules, which it genuinely needs');
+
+// Ordering: the standalone demands must sit in the else branch, or they run
+// for cPanel too and nothing has been fixed.
+$blk = substr($tsh, (int) strpos($tsh, 'Apache config: $CANDIDATE'), 1800);
+$ifPos  = strpos($blk, 'if [[ "${INSTALL_MODE}" == "cpanel" ]]');
+$elsPos = strpos($blk, 'else');
+$rwPos  = strpos($blk, 'grep -q "RewriteRule"');
+t_ok($ifPos !== false && $elsPos !== false && $rwPos !== false
+     && $ifPos < $elsPos && $elsPos < $rwPos,
+     'and they are inside the else branch, not left running for both');
+
+// The API .htaccess warning had the same problem, one severity down.
+t_contains($tsh, 'pass ".htaccess in API dir not required (cpsrvd serves the dashboard)"',
+     'the API .htaccess check is mode-aware too — warning about a file that '
+   . 'is deliberately absent trains people to ignore warnings');
