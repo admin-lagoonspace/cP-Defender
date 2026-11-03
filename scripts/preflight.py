@@ -331,6 +331,25 @@ def main():
     else:
         ok("daemon and cron scripts run on Python 3.6")
 
+    # 2c-lib. every lib must load without help from its caller
+    #
+    # UserReport used UserScanRequest and required nothing. The cron scripts
+    # happened to load it; the CLI did not, so `serverscrub user-reports`
+    # threw "Class not found" on all 132 accounts -- and writeAll() catches
+    # Throwable per account, so it reported "no usable home directory" and
+    # every customer's report.json froze for three releases.
+    if php:
+        r = subprocess.run([php, os.path.join(REPO, "scripts", "check-lib-standalone.php")],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            fail("a lib cannot be loaded on its own:")
+            for line in (r.stdout + r.stderr).strip().splitlines():
+                if line.strip():
+                    print("        " + line.strip())
+            problems += 1
+        else:
+            ok("every lib loads standalone and declares its class")
+
     # 2d. every read-only route actually executes
     if php:
         r = subprocess.run([php, os.path.join(REPO, "scripts", "smoke.php")],

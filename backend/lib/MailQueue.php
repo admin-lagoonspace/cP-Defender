@@ -36,6 +36,15 @@
 
 declare(strict_types=1);
 
+
+/* Pulls in what it calls, rather than trusting the caller to have done it.
+ * UserReport did not, and `serverscrub user-reports` died with
+ * Class "UserScanRequest" not found on all 132 accounts -- silently,
+ * because writeAll() catches Throwable per account. require_once is
+ * idempotent and safe across the cycles these classes form. */
+require_once __DIR__ . '/Database.php';
+require_once __DIR__ . '/MailGuard.php';
+
 class MailQueue
 {
     /** How long a snapshot stays usable before it is rebuilt. */

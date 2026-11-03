@@ -1,4 +1,15 @@
 <?php
+/* Pulls in what it uses, rather than trusting the caller to have done
+ * it. UserReport did not, and `serverscrub user-reports` died with
+ * Class "UserScanRequest" not found on all 132 accounts -- silently,
+ * because writeAll() catches Throwable per account. require_once is
+ * idempotent and safe across the cycles these classes form. */
+require_once __DIR__ . '/Heuristics.php';
+require_once __DIR__ . '/RealTimeMonitor.php';
+require_once __DIR__ . '/UserReport.php';
+require_once __DIR__ . '/Database.php';
+require_once __DIR__ . '/Logger.php';
+
 /**
  * ServerScrub — Malware Scanner Module
  * ClamAV + custom signature-based scanning

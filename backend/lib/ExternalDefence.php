@@ -29,6 +29,7 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/FirewallEngine.php';
 class ExternalDefence
 {
     /** Most of csf.deny / csf.allow we will read. Big enough for a real deny

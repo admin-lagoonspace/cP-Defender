@@ -1,4 +1,5 @@
 <?php
+
 /**
  * The one place a detection becomes a row in `threats`.
  *
@@ -26,6 +27,14 @@
 
 declare(strict_types=1);
 
+
+/* Pulls in what it uses, rather than trusting the caller to have done
+ * it. UserReport did not, and `serverscrub user-reports` died with
+ * Class "UserScanRequest" not found on all 132 accounts -- silently,
+ * because writeAll() catches Throwable per account. require_once is
+ * idempotent and safe across the cycles these classes form. */
+require_once __DIR__ . '/Verdicts.php';
+require_once __DIR__ . '/Database.php';
 class ThreatStore
 {
     /** Findings suppressed by a verdict this process, for the scan summary. */

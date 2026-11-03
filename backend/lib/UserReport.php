@@ -1,4 +1,25 @@
 <?php
+/* This class pulls in what it uses.
+ *
+ * It used to pull in nothing and rely on every caller having required the
+ * right things first. scheduler.php and user-scans.php did; the CLI did not,
+ * so `serverscrub user-reports` hit
+ *
+ *     Error: Class "UserScanRequest" not found
+ *
+ * inside build(), which writeAll() catches per account and counts as a skip.
+ * The CLI then reported "0 written, 132 skipped - accounts have no usable
+ * home directory", a cause it had invented, and every customer's report.json
+ * stayed frozen at whatever was last written.
+ *
+ * A class that depends on the caller's include list is a class that breaks
+ * whenever a new caller appears, and breaks silently when the caller catches
+ * Throwable. require_once is idempotent; this costs nothing.
+ */
+require_once __DIR__ . '/Database.php';
+require_once __DIR__ . '/Logger.php';
+require_once __DIR__ . '/UserScanRequest.php';
+
 /**
  * Per-user security reports for the cPanel-side plugin.
  *
