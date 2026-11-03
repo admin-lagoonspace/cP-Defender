@@ -125,6 +125,19 @@ trap cleanup EXIT
 
 command -v curl >/dev/null 2>&1 || die "curl not found"
 
+# Work from a directory this user can actually read.
+#
+# cdn-setup.sh starts this with `su -c`, which changes the user but NOT the
+# working directory, so the sync runs from root's home. find(1) saves its cwd
+# and restores it afterwards, and an unprivileged user cannot stat /root, so
+# every run printed two of these into the setup output:
+#
+#   find: Failed to restore initial working directory: /root: Permission denied
+#
+# Harmless, but it appears in the middle of a successful publish and reads
+# like a fault. SG_WORK is ours and always traversable.
+cd "$SG_WORK" 2>/dev/null || cd / 2>/dev/null || true
+
 fetch()    { curl -fsSL --max-time 30  -H 'Cache-Control: no-cache' "$1"; }
 fetch_to() { curl -fsSL --max-time 300 -o "$2" "$1"; }
 

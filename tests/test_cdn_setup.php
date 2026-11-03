@@ -424,3 +424,28 @@ t_contains($sh, "grep ' /home ' /proc/mounts",
 t_contains($sh, "Step 5 says 'different site' everywhere",
      'and the reading guide leads with that case, because it invalidates '
    . 'everything under it');
+
+// ── The sync runs from a directory it can read ─────────────────────────────
+//
+// cdn-setup.sh starts it with `su -c`, which changes the user but NOT the
+// working directory, so the sync ran from root's home. find(1) saves its cwd
+// and restores it afterwards, and an unprivileged user cannot stat /root, so
+// a successful publish printed two of these into the middle of its own
+// output:
+//
+//   find: Failed to restore initial working directory: /root: Permission denied
+//
+// Nothing was wrong. It appeared between "archived" and "published" and read
+// like a fault, in the one output an operator reads to decide whether the
+// setup worked.
+$sync = t_shell($repo . '/scripts/cdn-sync.sh');
+t_contains($sync, 'cd "$SG_WORK" 2>/dev/null || cd / 2>/dev/null || true',
+     'THE BORROWED CWD: the sync moves to a directory this user owns before '
+   . 'doing any work, so find(1) has somewhere it can return to');
+
+// The fallback matters: SG_WORK is created with mkdir -p, which can fail on a
+// full or read-only filesystem, and a cd that fails under `set -u` would
+// leave the script in the unreadable directory it was trying to leave.
+t_contains($sync, 'cd / 2>/dev/null || true',
+     'with / as a fallback, and never aborting on it — being in an awkward '
+   . 'directory is a cosmetic problem, not a reason to publish nothing');
