@@ -1230,23 +1230,55 @@ ENDREDIR
     SG_WEB_DIR="${INSTALL_DIR}/frontend"
   fi
 
-  # ── Write Apache alias config ──
-  APACHE_CONF="${APACHE_CONF_D}/serverscrub.conf"
-  info "Writing Apache alias config: ${APACHE_CONF}"
-  cat > "${APACHE_CONF}" << APACHEEOF
-# ServerScrub v${SG_VERSION} — Apache aliases
-# API alias MUST come before the root alias (more-specific path first)
+  # ── How much of /serverscrub should we claim? ───────────────────────────
+  #
+  # This file goes in conf.d, so it applies to EVERY vhost on the machine --
+  # every customer's site, not only ours. `Alias /serverscrub <dir>` therefore
+  # captures that URL path on all of them, and any account with a directory of
+  # that name in its docroot has those URLs silently served from our directory
+  # instead of theirs.
+  #
+  # It is not hypothetical. It is how serverscrub.com/serverscrub/code/
+  # returned 404 for six releases while the files sat on disk with correct
+  # ownership under a vhost with the correct DocumentRoot: the product was
+  # shadowing its own download URL and nothing about the files was wrong.
+  # (The CDN moved to /releases/ in 4.28.8; this is the other half.)
+  #
+  # On cPanel we need almost none of that reach. /serverscrub/ serves one
+  # static signpost that redirects to the WHM plugin -- it makes no API calls,
+  # and the dashboard's API candidates are all page-relative, so from
+  # /cgi/serverscrub/ they resolve under cpsrvd and never touch this alias.
+  # So match the exact path and nothing beneath it.
+  #
+  # Standalone is the opposite case: there is no cpsrvd, Apache IS the app
+  # server, and the whole subtree genuinely belongs to us.
+  if [[ "${INSTALL_MODE}" == "cpanel" ]]; then
+    read -r -d '' SG_ALIAS_SECTION <<ALIASEOF || true
+# cPanel: the ONLY thing at /serverscrub is a signpost page, so claim exactly
+# that path. A subtree alias here would shadow /serverscrub/* on every site
+# this server hosts.
+<IfModule mod_alias.c>
+  AliasMatch "^/serverscrub/?\$" "${SG_WEB_DIR}/index.html"
+</IfModule>
+ALIASEOF
+    SG_API_SECTION=""
+  else
+    read -r -d '' SG_ALIAS_SECTION <<ALIASEOF || true
+# Standalone: Apache is the application server, so the subtree is ours.
+# The API alias MUST come first — more-specific path wins.
 <IfModule mod_alias.c>
   Alias /serverscrub/backend/api ${INSTALL_DIR}/backend/api
   Alias /serverscrub             ${SG_WEB_DIR}
 </IfModule>
+ALIASEOF
+    read -r -d '' SG_API_SECTION <<APIEOF || true
 
 <Directory "${INSTALL_DIR}/backend/api">
   Options -Indexes -MultiViews
   AllowOverride FileInfo
   Require all granted
   DirectoryIndex index.php
-  <FilesMatch "\.php$">
+  <FilesMatch "\.php\$">
     SetHandler ${PHP_HANDLER}
   </FilesMatch>
   <IfModule mod_rewrite.c>
@@ -1255,7 +1287,20 @@ ENDREDIR
     RewriteRule ^ index.php [QSA,L]
   </IfModule>
 </Directory>
+APIEOF
+  fi
 
+  # ── Write Apache alias config ──
+  APACHE_CONF="${APACHE_CONF_D}/serverscrub.conf"
+  info "Writing Apache alias config: ${APACHE_CONF}"
+  cat > "${APACHE_CONF}" << APACHEEOF
+# ServerScrub v${SG_VERSION} — Apache aliases (install mode: ${INSTALL_MODE})
+#
+# This file is in conf.d and so applies to every vhost on this machine. What
+# it claims of the URL space is deliberately as small as the install mode
+# allows — see install.sh for why.
+${SG_ALIAS_SECTION}
+${SG_API_SECTION}
 <Directory "${INSTALL_DIR}/backend">
   Options -Indexes
   AllowOverride None
