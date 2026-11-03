@@ -306,13 +306,45 @@ elif [[ -n "$FORCE_URL" ]]; then
     warn "No checksum available for a direct URL — integrity will NOT be verified."
 
 else
-    # ── Fetch the manifest, walking each channel in turn (with retries) ────────
+    # ── Fetch the manifest from every channel and take the NEWEST ─────────────
+    #
+    # This used to stop at the first channel that answered. That was right
+    # while a broken channel 404d -- it fell through to the next one. It is
+    # wrong when a channel answers with STALE data: the updater believes it,
+    # reports "Already up to date", and every server stays pinned to an old
+    # version with nothing to indicate why.
+    #
+    # Which is exactly what happened. The CDN's sync died before writing its
+    # manifest, so the CDN served v4.28.9 while GitHub had v4.28.10, and the
+    # updater never asked GitHub because the CDN had already replied. A
+    # channel that fails loudly is safe; a channel that is confidently wrong
+    # is not.
+    #
+    # So: ask all of them, keep the highest version, and say so when they
+    # disagree -- a mirror falling behind is worth knowing about.
     info "Checking releases channel for latest version…"
     API_RETRIES=2
     API_WAIT=4
     MANIFEST_JSON=""
     ACTIVE_BASE=""
+    BEST_VER=""
+    CHANNEL_REPORT=()
+
+    # Highest-version test, needed here as well as below. `_is_newer` is
+    # defined further down and cannot be used before the manifest exists.
+    _ver_gt() {
+        local a="${1%%-*}" b="${2%%-*}"
+        [[ "$a" == "$b" ]] && return 1
+        [[ "$(printf '%s\n%s\n' "$b" "$a" | sort -V | tail -1)" == "$a" ]]
+    }
+
     for BASE in "${CHANNELS[@]}"; do
+        # Once a channel has answered, the rest are cross-checks. Probing them
+        # with the full retry budget would add ~8s per dead channel to every
+        # update, so they get one quick attempt.
+        if [[ -n "$MANIFEST_JSON" ]]; then
+            API_RETRIES=1
+        fi
         # latest/VERSION is the extracted build the channel is actually serving.
         # Six bytes, and it cannot disagree with what is on disk there, so it is
         # used to cross-check the manifest below.
@@ -320,14 +352,15 @@ else
         # manifest below. A missing latest/VERSION is normal on a channel that
         # serves only dist/, and must never stop the update. THIS LINE, without
         # its `|| true`, is what silently killed the updater on a live server.
-        LIVE_VER="$(curl -fsSL --max-time 10 "${BASE}/latest/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
-        [[ -n "$LIVE_VER" ]] && info "  ${BASE}/latest/ reports v${LIVE_VER}"
+        THIS_LIVE="$(curl -fsSL --max-time 10 "${BASE}/latest/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ -n "$THIS_LIVE" ]] && info "  ${BASE}/latest/ reports v${THIS_LIVE}"
 
         info "  Trying: ${BASE}/latest.json"
+        THIS_JSON=""
         for attempt in $(seq 1 $API_RETRIES); do
             [[ $attempt -gt 1 ]] && { warn "  Retrying in ${API_WAIT}s (${attempt}/${API_RETRIES})…"; sleep $API_WAIT; }
             CURL_ERR_FILE="${TMP_DIR}/curl_err.txt"
-            if MANIFEST_JSON="$(curl -fsSL --max-time 15 \
+            if THIS_JSON="$(curl -fsSL --max-time 15 \
                     -H 'Cache-Control: no-cache' \
                     "${BASE}/latest.json" 2>"$CURL_ERR_FILE")"; then
                 break
@@ -335,17 +368,41 @@ else
                 CURL_EXIT=$?
                 CURL_ERR="$(cat "$CURL_ERR_FILE" 2>/dev/null || true)"
                 warn "  curl exit ${CURL_EXIT}: ${CURL_ERR}"
-                MANIFEST_JSON=""
+                THIS_JSON=""
             fi
         done
-        if [[ -n "$MANIFEST_JSON" ]]; then
+
+        if [[ -z "$THIS_JSON" ]]; then
+            warn "Channel unreachable, trying next…"
+            continue
+        fi
+
+        THIS_VER="$(echo "$THIS_JSON" | grep -oP '"version"\s*:\s*"\K[^"]+' | head -1 || true)"
+        [[ -n "$THIS_VER" ]] || THIS_VER="$THIS_LIVE"
+        CHANNEL_REPORT+=("${BASE} → v${THIS_VER:-unparseable}")
+
+        if [[ -z "$MANIFEST_JSON" ]] || { [[ -n "$THIS_VER" ]] && _ver_gt "$THIS_VER" "$BEST_VER"; }; then
+            MANIFEST_JSON="$THIS_JSON"
             ACTIVE_BASE="$BASE"
             DIST_BASE="${BASE}/dist"
-            ok "Channel reachable: ${BASE}"
-            break
+            BEST_VER="$THIS_VER"
+            LIVE_VER="$THIS_LIVE"
         fi
-        warn "Channel unreachable, trying next…"
     done
+
+    # A mirror serving an older build than another is not fatal -- we just
+    # took the newer one -- but it is the symptom of a sync that has stopped,
+    # and nothing else on the server would ever mention it.
+    if [[ ${#CHANNEL_REPORT[@]} -gt 1 ]]; then
+        _distinct="$(printf '%s\n' "${CHANNEL_REPORT[@]}" | sed 's/.*→ //' | sort -u | wc -l || true)"
+        if [[ "$_distinct" -gt 1 ]]; then
+            warn "Channels disagree about the latest version:"
+            for _r in "${CHANNEL_REPORT[@]}"; do warn "    ${_r}"; done
+            warn "  Using the newest. A channel behind the others has a stalled sync."
+        fi
+    fi
+
+    [[ -n "$ACTIVE_BASE" ]] && ok "Channel used: ${ACTIVE_BASE} (v${BEST_VER})"
 
     if [[ -z "$MANIFEST_JSON" ]]; then
         err "Cannot reach ANY releases channel."

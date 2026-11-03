@@ -39,6 +39,18 @@ import os
 import re
 import sys
 
+# Windows consoles default to cp1252, and this script prints source
+# lines verbatim -- update.sh is full of arrows and box drawing. A
+# UnicodeEncodeError here killed the run WHILE REPORTING a finding,
+# so the first offending line containing a non-ASCII character hid
+# every finding after it, and the exit code said 'crashed' rather
+# than 'found problems'.
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 GREEN = "\033[0;32m"
