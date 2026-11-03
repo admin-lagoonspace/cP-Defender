@@ -396,6 +396,16 @@ class Database {
         if (!in_array('requested_by', $jobCols)) {
             $db->exec("ALTER TABLE scan_jobs ADD COLUMN requested_by TEXT NOT NULL DEFAULT ''");
         }
+        // Why a scan stopped.
+        //
+        // Every row said 'cancelled' and nothing said by what. A nightly
+        // /home scan killed by our own updater looked identical to one an
+        // operator stopped deliberately, so a scan log full of "cancelled"
+        // could not be read at all -- and the real answer (the updater stops
+        // every scan, on every update) stayed invisible for months.
+        if (!in_array('stop_reason', $jobCols)) {
+            $db->exec("ALTER TABLE scan_jobs ADD COLUMN stop_reason TEXT NOT NULL DEFAULT ''");
+        }
 
         // Where a quarantined file went, and when it may be deleted. The sweep
         // needs the exact path: guessing it from the threat's original name

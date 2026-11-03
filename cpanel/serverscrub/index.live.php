@@ -863,7 +863,18 @@ $renderLogsCard = function () use ($scanRows, $live, $liveStatus, $polling, $rep
             <td class="dimc"><?= e(ago($started)) ?></td>
             <td class="<?= $byCls ?>"><?= e($byTxt) ?></td>
             <td><?= e($j['scan_type'] ?? '') ?></td>
-            <td><span class="tag <?= $scls ?>"><?= e($status) ?></span></td>
+            <td>
+              <?php /* A log full of "cancelled" with nothing saying by what
+                       cannot be read. Our own updater stops every running
+                       scan, which looked exactly like somebody cancelling
+                       one on purpose. */ ?>
+              <span class="tag <?= $scls ?>"
+                    <?= !empty($j['stop_reason'])
+                        ? 'title="' . e($j['stop_reason']) . '"' : '' ?>><?= e($status) ?></span>
+              <?php if (!empty($j['stop_reason'])): ?>
+                <div class="dimc" style="font-size:.7rem"><?= e($j['stop_reason']) ?></div>
+              <?php endif; ?>
+            </td>
             <td class="hide-sm"><?= number_format((int)($j['files_scanned'] ?? 0)) ?></td>
             <?php
             /* A number with nothing behind it was the complaint: you could be

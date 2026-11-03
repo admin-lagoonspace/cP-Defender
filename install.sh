@@ -2089,8 +2089,26 @@ require_once '${INSTALL_DIR}/backend/config/config.php';
 require_once '${INSTALL_DIR}/backend/lib/Database.php';
 require_once '${INSTALL_DIR}/backend/lib/Logger.php';
 require_once '${INSTALL_DIR}/backend/lib/Scanner.php';
-\$r = Scanner::stopAllScans();
+// Remember what was running, so the update can put it back.
+//
+// This used to stop every scan and walk away. update.sh runs this installer
+// on every update, so each update silently killed the nightly /home scan --
+// which is why a scan log can be almost entirely "cancelled" with nothing
+// saying by what. On a server taking several updates in a day, the nightly
+// scan never completed once.
+//
+// Stopping is still right: an upgrade replaces the code underneath a
+// detached worker. Losing the scan is not.
+\$live = [];
+foreach (Scanner::liveScans() as \$j) {
+    \$live[] = ['path' => (string) \$j['scan_path'],
+                'type' => (string) \$j['scan_type'],
+                'by'   => (string) (\$j['requested_by'] ?? '')];
+}
+\$r = Scanner::stopAllScans('stopped by the ${SG_VERSION} update');
 echo \$r['message'] . PHP_EOL;
+file_put_contents('${INSTALL_DIR}/logs/.resume-scans.json', json_encode(\$live));
+echo count(\$live) . PHP_EOL;
 STOPEOF
 if _SG_STOP_OUT="$("$SG_PHP" "$_SG_STOPALL" 2>&1)"; then
   ok "  ${_SG_STOP_OUT}"

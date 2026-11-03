@@ -542,7 +542,8 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
             $limit = max(1, min(200, (int) ($q['limit'] ?? 50)));
             return ['success' => true, 'data' => Database::fetchAll(
                 "SELECT id, scan_type, status, scan_path, started_at, finished_at,
-                        files_scanned, threats_found, requested_by, ignore_backup
+                        files_scanned, threats_found, requested_by, ignore_backup,
+                        stop_reason
                    FROM scan_jobs
                   ORDER BY COALESCE(started_at, created_at) DESC
                   LIMIT {$limit}")];

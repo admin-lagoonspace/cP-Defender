@@ -196,12 +196,25 @@ t_ok(strpos($worker, 'if (!$workerPgid) {') === false,
 // running the OLD code against a database the installer has just migrated,
 // still holding their clamscan processes.
 $install = file_get_contents($repo . '/install.sh');
-t_contains($install, 'Scanner::stopAllScans()',
-    'the installer stops running scans during an upgrade');
-$stopPos  = strpos($install, 'Scanner::stopAllScans()');
-$cronPos  = strpos($install, 'Installing cron');
+t_contains($install, "Scanner::stopAllScans('stopped by the",
+    'the installer stops running scans during an upgrade, AND says so on the '
+  . 'row — every stopped scan read as a bare "cancelled", so our own updater '
+  . 'killing the nightly sweep looked exactly like an operator doing it');
+$stopPos = strpos($install, 'Scanner::stopAllScans(');
 t_ok($stopPos !== false,
     'and does so as its own step rather than leaving them to the new scheduler');
+
+// Stopping is right; losing the scan is not. update.sh runs this installer on
+// every update, so without this the nightly /home sweep died on each one and
+// never completed on a day with several releases.
+t_contains($install, "file_put_contents('\${INSTALL_DIR}/logs/.resume-scans.json'",
+    'THE LOST SWEEP: what was running is recorded before it is stopped');
+$upd = file_get_contents($repo . '/update.sh');
+t_contains($upd, 'section "Resuming interrupted scans"',
+    'and the update starts them again when it is done');
+t_contains($upd, 'continue 2;',
+    'skipping any path that is already scanning again, because several '
+  . 'workers on one tree is how six clamscans came to run at once');
 t_contains($install, 'rm -f /tmp/serverscrub/scan.lock.',
     'stale slot locks are cleared too');
 

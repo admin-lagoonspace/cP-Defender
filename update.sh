@@ -1019,6 +1019,74 @@ else
 fi
 
 # ── Update version in DB so dashboard shows correct version immediately ───────
+# ── Put back the scans this update stopped ───────────────────────────────────
+#
+# install.sh stops every running scan before replacing the code underneath it,
+# which is right -- a detached worker running half-old code against a migrated
+# database is worse than a stopped one. Walking away afterwards is not.
+#
+# update.sh runs install.sh on every update, so each update silently killed
+# whatever was scanning. On a server taking several updates in a day the
+# nightly /home scan never finished once, and the scan log filled with
+# "cancelled" rows that said nothing about who had cancelled them.
+#
+# The scheduled sweep is the one that matters here: nobody is sitting in front
+# of it, so nobody notices it never ran.
+section "Resuming interrupted scans"
+_SG_RESUME="${INSTALL_DIR}/logs/.resume-scans.json"
+if [[ -s "$_SG_RESUME" ]]; then
+    _SG_RESUME_PHP="${TMP_DIR:-/tmp}/sg-resume.php"
+    cat > "$_SG_RESUME_PHP" <<RESUMEEOF
+<?php
+define('SG_API', true);
+require_once '${INSTALL_DIR}/backend/config/config.php';
+require_once '${INSTALL_DIR}/backend/lib/Database.php';
+require_once '${INSTALL_DIR}/backend/lib/Logger.php';
+require_once '${INSTALL_DIR}/backend/lib/Scanner.php';
+
+\$list = json_decode((string) @file_get_contents('${_SG_RESUME}'), true);
+if (!is_array(\$list) || !\$list) { echo "nothing to resume" . PHP_EOL; exit(0); }
+
+// Only one scan per path. Several workers on the same tree is how this
+// server ended up with six clamscans at once.
+\$seen = [];
+\$n = 0;
+foreach (\$list as \$j) {
+    \$path = (string) (\$j['path'] ?? '');
+    if (\$path === '' || isset(\$seen[\$path])) { continue; }
+    \$seen[\$path] = true;
+
+    // Do not stack on top of something already running again.
+    foreach (Scanner::liveScans() as \$live) {
+        if ((string) \$live['scan_path'] === \$path) { continue 2; }
+    }
+
+    try {
+        \$scanner = new Scanner();
+        \$id = \$scanner->startScan(\$path, (string) (\$j['type'] ?? 'full'), false,
+                                   (string) (\$j['by'] ?? '@schedule'));
+        Logger::info('Resumed scan of ' . \$path . ' as job ' . \$id
+                   . ' after the update that stopped it');
+        \$n++;
+    } catch (Throwable \$e) {
+        // A refusal here is normal: max concurrency, a backup window, or an
+        // unlicensed install. Say so rather than failing the update.
+        echo "  could not resume " . \$path . ": " . \$e->getMessage() . PHP_EOL;
+    }
+}
+echo \$n . " scan(s) resumed" . PHP_EOL;
+RESUMEEOF
+    if _SG_RESUME_OUT="$(php "$_SG_RESUME_PHP" 2>&1)"; then
+        ok "  ${_SG_RESUME_OUT}"
+    else
+        warn "  Could not resume the stopped scan(s): ${_SG_RESUME_OUT}"
+        warn "  The next scheduled run will cover it."
+    fi
+    rm -f "$_SG_RESUME_PHP" "$_SG_RESUME"
+else
+    info "  No scans were interrupted by this update"
+fi
+
 section "Finalising"
 php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; Database::setSetting('update_available', '0'); Database::setSetting('update_latest_ver', '${LATEST_VERSION}'); echo 'Update state cleared.' . PHP_EOL;" 2>/dev/null || true
 

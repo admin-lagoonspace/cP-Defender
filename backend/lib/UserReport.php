@@ -330,7 +330,8 @@ class UserReport
         // job over one home counts for that account only.
         $scans = self::safeFetch(
             "SELECT id, scan_type, status, started_at, finished_at,
-                    files_scanned, threats_found, scan_path, requested_by
+                    files_scanned, threats_found, scan_path, requested_by,
+                    stop_reason
                FROM scan_jobs
               WHERE scan_path = ? OR scan_path = ? OR ? LIKE scan_path || '%'
               ORDER BY COALESCE(started_at, created_at) DESC

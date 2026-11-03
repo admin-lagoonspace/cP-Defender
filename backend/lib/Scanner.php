@@ -340,12 +340,12 @@ class Scanner {
      * at a time means finding six job ids first. This is the cleanup path:
      * used by the installer, the CLI, and the dashboard.
      */
-    public static function stopAllScans(): array
+    public static function stopAllScans(string $reason = ''): array
     {
         $stopped = [];
         $failed  = [];
         foreach (self::liveScans() as $job) {
-            $r = self::stopScan((int) $job['id']);
+            $r = self::stopScan((int) $job['id'], $reason);
             if (!empty($r['success'])) { $stopped[] = (int) $job['id']; }
             else { $failed[] = (int) $job['id']; }
         }
@@ -1912,7 +1912,7 @@ This file was removed and not kept. Restore it from your backups
      *      clamscan running -- it would finish the batch it was given, which on
      *      a large file can take a while.
      */
-    public static function stopScan(?int $jobId = null): array
+    public static function stopScan(?int $jobId = null, string $reason = ''): array
     {
         $job = $jobId !== null
             ? Database::fetchOne('SELECT * FROM scan_jobs WHERE id=?', [$jobId])
@@ -1960,8 +1960,8 @@ This file was removed and not kept. Restore it from your backups
         }
 
         Database::query(
-            "UPDATE scan_jobs SET status='cancelled', finished_at=? WHERE id=?",
-            [time(), $id]
+            "UPDATE scan_jobs SET status='cancelled', finished_at=?, stop_reason=? WHERE id=?",
+            [time(), $reason !== '' ? $reason : 'stopped by request', $id]
         );
         self::publishUserStatus($id);
 

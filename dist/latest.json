@@ -1,7 +1,7 @@
 {
-  "version": "4.29.8",
-  "url": "https://serverscrub.com/releases/dist/serverscrub-4.29.8.zip",
-  "mirror": "https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/dist/serverscrub-4.29.8.zip",
-  "sha256": "68ddf1e488f945ffa4f3ebd2da13fb8d5f55262ddaad381f9b7e511d3e9e4db2",
-  "notes": "https://github.com/admin-lagoonspace/cP-Defender/blob/main/dist/notes-4.29.8.md"
+  "version": "4.29.9",
+  "url": "https://serverscrub.com/releases/dist/serverscrub-4.29.9.zip",
+  "mirror": "https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/dist/serverscrub-4.29.9.zip",
+  "sha256": "00cebfc26f94cd9242bf93ec2ec87d0705bdfc340d469e489fe75b98ca8e2cd3",
+  "notes": "https://github.com/admin-lagoonspace/cP-Defender/blob/main/dist/notes-4.29.9.md"
 }

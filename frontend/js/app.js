@@ -1419,7 +1419,14 @@ async function loadScanJobs() {
       '<td style="color:' + whoColor + '">' + esc(who) + '</td>' +
       '<td>' + esc(j.scan_type || '') + '</td>' +
       '<td class="mono" title="' + esc(path) + '">' + esc(scope) + '</td>' +
-      '<td style="color:' + (COLOR[j.status] || 'var(--txt3)') + '">' + esc(j.status || '') + '</td>' +
+      // "cancelled" with nothing behind it is unreadable: our own updater
+      // stops every running scan, and that looked identical to an operator
+      // stopping one on purpose.
+      '<td style="color:' + (COLOR[j.status] || 'var(--txt3)') + '"' +
+        (j.stop_reason ? ' title="' + esc(j.stop_reason) + '"' : '') + '>' +
+        esc(j.status || '') +
+        (j.stop_reason ? ' <span class="dim" style="font-size:.72rem">(' + esc(j.stop_reason) + ')</span>' : '') +
+      '</td>' +
       '<td>' + Number(j.files_scanned || 0).toLocaleString() + '</td>' +
       '<td>' + threatCountCell(j) + '</td>' +
       '<td class="dim">' + esc(took) + '</td>' +
