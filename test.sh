@@ -177,20 +177,47 @@ if [[ -d /usr/local/cpanel ]]; then
     /etc/httpd/conf.d/serverscrub.conf; do
     if [[ -f "$CANDIDATE" ]]; then
       pass "Apache config: $CANDIDATE"
-      grep -q "RewriteRule" "$CANDIDATE" \
-        && pass "  mod_rewrite rules present in Apache config" \
-        || fail "  mod_rewrite MISSING from Apache config — Re-run install.sh"
-      grep -q "SetHandler" "$CANDIDATE" \
-        && pass "  PHP SetHandler present in Apache config" \
-        || fail "  PHP SetHandler MISSING — PHP won't execute in aliased dir. Re-run install.sh"
+
+      # What this file SHOULD contain depends on the install mode, and this
+      # check did not know that. It demanded RewriteRule and SetHandler in
+      # both modes; both live in the <Directory> block for the aliased API,
+      # which cPanel installs stopped emitting in 4.28.9 -- correctly, since
+      # there the dashboard runs under cpsrvd and nothing routes to an
+      # aliased PHP directory at all.
+      #
+      # So two tests failed on a perfectly healthy install and told the
+      # operator to re-run install.sh, which would have written the same
+      # file again. A check that cannot be satisfied is worse than no check.
+      if [[ "${INSTALL_MODE}" == "cpanel" ]]; then
+        # The alias must claim the signpost path and nothing beneath it:
+        # this file is in conf.d and applies to every vhost on the machine,
+        # so a subtree alias shadows /serverscrub/* on every hosted site.
+        grep -q 'AliasMatch "\^/serverscrub/?\$"' "$CANDIDATE" \
+          && pass "  alias matches the exact path only (no subtree)" \
+          || fail "  exact-path AliasMatch MISSING — Re-run install.sh"
+        grep -qE '^[[:space:]]*Alias[[:space:]]+/serverscrub[[:space:]]' "$CANDIDATE" \
+          && fail "  SUBTREE alias present — it shadows /serverscrub/* on every hosted site" \
+          || pass "  no subtree alias, so customer URLs are not shadowed"
+      else
+        grep -q "RewriteRule" "$CANDIDATE" \
+          && pass "  mod_rewrite rules present in Apache config" \
+          || fail "  mod_rewrite MISSING from Apache config — Re-run install.sh"
+        grep -q "SetHandler" "$CANDIDATE" \
+          && pass "  PHP SetHandler present in Apache config" \
+          || fail "  PHP SetHandler MISSING — PHP won't execute in aliased dir. Re-run install.sh"
+      fi
       break
     fi
   done
 
-  # .htaccess in API dir
-  [[ -f "${INSTALL_DIR}/backend/api/.htaccess" ]] \
-    && pass ".htaccess present in API dir (fallback URL routing)" \
-    || warn ".htaccess not in API dir — ensure mod_rewrite is in Apache config"
+  # .htaccess in API dir — only meaningful where Apache serves the API.
+  if [[ "${INSTALL_MODE}" == "cpanel" ]]; then
+    pass ".htaccess in API dir not required (cpsrvd serves the dashboard)"
+  else
+    [[ -f "${INSTALL_DIR}/backend/api/.htaccess" ]] \
+      && pass ".htaccess present in API dir (fallback URL routing)" \
+      || warn ".htaccess not in API dir — ensure mod_rewrite is in Apache config"
+  fi
 
   # AppConfig contents check (/var/cpanel/apps/ copy written by register_appconfig)
   if [[ -f "$APPCONF" ]]; then

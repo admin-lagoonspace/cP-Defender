@@ -279,6 +279,43 @@ ob_start();
 
   .sscrub .tile .t { color:var(--dim); font-size:.68rem; margin-top:2px; }
 
+  /* A dialog with no script behind it.
+   *
+   * This page is server-rendered on purpose, and this is the one place that
+   * wanted a popup. :target does it: the link is an ordinary anchor, the
+   * dialog is a sibling that shows when the URL fragment names it, and the
+   * close control is a link back to '#'. With scripting off it still opens,
+   * and the back button still closes it. */
+  .sscrub .ss-dlg {
+    display:none; position:fixed; inset:0; z-index:9000;
+    align-items:center; justify-content:center;
+    background:rgba(15,23,42,.55); padding:18px;
+  }
+  .sscrub .ss-dlg:target { display:flex; }
+  .sscrub .ss-dlg-box {
+    background:#fff; border:1px solid var(--line); border-radius:12px;
+    width:100%; max-width:720px; max-height:84vh;
+    display:flex; flex-direction:column; box-shadow:0 18px 60px rgba(0,0,0,.28);
+  }
+  .sscrub .ss-dlg-head {
+    display:flex; align-items:center; gap:10px;
+    padding:13px 16px; border-bottom:1px solid var(--line); font-weight:700;
+  }
+  .sscrub .ss-dlg-body { padding:14px 16px; overflow:auto; }
+  .sscrub .ss-dlg-foot {
+    padding:11px 16px; border-top:1px solid var(--line); text-align:right;
+  }
+  .sscrub .ss-find {
+    border:1px solid var(--line); border-radius:9px;
+    padding:11px 12px; margin-bottom:9px;
+  }
+  .sscrub .ss-find .p { font-family:ui-monospace,monospace; font-size:.8rem;
+                        word-break:break-all; margin-bottom:7px; }
+  .sscrub .ss-find .g { display:grid; gap:7px; font-size:.75rem;
+                        grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); }
+  .sscrub .ss-dlg-x { margin-left:auto; text-decoration:none; color:var(--dim);
+                      font-size:1.1rem; line-height:1; }
+
   @media (max-width:760px) {
     .sscrub .ss-head { gap:10px; }
     .sscrub .ss-tabs { margin-left:0; width:100%; }
@@ -694,11 +731,255 @@ $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
  * The buffered chrome is discarded rather than sent: this is a fragment, not
  * a page, and the LiveAPI header must not be wrapped around it.
  */
-if (($_GET['card'] ?? '') === 'scan') {
+/* ── The scan log, shown on its own tab ──────────────────────────────────────
+ *
+ * A closure rather than inline markup because the poller below re-reads it:
+ * a scan that is running has to be able to change this table without the
+ * reader pressing anything, exactly as it changes the card on Home.
+ */
+$renderLogsCard = function () use ($scanRows, $live, $liveStatus, $polling, $report) {
+?>
+
+  <div class="card" id="ss-logs" data-poll="<?= $polling ? '1' : '0' ?>">
+    <h2>Scanner logs</h2>
+    <?php
+      /* The live scan belongs in the log it is a log of.
+       *
+       * $scanRows comes out of report.json, which the privileged side rebuilds
+       * hourly. A customer who pressed "Scan my account", watched the Home
+       * card count files, then opened this page, found no row for the scan
+       * they were at that moment running -- and would not have found one for
+       * up to an hour. A log that cannot show you the thing you just did is
+       * not a log.
+       *
+       * scan-status.json is the one current thing this page can read, so the
+       * job it describes is merged in at the top. It is matched by job id, not
+       * appended: once the hourly rebuild catches up the same scan is in both,
+       * and it must not appear twice.
+       *
+       * triggered_by is 'you' here, and that is not a guess -- the privileged
+       * side writes this file ONLY for a scan this account requested.
+       * publishUserStatus() returns early for '' and for anything beginning
+       * with '@'. */
+      /* Read BEFORE the table, because the Threats cell decides whether to
+       * link from it. Deciding that from the count instead was the bug: the
+       * count comes out of the report row and the dialog comes out of this
+       * map, and on a report written before 4.29.0 the map is absent while
+       * the count is not. The link then pointed at a #fragment with no
+       * element behind it, so clicking it set the URL and did nothing
+       * whatsoever -- which is exactly what it looked like.
+       *
+       * Null here means "this report predates per-scan detail", which is a
+       * different thing from "this scan found nothing", and only the first
+       * should suppress the link while still showing the number. */
+      $allFinds = $report['scan_threats'] ?? null;
+
+      $logRows = $scanRows;
+      $liveJob = (int) ($live['job'] ?? 0);
+      if ($liveJob > 0 && $liveStatus !== '') {
+          $seen = false;
+          foreach ($logRows as $i => $r) {
+              if ((int) ($r['id'] ?? 0) !== $liveJob) { continue; }
+              $seen = true;
+              // The report's copy of a running job is older than the file's.
+              $logRows[$i] = array_merge($r, [
+                  'status'        => $liveStatus,
+                  'files_scanned' => (int) ($live['files_scanned'] ?? 0),
+                  'threats_found' => (int) ($live['threats_found'] ?? 0),
+                  'finished_at'   => (int) ($live['finished_at'] ?? 0),
+                  'triggered_by'  => 'you',
+              ]);
+              break;
+          }
+          if (!$seen) {
+              array_unshift($logRows, [
+                  'id'            => $liveJob,
+                  'scan_type'     => (string) ($live['scan_type'] ?? 'quick'),
+                  'status'        => $liveStatus,
+                  'started_at'    => (int) ($live['started_at'] ?? 0),
+                  'finished_at'   => (int) ($live['finished_at'] ?? 0),
+                  'files_scanned' => (int) ($live['files_scanned'] ?? 0),
+                  'threats_found' => (int) ($live['threats_found'] ?? 0),
+                  'triggered_by'  => 'you',
+              ]);
+          }
+      }
+    ?>
+    <?php if (!$logRows): ?>
+      <div class="ok">
+        No scan has covered your account yet. Scans are scheduled by your hosting
+        provider, and you can request one from the Virus scanner page.
+      </div>
+    <?php else: ?>
+      <table>
+        <thead><tr>
+          <th>Started</th><th>Started by</th><th>Type</th><th>Status</th>
+          <th class="hide-sm">Files</th><th>Threats</th><th class="hide-sm">Took</th>
+        </tr></thead>
+        <tbody>
+        <?php foreach ($logRows as $j):
+          $started  = (int)($j['started_at'] ?? 0);
+          $finished = (int)($j['finished_at'] ?? 0);
+          $found    = (int)($j['threats_found'] ?? 0);
+          $status   = (string)($j['status'] ?? '');
+          /* 'done' is the status this product writes; 'completed' is not a
+           * status it has ever used. A finished clean scan was therefore
+           * rendered in the same grey as "cancelled" and "error", so every row
+           * in the table looked equally unremarkable -- including the good
+           * ones, which are the reason to look. */
+          $scls     = $status === 'done' ? 'green'
+                    : (in_array($status, ['running', 'pending', 'cancelling'], true) ? 'amber'
+                    : ($status === 'error' || $status === 'interrupted' ? 'red' : 'dimc'));
+          /* A running scan has no finished_at, so measuring against it leaves
+           * the one row anybody is actually watching as the one row with no
+           * duration on it. Live rows are measured against now. */
+          $until    = $finished > $started ? $finished
+                    : (in_array($status, ['running', 'pending', 'cancelling'], true)
+                       ? time() : 0);
+          $secs     = ($started > 0 && $until > $started) ? $until - $started : 0;
+          $dur      = !$secs ? '—'
+                    : ($secs < 60 ? $secs . 's'
+                    : ($secs < 3600 ? intdiv($secs, 60) . 'm'
+                    : intdiv($secs, 3600) . 'h ' . intdiv($secs % 3600, 60) . 'm'));
+
+          /* Who started it.
+           *
+           * Asked for after this table was read and nothing distinguished the
+           * nightly server sweep from a scan the account owner asked for --
+           * every row said "full" and none said who. The label is computed on
+           * the privileged side; the raw account name never reaches here,
+           * because a scan of /home shows up in every customer's log and the
+           * name on it may not be theirs. */
+          $byMap = [
+              'you'      => ['You',                     ''],
+              'schedule' => ['Nightly scan',            'dimc'],
+              'provider' => ['Your hosting provider',   'dimc'],
+              'unknown'  => ['—',                       'dimc'],
+          ];
+          [$byTxt, $byCls] = $byMap[(string)($j['triggered_by'] ?? 'unknown')]
+                             ?? $byMap['unknown'];
+        ?>
+          <tr>
+            <td class="dimc"><?= e(ago($started)) ?></td>
+            <td class="<?= $byCls ?>"><?= e($byTxt) ?></td>
+            <td><?= e($j['scan_type'] ?? '') ?></td>
+            <td><span class="tag <?= $scls ?>"><?= e($status) ?></span></td>
+            <td class="hide-sm"><?= number_format((int)($j['files_scanned'] ?? 0)) ?></td>
+            <?php
+            /* A number with nothing behind it was the complaint: you could be
+             * told a scan found three things in your account and had no way
+             * to learn which files, or what became of them.
+             *
+             * The link is offered only when the dialog is actually rendered
+             * below, so the two cannot disagree. A dead anchor is worse than
+             * a plain number: it looks clickable, consumes the click, and
+             * leaves the reader thinking the page is broken. */
+            $jdid   = (int) ($j['id'] ?? 0);
+            $jfinds = is_array($allFinds) ? ($allFinds[$jdid] ?? []) : null;
+            if (is_array($jfinds)) { $found = count($jfinds); }
+          ?>
+          <td>
+            <?php if ($found > 0 && !empty($jfinds)): ?>
+              <a class="red" style="font-weight:600"
+                 href="#sst-<?= $jdid ?>"
+                 title="Show the files this scan flagged in your account"><?= $found ?></a>
+            <?php elseif ($found > 0): ?>
+              <?php /* Counted, but no stored detail: an older report, or rows
+                       cleared since. Say so on hover rather than linking to
+                       nothing. */ ?>
+              <span class="red" title="Detail for this scan is not in the current report yet"><?= $found ?></span>
+            <?php else: ?>
+              <span class="green">0</span>
+            <?php endif; ?>
+          </td>
+            <td class="hide-sm dimc"><?= e($dur) ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+
+      <?php
+        /* One dialog per scan that found something in THIS account.
+         *
+         * Rendered with the table rather than fetched: the data is already in
+         * the report this page was built from, so there is nothing to ask for
+         * and nothing that can fail. It is also why this works with scripting
+         * switched off.
+         *
+         * scan_threats is scoped to this account on the privileged side -- a
+         * /home sweep covers every customer on the server, and its other
+         * findings are not ours to show. See UserReport::build(). */
+        $whatMap  = [
+            'quarantined' => ['Quarantined - moved out of your account', 'amber'],
+            'deleted'     => ['Deleted', 'red'],
+            'cleaned'     => ['Cleaned', 'green'],
+            'ignored'     => ['Reviewed and judged safe', 'dimc'],
+            'restored'    => ['Restored to its original place', 'dimc'],
+            'active'      => ['Still in place - not yet actioned', 'red'],
+        ];
+        foreach ($logRows as $j):
+          $jid   = (int) ($j['id'] ?? 0);
+          $finds = is_array($allFinds) ? ($allFinds[$jid] ?? []) : [];
+          if (!$finds) { continue; }
+      ?>
+        <div class="ss-dlg" id="sst-<?= $jid ?>" role="dialog" aria-modal="true">
+          <div class="ss-dlg-box">
+            <div class="ss-dlg-head">
+              <span>What this scan found in your account</span>
+              <a class="ss-dlg-x" href="#" aria-label="Close">&#10005;</a>
+            </div>
+            <div class="ss-dlg-body">
+              <div class="dimc" style="font-size:.76rem;margin-bottom:10px">
+                Scan started <?= e(ago((int) ($j['started_at'] ?? 0))) ?> &middot;
+                <?= count($finds) ?> finding(s)
+              </div>
+              <?php foreach ($finds as $f):
+                $st = strtolower((string) ($f['status'] ?? 'active'));
+                [$wTxt, $wCls] = $whatMap[$st] ?? [($st ?: 'unknown'), 'dimc'];
+                $sev  = strtolower((string) ($f['severity'] ?? ''));
+                $sCls = ($sev === 'critical' || $sev === 'high') ? 'red'
+                      : ($sev === 'medium' ? 'amber' : 'dimc');
+              ?>
+                <div class="ss-find">
+                  <div class="p"><?= e($f['relative_path'] ?? $f['file_path'] ?? '') ?></div>
+                  <div class="g">
+                    <div><span class="dimc">Detected as</span><br>
+                         <?= e($f['threat_name'] ?? $f['threat_type'] ?? 'unknown') ?></div>
+                    <div><span class="dimc">Severity</span><br>
+                         <span class="<?= $sCls ?>"><?= e($f['severity'] ?? '?') ?></span></div>
+                    <div><span class="dimc">What happened</span><br>
+                         <span class="<?= $wCls ?>"><?= e($wTxt) ?></span></div>
+                    <div><span class="dimc">Found</span><br>
+                         <?= e(ago((int) ($f['detected_at'] ?? 0))) ?></div>
+                  </div>
+                  <?php if (!empty($f['action_taken'])): ?>
+                    <div class="dimc" style="font-size:.73rem;margin-top:7px">
+                      <?= e($f['action_taken']) ?>
+                    </div>
+                  <?php endif; ?>
+                </div>
+              <?php endforeach; ?>
+              <div class="dimc" style="font-size:.73rem">
+                Only findings inside your own account are listed. A scan may
+                have covered other accounts on this server as well.
+              </div>
+            </div>
+            <div class="ss-dlg-foot"><a href="#">Close</a></div>
+          </div>
+        </div>
+      <?php endforeach; ?>
+    <?php endif; ?>
+  </div>
+<?php
+};
+
+$CARDS = ['scan' => $renderScanCard, 'logs' => $renderLogsCard];
+$want  = (string) ($_GET['card'] ?? '');
+if (isset($CARDS[$want])) {
     while (ob_get_level() > 0) { ob_end_clean(); }
     header('Content-Type: text/html; charset=utf-8');
     header('Cache-Control: no-store');
-    $renderScanCard();
+    $CARDS[$want]();
     exit;
 }
 
@@ -789,64 +1070,8 @@ $renderThreats = function (array $rows) {
 <?php /* ── SCANNER LOGS ─────────────────────────────────────────────────── */ ?>
 <?php elseif ($tab === 'logs'): ?>
 
-  <div class="card">
-    <h2>Scanner logs</h2>
-    <?php if (!$scanRows): ?>
-      <div class="ok">
-        No scan has covered your account yet. Scans are scheduled by your hosting
-        provider, and you can request one from the Virus scanner page.
-      </div>
-    <?php else: ?>
-      <table>
-        <thead><tr>
-          <th>Started</th><th>Started by</th><th>Type</th><th>Status</th>
-          <th class="hide-sm">Files</th><th>Threats</th><th class="hide-sm">Took</th>
-        </tr></thead>
-        <tbody>
-        <?php foreach ($scanRows as $j):
-          $started  = (int)($j['started_at'] ?? 0);
-          $finished = (int)($j['finished_at'] ?? 0);
-          $found    = (int)($j['threats_found'] ?? 0);
-          $status   = (string)($j['status'] ?? '');
-          $scls     = $status === 'completed' ? 'green'
-                    : ($status === 'running' || $status === 'pending' ? 'amber' : 'dimc');
-          $dur      = ($started > 0 && $finished > $started)
-                    ? ($finished - $started < 60
-                        ? ($finished - $started) . 's'
-                        : intdiv($finished - $started, 60) . 'm')
-                    : '—';
+  <?php $renderLogsCard(); ?>
 
-          /* Who started it.
-           *
-           * Asked for after this table was read and nothing distinguished the
-           * nightly server sweep from a scan the account owner asked for --
-           * every row said "full" and none said who. The label is computed on
-           * the privileged side; the raw account name never reaches here,
-           * because a scan of /home shows up in every customer's log and the
-           * name on it may not be theirs. */
-          $byMap = [
-              'you'      => ['You',                     ''],
-              'schedule' => ['Nightly scan',            'dimc'],
-              'provider' => ['Your hosting provider',   'dimc'],
-              'unknown'  => ['—',                       'dimc'],
-          ];
-          [$byTxt, $byCls] = $byMap[(string)($j['triggered_by'] ?? 'unknown')]
-                             ?? $byMap['unknown'];
-        ?>
-          <tr>
-            <td class="dimc"><?= e(ago($started)) ?></td>
-            <td class="<?= $byCls ?>"><?= e($byTxt) ?></td>
-            <td><?= e($j['scan_type'] ?? '') ?></td>
-            <td><span class="tag <?= $scls ?>"><?= e($status) ?></span></td>
-            <td class="hide-sm"><?= number_format((int)($j['files_scanned'] ?? 0)) ?></td>
-            <td class="<?= $found ? 'red' : 'green' ?>"><?= $found ?></td>
-            <td class="hide-sm dimc"><?= e($dur) ?></td>
-          </tr>
-        <?php endforeach; ?>
-        </tbody>
-      </table>
-    <?php endif; ?>
-  </div>
 
 <?php /* ── CMS THREATS ──────────────────────────────────────────────────── */ ?>
 <?php elseif ($tab === 'cms'): ?>
@@ -994,60 +1219,82 @@ $renderThreats = function (array $rows) {
 <?php endif; ?>
 
 <script>
-/* Keep the scan card current.
+/* Keep the live regions current.
  *
- * The card renders its own answer: data-poll="1" means something is moving and
+ * A region renders its own answer: data-poll="1" means something is moving and
  * is worth re-reading. The replacement carries the same attribute, so the loop
  * stops by itself the moment the scan finishes -- there is no state here
  * deciding when to give up, and nothing to get out of step with the markup.
  *
- * Everything degrades: with scripting off the card is still correct on load,
- * the buttons are real form submits, and the only thing lost is that it
- * stops moving on its own.
+ * There are two such regions and they are on different tabs: the scan card on
+ * Home and Virus scanner, and the scan log. Only the one actually in the page
+ * is asked for, by its own id. Polling a card that is not on screen would
+ * fetch a tab the reader is not looking at.
+ *
+ * Everything degrades: with scripting off every region is still correct on
+ * load, the buttons are real form submits, and the only thing lost is that
+ * they stop moving on their own.
  */
 (function () {
   var EVERY = 5000, MAX = 60 * 60 * 1000, began = Date.now(), armed = false;
 
+  /* The id of each live region, and the card= value that renders just it. */
+  var REGIONS = { 'ss-scan': 'scan', 'ss-logs': 'logs' };
+
   /* One timer, ever. Coming back to the tab asks for an immediate read, and
    * without this that would start a second chain alongside the first -- then
-   * a third, until the card is being re-read several times a second. */
+   * a third, until the page is being re-read several times a second. */
   function arm(ms) {
     if (armed) { return; }
     armed = true;
     setTimeout(function () { armed = false; tick(); }, ms);
   }
 
-  function url() {
+  function url(card) {
     var u = new URL(window.location.href);
-    u.searchParams.set('card', 'scan');
+    u.searchParams.set('card', card);
     /* Cancels and scan requests are POSTs. Re-reading must not repeat one. */
     return u.toString();
   }
 
-  function tick() {
-    var card = document.getElementById('ss-scan');
-    if (!card || card.getAttribute('data-poll') !== '1') { return; }
-    if (Date.now() - began > MAX) { return; }
+  /* Every region that is both present and still moving. */
+  function live() {
+    var out = [];
+    for (var id in REGIONS) {
+      var el = document.getElementById(id);
+      if (el && el.getAttribute('data-poll') === '1') { out.push(id); }
+    }
+    return out;
+  }
 
-    /* Nothing is read while the tab is in the background. The scan carries on
-     * server-side either way, and the card is refreshed on the way back. */
-    if (document.hidden) { arm(EVERY); return; }
-
-    fetch(url(), { credentials: 'same-origin', headers: { 'X-Requested-With': 'fetch' } })
+  function refresh(id) {
+    return fetch(url(REGIONS[id]), {
+        credentials: 'same-origin', headers: { 'X-Requested-With': 'fetch' } })
       .then(function (r) { return r.ok ? r.text() : null; })
       .then(function (html) {
         if (!html) { return; }
         var box = document.createElement('div');
         box.innerHTML = html;
-        var fresh = box.querySelector('#ss-scan');
-        var now   = document.getElementById('ss-scan');
-        /* A response without the card means something is wrong at the other
+        var fresh = box.querySelector('#' + id);
+        var now   = document.getElementById(id);
+        /* A response without the region means something is wrong at the other
          * end -- a session that has expired, most likely. Leaving what is on
          * screen is better than blanking it. */
         if (fresh && now) { now.replaceWith(fresh); }
       })
-      .catch(function () { /* A dropped request is not worth a message. */ })
-      .then(function () { arm(EVERY); });
+      .catch(function () { /* A dropped request is not worth a message. */ });
+  }
+
+  function tick() {
+    var ids = live();
+    if (!ids.length) { return; }
+    if (Date.now() - began > MAX) { return; }
+
+    /* Nothing is read while the tab is in the background. The scan carries on
+     * server-side either way, and the page is refreshed on the way back. */
+    if (document.hidden) { arm(EVERY); return; }
+
+    Promise.all(ids.map(refresh)).then(function () { arm(EVERY); });
   }
 
   document.addEventListener('visibilitychange', function () {

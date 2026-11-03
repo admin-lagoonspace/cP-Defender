@@ -161,3 +161,45 @@ $syncRaw = (string) file_get_contents($repo . '/scripts/cdn-sync.sh');
 t_contains($syncRaw, "THE PATH IS 'releases', NOT 'serverscrub/code'. Do not move it back.",
      'and the reason is written beside the setting, because the mistake is '
    . 'invisible on any machine that does not host both');
+
+// ── The commit has to contain what the zip contains ────────────────────────
+//
+// make-release.sh packages from the WORKING TREE, so whatever is on disk is
+// what customers get. The commit is supposed to cover the same thing, and
+// twice it has not:
+//
+//   v4.6.0   two new library modules shipped and were never committed.
+//            Fixed by enumerating SRC_TREES.
+//   v4.28.0+ that enumeration omitted cpanel/ and test.sh, so the customer
+//            plugin's index.live.php sat uncommitted since v4.27.0 while six
+//            releases shipped changes to it -- the scan log, the Started-by
+//            column, the threat dialog. The zips were right; the repository
+//            was not, so a fresh clone would build a product missing all of
+//            it.
+//
+// Enumerating is the bug, not the particular list. Ask the artifact instead.
+t_contains($pub, 'SRC_TREES=(backend frontend whm scripts tests cpanel)',
+     'cpanel/ — the entire customer-facing plugin — is staged with the rest '
+   . 'of the source');
+t_contains($pub, 'upgrade.sh get.sh test.sh',
+     'and test.sh, which update.sh copies onto every server');
+
+t_contains($pub, 'while IFS= read -r _zp; do',
+     'THE LIST THAT KEEPS BEING WRONG: every path inside the built zip is '
+   . 'checked against the repository, so a forgotten directory cannot let a '
+   . 'release claim source it does not contain');
+t_contains($pub, 'done < <(unzip -Z1 "$ZIP" 2>/dev/null || true)',
+     'read from the artifact that is actually about to ship');
+t_contains($pub, 'err "These files are IN THE ZIP but not in the commit:"',
+     'and the release is refused rather than warned about');
+
+// The test that matters: staged is fine, worktree-dirty is not.
+t_contains($pub, 'if [[ -n "$_st" && "${_st:1:1}" != " " ]]; then',
+     'THE FALSE POSITIVE: it looks at the WORKING TREE column, not at '
+   . 'whether porcelain printed anything. A staged file reads as "M " and is '
+   . 'about to be committed; failing on that would refuse every release, '
+   . 'which is how a guard gets switched off');
+
+// A guard that silently does nothing is the theme of this whole file.
+t_contains($pub, 'warn "unzip not available — cannot verify the commit covers what shipped."',
+     'and when the check cannot run it says so, instead of passing quietly');

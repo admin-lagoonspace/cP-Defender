@@ -17,6 +17,15 @@
 
 set -euo pipefail
 
+# Every assignment below that reads from a pipeline carries `|| true`.
+#
+# Under `set -e` plus pipefail an assignment takes the pipeline's exit
+# status, so one failing stage ends the release silently and part-way, with
+# no message at all -- the exact failure this project was already bitten by
+# in update.sh on 2026-10-20. Each of these is followed by an emptiness
+# check, so the code was written expecting an empty value; the shell options
+# were quietly defeating that intent.
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 info() { echo -e "${CYAN}[*]${NC} $*"; }
 ok()   { echo -e "${GREEN}[+]${NC} $*"; }
@@ -32,7 +41,7 @@ TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 
 # ── Resolve owner/repo from origin ─────────────────────────────────────────────
 ORIGIN_URL="$(git config --get remote.origin.url)"
-SLUG="$(printf '%s' "$ORIGIN_URL" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')"
+SLUG="$(printf '%s' "$ORIGIN_URL" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##' || true)"
 [[ "$SLUG" == */* ]] || die "Could not parse owner/repo from origin: $ORIGIN_URL"
 info "Repository: ${BOLD}${SLUG}${NC}"
 
@@ -66,7 +75,7 @@ ZIP="dist/serverscrub-${VER}.zip"
 [[ -f "$ZIP" ]] || die "Build did not produce ${ZIP}"
 # update.sh reads latest.json from the repo ROOT
 cp -f "dist/latest.json" "latest.json"
-SHA="$(sha256sum "$ZIP" | awk '{print $1}')"
+SHA="$(sha256sum "$ZIP" | awk '{print $1}' || true)"
 ok "Built ${ZIP} ($(wc -c < "$ZIP") bytes), sha256 ${SHA:0:16}…"
 
 # ── 2. Clean known junk so it never gets committed ─────────────────────────────
@@ -77,7 +86,7 @@ find dist -maxdepth 1 -name 'serverscrub-*.zip' -size 0 -delete 2>/dev/null || t
 # ── 3. Stage exactly the release files ─────────────────────────────────────────
 info "Staging files…"
 STAGE_LIST=(
-  VERSION CHANGELOG.md install.sh uninstall.sh update.sh upgrade.sh get.sh
+  VERSION CHANGELOG.md install.sh uninstall.sh update.sh upgrade.sh get.sh test.sh
   backend/config/config.php backend/cli/serverscrub.php
   frontend/index.html whm/serverscrub.conf whm/serverscrub.png
   scripts/make-release.sh scripts/publish.sh scripts/extract-notes.sh
@@ -103,13 +112,76 @@ git add -u install.sh uninstall.sh update.sh 2>/dev/null || true
 # what customers get. The commit therefore has to cover the same trees, or the
 # tag is a lie about what shipped. Untracked files are included deliberately:
 # a brand-new module is exactly the thing that went missing.
-SRC_TREES=(backend frontend whm scripts tests)
+# cpanel/ was missing from this list, which is the whole customer-facing
+# plugin. Its index.live.php had not been committed since v4.27.0 while
+# six releases shipped changes to it -- the scan log, the Started-by
+# column, the threat dialog. The zips were correct; the repository was
+# not, so a fresh clone would have built a product missing all of it.
+SRC_TREES=(backend frontend whm scripts tests cpanel)
 for d in "${SRC_TREES[@]}"; do [[ -d "$d" ]] && git add -A -- "$d"; done
 
-SRC_STAGED=$(git diff --cached --name-only -- "${SRC_TREES[@]}" | wc -l | tr -d ' ')
+SRC_STAGED=$(git diff --cached --name-only -- "${SRC_TREES[@]}" | wc -l | tr -d ' ' || true)
 if [[ "$SRC_STAGED" -gt 0 ]]; then
     info "Staging ${SRC_STAGED} source file(s) the zip was built from:"
     git diff --cached --name-only -- "${SRC_TREES[@]}" | sed 's/^/      /'
+fi
+
+# ── Does the commit actually cover what the zip contains? ────────────────────
+#
+# Both lists above are hand-maintained, and both have been wrong. v4.6.0
+# shipped two library modules that were never committed; the fix was to
+# enumerate SRC_TREES, which then omitted cpanel/ and test.sh for six
+# releases. Enumerating is the bug, not the specific list.
+#
+# So stop trusting the lists and ask the artifact. make-release.sh packages
+# from the WORKING TREE, so every path inside the zip is a path customers
+# receive. If any of them is dirty or untracked after staging, the tag is
+# about to claim something the repository does not contain.
+# A guard that quietly does nothing when a tool is missing is not a guard.
+# Say so, because the release still goes out and somebody has to know the
+# check did not happen.
+if [[ ! -f "$ZIP" ]]; then
+    warn "No zip at ${ZIP} — cannot verify the commit covers what shipped."
+elif ! command -v unzip >/dev/null 2>&1; then
+    warn "unzip not available — cannot verify the commit covers what shipped."
+fi
+if [[ -f "$ZIP" ]] && command -v unzip >/dev/null 2>&1; then
+    _unstaged=""
+    while IFS= read -r _zp; do
+        # Paths inside the archive are prefixed with serverscrub/ and mirror
+        # the repo. Directories and the generated dist/ tree are not source.
+        _rp="${_zp#serverscrub/}"
+        [[ -z "$_rp" || "$_rp" == */ ]] && continue
+        case "$_rp" in dist/*|database/*|logs/*|quarantine/*) continue ;; esac
+        [[ -e "$_rp" ]] || continue
+        # porcelain is "XY path": X is the index, Y is the working tree.
+        #
+        # Any output at all is NOT the test. A file that is staged reads as
+        # "M " and is about to be committed -- treating that as a failure
+        # refuses every release, which is how a guard gets switched off.
+        #
+        # What matters is the working tree column: if Y is not a space the
+        # file on disk differs from what will be committed, and the zip was
+        # built from the disk. "??" has Y="?" and is caught by the same test.
+        _st="$(git status --porcelain -- "$_rp" 2>/dev/null | head -1 || true)"
+        if [[ -n "$_st" && "${_st:1:1}" != " " ]]; then
+            _unstaged="${_unstaged}    ${_rp}  [${_st:0:2}]
+"
+        fi
+    done < <(unzip -Z1 "$ZIP" 2>/dev/null || true)
+
+    if [[ -n "$_unstaged" ]]; then
+        echo ""
+        err "These files are IN THE ZIP but not in the commit:"
+        printf '%s' "$_unstaged"
+        echo ""
+        echo -e "  The tag would claim a source tree that does not contain what"
+        echo -e "  shipped. Add them to SRC_TREES or STAGE_LIST in this script,"
+        echo -e "  or stage them by hand, and run again."
+        echo ""
+        exit 1
+    fi
+    ok "Every file in the zip is committed"
 fi
 
 if git diff --cached --quiet; then
@@ -158,8 +230,8 @@ elif [[ -n "$TOKEN" ]]; then
         -H "X-GitHub-Api-Version: 2022-11-28" \
         -H "Accept: application/vnd.github+json" \
         "https://api.github.com/repos/${SLUG}/releases" -d "$BODY")"
-    UPLOAD_URL="$(printf '%s' "$RESP" | sed -n 's/.*"upload_url":[[:space:]]*"\([^{"]*\).*/\1/p')"
-    REL_HTML="$(printf '%s' "$RESP"   | sed -n 's/.*"html_url":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    UPLOAD_URL="$(printf '%s' "$RESP" | sed -n 's/.*"upload_url":[[:space:]]*"\([^{"]*\).*/\1/p' || true)"
+    REL_HTML="$(printf '%s' "$RESP"   | sed -n 's/.*"html_url":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 || true)"
     [[ -n "$UPLOAD_URL" ]] || die "Release creation failed: $(printf '%s' "$RESP" | head -c 300)"
     ok "Release created: ${REL_HTML}"
     # Attach the zip as a release asset (optional but nice for the Releases page)
