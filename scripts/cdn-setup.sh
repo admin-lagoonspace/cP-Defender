@@ -12,7 +12,7 @@
 #
 # The five-command version of this setup hard-codes a docroot:
 #
-#     /home/serversc/public_html/serverscrub/code
+#     /home/serversc/public_html/releases
 #
 # which is right only if serverscrub.com is that account's MAIN domain. If it
 # is an addon or a subdomain, cPanel put its docroot somewhere else, and
@@ -34,7 +34,7 @@ set -uo pipefail
 
 ACCT="${SG_CDN_ACCOUNT:-serversc}"
 DOMAIN="${SG_CDN_DOMAIN:-serverscrub.com}"
-SUBPATH="${SG_CDN_SUBPATH:-serverscrub/code}"
+SUBPATH="${SG_CDN_SUBPATH:-releases}"
 REPO="${SG_REPO:-admin-lagoonspace/cP-Defender}"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 

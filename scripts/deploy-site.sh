@@ -10,7 +10,7 @@
 # It does two separate things, because the domain serves two separate things:
 #
 #   1. The marketing site        -> /home/serversc/public_html/
-#   2. The download directory    -> /home/serversc/public_html/serverscrub/code/
+#   2. The download directory    -> /home/serversc/public_html/releases/
 #
 # The second is what every installed server fetches updates from, so this
 # script never deletes anything underneath it. Wiping a docroot that other
@@ -29,7 +29,7 @@ CP_USER="${SG_CP_USER:-serversc}"
 DOMAIN="${SG_DOMAIN:-serverscrub.com}"
 HOME_DIR="/home/${CP_USER}"
 DOCROOT="${HOME_DIR}/public_html"
-CODE_DIR="${DOCROOT}/serverscrub/code"
+CODE_DIR="${DOCROOT}/releases"
 REPO_RAW="https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/website"
 
 [[ $EUID -eq 0 ]] || die "run as root"
@@ -92,7 +92,7 @@ if [[ -f "${CODE_DIR}/latest.json" ]]; then
   ok "Download directory present: ${CODE_DIR} (latest.json found, left untouched)"
 else
   warn "Download directory is EMPTY: ${CODE_DIR}"
-  warn "  Until latest.json and dist/ are there, https://${DOMAIN}/serverscrub/code/"
+  warn "  Until latest.json and dist/ are there, https://${DOMAIN}/releases/"
   warn "  serves nothing and installs fall back to the GitHub mirror."
   warn "  Populate it with scripts/cdn-sync.sh (see its header)."
 fi
@@ -112,7 +112,7 @@ done
 echo
 ok "Done."
 echo "   Site:      https://${DOMAIN}/"
-echo "   Downloads: https://${DOMAIN}/serverscrub/code/"
+echo "   Downloads: https://${DOMAIN}/releases/"
 echo
 echo "   If TLS is not valid yet, issue it with:"
 echo "     /usr/local/cpanel/bin/autossl_check --user=${CP_USER}"

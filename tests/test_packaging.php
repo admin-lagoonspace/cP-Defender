@@ -274,7 +274,7 @@ $repoRoot = dirname(__DIR__);
 
 foreach (['get.sh', 'update.sh', 'upgrade.sh', 'backend/lib/UpdateChecker.php'] as $f) {
     $src = (string) file_get_contents($repoRoot . '/' . $f);
-    t_contains($src, 'https://serverscrub.com/serverscrub/code',
+    t_contains($src, 'https://serverscrub.com/releases',
          $f . ' points at the product\'s own domain');
 }
 
@@ -289,7 +289,7 @@ t_ok($cdnAt !== false, 'and the new host is first, so it is the one that is actu
 
 // The CDN-side scripts follow the account, not just the domain.
 $sync = (string) file_get_contents($repoRoot . '/scripts/cdn-sync.sh');
-t_contains($sync, '/home/serversc/public_html/serverscrub/code',
+t_contains($sync, '/home/serversc/public_html/releases',
      'the sync script writes into the new account\'s docroot');
 t_ok(strpos($sync, '/home/lwss1') === false, 'and no path still names the old account');
 

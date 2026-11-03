@@ -186,7 +186,7 @@ fi
 # account: every serverscrub.com URL 404d and every install silently fell back
 # to the GitHub mirror, for release after release, because nothing in the
 # release ever looked. One HTTP request settles it.
-CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/serverscrub/code}"
+CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/releases}"
 CDN_ACCT="${SG_CDN_ACCOUNT:-serversc}"
 info "Checking the CDN…"
 # No -f. With it, curl exits non-zero on a 404, the `|| echo 000` fires as

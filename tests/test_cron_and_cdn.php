@@ -107,10 +107,57 @@ foreach ([
 // that then names some other account's home is worse than no advice.
 t_contains($pub, 'CDN_ACCT="${SG_CDN_ACCOUNT:-serversc}"',
      'the account the CDN is served from is named once');
-t_contains($pub, 'CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/serverscrub/code}"',
+t_contains($pub, 'CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/releases}"',
      'and matches the URL the updater reads');
 
 $uc = (string) file_get_contents($repo . '/backend/lib/UpdateChecker.php');
-t_contains($uc, "'https://serverscrub.com/serverscrub/code'",
+t_contains($uc, "'https://serverscrub.com/releases'",
      'which is the same base the product itself checks for updates — a probe '
    . 'against a different URL than the one that matters proves nothing');
+
+// ── The product was shadowing its own download URL ──────────────────────────
+//
+// serverscrub.com/serverscrub/code/latest.json returned 404 for six releases
+// while the file sat on disk with the right owner and mode, under a vhost
+// with the right DocumentRoot, reachable by a fingerprinted probe. Nothing
+// about the file, the directory or the vhost was wrong.
+//
+// install.sh writes /etc/apache2/conf.d/serverscrub.conf containing
+//
+//     Alias /serverscrub  ${SG_WEB_DIR}
+//
+// and conf.d applies to EVERY vhost on the machine. So any URL starting
+// /serverscrub/ is served from the plugin's directory and never reaches
+// public_html -- on any server that both runs ServerScrub and hosts the CDN,
+// which is exactly one machine: ours.
+//
+// The download path therefore must not begin with /serverscrub.
+$ins = t_shell($repo . '/install.sh');
+t_contains($ins, 'Alias /serverscrub             ${SG_WEB_DIR}',
+     'install.sh still installs the server-wide alias this is about');
+
+foreach ([
+    'scripts/publish.sh', 'scripts/cdn-sync.sh', 'scripts/cdn-setup.sh',
+    'update.sh', 'upgrade.sh', 'get.sh', 'backend/lib/UpdateChecker.php',
+    'latest.json',
+] as $f) {
+    // Comments stripped first. The explanation of this very bug names the old
+    // URL, and reading the raw file made the test fail on its own prose --
+    // the fourth time that trap has been sprung in this suite.
+    $ext  = pathinfo($f, PATHINFO_EXTENSION);
+    $body = $ext === 'sh'  ? t_shell($repo . '/' . $f)
+          : ($ext === 'php' ? t_code($repo . '/' . $f)
+          : (string) file_get_contents($repo . '/' . $f));
+    t_ok(strpos($body, 'serverscrub.com/serverscrub/') === false,
+         'THE SELF-COLLISION: ' . $f . ' does not serve downloads from a URL '
+       . 'beginning /serverscrub — our own Apache alias owns that path on '
+       . 'every vhost, so the file is never reached however correct it is');
+}
+
+// And the reason is recorded where someone tidying paths would see it.
+// Raw, not comment-stripped: the note IS a comment, and that is the point --
+// it has to be readable by whoever opens the file to tidy the path.
+$syncRaw = (string) file_get_contents($repo . '/scripts/cdn-sync.sh');
+t_contains($syncRaw, "THE PATH IS 'releases', NOT 'serverscrub/code'. Do not move it back.",
+     'and the reason is written beside the setting, because the mistake is '
+   . 'invisible on any machine that does not host both');

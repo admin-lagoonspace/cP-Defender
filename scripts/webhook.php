@@ -19,7 +19,7 @@
  *      chmod 600 /home/serversc/.sg-webhook-secret
  * 3. Copy this file to  <docroot>/webhook.php
  * 4. GitHub → repo → Settings → Webhooks → Add webhook
- *      Payload URL : https://serverscrub.com/serverscrub/code/webhook.php
+ *      Payload URL : https://serverscrub.com/releases/webhook.php
  *      Content type: application/json
  *      Secret      : <the same secret>
  *      Events      : "Let me select individual events" → Releases  (and Pushes

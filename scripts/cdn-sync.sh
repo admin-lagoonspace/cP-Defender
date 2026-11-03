@@ -30,7 +30,23 @@
 set -uo pipefail
 
 # ── Config (override via environment) ─────────────────────────────────────────
-DOCROOT="${SG_DOCROOT:-/home/serversc/public_html/serverscrub/code}"
+#
+# THE PATH IS 'releases', NOT 'serverscrub/code'. Do not move it back.
+#
+# install.sh writes /etc/apache2/conf.d/serverscrub.conf, which contains
+#
+#     Alias /serverscrub  ${SG_WEB_DIR}
+#
+# in conf.d -- so it applies to EVERY vhost on the machine, including the one
+# hosting the CDN. Any URL beginning /serverscrub/ is therefore served out of
+# the plugin's own directory and never reaches public_html at all.
+#
+# That is why serverscrub.com/serverscrub/code/latest.json returned 404 for
+# six releases while the file sat on disk with correct ownership and
+# permissions, under a vhost with the correct DocumentRoot: the product was
+# shadowing its own download URL, and only on a server that both runs
+# ServerScrub and hosts the CDN -- which is one machine, ours.
+DOCROOT="${SG_DOCROOT:-/home/serversc/public_html/releases}"
 REPO="${SG_REPO:-admin-lagoonspace/cP-Defender}"
 BRANCH="${SG_BRANCH:-main}"
 SRC="https://raw.githubusercontent.com/${REPO}/${BRANCH}"

@@ -221,7 +221,7 @@ fi
 # ── Manifest ──────────────────────────────────────────────────────────────────
 # Primary download is our own CDN (no API limits, reachable when GitHub is
 # firewalled); get.sh/update.sh fall back to the GitHub raw mirror on failure.
-CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/serverscrub/code}"
+CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/releases}"
 DL_URL="${CDN_BASE}/dist/${ZIP_NAME}"
 MIRROR_URL="https://raw.githubusercontent.com/${RELEASES_REPO}/${RELEASES_BRANCH}/dist/${ZIP_NAME}"
 # Notes point at THIS version's notes, not the full history. A user opening the
