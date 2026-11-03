@@ -844,6 +844,19 @@ class Scanner {
     /** Directories that are never worth scanning. */
     private const SCAN_SKIP_DIRS = [
         'node_modules', '.git', '.svn', 'cache', '.cache', 'proc', 'sys', 'dev',
+        // THE BIND-MOUNTED COPIES. Absent here until 4.29.8, while
+        // getPhpFiles() had pruned them for a long time -- two walks over the
+        // same tree with two different ideas of what to skip.
+        //
+        // cPanel jailshell bind-mounts a copy of the filesystem under
+        // /home/virtfs for EVERY account, so walking /home here scanned every
+        // customer's files once per account: on this server, 118 times over.
+        // It is why a /home scan ran for fifteen hours and reported 121
+        // threats, and why the one finding in the database had the path
+        // /home/virtfs/... -- attributed to an "account" called virtfs, which
+        // does not exist, so it appeared on nobody's page and could not be
+        // acted on by anyone.
+        'virtfs', '.snapshot', '.zfs', '.trash', '.cagefs',
         // Our own working directories, by name as well as by resolved path.
         //
         // The path check below is the precise one, but it depends on the
@@ -1263,8 +1276,14 @@ class Scanner {
      *    whole-filesystem scan.
      */
     private function getPhpFiles(string $path): Generator {
-        $prune = '#(?:^|/)(?:virtfs|\.snapshot|\.zfs|\.trash|\.cagefs|'
-               . 'node_modules|\.git)(?:/|$)#';
+        // Built from SCAN_SKIP_DIRS so the two walks cannot disagree again.
+        // They already had: this regex pruned virtfs and walkFiles() did not,
+        // and the walk that fed ClamAV was the one without it.
+        $prune = '#(?:^|/)(?:'
+               . implode('|', array_map(
+                     static function (string $d): string { return preg_quote($d, '#'); },
+                     self::SCAN_SKIP_DIRS))
+               . ')(?:/|$)#i';
         try {
             $it = new RecursiveIteratorIterator(
                 new RecursiveDirectoryIterator(
