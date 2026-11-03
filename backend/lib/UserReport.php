@@ -389,6 +389,18 @@ class UserReport
         if ($jobIds) {
             $in = self::inClause($jobIds);
             if ($in !== null) {
+                // inClause() returns [placeholders, values] POSITIONALLY, and
+                // the placeholders are bare "?,?,?" with no IN(...) around
+                // them. Read as $in['sql'] / $in['params'] it yields null and
+                // an empty array, so the query became
+                //
+                //     WHERE scan_job_id  AND (cpanel_user = ? OR ...)
+                //
+                // -- a syntax error, on every account, which safeFetch turned
+                // into a skip. "0 written, 132 skipped": every customer's
+                // report frozen, and the page silently serving whatever was
+                // last written before 4.29.0.
+                [$ph, $jobArgs] = $in;
                 // Bounded: 25 scans are listed, and a single bad night can
                 // produce thousands of findings. This is written into every
                 // account's home on a schedule.
@@ -396,11 +408,11 @@ class UserReport
                     "SELECT scan_job_id, file_path, threat_name, threat_type,
                             severity, status, detected_at, action_taken
                        FROM threats
-                      WHERE scan_job_id " . $in['sql'] . "
+                      WHERE scan_job_id IN (" . $ph . ")
                         AND (cpanel_user = ? OR file_path LIKE ?)
                       ORDER BY detected_at DESC
                       LIMIT 200",
-                    array_merge($in['params'], [$user, $prefix . '%'])
+                    array_merge($jobArgs, [$user, $prefix . '%'])
                 );
                 foreach ($rows as $t) {
                     $jid = (int) ($t['scan_job_id'] ?? 0);

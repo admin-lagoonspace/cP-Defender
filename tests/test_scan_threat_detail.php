@@ -169,3 +169,80 @@ t_contains($page, '$finds = is_array($allFinds) ? ($allFinds[$jid] ?? []) : [];'
 t_ok(substr_count($page, "\$report['scan_threats']") === 1,
      'which is read in exactly one place — two reads is how the cell and the '
    . 'dialog came to disagree in the first place');
+
+// ── RUN IT. Every test above this line reads source code. ──────────────────
+//
+// That is why this shipped: the per-scan findings query used inClause() as if
+// it returned ['sql' => ..., 'params' => ...]. It returns [placeholders,
+// values] positionally, and the placeholders are bare "?,?,?" with no IN()
+// around them. So build() raised two "Undefined array key" warnings and then
+//
+//     TypeError: array_merge(): Argument #1 must be of type array, null given
+//
+// writeAll() catches Throwable per account and counts it as a skip, so the
+// CLI reported "0 written, 132 skipped" and every customer's report.json
+// froze at whatever was last written before 4.29.0. The page kept serving the
+// stale file, so the threats link never appeared.
+//
+// A dozen assertions matched the source exactly as written and every one of
+// them passed, because the source was exactly what I wrote. Only calling the
+// function finds a call that cannot run.
+$job = Database::insert('scan_jobs', [
+    'scan_type'   => 'full',  'status'      => 'done',
+    'started_at'  => time() - 3600, 'finished_at' => time() - 60,
+    'scan_path'   => '/home', 'threats_found' => 2,
+    'requested_by' => '@schedule',
+]);
+Database::insert('threats', [
+    'scan_job_id' => $job, 'file_path' => '/home/sgdetail/public_html/shell.php',
+    'threat_name' => 'PHP.Webshell.Generic', 'threat_type' => 'webshell',
+    'severity'    => 'critical', 'status' => 'quarantined',
+    'detected_at' => time() - 1800, 'action_taken' => 'moved to quarantine',
+]);
+// Another account's finding from the SAME scan. A /home sweep covers every
+// customer, and this one must not reach sgdetail's report.
+Database::insert('threats', [
+    'scan_job_id' => $job, 'file_path' => '/home/someoneelse/public_html/x.php',
+    'threat_name' => 'PHP.Backdoor.Obfuscated', 'threat_type' => 'backdoor',
+    'severity'    => 'high', 'status' => 'deleted',
+    'detected_at' => time() - 1700, 'action_taken' => 'deleted',
+]);
+
+$built = null;
+$threw = null;
+try {
+    $built = UserReport::build('sgdetail', '/home/sgdetail');
+} catch (Throwable $e) {
+    $threw = get_class($e) . ': ' . $e->getMessage();
+}
+t_ok($threw === null,
+     'THE TEST THAT WAS MISSING: build() actually runs. It threw a TypeError '
+   . 'for every account on the server and nothing above this line noticed — '
+   . ($threw ?? 'no exception'));
+
+t_ok(is_array($built) && isset($built['scan_threats']),
+     'and returns the per-scan findings map');
+
+$mine = $built['scan_threats'][$job] ?? null;
+t_ok(is_array($mine) && count($mine) === 1,
+     'THE SCOPING, AS BEHAVIOUR: the scan found two things and exactly one '
+   . 'of them is in this account — asserting the SQL text could never have '
+   . 'shown that');
+t_ok(is_array($mine) && strpos((string) ($mine[0]['file_path'] ?? ''), '/home/sgdetail/') === 0,
+     'and it is the right one');
+
+// The count on the row must agree with the list, since the page links from
+// one and renders the other.
+$row = null;
+foreach (($built['scans'] ?? []) as $sc) {
+    if ((int) ($sc['id'] ?? 0) === (int) $job) { $row = $sc; break; }
+}
+t_ok($row !== null && (int) $row['threats_found'] === 1,
+     'the scan row reports 1, not the server-wide 2 — the number and the '
+   . 'list are the same fact');
+
+// writeFor() json_encodes this. A value json_encode refuses is another way
+// to produce a skip, and it would be just as silent.
+t_ok(json_encode($built, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) !== false,
+     'and the whole report encodes to JSON, which is what writeFor() does '
+   . 'before writing — a refusal there is another silent skip');
