@@ -277,26 +277,76 @@ if $DIAGNOSE; then
     # vhost for this Host at all, and the request is landing on the default
     # one. Those have entirely different fixes, and the first version of this
     # asked only about the file.
-    APORT=""
+    # WHICH VHOST IS ANSWERING. The question the first version skipped.
+    #
+    # Apache selects a vhost by IP:port FIRST and ServerName second. cPanel
+    # binds each account's vhost to that account's IP, so a request sent to
+    # 127.0.0.1 can match no vhost on that address at all and fall through to
+    # the DEFAULT one -- which happily answers 200 for / (the server's own
+    # page) and 404 for every other path.
+    #
+    # That is indistinguishable, by status code alone, from "Apache cannot
+    # see this directory". It produced exactly that reading on a live server:
+    # 200 for /, 404 for a brand-new file beside the working homepage, and a
+    # confident conclusion about bind mounts that was about the wrong vhost.
+    #
+    # So: send to the vhost's own IP, and fingerprint / to prove which site
+    # answered.
+    _vip="$(grep -hE '^ip:' "/var/cpanel/userdata/${ACCT}/${DOMAIN}" 2>/dev/null \
+            | head -1 | sed -E 's/^ip:[[:space:]]*//' || true)"
+    [[ "$_vip" =~ ^[0-9.]+$ ]] || _vip=""
+    echo "    vhost IP from cPanel: ${_vip:-unknown}"
+
+    # The public site is the reference: whatever answers / out there is the
+    # vhost we are trying to reach.
+    _pubmd5="$(curl -sS --max-time 20 "https://${DOMAIN}/" 2>/dev/null | md5sum 2>/dev/null | awk '{print $1}' || true)"
+    echo "    fingerprint of the real site's /: ${_pubmd5:0:12}"
+
+    APORT=""; AHOST=""
+    for _host in ${_vip} 127.0.0.1; do
     for _port in ${_aport} 8080 80; do
-        printf '    apache on :%-5s ' "$_port"
+        printf '    apache %-15s :%-5s ' "$_host" "$_port"
         _c="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-                   -H "Host: ${DOMAIN}" "http://127.0.0.1:${_port}${TARGET}" 2>/dev/null || true)"
+                   -H "Host: ${DOMAIN}" "http://${_host}:${_port}${TARGET}" 2>/dev/null || true)"
         [[ "$_c" =~ ^[0-9]{3}$ ]] || _c=000
         if [[ "$_c" == "000" ]]; then
-            echo "no answer on this port"
+            echo "no answer"
             continue
         fi
-        [[ -n "$APORT" ]] || APORT="$_port"
         _r="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-                   -H "Host: ${DOMAIN}" "http://127.0.0.1:${_port}/" 2>/dev/null || true)"
+                   -H "Host: ${DOMAIN}" "http://${_host}:${_port}/" 2>/dev/null || true)"
         [[ "$_r" =~ ^[0-9]{3}$ ]] || _r=000
-        echo "HTTP ${_c} for the file, HTTP ${_r} for /"
-        if [[ "$_c" == "404" && "$_r" == "404" ]]; then
-            warn "        Apache 404s the site root too — it has no working vhost"
-            warn "        for ${DOMAIN}; this is not about the published path."
+        _m="$(curl -sS --max-time 10 -H "Host: ${DOMAIN}" \
+                   "http://${_host}:${_port}/" 2>/dev/null | md5sum 2>/dev/null | awk '{print $1}' || true)"
+        _same="different site"
+        if [[ -n "$_pubmd5" && "$_m" == "$_pubmd5" ]]; then
+            _same="SAME site"
+            # Only a probe that reaches the real vhost is worth believing.
+            [[ -n "$APORT" ]] || { APORT="$_port"; AHOST="$_host"; }
         fi
+        echo "HTTP ${_c} for the file, HTTP ${_r} for / (${_same})"
     done
+    done
+
+    if [[ -z "$APORT" ]]; then
+        warn "    NOTHING REACHED THIS SITE'S VHOST."
+        warn "    Every probe above answered with a page that is not ${DOMAIN}'s"
+        warn "    home page, so each was served by some other vhost -- most"
+        warn "    likely the default one, which answers 200 for / and 404 for"
+        warn "    everything else. No conclusion about the published directory"
+        warn "    can be drawn from those numbers."
+        warn ""
+        warn "    What is listening, and which vhost is the default:"
+        if command -v httpd >/dev/null 2>&1 || command -v apachectl >/dev/null 2>&1; then
+            _hs="$(httpd -S 2>/dev/null || apachectl -S 2>/dev/null || true)"
+            printf '%s\n' "$_hs" | grep -iE "default server|${DOMAIN}|namevhost ${DOMAIN}" \
+              | head -8 | sed 's/^/        /'
+        else
+            warn "        (no httpd/apachectl on PATH to ask)"
+        fi
+    else
+        ok "    reached ${DOMAIN}'s own vhost at ${AHOST}:${APORT}"
+    fi
 
     # ── 5b. Is it this PATH, or everything Apache has not seen before? ───────
     #
@@ -323,8 +373,11 @@ if $DIAGNOSE; then
                 && chmod 644 "$1" 2>/dev/null; }
         _ask() {
             local c
+            # AHOST, not 127.0.0.1: the address that was PROVEN to reach this
+            # site's vhost, by fingerprint. Asking the loopback tests whatever
+            # vhost happens to own that address.
             c="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-                      -H "Host: ${DOMAIN}" "http://127.0.0.1:${APORT}$1" 2>/dev/null || true)"
+                      -H "Host: ${DOMAIN}" "http://${AHOST}:${APORT}$1" 2>/dev/null || true)"
             [[ "$c" =~ ^[0-9]{3}$ ]] || c=000
             printf '%s' "$c"
         }
@@ -356,19 +409,26 @@ if $DIAGNOSE; then
             warn "      grep -rn '${SUBPATH%%/*}' /etc/apache2/conf.d/userdata/ 2>/dev/null"
             warn "      grep -rn '${SUBPATH%%/*}' /etc/apache2/conf/httpd.conf"
         elif [[ "$_a" != "200" ]]; then
-            warn "    A brand-new file beside the working homepage is ALSO 404."
-            warn "    Apache is not reading the directory this script writes to."
-            warn "    That is the jailed-Apache case: the vhost is served from a"
-            warn "    per-account bind mount, and this one is stale or predates"
-            warn "    the directory."
+            warn "    A brand-new file beside the working homepage is ALSO 404,"
+            warn "    on a connection that DID reach this site's vhost."
+            warn "    So Apache is not reading the directory this script writes to."
             if [[ -d "/home/virtfs/${ACCT}" ]]; then
-                warn "    /home/virtfs/${ACCT} exists — jailed Apache is in use here."
+                warn "    /home/virtfs/${ACCT} exists — jailed Apache is in use, and"
+                warn "    the vhost is served from a per-account bind mount that is"
+                warn "    stale or predates this directory."
                 warn "    Fix:  /scripts/clear_orphaned_virtfs_mounts"
                 warn "          /usr/local/cpanel/scripts/rebuildhttpdconf"
                 warn "          /scripts/restartsrv_httpd"
             else
-                warn "    No /home/virtfs/${ACCT}, so not VirtFS. Check for a chroot or"
-                warn "    a mount under the docroot:  findmnt -T '${DOCROOT_BASE}'"
+                warn "    No /home/virtfs/${ACCT}, so this is not VirtFS. What is"
+                warn "    mounted under the docroot:"
+                if command -v findmnt >/dev/null 2>&1; then
+                    findmnt -T "${DOCROOT_BASE}" 2>/dev/null | sed 's/^/        /' \
+                      || warn "        (findmnt returned nothing)"
+                else
+                    warn "        (no findmnt; try: grep ' /home ' /proc/mounts)"
+                    grep ' /home ' /proc/mounts 2>/dev/null | sed 's/^/        /' || true
+                fi
             fi
         fi
     fi
@@ -385,12 +445,14 @@ if $DIAGNOSE; then
 
     echo
     warn "READING THIS:"
+    warn "  Step 5 says 'different site' everywhere → the probes never reached"
+    warn "                            this account's vhost, so their 404s mean"
+    warn "                            nothing. Read the httpd -S lines instead."
     warn "  Apache 200, public 404  → the proxy in front of Apache, or its cache."
     warn "                            On cPanel: WHM → NGINX Manager → clear cache,"
     warn "                            or rebuild the vhost for ${ACCT}."
-    warn "  Apache 404, file present → Apache's DocumentRoot is not where the file"
-    warn "                            is. Compare step 3 with step 1; if two vhost"
-    warn "                            files name ${DOMAIN}, the wrong one is winning."
+    warn "  Apache 404 on the right vhost, file present → Apache is not reading"
+    warn "                            that directory; see step 5b's mount output."
     warn "  Directory without o+x    → chmod o+x it; the file is unreachable."
     exit 0
 fi

@@ -193,22 +193,23 @@ t_contains($sh, 'if $DIAGNOSE; then',
      'there is a diagnose mode for the one failure this script could report '
    . 'and not resolve');
 
-t_contains($sh, '-H "Host: ${DOMAIN}" "http://127.0.0.1:${_port}${TARGET}"',
+t_contains($sh, '-H "Host: ${DOMAIN}" "http://${_host}:${_port}${TARGET}"',
      'THE DECISIVE TEST: Apache is asked directly, with the Host header, '
-   . 'bypassing whatever proxy is in front of it. 200 from Apache and 404 in '
-   . 'public means the proxy or its cache; 404 from both means Apache is not '
-   . 'serving that directory at all');
+   . 'bypassing whatever proxy is in front of it — and at a host that varies, '
+   . 'because the loopback is not necessarily an address this vhost is bound '
+   . 'to');
 t_contains($sh, "grep -E '^apache_port=' /var/cpanel/cpanel.config",
      'and the port comes from cPanel rather than being guessed');
 
 // curl prints its -w line even when it cannot connect, and exits non-zero.
 // A `|| echo "no answer"` therefore prints BOTH. Same shape as "404000".
-t_ok(strpos($sh, 'echo "no answer"') === false,
+t_ok(strpos($sh, '2>/dev/null || echo "no answer"') === false,
      'NOT BOTH BRANCHES: the connection probe does not pair a -w line with an '
    . 'error fallback — curl prints the line and exits non-zero, so both fire '
    . 'and the output reads "HTTP 000" then "no answer"');
-t_contains($sh, 'echo "no answer on this port"',
-     'one answer per port, decided from the status code');
+t_contains($sh, 'if [[ "$_c" == "000" ]]; then
+            echo "no answer"',
+     'one answer per probe, decided from the status code');
 
 // A file the web server cannot traverse to is as absent as a missing one, and
 // nothing about the file's own ls shows it.
@@ -277,8 +278,12 @@ t_contains($sh, 'HTTP ${_c} for the file, HTTP ${_r} for /',
    . 'file. A 404 for the file alone means that path is missing from a working '
    . 'vhost; a 404 for both means there is no working vhost for this Host at '
    . 'all. Same status code, unrelated fixes');
-t_contains($sh, 'Apache 404s the site root too',
-     'and the combination is called out rather than left to be noticed');
+// The old verdict here read a 404-for-both as "no working vhost for this
+// Host". That was the wrong conclusion from the right observation: the probe
+// may simply have been talking to another vhost entirely. Which one answered
+// is now established first, and asserted further down.
+t_contains($sh, 'echo "HTTP ${_c} for the file, HTTP ${_r} for / (${_same})"',
+     'both numbers are reported together with WHICH SITE answered them');
 
 // ── A normal account must not look like a finding ───────────────────────────
 //
@@ -321,7 +326,7 @@ t_contains($sh, 'Both served. Apache CAN read new files in that directory',
 t_contains($sh, 'The docroot root works and ${SUBPATH} does not.',
      'only the root served means something path-specific — an Alias, a '
    . 'Location or a rewrite in the vhost include, and it says where to grep');
-t_contains($sh, 'A brand-new file beside the working homepage is ALSO 404.',
+t_contains($sh, 'A brand-new file beside the working homepage is ALSO 404,',
      'NEITHER SERVED: Apache is not reading the directory being written to at '
    . 'all, which no amount of inspecting that directory would ever reveal');
 t_contains($sh, 'if [[ -d "/home/virtfs/${ACCT}" ]]; then',
@@ -329,8 +334,10 @@ t_contains($sh, 'if [[ -d "/home/virtfs/${ACCT}" ]]; then',
    . '/home/virtfs is where a per-account bind mount lives');
 t_contains($sh, '/scripts/clear_orphaned_virtfs_mounts',
      'with the command that clears a stale one');
-t_contains($sh, 'findmnt -T \'${DOCROOT_BASE}\'',
-     'and a different next step when it is not VirtFS, rather than the same '
+// The not-VirtFS branch used to print a findmnt command for the operator to
+// run. It now runs it -- asserted at the end of this file.
+t_contains($sh, 'No /home/virtfs/${ACCT}, so this is not VirtFS.',
+     'and a different branch when it is not VirtFS, rather than the same '
    . 'advice regardless');
 
 // Probe files are written into a live customer document root.
@@ -342,10 +349,11 @@ t_contains($sh, 'rm -f "$_pr1" "$_pr2"
         trap - EXIT INT TERM',
      'and the trap is released once they are gone');
 
-// The port is the one that actually answered, not the first one tried.
-t_contains($sh, '[[ -n "$APORT" ]] || APORT="$_port"',
-     'the probe uses the port Apache actually answered on — on this server '
-   . 'that was :81, which no list of likely ports would have guessed first');
+// The port is the one that actually answered, not the first one tried. On
+// the server this was written for that was :81, which is not where a list of
+// likely ports starts.
+t_contains($sh, 'APORT="$_port"; AHOST="$_host"',
+     'the probe records the port AND the address that answered as this site');
 
 // ── A named file with nothing under it reads as "this file is fine" ────────
 t_contains($sh, "sed -n '1,40p' \"\${_p}/.htaccess\"",
@@ -355,3 +363,64 @@ t_contains($sh, "sed -n '1,40p' \"\${_p}/.htaccess\"",
    . 'said nothing about it, which reads as a clean bill of health');
 t_ok(strpos($sh, "grep -nE 'Rewrite|ErrorDocument|Deny|Require|Order|Redirect'") === false,
      'the grep that could only ever hide things is gone');
+
+// ── Which vhost answered? ───────────────────────────────────────────────────
+//
+// The flaw in every version of this diagnostic until now. Apache selects a
+// vhost by IP:port FIRST and ServerName second, and cPanel binds each
+// account's vhost to that account's own IP. A request sent to 127.0.0.1
+// therefore matches no vhost on that address and falls through to the DEFAULT
+// one -- which answers 200 for / (the server's own page) and 404 for every
+// other path.
+//
+// By status code alone that is indistinguishable from "Apache cannot see this
+// directory", and on a live server it produced exactly that reading: 200 for
+// /, 404 for a brand-new file beside the working homepage, and a confident
+// conclusion about stale bind mounts drawn entirely from the wrong vhost.
+t_contains($sh, "_vip=\"\$(grep -hE '^ip:' \"/var/cpanel/userdata/\${ACCT}/\${DOMAIN}\"",
+     'THE WRONG VHOST: the probe sends to the vhost\'s own IP, taken from '
+   . 'cPanel, not only to the loopback');
+t_contains($sh, 'for _host in ${_vip} 127.0.0.1; do',
+     'and tries both, since either may be the one that matches');
+
+// An address alone does not prove anything -- the question is whether the
+// page that came back is this site's.
+t_contains($sh, '_pubmd5="$(curl -sS --max-time 20 "https://${DOMAIN}/"',
+     'THE PROOF: the real site\'s / is fingerprinted first, as the reference');
+t_contains($sh, '_same="SAME site"',
+     'and each probe is compared against it, so the output says which site '
+   . 'actually answered rather than only what it answered');
+t_contains($sh, '[[ -n "$APORT" ]] || { APORT="$_port"; AHOST="$_host"; }',
+     'only a probe that reached the real vhost is remembered for later tests');
+
+// If nothing matched, every number above is meaningless and the script must
+// say so rather than let them be read as findings.
+t_contains($sh, "NOTHING REACHED THIS SITE'S VHOST.",
+     'THE VOID RESULT: when no probe reaches the site, that is stated — '
+   . 'otherwise its 404s get read as evidence about the published directory');
+t_contains($sh, 'can be drawn from those numbers.',
+     'and the earlier numbers are explicitly disclaimed');
+t_contains($sh, '_hs="$(httpd -S 2>/dev/null || apachectl -S 2>/dev/null || true)"',
+     'with Apache\'s own vhost map as the thing to read instead — it names '
+   . 'the default server and every namevhost, which is the question');
+
+// The follow-up probe must use the proven address, not the loopback again.
+t_contains($sh, '"http://${AHOST}:${APORT}$1"',
+     'the two-file test asks the address PROVEN to reach this vhost, rather '
+   . 'than repeating the assumption that made the first reading wrong');
+
+// ── The verdict no longer names a cause it has not checked ──────────────────
+t_contains($sh, 'on a connection that DID reach this site\'s vhost.',
+     'and the "Apache cannot read the directory" verdict now states the '
+   . 'precondition that makes it meaningful');
+t_contains($sh, 'findmnt -T "${DOCROOT_BASE}"',
+     'THE UNRUN SUGGESTION: when it is not VirtFS the mount table is printed '
+   . 'rather than suggested — the previous version told the operator to run '
+   . 'findmnt themselves, which is another round trip for a command the '
+   . 'script could have run');
+t_contains($sh, "grep ' /home ' /proc/mounts",
+     'with a fallback for a box without findmnt');
+
+t_contains($sh, "Step 5 says 'different site' everywhere",
+     'and the reading guide leads with that case, because it invalidates '
+   . 'everything under it');
