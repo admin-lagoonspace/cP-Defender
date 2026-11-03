@@ -89,7 +89,7 @@ t_contains($html, '.wem-modal.hidden { display: none; }',
 t_contains($raw, '.sscrub .ss-dlg:target { display:flex; }',
      'NO SCRIPT NEEDED: the customer dialog opens on :target, so it works '
    . 'with scripting switched off, and the back button closes it');
-t_contains($page, 'href="#sst-<?= (int) ($j[\'id\'] ?? 0) ?>"',
+t_contains($page, 'href="#sst-<?= $jdid ?>"',
      'the count is an ordinary anchor');
 t_contains($page, '<div class="ss-dlg" id="sst-<?= $jid ?>"',
      'pointing at a dialog rendered beside the table');
@@ -133,3 +133,39 @@ $perScan = substr($ur, (int) strpos($ur, '$byScan = [];'), 1800);
 t_ok(strpos($perScan, "status != 'deleted'") === false,
      'and a deleted finding is still listed — hiding it would make a scan '
    . 'that found two and removed both read as a scan that found nothing');
+
+// ── The link and the dialog cannot disagree ────────────────────────────────
+//
+// They did, on the live server. The link was rendered from the scan row's
+// threats_found; the dialog was rendered from the report's scan_threats map.
+// On a report written before 4.29.0 the map is absent and the count is not,
+// so the page offered a link to a #fragment with no element behind it.
+// Clicking it set the URL, matched no :target, and did nothing at all --
+// which is exactly what it looked like.
+//
+// A dead anchor is worse than a plain number: it looks clickable, consumes
+// the click, and leaves the reader thinking the page is broken.
+t_contains($page, '$allFinds = $report[\'scan_threats\'] ?? null;',
+     'THE DEAD ANCHOR: the findings map is read BEFORE the table, so the '
+   . 'cell can see whether a dialog will exist');
+t_contains($page, 'if ($found > 0 && !empty($jfinds)):',
+     'and a link is offered only when that scan has findings to show');
+t_contains($page, '<span class="red" title="Detail for this scan is not in the current report yet">',
+     'while a count with no stored detail stays plain text and says why on '
+   . 'hover, rather than linking to nothing');
+
+// null vs [] carry different meanings and must not be conflated: "this report
+// predates the feature" is not "this scan found nothing here".
+t_contains($page, '$jfinds = is_array($allFinds) ? ($allFinds[$jdid] ?? []) : null;',
+     'an older report (no map at all) is distinguished from a scan with no '
+   . 'findings in this account');
+t_contains($page, 'if (is_array($jfinds)) { $found = count($jfinds); }',
+     'and where the map exists the count comes FROM it, so the number and '
+   . 'the list are the same fact rather than two that can drift');
+
+// The dialog loop must read the same variable, or the hoist achieved nothing.
+t_contains($page, '$finds = is_array($allFinds) ? ($allFinds[$jid] ?? []) : [];',
+     'the dialog loop reads that same map');
+t_ok(substr_count($page, "\$report['scan_threats']") === 1,
+     'which is read in exactly one place — two reads is how the cell and the '
+   . 'dialog came to disagree in the first place');
