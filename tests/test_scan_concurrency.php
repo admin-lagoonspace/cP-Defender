@@ -393,9 +393,14 @@ $worker2 = t_code($repo . '/backend/cron/scan.php');
 t_contains($worker2, "require_once SG_ROOT . '/backend/lib/RealTimeMonitor.php'",
     'the scan worker loads the probe it depends on');
 
-// Switched on by default, or none of this happens.
+// OFF by default since 4.31.2, on an operator's instruction. The gate does
+// not delay a scan that meets a long backup window, it abandons it at
+// scan_backup_max_wait -- so a backup overlapping the scan window cost whole
+// nights of coverage. See test_backup_gate_off.php, which owns this now.
 $db3 = t_code($repo . '/backend/lib/Database.php');
-t_contains($db3, "'scan_pause_on_backup',    '1'", 'scans pause during backups by default');
+t_contains($db3, "'scan_pause_on_backup',    '0'",
+    'scans are NOT held for backups by default: losing a night of scanning '
+  . 'is worse than two jobs sharing the disks');
 t_contains($db3, "'scan_backup_max_wait',    '14400'", 'with a wait cap');
 
 // -- Behaviour that can be exercised here ------------------------------------

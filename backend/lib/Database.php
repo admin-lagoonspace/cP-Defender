@@ -236,11 +236,19 @@ class Database {
                 -- A single clamscan invocation that exceeds this is abandoned;
                 -- one was found holding 13 minutes of CPU on one file.
                 ('scan_batch_timeout',      '600'),
-                -- Hold a scan while a backup is running. The real-time monitor
-                -- has paused during backups since 3.30.0; the scanner did not,
-                -- so clamscan competed with rsync for the same disks while the
-                -- monitor sat idle.
-                ('scan_pause_on_backup',    '1'),
+                -- Hold a malware scan while a backup is running. OFF since
+                -- 4.31.2, on an operator's instruction: on a server whose
+                -- backups overlap the scan window this did not delay the
+                -- nightly sweep, it CANCELLED it. The wait cap
+                -- (scan_backup_max_wait, four hours) is reached, the worker
+                -- gives up, and the next scheduled run is a day later -- so a
+                -- long backup window bought a day with no scan at all, which
+                -- is a far worse outcome than a scan competing with rsync for
+                -- I/O.
+                --
+                -- Set it to 1 to put the gate back; everything that reads it
+                -- honours it, including the scheduled sweep.
+                ('scan_pause_on_backup',    '0'),
                 -- How long a dealt-with threat stays in the log. Active ones
                 -- are kept regardless of age: an unresolved threat is exactly
                 -- what the log is for.
@@ -468,6 +476,37 @@ class Database {
             $db->exec("DELETE FROM settings WHERE key = 'mg_offset'");
             $db->exec("INSERT OR REPLACE INTO settings (key, value)
                        VALUES ('mg_bucket_repair', '1')");
+        }
+
+        // One-time: turn the scanner's backup gate off on an existing install.
+        //
+        // Changing the SEEDED default only reaches new installs -- INSERT OR
+        // IGNORE never touches a row that already exists -- so without this
+        // every server already running would keep the gate on and nothing
+        // about their coverage would change.
+        //
+        // Why it is being turned off: the gate does not DELAY a scan that
+        // meets a long backup window, it ABANDONS it. waitOutBackup() gives up
+        // at scan_backup_max_wait (four hours) and the rest of that sweep is
+        // dropped until the next scheduled run a day later. On a server whose
+        // JetBackup and rsync windows overlap the scan window, that is whole
+        // nights with no malware scan -- traded for I/O contention, which
+        // makes both jobs slower but loses neither.
+        //
+        // Keyed on its own marker so this runs ONCE. An operator who turns the
+        // gate back on afterwards keeps it: a migration that re-applied itself
+        // on every boot would silently overrule them for ever.
+        $row = $db->query("SELECT value FROM settings WHERE key = 'scan_backup_gate_off_4312'")
+                  ->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            $db->exec("UPDATE settings SET value = '0'
+                        WHERE key = 'scan_pause_on_backup'");
+            $db->exec("INSERT OR REPLACE INTO settings (key, value)
+                       VALUES ('scan_backup_gate_off_4312', '1')");
+            // Any scan parked by the old gate is no longer parked, and a stale
+            // '1' here shows "paused for backup" on the dashboard for ever.
+            $db->exec("UPDATE settings SET value = '0'
+                        WHERE key = 'scan_paused_for_backup'");
         }
 
         // Outbound mail monitoring, on by default.

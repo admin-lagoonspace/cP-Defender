@@ -180,13 +180,20 @@ $tasks = [
             $type  = setting('scan_type', 'full');
             $sc    = new Scanner();
 
-            // Do not start a scheduled scan into a backup window. startScan()
-            // refuses anyway; catching it here keeps the log readable and
-            // leaves the scan to the next tick.
-            $busy = Scanner::backupRunning();
-            if ($busy) {
-                slog('  backup in progress (' . implode(', ', $busy) . ') - scan deferred');
-                return false;      // still due: try again on the next tick
+            // Do not start a scheduled scan into a backup window -- WHEN THE
+            // OPERATOR HAS ASKED FOR THAT. This check used to be
+            // unconditional, so scan_pause_on_backup was a setting that did
+            // not work: startScan() and waitOutBackup() both honoured it, but
+            // the scheduled sweep -- the only scan that matters for coverage
+            // -- deferred regardless. Turning the gate off left the nightly
+            // scan exactly as blocked as before, which is the worst kind of
+            // setting: one that reports a state it does not have.
+            if (setting('scan_pause_on_backup', '0') === '1') {
+                $busy = Scanner::backupRunning();
+                if ($busy) {
+                    slog('  backup in progress (' . implode(', ', $busy) . ') - scan deferred');
+                    return false;  // still due: try again on the next tick
+                }
             }
 
             $usable = array_values(array_filter($paths, 'is_dir'));

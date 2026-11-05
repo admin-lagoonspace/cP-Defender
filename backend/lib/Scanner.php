@@ -593,8 +593,12 @@ class Scanner {
 
         // Starting a scan into a running backup is the same mistake as not
         // pausing one: two processes reading the whole filesystem at once.
+        //
+        // Off by default since 4.31.2. The code default matches the seeded
+        // one deliberately -- they disagreed on an install whose settings row
+        // was missing, and the fallback is the value that then applies.
         if (!$ignoreBackup
-            && (Database::setting('scan_pause_on_backup', '1') ?? '1') === '1') {
+            && (Database::setting('scan_pause_on_backup', '0') ?? '0') === '1') {
             $backups = self::backupRunning();
             if ($backups) {
                 throw new RuntimeException(
@@ -1899,7 +1903,10 @@ This file was removed and not kept. Restore it from your backups
      */
     private static function waitOutBackup(int $jobId): bool
     {
-        if ((Database::setting('scan_pause_on_backup', '1') ?? '1') !== '1') {
+        // Off by default since 4.31.2: waiting out a backup window longer
+        // than scan_backup_max_wait abandons the rest of the scan, so on a
+        // server with long backups the gate cost whole nights of coverage.
+        if ((Database::setting('scan_pause_on_backup', '0') ?? '0') !== '1') {
             return true;
         }
         $running = self::backupRunning();
