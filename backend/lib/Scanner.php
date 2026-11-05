@@ -6,6 +6,7 @@
  * idempotent and safe across the cycles these classes form. */
 require_once __DIR__ . '/Heuristics.php';
 require_once __DIR__ . '/Signatures.php';
+require_once __DIR__ . '/SignatureFeeds.php';
 require_once __DIR__ . '/RealTimeMonitor.php';
 require_once __DIR__ . '/UserReport.php';
 require_once __DIR__ . '/Database.php';
@@ -988,7 +989,7 @@ class Scanner {
         Logger::event('malware_detected', $this->getSeverity($threatName), '',
                       $filePath, "Malware detected: {$threatName}");
 
-        $this->applyThreatPolicy($filePath, $threatId, $this->getSeverity($threatName));
+        $this->applyThreatPolicy($filePath, $threatId, $this->getSeverity($threatName), $threatName);
 
         return ['id' => $threatId, 'file' => $filePath, 'name' => $threatName];
     }
@@ -1099,7 +1100,7 @@ class Scanner {
 
                 // Severity decides what happens: delete outright, or
                 // quarantine with a deadline.
-                $this->applyThreatPolicy($filePath, $threatId, $this->getSeverity($threatName));
+                $this->applyThreatPolicy($filePath, $threatId, $this->getSeverity($threatName), $threatName);
             }
         }
 
@@ -1367,6 +1368,75 @@ class Scanner {
         return $mode;
     }
 
+    /**
+     * Make a file inert and leave it there.
+     *
+     * The difference from disableFile() is that this one is an answer, not a
+     * step: the mode that was taken away is recorded against the threat so
+     * the file can be put back exactly as it was found.
+     *
+     * Honest about what it is: the account still owns the file and can chmod
+     * it back, so this contains an accident better than it contains an
+     * attacker who still has a shell. For a confirmed compromise, quarantine
+     * moves it somewhere the account cannot reach at all.
+     */
+    public function disableInfected(string $filePath, int $threatId, string $why): array
+    {
+        if (!file_exists($filePath)) {
+            return ['action' => 'none', 'reason' => 'file is already gone'];
+        }
+        $mode = self::disableFile($filePath);
+
+        // Verify, rather than trust chmod's return. A file on a filesystem
+        // mounted without permission support would report success and stay
+        // executable, which is the one outcome this must never claim.
+        clearstatcache(true, $filePath);
+        $now = @fileperms($filePath);
+        if ($now !== false && ($now & 0777) !== 0) {
+            self::restoreMode($filePath, $mode);
+            return ['action' => 'failed',
+                    'error'  => 'could not remove permissions (filesystem may not support it)'];
+        }
+
+        Database::query(
+            "UPDATE threats SET status='disabled', action_taken=?, prev_mode=?, resolved_at=?
+              WHERE id=?",
+            ['disabled in place (' . $why . ')', $mode, time(), $threatId]
+        );
+        Logger::info('Disabled ' . $filePath . ' in place (' . $why . ')');
+        return ['action' => 'disabled', 'previous_mode' => $mode];
+    }
+
+    /**
+     * Put a disabled file back as it was.
+     *
+     * The counterpart that makes disabling safe to choose. Without it the
+     * "reversible" action is only reversible by someone who knows what the
+     * permissions used to be.
+     */
+    public static function reEnable(int $threatId): array
+    {
+        $t = Database::fetchOne('SELECT file_path, prev_mode, status FROM threats WHERE id=?',
+                                [$threatId]);
+        if (!$t) { return ['success' => false, 'error' => 'no such threat']; }
+        if (($t['status'] ?? '') !== 'disabled') {
+            return ['success' => false, 'error' => 'that threat is not disabled'];
+        }
+        $path = (string) $t['file_path'];
+        if (!file_exists($path)) { return ['success' => false, 'error' => 'file is gone']; }
+
+        // 0644 only when nothing was recorded: better a sane default than
+        // leaving the file unreadable because the column predates this.
+        $mode = $t['prev_mode'] !== null ? (int) $t['prev_mode'] : 0644;
+        @chmod($path, $mode);
+        Database::query(
+            "UPDATE threats SET status='active', action_taken=?, resolved_at=NULL WHERE id=?",
+            ['re-enabled by an operator', $threatId]
+        );
+        Logger::warn('Re-enabled ' . $path . ' - it is executable again and still flagged');
+        return ['success' => true, 'mode' => $mode];
+    }
+
     /** Put back a mode captured by disableFile(). */
     public static function restoreMode(string $filePath, ?int $mode): void
     {
@@ -1452,10 +1522,37 @@ This file was removed and not kept. Restore it from your backups
      * quarantine it", which treated a webshell and a suspicious comment
      * exactly alike.
      */
-    public function applyThreatPolicy(string $filePath, int $threatId, string $severity): array
+    public function applyThreatPolicy(string $filePath, int $threatId, string $severity,
+                                      string $threatName = ''): array
     {
+        // A third-party feed does not get to touch a customer's files until
+        // somebody has seen what it finds on THIS server.
+        //
+        // These rules are written by other people for other environments. One
+        // that is merely noisy on a workstation takes a working website down
+        // here, on every account at once, and the first anyone hears of it is
+        // the customer. So a feed arrives in report mode and is promoted by
+        // hand -- per feed, because they differ wildly in precision.
+        if ($threatName !== '' && SignatureFeeds::isReportOnly($threatName)) {
+            return ['action' => 'none',
+                    'reason' => 'reported only: the feed that matched is not promoted yet'];
+        }
+
         if ((Database::setting('auto_quarantine', '0') ?? '0') !== '1') {
             return ['action' => 'none', 'reason' => 'auto-quarantine is off'];
+        }
+
+        // Disabling as an END state, not just a step on the way to deleting.
+        //
+        // Asked for directly, and it is the right default for anything short
+        // of certainty: the file stops executing immediately, nothing is
+        // destroyed, and a false positive costs one chmod to undo instead of
+        // a restore from backup. It is weaker containment than quarantine --
+        // the account owns the file and can put the bit back -- so it is
+        // offered, not imposed.
+        $feed = $threatName !== '' ? SignatureFeeds::feedFor($threatName) : null;
+        if ($feed !== null && SignatureFeeds::action($feed) === 'disable') {
+            return $this->disableInfected($filePath, $threatId, 'feed ' . $feed);
         }
 
         $days = self::policyDaysFor($severity);
@@ -2665,7 +2762,32 @@ This file was removed and not kept. Restore it from your backups
             $clamResult = implode("\n", $out);
         }
 
+        // And the third-party databases ClamAV loads alongside its own.
+        //
+        // freshclam alone is what this product ran on, weekly, and ClamAV
+        // is weak on precisely the thing that matters here: PHP webshells
+        // in a customer's docroot. These arrive in report mode and are
+        // promoted by hand -- see SignatureFeeds.
+        $feeds = ['success' => false, 'error' => 'not attempted'];
+        try {
+            $feeds = SignatureFeeds::update();
+        } catch (Throwable $e) {
+            // A feed being unreachable must not make the whole signature
+            // update report failure: ClamAV's own database still updated.
+            $feeds = ['success' => false, 'error' => $e->getMessage()];
+            Logger::warn('Signature feeds: ' . $e->getMessage());
+        }
+
+        // Our own pattern set, mirrored to disk after every run so the
+        // file beside the database is never older than the database.
+        try {
+            Signatures::seedIfEmpty();
+            Signatures::export();
+        } catch (Throwable $e) {
+            Logger::warn('Signatures: could not mirror - ' . $e->getMessage());
+        }
+
         Database::setSetting('clam_db_update', (string) time());
-        return ['success' => true, 'clam' => $clamResult];
+        return ['success' => true, 'clam' => $clamResult, 'feeds' => $feeds];
     }
 }

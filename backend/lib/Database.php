@@ -422,6 +422,15 @@ class Database {
         if (!in_array('stop_reason', $jobCols)) {
             $db->exec("ALTER TABLE scan_jobs ADD COLUMN stop_reason TEXT NOT NULL DEFAULT ''");
         }
+        // What a disabled file's permissions were before we took them away.
+        // Without it, "disable" is a one-way door: nobody can put a false
+        // positive back the way they found it, which makes the safe action
+        // feel more dangerous than deleting.
+        $thrCols = array_column(
+            $db->query("PRAGMA table_info(threats)")->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('prev_mode', $thrCols)) {
+            $db->exec("ALTER TABLE threats ADD COLUMN prev_mode INTEGER");
+        }
 
         // Where a quarantined file went, and when it may be deleted. The sweep
         // needs the exact path: guessing it from the threat's original name
