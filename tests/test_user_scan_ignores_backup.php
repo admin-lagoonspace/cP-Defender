@@ -134,8 +134,15 @@ foreach ([
 
         // And it must say who, or the customer's scan log cannot tell the
         // nightly sweep from their own request.
+        //
+        // The marker need not be a literal. The scheduler's resume of a scan
+        // the updater stopped passes through whatever that scan recorded,
+        // falling back to '@schedule' -- which is more correct than a literal
+        // would be, since a resumed operator scan should stay an operator
+        // scan. So the test is that an '@' marker is present, not that the
+        // argument is nothing but one.
         $who = trim($args[3] ?? '');
-        t_ok($who !== '' && $who[1] === '@',
+        t_ok($who !== '' && strpos($who, '@') !== false,
              $what . ' records what triggered it: ' . $who);
     }
 }

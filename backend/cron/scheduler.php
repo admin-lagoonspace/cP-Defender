@@ -636,6 +636,68 @@ $tasks = [
         },
     ],
 
+    // Start a scan the updater had to stop and could not restart.
+    //
+    // install.sh stops every running scan before replacing the code beneath
+    // it, and update.sh starts them again afterwards. When a backup is
+    // running at that moment the restart is refused -- correctly, since a
+    // full /home sweep competes with rsync for the same disks -- and without
+    // this the nightly sweep is simply gone until its next slot a day later.
+    //
+    // Runs on the ordinary scheduler tick, so it costs one stat of a file
+    // that is absent on almost every run.
+    'resumescan' => [
+        'schedule' => 'every',
+        'time'     => '00:00',
+        'day'      => 0,
+        'run'      => function () {
+            $marker = SG_ROOT . '/logs/.resume-scans.json';
+            if (!is_file($marker)) { return; }
+
+            $list = json_decode((string) @file_get_contents($marker), true);
+            if (!is_array($list) || !$list) { @unlink($marker); return; }
+
+            $left = [];
+            $started = 0;
+            foreach ($list as $j) {
+                $path = (string) ($j['path'] ?? '');
+                if ($path === '') { continue; }
+
+                // Already running again? Then the marker has done its job.
+                $busy = false;
+                foreach (Scanner::liveScans() as $live) {
+                    if ((string) $live['scan_path'] === $path) { $busy = true; break; }
+                }
+                if ($busy) { continue; }
+
+                try {
+                    $sc = new Scanner();
+                    $id = $sc->startScan($path, (string) ($j['type'] ?? 'full'), false,
+                                         (string) ($j['by'] ?? '@schedule'));
+                    $n  = substr_count($path, ',') + 1;
+                    slog('  resumed the scan the update stopped: '
+                       . ($n > 1 ? $n . ' account(s)' : $path) . ' as job ' . $id);
+                    $started++;
+                } catch (Throwable $e) {
+                    // Still refused -- a backup is probably still running.
+                    // Keep it and try again on the next tick.
+                    $left[] = $j;
+                }
+            }
+
+            if ($left) {
+                @file_put_contents($marker, json_encode($left));
+                // Said once per tick at most, and only while something is
+                // actually outstanding.
+                slog('  ' . count($left) . ' interrupted scan(s) still waiting '
+                   . 'to resume (a backup is usually why)');
+            } else {
+                @unlink($marker);
+                if ($started) { slog('  all interrupted scans resumed'); }
+            }
+        },
+    ],
+
     'rtguard' => [
         'schedule' => setting('rt_autostart_schedule', 'every'),
         'time'     => '00:00',

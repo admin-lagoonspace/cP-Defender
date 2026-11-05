@@ -1050,6 +1050,7 @@ if (!is_array(\$list) || !\$list) { echo "nothing to resume" . PHP_EOL; exit(0);
 // Only one scan per path. Several workers on the same tree is how this
 // server ended up with six clamscans at once.
 \$seen = [];
+\$deferred = [];
 \$n = 0;
 foreach (\$list as \$j) {
     \$path = (string) (\$j['path'] ?? '');
@@ -1069,20 +1070,49 @@ foreach (\$list as \$j) {
                    . ' after the update that stopped it');
         \$n++;
     } catch (Throwable \$e) {
-        // A refusal here is normal: max concurrency, a backup window, or an
-        // unlicensed install. Say so rather than failing the update.
-        echo "  could not resume " . \$path . ": " . \$e->getMessage() . PHP_EOL;
+        // A refusal here is usually TRANSIENT: a backup window, or the
+        // concurrency cap. The scan is not resumable right now and must not
+        // be thrown away -- keep the marker so the scheduler retries it,
+        // or the nightly sweep is lost until its next slot a day later.
+        \$deferred[] = \$j;
+        \$why = \$e->getMessage();
+
+        // A scheduled sweep's scan_path is every account's docroot joined
+        // with commas. Printed whole it is 132 paths on one line, which
+        // buries the one thing the operator needs: why.
+        \$n_paths = substr_count(\$path, ',') + 1;
+        \$short = \$n_paths > 1
+            ? \$n_paths . ' account(s)'
+            : \$path;
+        echo "  deferred " . \$short . ": " . \$why . PHP_EOL;
     }
 }
-echo \$n . " scan(s) resumed" . PHP_EOL;
+
+// Anything deferred stays on disk for the scheduler to pick up. An empty
+// list removes the file, so a successful resume does not leave a marker
+// that would re-start the scan on some later run.
+if (\$deferred) {
+    @file_put_contents('${INSTALL_DIR}/logs/.resume-scans.json', json_encode(\$deferred));
+} else {
+    @unlink('${INSTALL_DIR}/logs/.resume-scans.json');
+}
+echo \$n . " scan(s) resumed, " . count(\$deferred) . " deferred" . PHP_EOL;
 RESUMEEOF
     if _SG_RESUME_OUT="$(php "$_SG_RESUME_PHP" 2>&1)"; then
-        ok "  ${_SG_RESUME_OUT}"
+        # "deferred" is not success. Printing a tick next to a scan that did
+        # not start is how a missed nightly sweep goes unnoticed.
+        if [[ "$_SG_RESUME_OUT" == *"0 scan(s) resumed"* ]]; then
+            warn "  ${_SG_RESUME_OUT}"
+            warn "  The scheduler will retry; nothing has been lost."
+        else
+            ok "  ${_SG_RESUME_OUT}"
+        fi
     else
         warn "  Could not resume the stopped scan(s): ${_SG_RESUME_OUT}"
         warn "  The next scheduled run will cover it."
     fi
-    rm -f "$_SG_RESUME_PHP" "$_SG_RESUME"
+    # The marker is removed by the PHP above only when nothing was deferred.
+    rm -f "$_SG_RESUME_PHP"
 else
     info "  No scans were interrupted by this update"
 fi
