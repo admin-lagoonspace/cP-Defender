@@ -5,6 +5,7 @@
  * because writeAll() catches Throwable per account. require_once is
  * idempotent and safe across the cycles these classes form. */
 require_once __DIR__ . '/Heuristics.php';
+require_once __DIR__ . '/Signatures.php';
 require_once __DIR__ . '/RealTimeMonitor.php';
 require_once __DIR__ . '/UserReport.php';
 require_once __DIR__ . '/Database.php';
@@ -29,33 +30,13 @@ class Scanner {
 
     public function __construct() {
         $this->loadSignatures();
-        $this->phpPatterns = [
-            // Obfuscation
-            'base64_decode_exec'    => '/base64_decode\s*\(.*\)\s*;?\s*\)?\s*;?\s*eval\s*\(/i',
-            'eval_base64'           => '/eval\s*\(\s*base64_decode\s*\(/i',
-            'eval_gzinflate'        => '/eval\s*\(\s*gzinflate\s*\(/i',
-            'eval_str_rot13'        => '/eval\s*\(\s*str_rot13\s*\(/i',
-            'preg_replace_eval'     => '/preg_replace\s*\(\s*[\'"].*\/e[\'"],/i',
-            'assert_base64'         => '/assert\s*\(\s*base64_decode\s*\(/i',
-            'hex_decode_exec'       => '/\\\\x[0-9a-f]{2}.*eval/i',
-            'gzuncompress_eval'     => '/eval\s*\(\s*gzuncompress\s*\(/i',
-            // Shells
-            'c99_shell'             => '/\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\[.{0,30}\]\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)/i',
-            'system_shell'          => '/\$_(?:GET|POST|REQUEST)\s*\[.{0,30}\]\s*;\s*(?:system|exec|passthru|shell_exec)/i',
-            'backdoor_connect'      => '/fsockopen\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)/i',
-            'stdin_exec'            => '/proc_open.*STDIN.*STDOUT.*STDERR/is',
-            'reverse_shell'         => '/(?:bash|sh)\s*-i\s*>&?\s*\/dev\/tcp/i',
-            // Crypto miners
-            'xmrig_pattern'         => '/stratum\+tcp:\/\/|xmrig|moneropool|minergate\.com/i',
-            'coin_hive'             => '/CoinHive\.Anonymous|coinhive\.min\.js/i',
-            // Injections
-            'spam_mailer'           => '/\$(?:to|from|subject|body|message)\s*=.*(?:@gmail|@yahoo|@hotmail).*;.*mail\s*\(/is',
-            'seo_spam_hidden'       => '/<div\s+style=["\']display\s*:\s*none["\'][^>]*>.*(?:viagra|cialis|pharmacy|casino|poker)/is',
-            // Encoded payloads
-            'long_base64'           => '/[\'"][A-Za-z0-9+\/]{500,}={0,2}[\'"]/',
-            'hex_string_long'       => '/[\'"][0-9a-f]{200,}[\'"]/i',
-            'char_code_obf'         => '/chr\s*\(\s*\d+\s*\)\s*\.\s*chr\s*\(\s*\d+\s*\)/i',
-        ];
+        // Patterns come from the database now, so a feed can add to them and
+        // a false positive can be switched off without shipping a release.
+        // Signatures::activePatterns() falls back to the mirror file and then
+        // to its BUILTIN array, which is this list, moved there verbatim --
+        // there is no state in which the scanner runs with no patterns, since
+        // that failure is indistinguishable from a clean server.
+        $this->phpPatterns = Signatures::activePatterns();
     }
 
     private function loadSignatures(): void {

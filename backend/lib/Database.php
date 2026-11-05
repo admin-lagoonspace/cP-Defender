@@ -58,6 +58,22 @@ class Database {
                 action_taken TEXT
             );
 
+            -- Detection patterns, so they can change without a release and a
+            -- bad one can be turned off without a code change. Mirrored to
+            -- signatures.json after every write; see Signatures.php for why
+            -- there are three places and not one.
+            CREATE TABLE IF NOT EXISTS signatures (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT    NOT NULL UNIQUE,
+                sig_type   TEXT    NOT NULL DEFAULT 'regex',
+                pattern    TEXT    NOT NULL,
+                severity   TEXT    NOT NULL DEFAULT 'high',
+                source     TEXT    NOT NULL DEFAULT 'builtin',
+                enabled    INTEGER NOT NULL DEFAULT 1,
+                added_at   INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );
+
             CREATE TABLE IF NOT EXISTS firewall_rules (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 name        TEXT    NOT NULL,

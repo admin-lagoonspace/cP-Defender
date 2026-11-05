@@ -33,6 +33,7 @@ require_once $BASE . '/lib/Firewall.php';
 require_once $BASE . '/lib/IPReputation.php';
 require_once $BASE . '/lib/License.php';
 require_once $BASE . '/lib/UserReport.php';
+require_once $BASE . '/lib/Signatures.php';
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 $argv0 = 'serverscrub';
@@ -157,6 +158,49 @@ try {
         License::requireValid('IP reputation lookup');
         $ip = $rest[0] ?? ''; if (!valid_ip($ip)) fail('usage: serverscrub reputation <ip>');
         out((new IPReputation())->check($ip));
+        break;
+    }
+
+    // Inspect and repair the pattern store.
+    //
+    //   signatures            counts, and where they came from
+    //   signatures export     write the mirror file now
+    //   signatures restore    rebuild the table from the mirror
+    //   signatures disable X  switch one rule off after a false positive
+    case 'signatures': {
+        need_root();
+        $sub = $args[1] ?? 'status';
+        if ($sub === 'export') {
+            $p = Signatures::export();
+            echo $p ? "Mirrored to {$p}" . PHP_EOL : "Nothing to export" . PHP_EOL;
+            break;
+        }
+        if ($sub === 'restore') {
+            // Deliberately only seeds an EMPTY table. Restoring over a live
+            // set would quietly undo every rule an operator had disabled.
+            $n = Signatures::seedIfEmpty();
+            echo $n > 0
+                ? "Restored {$n} pattern(s)" . PHP_EOL
+                : "The table already has patterns; nothing restored." . PHP_EOL;
+            break;
+        }
+        if ($sub === 'disable') {
+            $name = (string) ($args[2] ?? '');
+            if ($name === '') { echo "Usage: signatures disable <name>" . PHP_EOL; break; }
+            Signatures::disable($name);
+            Signatures::export();
+            echo "Disabled {$name}" . PHP_EOL;
+            break;
+        }
+        $st = Signatures::stats();
+        echo "Patterns: {$st['enabled']} enabled of {$st['total']}" . PHP_EOL;
+        foreach ($st['by_source'] as $r) {
+            echo "  {$r['source']}: {$r['c']}" . PHP_EOL;
+        }
+        echo "Built into the code: {$st['builtin']} (the floor if all else fails)" . PHP_EOL;
+        echo "Mirror: " . ($st['mirror'] ?? '?')
+           . (!empty($st['mirror_at']) ? ' (written ' . date('Y-m-d H:i', $st['mirror_at']) . ')'
+                                       : ' (NOT WRITTEN YET)') . PHP_EOL;
         break;
     }
 
