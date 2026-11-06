@@ -130,7 +130,7 @@ t_contains($dbsrc, "UPDATE waf_events SET action = 'unknown'",
      'existing rows are reset to unknown — there is nothing to recover, the '
    . 'value was never observed, and a confident wrong answer is worse than '
    . 'an admitted gap');
-t_contains($dbsrc, "'waf_action_honesty_4330', '1'",
+t_contains($dbsrc, "once(\$db, 'waf_action_honesty_4330'",
      'keyed so it runs once and does not overwrite real values later');
 
 // ── The UI ─────────────────────────────────────────────────────────────────

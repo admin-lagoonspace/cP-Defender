@@ -18,6 +18,7 @@
    serverscrub waf mode                 (show the rule engine mode)
    serverscrub waf mode <on|detectiononly|off>
    serverscrub waf triage [days]        (what arming the engine would do)
+   serverscrub db-check                 (SQLite integrity check)
  *   serverscrub reputation <ip>
  *   serverscrub update-sigs
  * Global flag: --json  (machine-readable output for any command)
@@ -365,6 +366,31 @@ try {
     // answer is a path that shows its working -- this one prints the mode it
     // reads back from the config Apache actually loads, so "did it take?" is
     // answerable without the UI.
+    // SQLite's own integrity check.
+    //
+    // The first anyone knew of a corrupted database was every command
+    // answering "database disk image is malformed". This is the one that
+    // answers the question directly, and exits non-zero so it can be used
+    // from a monitoring check.
+    case 'db-check': {
+        $r = Database::integrityCheck(50);
+        out($r);
+        if (empty($r['ok'])) {
+            echo PHP_EOL . 'The database is damaged. Stop the writers, back it '
+               . 'up, and rebuild:' . PHP_EOL;
+            echo '  systemctl stop serverscrub-monitor' . PHP_EOL;
+            echo '  mv /etc/cron.d/serverscrub /root/serverscrub.cron.held' . PHP_EOL;
+            echo '  cp -a ' . SG_DB . ' /root/serverscrub.db.backup' . PHP_EOL;
+            echo '  sqlite3 ' . SG_DB . " '.dump' > /root/sg-dump.sql" . PHP_EOL;
+            echo '  sqlite3 /root/rebuilt.db < /root/sg-dump.sql' . PHP_EOL;
+            echo "  sqlite3 /root/rebuilt.db 'PRAGMA integrity_check;'" . PHP_EOL;
+            echo PHP_EOL . 'Check the row counts in the rebuilt file before '
+               . 'putting it in place, and keep the original.' . PHP_EOL;
+            exit(1);
+        }
+        break;
+    }
+
     case 'waf': {
         require_once $BASE . '/lib/WAF.php';
         require_once $BASE . '/lib/WAFInstaller.php';

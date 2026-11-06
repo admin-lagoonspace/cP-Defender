@@ -23,10 +23,99 @@ class Database {
             self::$pdo = new PDO("sqlite:$db_path");
             self::$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             self::$pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+            // BUSY_TIMEOUT WAS MISSING ENTIRELY on the PHP side while the
+            // Python monitor set 10 seconds. Six writers share this file --
+            // the scheduler, the API under cpsrvd, the CLI, the customer
+            // pages, the user-scan picker and the monitor -- and without a
+            // timeout a PHP writer meeting a held lock fails INSTANTLY with
+            // SQLITE_BUSY rather than waiting the few milliseconds the other
+            // writer needs. Every one of those is a lost write that nothing
+            // retries.
+            //
+            // Ten seconds, matching the daemon: one setting, one number.
+            self::$pdo->exec('PRAGMA busy_timeout=10000');
             self::$pdo->exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
+            // Bound the WAL. A mass UPDATE -- a migration over 148,551 rows,
+            // say -- grows it without limit until something checkpoints, and
+            // an unbounded WAL on a server that runs short of disk is one of
+            // the few ways SQLite genuinely corrupts.
+            self::$pdo->exec('PRAGMA wal_autocheckpoint=1000');
             self::migrate(self::$pdo);
         }
         return self::$pdo;
+    }
+
+    /**
+     * Run a migration exactly once, atomically.
+     *
+     * THE OLD SHAPE WAS: check for the marker, do the work, write the marker.
+     * Three separate statements with no transaction, in code that runs on
+     * EVERY connection. So when cpsrvd, the scheduler and the monitor opened
+     * the database inside the same window, each of them found no marker and
+     * each independently ran the whole thing -- which for the 4.33.0
+     * migration meant three concurrent rewrites of 148,551 rows, three times
+     * the WAL, on a file where the PHP side also had no busy timeout.
+     *
+     * Wrapping it puts the marker in the same transaction as the work: either
+     * both land or neither does, and a second process arriving later finds
+     * the marker and does nothing. A crash midway leaves the marker absent
+     * and the work undone, which is the right way round -- it will simply run
+     * again next time.
+     *
+     * BEGIN IMMEDIATE rather than a plain BEGIN: it takes the write lock up
+     * front instead of discovering the conflict at COMMIT, when the work is
+     * already done and has to be thrown away.
+     */
+    private static function once(PDO $db, string $marker, callable $work): void
+    {
+        $st = $db->prepare("SELECT 1 FROM settings WHERE key = ?");
+        $st->execute([$marker]);
+        if ($st->fetchColumn()) { return; }
+
+        try {
+            $db->exec('BEGIN IMMEDIATE');
+
+            // Checked again INSIDE the lock. Between the read above and the
+            // lock, another process may have done the whole thing.
+            $st->execute([$marker]);
+            if ($st->fetchColumn()) { $db->exec('COMMIT'); return; }
+
+            $work($db);
+            $ins = $db->prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, '1')");
+            $ins->execute([$marker]);
+            $db->exec('COMMIT');
+        } catch (Throwable $e) {
+            try { $db->exec('ROLLBACK'); } catch (Throwable $ignored) { }
+            // Not rethrown: one migration that cannot run must not stop the
+            // product from starting. It is logged and retried next time.
+            error_log('ServerScrub: migration ' . $marker . ' failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * SQLite's own integrity check.
+     *
+     * Exists because the first anyone knew of a corrupted database was a
+     * command failing in an operator's hands with "database disk image is
+     * malformed". The check is cheap enough to run nightly and the one thing
+     * that turns silent damage into something the dashboard can say.
+     *
+     * @return array{ok:bool,problems:string[]}
+     */
+    public static function integrityCheck(int $maxErrors = 20): array
+    {
+        try {
+            $rows = self::get()->query('PRAGMA integrity_check(' . max(1, $maxErrors) . ')')
+                        ->fetchAll(PDO::FETCH_COLUMN);
+        } catch (Throwable $e) {
+            // The check itself failing IS the finding.
+            return ['ok' => false, 'problems' => [$e->getMessage()]];
+        }
+        $rows = array_values(array_filter(array_map('strval', $rows)));
+        if (count($rows) === 1 && strtolower($rows[0]) === 'ok') {
+            return ['ok' => true, 'problems' => []];
+        }
+        return ['ok' => false, 'problems' => $rows];
     }
 
     private static function migrate(PDO $db): void {
@@ -496,18 +585,14 @@ class Database {
         // Keyed on its own marker so this runs ONCE. An operator who turns the
         // gate back on afterwards keeps it: a migration that re-applied itself
         // on every boot would silently overrule them for ever.
-        $row = $db->query("SELECT value FROM settings WHERE key = 'scan_backup_gate_off_4312'")
-                  ->fetch(PDO::FETCH_ASSOC);
-        if (!$row) {
+        self::once($db, 'scan_backup_gate_off_4312', function (PDO $db) {
             $db->exec("UPDATE settings SET value = '0'
                         WHERE key = 'scan_pause_on_backup'");
-            $db->exec("INSERT OR REPLACE INTO settings (key, value)
-                       VALUES ('scan_backup_gate_off_4312', '1')");
             // Any scan parked by the old gate is no longer parked, and a stale
             // '1' here shows "paused for backup" on the dashboard for ever.
             $db->exec("UPDATE settings SET value = '0'
                         WHERE key = 'scan_paused_for_backup'");
-        }
+        });
 
         // Every WAF read filters by time: the event list, the "today"
         // count, and the triage report's aggregates. 148,551 rows is a fast
@@ -532,9 +617,7 @@ class Database {
         // was never observed -- and leaving a confident wrong answer in place
         // is worse than admitting the gap. Events ingested from now on carry
         // what ModSecurity actually did.
-        $row = $db->query("SELECT value FROM settings WHERE key = 'waf_action_honesty_4330'")
-                  ->fetch(PDO::FETCH_ASSOC);
-        if (!$row) {
+        self::once($db, 'waf_action_honesty_4330', function (PDO $db) {
             $has = $db->query("SELECT name FROM sqlite_master
                                 WHERE type='table' AND name='waf_events'")
                       ->fetch(PDO::FETCH_ASSOC);
@@ -542,9 +625,7 @@ class Database {
                 $db->exec("UPDATE waf_events SET action = 'unknown'
                             WHERE action IS NULL OR action = '' OR action = 'block'");
             }
-            $db->exec("INSERT OR REPLACE INTO settings (key, value)
-                       VALUES ('waf_action_honesty_4330', '1')");
-        }
+        });
 
         // Queued mail that will never be delivered is deleted after this
         // long. Exim retries until retry_data expires -- days -- so these

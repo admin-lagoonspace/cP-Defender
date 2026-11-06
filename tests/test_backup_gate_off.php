@@ -72,7 +72,7 @@ $dbsrc = (string) file_get_contents($repo . '/backend/lib/Database.php');
 t_contains($dbsrc, "UPDATE settings SET value = '0'\n                        WHERE key = 'scan_pause_on_backup'",
      'the migration UPDATEs the existing row — INSERT OR IGNORE would not '
    . 'touch it, and every server already running has one');
-t_contains($dbsrc, "'scan_backup_gate_off_4312', '1'",
+t_contains($dbsrc, "once(\$db, 'scan_backup_gate_off_4312'",
      'keyed on its own marker, so it runs once and an operator who turns the '
    . 'gate back on afterwards keeps it');
 t_contains($dbsrc, "WHERE key = 'scan_paused_for_backup'",

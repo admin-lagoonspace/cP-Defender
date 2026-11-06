@@ -58,18 +58,66 @@ class WAFTriage
      * every site with an admin panel as scanner traffic and the verdicts
      * would stop meaning anything.
      */
-    private const PROBE_URI = '#(?:^|/)(?:\.env|\.git|\.aws|\.ssh|\.svn|\.hg)(?:/|$)
-                               |wp-config\.php(?:\.(?:bak|old|save|txt|orig|swp))?$
-                               |configuration\.php\.(?:bak|old|save|txt)$
-                               |(?:^|/)(?:phpinfo|info|test)\.php$
-                               |(?:^|/)(?:shell|c99|r57|wso|alfa|adminer)\w*\.php
-                               |\.(?:sql|sql\.gz|tar\.gz|zip|bak|old|swp|log)$
+    /**
+     * URIs that are nobody's real traffic.
+     *
+     * A request for /.env is not a visitor who mistyped. Nothing here is a
+     * path a browser follows from a link on a working site, which is what
+     * makes a rule that only ever fires on these safe to arm.
+     *
+     * THE FIRST VERSION WAS TOO STRICT AND IT SHOWED. Anchoring `.env` on a
+     * preceding slash missed /config.env, /secrets.env and /ses.env; the
+     * optional-suffix form missed /.env.supabase and /.env.anthropic. So a
+     * rule whose every URI was an env-file probe scored 0% and came back as
+     * "check a few before arming" -- 33 rules landed in that pile on a live
+     * server, which leaves the operator reading exactly the list the tool was
+     * supposed to read for them. Being conservative is right; being so
+     * conservative that nothing is decided is just a slower way of not
+     * helping.
+     *
+     * Still deliberately narrow. Nothing here matches a path a real site
+     * serves: no bare /admin, no /index.php, no /login.
+     */
+    private const PROBE_URI = '#(?:^|/)\.(?:env|git|aws|ssh|svn|hg|htpasswd|npmrc|docker)(?:[./]|$)
+                               |\.env(?:[.\-_][\w.\-]*)?(?:$|\?)
+                               |(?:^|/)env(?:[.\-_][\w.\-]*)?(?:$|\?)
+                               |wp-config(?:-sample)?\.php[~.]?\w*$
+                               |wp-config\.(?:bak|old|save|txt|orig|swp)$
+                               |configuration\.php[~.]?\w*$
+                               |config(?:uration)?\.(?:php|inc|ini|json|yml|yaml)\.(?:bak|old|save|txt|orig|swp|dist)$
+                               |(?:^|/)(?:phpinfo|info|test|hello)\w*\.php\d?$
+                               |(?:^|/)(?:shell|c99|r57|wso|alfa|alfa-rex|adminer|b1ack|filefuns|
+                                         wp-conflg|wp-l0gin|xmrlpc|worksec|wp-firewall|mail\d|
+                                         wp-plain|lndex|gecko|cache|dog|uGaFTFu|moon)\w*\.php\d?$
+                               |\.(?:sql|sql\.gz|tar\.gz|tgz|zip|bak|old|swp|log)(?:$|\?)
                                |(?:^|/)vendor/phpunit/
-                               |(?:^|/)(?:cgi-bin|boaform|HNAP1)/
-                               |(?:^|/)(?:\.\./|%2e%2e)
-                               |credentials(?:%3F|\?|$)
-                               |(?:^|/)(?:actuator|druid|solr|jenkins)/
+                               |(?:^|/)(?:cgi-bin|boaform|HNAP1|actuator|druid|solr|jenkins)/
+                               |(?:\.\.|%2e%2e|\.\.%2f|\.\.\.\.//)
+                               |proc/self/environ
+                               |credentials(?:%3F|\?|\.|$)
+                               |(?:^|/)wp-content/(?:upgrade|uploads|plugins/WordPressCore)/[\w.\-]*\.php\d?$
                               #xi';
+
+    /**
+     * Addresses that are not the internet.
+     *
+     * 127.0.0.1 appeared in this server's attacker list with 862 hits across
+     * 39 rules and 84 sites. That is not somebody attacking from the machine
+     * itself -- it is the real client address being lost, because cPanel's
+     * nginx reverse proxy terminates the connection and Apache sees loopback
+     * unless mod_remoteip is configured to read X-Forwarded-For.
+     *
+     * It matters twice. Those events have no usable source, so the IP-spread
+     * signal is wrong for every rule they appear in. And an operator reading
+     * "127.0.0.1, 39 rules" as an attacker and blocking it takes the site
+     * down. Separated out and called what it is.
+     */
+    private static function isLocalOrPrivate(string $ip): bool
+    {
+        if ($ip === '') { return true; }
+        return filter_var($ip, FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
+    }
 
     /** A window that has rows in it, expressed as a unix timestamp. */
     private static function since(int $days): int
@@ -163,7 +211,7 @@ class WAFTriage
 
         // Addresses tripping many different rules are running a scanner, not
         // stumbling into one.
-        $attackers = Database::fetchAll(
+        $rawAttackers = Database::fetchAll(
             "SELECT ip_address, COUNT(*) AS hits,
                     COUNT(DISTINCT rule_id) AS rules,
                     COUNT(DISTINCT host)    AS hosts,
@@ -172,7 +220,37 @@ class WAFTriage
               WHERE timestamp >= ? AND ip_address IS NOT NULL AND ip_address != ''
            GROUP BY ip_address
            HAVING rules >= 2
-           ORDER BY rules DESC, hits DESC LIMIT 15", [$since]);
+           ORDER BY rules DESC, hits DESC LIMIT 40", [$since]);
+
+        // Loopback and RFC1918 are not attackers. Listing them invites
+        // somebody to block 127.0.0.1, which takes the server off the air.
+        $attackers = [];
+        $proxied   = 0;
+        foreach ($rawAttackers as $a) {
+            if (self::isLocalOrPrivate((string) $a['ip_address'])) {
+                $proxied += (int) $a['hits'];
+                continue;
+            }
+            if (count($attackers) < 15) { $attackers[] = $a; }
+        }
+
+        $localTotal = (int) (Database::fetchOne(
+            "SELECT COUNT(*) c FROM waf_events
+              WHERE timestamp >= ? AND (ip_address = '127.0.0.1' OR ip_address = '::1'
+                                        OR ip_address LIKE '10.%' OR ip_address LIKE '192.168.%'
+                                        OR ip_address = '')", [$since])['c'] ?? 0);
+        if ($localTotal > 0) {
+            $notes[] = sprintf(
+                '%s event(s) — %d%% — were recorded from loopback or a private '
+              . 'address. The real client IP is being lost, almost certainly '
+              . 'because a reverse proxy (cPanel ships nginx in front of '
+              . 'Apache) terminates the connection and mod_remoteip is not '
+              . 'reading X-Forwarded-For. Those events cannot be attributed, '
+              . 'the IP-spread signal is understated for every rule they '
+              . 'appear in, and NOTHING in that group should ever be blocked.',
+                number_format($localTotal),
+                $total > 0 ? (int) round($localTotal / $total * 100) : 0);
+        }
 
         $hostRecorded = (int) (Database::fetchOne(
             "SELECT COUNT(*) c FROM waf_events

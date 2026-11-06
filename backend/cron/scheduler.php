@@ -744,6 +744,52 @@ $tasks = [
         },
     ],
 
+    // Is the database still sound?
+    //
+    // A live server answered every command with "database disk image is
+    // malformed" and nobody knew until a command failed in an operator's
+    // hands. The damage had been there for some time -- a miscounted
+    // freelist and a doubly-referenced page do not appear at the moment they
+    // are noticed. Checking nightly is what turns that into something the
+    // product says rather than something the operator discovers.
+    //
+    // Nightly, not hourly: the check reads the whole file, which is 80 MB
+    // here, and an hourly full read buys nothing a nightly one does not.
+    'dbcheck' => [
+        'schedule' => 'daily',
+        'time'     => '04:30',
+        'day'      => 0,
+        'run'      => function () {
+            $r = Database::integrityCheck(50);
+            if (!empty($r['ok'])) { return true; }
+
+            $what = implode('; ', array_slice($r['problems'], 0, 5));
+            slog('  DATABASE INTEGRITY CHECK FAILED: ' . $what);
+            Logger::error('Database integrity check failed: ' . $what);
+
+            // Raised once a day at most, which is how often it is checked.
+            // A damaged database is critical: everything this product knows
+            // -- threats, quarantine, settings, the firewall's own block
+            // list -- is in that one file.
+            try {
+                Database::insert('security_events', [
+                    'type'        => 'database_corruption',
+                    'severity'    => 'critical',
+                    'description' => 'SQLite reported damage in the ServerScrub '
+                                   . 'database: ' . mb_substr($what, 0, 500)
+                                   . ' — run `serverscrub db-check` for the full '
+                                   . 'report and the rebuild steps.',
+                ]);
+            } catch (Throwable $e) {
+                // Writing the event may itself fail on a damaged file. The
+                // log line above is the fallback, and it is deliberately
+                // emitted first.
+                slog('  (could not record the event: ' . $e->getMessage() . ')');
+            }
+            return true;
+        },
+    ],
+
     'rtguard' => [
         'schedule' => setting('rt_autostart_schedule', 'every'),
         'time'     => '00:00',
