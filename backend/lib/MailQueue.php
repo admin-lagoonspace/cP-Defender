@@ -490,6 +490,103 @@ class MailQueue
         ];
     }
 
+    /**
+     * Delete everything that has been queued too long.
+     *
+     * Exim retries a message until retry_data expires -- days by default --
+     * and a message that has sat for three days is almost never going to be
+     * delivered: the recipient server is gone, the domain does not resolve, or
+     * it is a bounce for a bounce. Asked for directly: "any message which is
+     * in queue for >= 72hrs just delete those message, because these will stay
+     * there forever".
+     *
+     * Three guards, because this is a destructive path that runs unattended:
+     *
+     *   - it is OFF unless mq_autodelete is '1';
+     *   - the age floor is never less than 24 hours, whatever the setting says.
+     *     A typo of '1' meaning one day would otherwise read as one HOUR and
+     *     delete live mail that was about to go out on its next retry;
+     *   - a per-run cap, so the first run on a 93,000-message queue does not
+     *     try to delete all of it in one pass. The rest goes on the next run,
+     *     and nothing gets older than it already is by waiting.
+     *
+     * What it deletes is logged by id before it happens -- see
+     * MailGuard::deleteMessages() -- because afterwards there is nothing left
+     * to inspect.
+     *
+     * @return array{deleted:int,candidates:int,examined:int,capped:bool,
+     *               enabled:bool,max_age_hours:int,error?:string}
+     */
+    public static function pruneStale(?int $maxAgeHours = null, ?int $cap = null): array
+    {
+        $enabled = (Database::setting('mq_autodelete', '1') ?? '1') === '1';
+
+        $hours = $maxAgeHours !== null
+            ? $maxAgeHours
+            : (int) (Database::setting('mq_max_age_hours', '72') ?? 72);
+        // THE FLOOR IS NOT NEGOTIABLE. Deleting queued mail is irreversible
+        // and a plausible misconfiguration -- '1' for "one day" -- would
+        // otherwise destroy an hour-old queue.
+        $hours = max(24, min(8760, $hours));
+
+        $cap = $cap !== null
+            ? $cap
+            : (int) (Database::setting('mq_autodelete_cap', '500') ?? 500);
+        // 500 is MailGuard::deleteMessages()'s own per-call ceiling; asking for
+        // more would be refused wholesale and delete nothing at all.
+        $cap = max(1, min(500, $cap));
+
+        $out = ['deleted' => 0, 'candidates' => 0, 'examined' => 0,
+                'capped' => false, 'enabled' => $enabled, 'max_age_hours' => $hours];
+
+        if (!$enabled) { return $out; }
+
+        // Rebuilt rather than read from cache: the cached snapshot can be a
+        // minute old, and this is the one caller whose decision is destructive.
+        $snap = self::snapshot(true);
+        if (!empty($snap['error'])) {
+            $out['error'] = (string) $snap['error'];
+            return $out;
+        }
+
+        $floor = $hours * 60;
+        $ids   = [];
+        foreach (($snap['messages'] ?? []) as $m) {
+            $out['examined']++;
+            if ((int) ($m['age_mins'] ?? 0) < $floor) { continue; }
+            $out['candidates']++;
+            if (count($ids) < $cap) { $ids[] = (string) $m['id']; }
+        }
+        if ($out['candidates'] > count($ids)) { $out['capped'] = true; }
+        if (!$ids) { return $out; }
+
+        $r = MailGuard::deleteMessages($ids);
+        $out['deleted'] = (int) ($r['deleted'] ?? 0);
+        if (!empty($r['error'])) { $out['error'] = (string) $r['error']; }
+
+        if ($out['deleted'] > 0) {
+            self::invalidate();
+            Logger::warn(sprintf(
+                'Mail queue: deleted %d message(s) older than %dh%s',
+                $out['deleted'], $hours,
+                $out['capped'] ? ' (per-run cap reached; more remain)' : ''));
+            // An operator looking at a shrinking queue needs to find out from
+            // the product that the product did it, not infer it.
+            Database::insert('security_events', [
+                'type'        => 'mailqueue_pruned',
+                'severity'    => 'low',
+                'description' => sprintf(
+                    '%d queued message(s) older than %d hours were deleted '
+                  . 'automatically. Exim would have retried these until their '
+                  . 'retry data expired; they are not deliverable.%s',
+                    $out['deleted'], $hours,
+                    $out['capped'] ? ' The per-run cap was reached, so more remain.' : ''),
+            ]);
+        }
+
+        return $out;
+    }
+
     /** Drop the cached snapshot, so the next read rebuilds it. */
     public static function invalidate(): void
     {

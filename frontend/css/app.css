@@ -631,6 +631,32 @@ select.form-input { cursor: pointer; }
   animation: update-spin .9s linear infinite;
 }
 @keyframes update-spin { to { transform: rotate(360deg); } }
+
+/* The in-button loading icon, for a refresh that reloads a card in the
+   background. A refresh used to swap the label for the word "Refreshing" and
+   nothing else, so on a card whose contents came back identical -- scanner
+   logs between two scans, most of the time -- a click produced no visible
+   change at all and read as a dead button.
+
+   Reuses update-spin rather than declaring a second identical animation.
+   currentColor so it works on a ghost button in either theme, and
+   vertical-align keeps it on the text baseline instead of lifting the label. */
+.btn-spin {
+  display: inline-block;
+  width: 11px; height: 11px;
+  margin-right: 5px;
+  vertical-align: -1px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: .85;
+  animation: update-spin .7s linear infinite;
+}
+/* Someone who has asked for less motion gets a static ring, which still
+   reads as "busy" because the button is also disabled and relabelled. */
+@media (prefers-reduced-motion: reduce) {
+  .btn-spin { animation: none; }
+}
 /* Swapped for a static state once the run ends, so a finished update does not
    keep spinning as though it were still working. */
 .update-spinner.done   { animation: none; border-color: var(--green); border-top-color: var(--green); }

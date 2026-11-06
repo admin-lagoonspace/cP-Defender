@@ -1086,9 +1086,67 @@ def watch_paths(conn):
 
 SKIP = {'node_modules','.git','__pycache__','.svn'}
 
+def add_watch_tree(conn, ino, wds, root, fl, limits, limiter, debouncer):
+    """Watch a directory that appeared after startup, and sweep what is in it.
+
+    Returns the number of watches added.
+
+    Bounded by the same rt_max_watches cap as the initial walk. Without the
+    cap an attacker -- or a careless `git clone` -- could exhaust
+    fs.inotify.max_user_watches by creating directories, and once that limit
+    is hit the kernel refuses watches for the WHOLE tree, not just the new
+    part. Declining to watch a new subtree loses that subtree; running out of
+    watches loses the server.
+    """
+    if os.path.basename(root).startswith('.') and os.path.basename(root) not in ('.',):
+        # Hidden directories are excluded from the initial walk, so including
+        # them here would make coverage depend on whether a directory existed
+        # when the daemon started. Kept consistent deliberately -- but the
+        # FILES inside a hidden directory still reach handle() through the
+        # parent's watch, and STASH in interesting() is what catches the
+        # hex-named payload stash.
+        return 0
+    if os.path.basename(root) in limits['excludes']:
+        return 0
+
+    added = 0
+    for r, ds, fs in os.walk(root, followlinks=False):
+        ds[:] = [d for d in ds
+                 if d not in limits['excludes'] and not d.startswith('.')]
+        if len(wds) >= limits['max_watches']:
+            log.warning('inotify: watch cap (%d) reached; not watching %s',
+                        limits['max_watches'], r)
+            db_set(conn, 'rt_watch_capped', '1')
+            break
+        try:
+            wd = ino.add_watch(r, fl)
+            wds[wd] = r
+            added += 1
+        except (PermissionError, FileNotFoundError):
+            # A directory created and removed again between the event and now.
+            continue
+        except OSError as e:
+            log.error('inotify: cannot watch %s (%s)', r, e)
+            db_set(conn, 'rt_watch_capped', '1')
+            break
+
+        # Files already inside it. Their CREATE events were never delivered
+        # -- there was no watch yet -- so this is the only chance to see them.
+        for f in fs:
+            fp = os.path.join(r, f)
+            if interesting(fp):
+                handle(conn, fp, limits, limiter, debouncer)
+
+    if added:
+        log.info('inotify: watching %d new dir(s) under %s', added, root)
+        db_set(conn, 'rt_watch_count', str(len(wds)))
+    return added
+
+
 def run_inotify(conn, paths, limits):
     import inotify_simple
     fl = inotify_simple.flags.CREATE | inotify_simple.flags.MODIFY | inotify_simple.flags.MOVED_TO
+    ISDIR = inotify_simple.flags.ISDIR
     ino = inotify_simple.INotify()
     wds = {}
     capped = False
@@ -1168,6 +1226,26 @@ def run_inotify(conn, paths, limits):
             dp = wds.get(ev.wd,'')
             if not dp: continue
             fp = os.path.join(dp, ev.name)
+
+            # A DIRECTORY THAT APPEARS AFTER STARTUP MUST BE WATCHED.
+            #
+            # The watch list was built once, by walking the tree at startup.
+            # inotify watches are per-directory and do not recurse, so a
+            # directory created later had no watch -- and every file created
+            # inside it was invisible for the lifetime of the daemon. Creating
+            # a directory and dropping the payload inside it is not an exotic
+            # case, it is the ordinary shape of a web-shell drop, and it was a
+            # blind spot that a restart was the only thing that closed.
+            #
+            # The walk matters as much as the watch: between the directory
+            # being created and the watch being added, files can already have
+            # landed, and those events are gone. So the new tree is also swept
+            # once, through the same rate limiter as everything else.
+            if ev.mask & ISDIR:
+                add_watch_tree(conn, ino, wds, fp, fl, limits,
+                               limiter, debouncer)
+                continue
+
             # interesting() replaces the bare suffix check: drop-ins and the
             # hidden hex-named payload stash have to get through it.
             if not interesting(fp): continue

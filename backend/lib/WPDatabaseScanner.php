@@ -7,6 +7,11 @@
 require_once __DIR__ . '/Scanner.php';
 require_once __DIR__ . '/Database.php';
 require_once __DIR__ . '/Logger.php';
+// Called by wordpressRoots() and by the sweep's discovery step. Absent, the
+// sweep fatals with "Class CMSGuard not found" the moment it runs from cron,
+// where nothing else has loaded it -- the same shape of failure that once
+// made every one of 132 user reports silently skip.
+require_once __DIR__ . '/CMSGuard.php';
 
 /**
  * ServerScrub — WordPress database scanner
@@ -605,13 +610,38 @@ class WPDatabaseScanner
         $roots   = $installs;
 
         if ($roots === null) {
-            $roots = [];
-            foreach ((new CMSGuard())->getInstalls() as $i) {
-                if (strtolower((string)($i['cms'] ?? '')) !== 'wordpress') continue;
-                $d = (string)($i['path'] ?? $i['docroot'] ?? '');
-                if ($d !== '') $roots[] = $d;
+            $roots = self::wordpressRoots();
+
+            // NOTHING TO SCAN IS NOT THE SAME AS NOTHING WRONG.
+            //
+            // The inventory is CMSGuard's table, which is populated by its own
+            // scan. On a server where that had never run -- or had not run
+            // since the sites were added -- this swept zero installs and
+            // reported "0 findings", which reads as a clean server. The whole
+            // point of the sweep is the half of a compromise that is not a
+            // file, so answering "clean" from an empty list is the worst
+            // failure this module has.
+            //
+            // So discover first, then sweep. Bounded by CMSGuard's own depth
+            // and directory caps, and only when the inventory cannot be
+            // trusted: an inventory refreshed in the last day is used as it
+            // stands, because the walk is the expensive part.
+            $lastScan = (int) (Database::setting('cms_last_scan_at', '0') ?? 0);
+            $stale    = (time() - $lastScan) > 86400;
+            if (!$roots || $stale) {
+                $why = !$roots ? 'no WordPress installs on record'
+                               : 'the CMS inventory is more than a day old';
+                Logger::info('WordPress database sweep: discovering installs first — ' . $why);
+                try {
+                    (new CMSGuard())->scanInstalls();
+                    $roots = self::wordpressRoots();
+                } catch (Throwable $e) {
+                    // Report it; do not let a failed discovery turn into a
+                    // silent zero-install sweep.
+                    Logger::warn('WordPress database sweep: install discovery failed: '
+                               . $e->getMessage());
+                }
             }
-            $roots = array_values(array_unique($roots));
         }
 
         // Resume point, so a sweep that runs out of budget rotates through the
@@ -687,6 +717,42 @@ class WPDatabaseScanner
             'errors'   => array_slice($errors, 0, 50),
             'complete' => $complete,
         ];
+    }
+
+    /**
+     * Every WordPress install on record.
+     *
+     * THE KEY NAMES ARE THE BUG THIS FIXES. getInstalls() returns rows from
+     * cms_installs, whose columns are `cms_type` and `install_path`. This read
+     * `$i['cms']` and `$i['path']`, neither of which exists, so the comparison
+     * was always '' !== 'wordpress' and EVERY row was skipped. The sweep found
+     * zero installs on a server with hundreds of WordPress sites, and the
+     * panel reported "Read 0 of 0 installs - 0 new finding(s)" in green.
+     *
+     * The old names are kept as fallbacks rather than deleted: scanInstall()
+     * and the API's single-install path both pass paths around under other
+     * names, and a second silent mismatch is exactly what this cost us once.
+     *
+     * @return string[]
+     */
+    public static function wordpressRoots(): array
+    {
+        $roots = [];
+        foreach ((new CMSGuard())->getInstalls() as $i) {
+            $cms = strtolower((string) ($i['cms_type'] ?? $i['cms'] ?? ''));
+            if ($cms !== 'wordpress') { continue; }
+
+            $d = (string) ($i['install_path'] ?? $i['path'] ?? $i['docroot'] ?? '');
+            if ($d === '') { continue; }
+
+            // A recorded install whose directory has since gone would be
+            // counted in "installs" and never scanned, which is how a sweep
+            // comes to report fewer read than found for no visible reason.
+            if (!is_dir($d)) { continue; }
+
+            $roots[] = $d;
+        }
+        return array_values(array_unique($roots));
     }
 
     /** Open findings, worst first. */

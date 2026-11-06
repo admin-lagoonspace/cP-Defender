@@ -6110,7 +6110,9 @@ async function doRefresh(btn, fn) {
 
   const original = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '\u21BB Refreshing\u2026';
+  // The spinning ring, not just a word: see .btn-spin. The label stays
+  // too, because an icon alone does not say what is happening.
+  btn.innerHTML = '<span class="btn-spin"></span>Refreshing\u2026';
 
   const started = Date.now();
   let failed = false;
@@ -6382,6 +6384,18 @@ async function runWPScan() {
     if (!r || r.success === false) {
       toast(r && r.error ? r.error : 'Sweep failed', 'error');
     } else {
+      /* NOTHING SCANNED IS NOT A CLEAN RESULT. A sweep that found no
+       * installs at all used to toast "Read 0 of 0 installs - 0 new
+       * finding(s)" in green, which is indistinguishable from a server
+       * with nothing wrong. It was the only visible symptom of a key-name
+       * bug that skipped every WordPress install on the server. */
+      if (!(d.installs || 0)) {
+        toast('No WordPress installs were found to scan. Check that '
+            + 'scan_paths covers the sites, then run the CMS scan.',
+              'warning', 8000);
+        await loadWPScan();
+        return;
+      }
       let msg = 'Read ' + (d.scanned || 0) + ' of ' + (d.installs || 0)
               + ' installs \u2014 ' + (d.findings || 0) + ' new finding(s)';
       if (d.complete === false) {

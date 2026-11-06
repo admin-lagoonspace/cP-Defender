@@ -66,6 +66,10 @@ require_once SG_ROOT . '/backend/lib/Schedule.php';
 require_once SG_ROOT . '/backend/lib/BruteForce.php';
 require_once SG_ROOT . '/backend/lib/NetworkGuard.php';
 require_once SG_ROOT . '/backend/lib/MailGuard.php';
+// pruneStale() runs from the mailqueueprune task below. MailQueue was only
+// ever loaded by the API before now, so without this the task fatals in cron
+// with "Class MailQueue not found" and every task after it is skipped.
+require_once SG_ROOT . '/backend/lib/MailQueue.php';
 // The fwprobe task measures iptables and CSF off the request path.
 require_once SG_ROOT . '/backend/lib/Firewall.php';
 
@@ -702,6 +706,41 @@ $tasks = [
                 @unlink($marker);
                 if ($started) { slog('  all interrupted scans resumed'); }
             }
+        },
+    ],
+
+    // Clear mail that will never be delivered.
+    //
+    // Exim retries until a message's retry data expires, which on a default
+    // cPanel box is days. A message that has sat for three days is not
+    // waiting, it is stuck: the recipient server is gone, the domain does not
+    // resolve, or it is a bounce of a bounce. They accumulate, and a queue
+    // nobody can read is a queue in which a live relay goes unnoticed.
+    //
+    // Hourly rather than nightly: a relay incident puts tens of thousands of
+    // messages in the queue in an afternoon, and the per-run cap means
+    // clearing them takes several passes.
+    'mailqueueprune' => [
+        'schedule' => 'hourly',
+        'time'     => '00:00',
+        'day'      => 0,
+        'run'      => function () {
+            if ((string) setting('mq_autodelete', '1') !== '1') {
+                return true;   // off by configuration; nothing to retry
+            }
+
+            $r = MailQueue::pruneStale();
+
+            if (!empty($r['error'])) {
+                slog('  mail queue prune: ' . $r['error']);
+                return true;   // a missing exim is not something retrying fixes
+            }
+            if (($r['deleted'] ?? 0) > 0) {
+                slog(sprintf('  deleted %d queued message(s) older than %dh%s',
+                             $r['deleted'], $r['max_age_hours'],
+                             !empty($r['capped']) ? ' (cap reached, more remain)' : ''));
+            }
+            return true;
         },
     ],
 

@@ -509,6 +509,24 @@ class Database {
                         WHERE key = 'scan_paused_for_backup'");
         }
 
+        // Queued mail that will never be delivered is deleted after this
+        // long. Exim retries until retry_data expires -- days -- so these
+        // messages sit there for ever, and a queue nobody can read through is
+        // a queue in which an active relay is invisible.
+        //
+        // pruneStale() clamps the age to at least 24 hours whatever is set
+        // here: the setting is in HOURS and a '1' meant as "one day" would
+        // otherwise delete an hour-old queue.
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('mq_autodelete', '1')");
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('mq_max_age_hours', '72')");
+        // Per run, and MailGuard::deleteMessages() refuses more than 500 in
+        // one call anyway. A 93,000-message queue is cleared over several
+        // hourly passes rather than in one unreviewable sweep.
+        $db->exec("INSERT OR IGNORE INTO settings (key, value)
+                   VALUES ('mq_autodelete_cap', '500')");
+
         // Outbound mail monitoring, on by default.
         //
         // OUTBOUND ONLY. Inbound filtering is MagicSpam's job on this server
