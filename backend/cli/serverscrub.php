@@ -15,6 +15,8 @@
  *   serverscrub firewall block   <ip> [reason]
  *   serverscrub firewall unblock <ip>
  *   serverscrub firewall allow   <ip> [comment]
+   serverscrub waf mode                 (show the rule engine mode)
+   serverscrub waf mode <on|detectiononly|off>
  *   serverscrub reputation <ip>
  *   serverscrub update-sigs
  * Global flag: --json  (machine-readable output for any command)
@@ -350,6 +352,53 @@ try {
         if (!$rk && !$ck) {
             echo 'Neither could be installed. The built-in engine needs neither'
                . ' and is used instead.' . PHP_EOL;
+        }
+        break;
+    }
+
+    // Read or set the rule engine mode, from the shell.
+    //
+    // Added because the panel's two mode controls disagreed and one of them
+    // silently did nothing: pressing Apply Mode reported success while the
+    // engine stayed in detection only. When a control cannot be trusted the
+    // answer is a path that shows its working -- this one prints the mode it
+    // reads back from the config Apache actually loads, so "did it take?" is
+    // answerable without the UI.
+    case 'waf': {
+        require_once $BASE . '/lib/WAF.php';
+        require_once $BASE . '/lib/WAFInstaller.php';
+        $sub = $rest[0] ?? 'mode';
+        if ($sub !== 'mode') { fail("unknown waf subcommand: $sub"); }
+
+        $want = strtolower((string)($rest[1] ?? ''));
+        if ($want === '') {
+            out(['mode'      => WAFInstaller::currentMode(),
+                 'conf'      => WAFInstaller::confDir() . '/serverscrub-waf.conf',
+                 'installed' => WAFInstaller::status()]);
+            break;
+        }
+
+        need_root();
+        License::requireValid('WAF management');
+        if (!in_array($want, ['on', 'detectiononly', 'off'], true)) {
+            fail('usage: serverscrub waf mode [on|detectiononly|off]');
+        }
+
+        $r = WAFInstaller::setMode($want);
+        if (empty($r['success'])) {
+            echo 'ERROR: ' . ($r['error'] ?? 'could not set the mode') . PHP_EOL;
+            exit(1);
+        }
+
+        // Read back rather than echo what was asked for. Reporting the
+        // requested value is exactly the mistake the panel made.
+        $now = WAFInstaller::currentMode();
+        out(['requested' => $want, 'mode' => $now,
+             'applied'   => $now === $want]);
+        if ($now !== $want) {
+            echo 'WARNING: Apache reloaded but the config still reads '
+               . $now . PHP_EOL;
+            exit(1);
         }
         break;
     }

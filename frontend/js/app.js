@@ -1858,6 +1858,20 @@ async function wafIngestNow() {
   loadWAF();
 }
 
+/* One spelling of the mode for the whole page.
+ *
+ * The engine reports 'on' | 'detectiononly' | 'off' | 'unknown'. "Unknown" is
+ * displayed as such rather than smoothed into "On": not being able to read
+ * the config is a thing the operator needs to see, not a thing to guess past.
+ */
+function wafModeLabel(mode) {
+  const m = String(mode || 'unknown').toLowerCase();
+  if (m === 'on')            { return 'Blocking'; }
+  if (m === 'detectiononly') { return 'Detection only'; }
+  if (m === 'off')           { return 'Off'; }
+  return 'Unknown';
+}
+
 async function loadWAF() {
   loadWafIngestState();
   const [stats, cats] = await Promise.all([
@@ -1870,7 +1884,12 @@ async function loadWAF() {
     document.getElementById('waf-stat-total').textContent    = fmtNum(d.total_events || 0);
     document.getElementById('waf-stat-today').textContent    = fmtNum(d.events_today || 0);
     document.getElementById('waf-stat-top-rule').textContent = d.top_rules?.[0]?.rule_id || '—';
-    document.getElementById('waf-stat-mode').textContent     = 'On';
+    /* THE TILE WAS THE WORD "On", HARD-CODED. It read nothing, so it said
+     * "On" while the engine below it said "detectiononly" -- and it would
+     * have said "On" with ModSecurity not installed at all. In a security
+     * product the tile that says whether the firewall is enforcing is the
+     * last place to print a constant. */
+    setText('waf-stat-mode', wafModeLabel(d.mode));
   }
 
   loadWAFEvents();
@@ -2130,11 +2149,25 @@ function fallbackCopy(text, done) {
   document.body.removeChild(ta);
 }
 
+/* The page header's Apply Mode.
+ *
+ * It called a different endpoint from the WAF Engine card's own selector, and
+ * that endpoint wrote a different file -- the vendor config, rather than the
+ * serverscrub-waf.conf that Apache actually honours. It could not fail: the
+ * edit was guarded by is_readable and the method returned success whether or
+ * not anything was written. So pressing it reported "WAF mode set to On"
+ * while the card directly below went on reading the real file and saying
+ * detectiononly. Two controls for one setting, disagreeing in public.
+ *
+ * Now both go through setWafEngineMode(): one endpoint, one file, validated
+ * before Apache is reloaded, and the card is re-read afterwards so what is on
+ * screen is what is on disk. */
 async function setWAFMode() {
-  const mode = document.getElementById('waf-mode-sel')?.value;
-  const res  = Demo.active ? { success: true } : await API.wafSetMode(mode);
-  if (res?.success) toast(`WAF mode set to ${mode}`, 'success');
-  else toast('Failed', 'error');
+  const sel = document.getElementById('waf-mode-sel');
+  const mode = (sel && sel.value) || '';
+  if (!mode) { return; }
+  // The engine endpoint speaks lower case.
+  await setWafEngineMode(mode.toLowerCase());
 }
 
 // ── Dashboard overview ─────────────────────────────────────────────────────
@@ -5860,7 +5893,7 @@ async function loadWafEngine() {
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
   set('waf-ms-val',  d.modsecurity_installed ? ('installed ' + (d.modsecurity_version || '')) : 'not installed');
   set('waf-crs-val', d.crs_installed ? ('v' + (d.crs_version || '?')) : 'not installed');
-  set('waf-mode-val', d.mode === 'unknown' ? '—' : d.mode);
+  set('waf-mode-val', d.mode === 'unknown' ? '—' : wafModeLabel(d.mode));
 
   // Offer install only when it can actually succeed — a button that always
   // fails is worse than no button.
@@ -5869,6 +5902,17 @@ async function loadWafEngine() {
   btn.classList.toggle('hidden', ready || !d.can_install);
   sel.classList.toggle('hidden', !ready);
   if (ready) sel.value = d.mode === 'unknown' ? 'detectiononly' : d.mode;
+
+  // The header selector shows the SAME mode. It used to sit on whatever it
+  // was left on, so after a failed Apply it still displayed the mode the
+  // operator had asked for while the card below displayed the real one --
+  // the two controls visibly contradicting each other, which is what was
+  // reported. Its values are capitalised; the engine reports lower case.
+  const head = document.getElementById('waf-mode-sel');
+  if (head && d.mode && d.mode !== 'unknown') {
+    const CAP = { on: 'On', detectiononly: 'DetectionOnly', off: 'Off' };
+    if (CAP[d.mode]) { head.value = CAP[d.mode]; }
+  }
 
   if (!ready && !d.can_install) {
     summary.textContent += ' (No supported package manager was found, so this '
@@ -5914,9 +5958,17 @@ async function setWafEngineMode(mode) {
     return;
   }
   const res = Demo.active ? { success: true } : await API.post('waf/engine-mode', { mode });
-  toast(res && res.success ? 'WAF mode updated' : ((res && res.error) || 'Could not change mode'),
-        res && res.success ? 'success' : 'error');
-  loadWafEngine();
+  const okay = !!(res && res.success);
+  toast(okay ? 'WAF mode set to ' + wafModeLabel(mode)
+             : ((res && res.error) || 'Could not change mode'),
+        okay ? 'success' : 'error');
+
+  // Both views of the mode are re-read from the server, not assumed. The old
+  // code refreshed the card only, so the header selector and the Mode tile
+  // kept showing whatever they had been showing -- which is how a failed
+  // change looked exactly like a successful one.
+  await loadWafEngine();
+  if (typeof loadWAF === 'function') { await loadWAF(); }
 }
 
 function _demoWafEngine() {

@@ -7,6 +7,9 @@
  * idempotent and safe across the cycles these classes form. */
 require_once __DIR__ . '/Database.php';
 require_once __DIR__ . '/Logger.php';
+// setMode() delegates to it and getMode() reads the mode it records. No
+// cycle: WAFInstaller requires only Database and Logger.
+require_once __DIR__ . '/WAFInstaller.php';
 
 /**
  * ServerScrub — WAF Module
@@ -38,10 +41,27 @@ class WAF {
         ];
     }
 
+    /**
+     * The mode Apache is actually running in.
+     *
+     * Our own config is read FIRST, because it is included after the vendor's
+     * and therefore wins. Reading only the vendor file reported a mode that
+     * had been overridden -- the status said one thing and the engine card,
+     * reading the right file, said another.
+     *
+     * 'unknown' when neither can be read. Not 'On': a status that assumes it
+     * is protecting you is the one assumption this must never make.
+     */
     private function getMode(): string {
+        $ours = WAFInstaller::currentMode();          // on | detectiononly | off | unknown
+        if ($ours !== 'unknown') {
+            return ['on' => 'On', 'detectiononly' => 'DetectionOnly',
+                    'off' => 'Off'][$ours] ?? $ours;
+        }
+
         if (!is_readable(MODSEC_CONF . '/modsecurity.conf')) return 'unknown';
-        $conf = file_get_contents(MODSEC_CONF . '/modsecurity.conf');
-        if (preg_match('/SecRuleEngine\s+(\w+)/i', $conf, $m)) return $m[1];
+        $conf = (string) @file_get_contents(MODSEC_CONF . '/modsecurity.conf');
+        if (preg_match('/^\s*SecRuleEngine\s+(\w+)/mi', $conf, $m)) return $m[1];
         return 'unknown';
     }
 
@@ -101,20 +121,45 @@ class WAF {
                 'limit' => $limit, 'offset' => $offset];
     }
 
+    /**
+     * Set the rule engine mode.
+     *
+     * THIS USED TO BE A SECOND, DIFFERENT IMPLEMENTATION, and the two
+     * disagreed. The page header's "Apply Mode" came here; the WAF Engine
+     * card's selector went to WAFInstaller::setMode(). They wrote DIFFERENT
+     * FILES:
+     *
+     *   here                 the VENDOR config, modsec_vendor_configs/modsecurity.conf
+     *   WAFInstaller         serverscrub-waf.conf, the file we own and Apache loads
+     *
+     * Ours is included after the vendor's and sets SecRuleEngine itself, so
+     * it is the one that decides. Editing the vendor file changed nothing a
+     * request would ever notice.
+     *
+     * And it could not fail. `is_readable` guarded the edit, so on a server
+     * where that path does not exist -- which is most of them; cPanel keeps
+     * ModSecurity's config elsewhere -- the whole block was skipped and the
+     * method still returned success. No write check, no `apachectl -t`, no
+     * check that the reload worked. The operator pressed Apply Mode, was told
+     * it had worked, and the engine below carried on saying "detectiononly",
+     * because it was reading the file that actually governs.
+     *
+     * So this delegates. One implementation, which writes the file that
+     * counts, validates the config before reloading, and reports a failure as
+     * a failure.
+     */
     public function setMode(string $mode): array {
         $allowed = ['On', 'Off', 'DetectionOnly'];
-        if (!in_array($mode, $allowed)) {
+        if (!in_array($mode, $allowed, true)) {
             return ['success' => false, 'error' => 'Invalid mode'];
         }
 
-        $confPath = MODSEC_CONF . '/modsecurity.conf';
-        if (is_readable($confPath)) {
-            $conf = file_get_contents($confPath);
-            $conf = preg_replace('/SecRuleEngine\s+\w+/', "SecRuleEngine $mode", $conf);
-            file_put_contents($confPath, $conf);
-            exec('service httpd graceful 2>/dev/null || service apache2 graceful 2>/dev/null');
-        }
+        $r = WAFInstaller::setMode(strtolower($mode));
+        if (empty($r['success'])) { return $r; }
 
+        // Kept in step rather than set independently. waf_enabled drove a
+        // "Mode: On" tile while the engine sat in DetectionOnly; two settings
+        // for one fact is how that happens.
         Database::setSetting('waf_enabled', $mode === 'On' ? '1' : '0');
         return ['success' => true, 'mode' => $mode];
     }
