@@ -509,6 +509,15 @@ class Database {
                         WHERE key = 'scan_paused_for_backup'");
         }
 
+        // Every WAF read filters by time: the event list, the "today"
+        // count, and the triage report's aggregates. 148,551 rows is a fast
+        // scan but not a free one, and it is scanned several times per page
+        // load.
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_waf_time
+                       ON waf_events (timestamp)");
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_waf_rule_time
+                       ON waf_events (rule_id, timestamp)");
+
         // One-time: the action on every existing WAF event was invented.
         //
         // saveWafEvent() wrote the literal string 'block' on every row it ever

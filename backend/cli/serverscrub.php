@@ -17,6 +17,7 @@
  *   serverscrub firewall allow   <ip> [comment]
    serverscrub waf mode                 (show the rule engine mode)
    serverscrub waf mode <on|detectiononly|off>
+   serverscrub waf triage [days]        (what arming the engine would do)
  *   serverscrub reputation <ip>
  *   serverscrub update-sigs
  * Global flag: --json  (machine-readable output for any command)
@@ -368,6 +369,19 @@ try {
         require_once $BASE . '/lib/WAF.php';
         require_once $BASE . '/lib/WAFInstaller.php';
         $sub = $rest[0] ?? 'mode';
+
+        // What would happen if the engine were armed, answered from the
+        // events already recorded. Read-only: it changes nothing, so it is
+        // safe to run on a production server mid-incident.
+        if ($sub === 'triage') {
+            require_once $BASE . '/lib/WAFTriage.php';
+            $days = (int) ($rest[1] ?? 7);
+            $rep  = WAFTriage::report($days, 40);
+            if (in_array('--json', $args, true)) { out($rep); break; }
+            echo WAFTriage::text($rep);
+            break;
+        }
+
         if ($sub !== 'mode') { fail("unknown waf subcommand: $sub"); }
 
         $want = strtolower((string)($rest[1] ?? ''));
