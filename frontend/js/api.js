@@ -276,7 +276,9 @@ const API = (() => {
     // WAF
     wafStatus:    ()           => req('GET',  'waf/status'),
     wafStats:     ()           => req('GET',  'waf/stats'),
-    wafEvents:    (sev)        => req('GET',  `waf/events${sev ? '?severity='+sev : ''}`),
+    wafEvents:    (sev, limit, offset) => req('GET',
+      'waf/events?limit=' + (limit || 100) + '&offset=' + (offset || 0)
+      + (sev ? '&severity=' + encodeURIComponent(sev) : '')),
     wafCats:      ()           => req('GET',  'waf/categories'),
     wafSetMode:   (mode)       => req('POST', 'waf/set-mode', { mode }),
     overview:     (days)       => req('GET',  `overview/stats?days=${days || 30}`),

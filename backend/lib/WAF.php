@@ -61,17 +61,44 @@ class WAF {
         return (int) ($row['c'] ?? 0);
     }
 
-    public function getEvents(int $limit = 100, ?string $severity = null, ?string $ip = null): array {
+    public const EVENTS_MIN_PAGE = 25;
+    public const EVENTS_MAX_PAGE = 500;
+
+    /**
+     * One page of events, WITH the total.
+     *
+     * This returned a bare list capped at 100 and nothing else, so the panel
+     * showed the most recent hundred of 148,551 events and gave no way to
+     * reach the rest -- or even to know there WAS a rest. An attack from last
+     * Tuesday was in the database and unreachable from the product.
+     *
+     * The total is counted under the same filter as the rows. Counting the
+     * whole table while listing a filtered page would put "Showing 1-50 of
+     * 148,551" under fifty critical events, which is worse than no count.
+     *
+     * @return array{items:array,total:int,limit:int,offset:int}
+     */
+    public function getEvents(int $limit = 100, ?string $severity = null,
+                              ?string $ip = null, int $offset = 0): array {
+        $limit  = max(self::EVENTS_MIN_PAGE, min(self::EVENTS_MAX_PAGE, $limit));
+        $offset = max(0, $offset);
+
         $where  = [];
         $params = [];
         if ($severity) { $where[] = 'severity = ?'; $params[] = $severity; }
         if ($ip)       { $where[] = 'ip_address = ?'; $params[] = $ip; }
+        $clause = $where ? ' WHERE ' . implode(' AND ', $where) : '';
 
-        $sql = "SELECT * FROM waf_events" .
-               ($where ? ' WHERE ' . implode(' AND ', $where) : '') .
-               " ORDER BY timestamp DESC LIMIT ?";
-        $params[] = $limit;
-        return Database::fetchAll($sql, $params);
+        $total = (int) (Database::fetchOne(
+            "SELECT COUNT(*) AS c FROM waf_events" . $clause, $params)['c'] ?? 0);
+
+        $rows = Database::fetchAll(
+            "SELECT * FROM waf_events" . $clause .
+            " ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?",
+            array_merge($params, [$limit, $offset]));
+
+        return ['items' => $rows, 'total' => $total,
+                'limit' => $limit, 'offset' => $offset];
     }
 
     public function setMode(string $mode): array {
@@ -348,6 +375,21 @@ class WAF {
                 $entry['rule_id']  = $idM[1]  ?? '';
                 $entry['rule_msg'] = $msgM[1] ?? '';
                 $entry['severity'] = strtolower($sevM[1] ?? 'medium');
+
+                // The disruptive action is in the Message line's own preamble:
+                // "Access denied with code 403", "Warning." and so on. One
+                // transaction can carry several Message lines, and what the
+                // operator needs is the strongest -- a request denied by rule
+                // two was denied, whatever rule one merely warned about.
+                $entry['action'] = self::strongerAction(
+                    $entry['action'] ?? null, self::actionFromMessage($m[1]));
+            } elseif (preg_match('/^Action:\s*Intercepted/i', $line)) {
+                // Section H states it outright when present.
+                $entry['action'] = 'blocked';
+            } elseif (preg_match('/^Engine-Mode:\s*"?DETECTION_ONLY/i', $line)) {
+                // Decisive in the other direction: in DetectionOnly nothing is
+                // blocked, whatever an individual rule's message claims.
+                $entry['action'] = 'detected';
             } elseif (preg_match('/^\[[^\]]+\]\s+(.*)$/', $line, $m)) {
                 // ModSecurity section A, which carries the addresses.
                 //
@@ -398,6 +440,52 @@ class WAF {
         return $count;
     }
 
+    /**
+     * The disruptive action named in a ModSecurity Message line.
+     *
+     * 'blocked'  the request did not reach the site;
+     * 'detected' the rule matched and the request was served anyway;
+     * 'unknown'  the line says nothing either way, which is NOT 'blocked'.
+     *
+     * The third is the point. Guessing "blocked" from silence is how a column
+     * that is supposed to say whether you were protected comes to say so
+     * regardless.
+     */
+    public static function actionFromMessage(string $msg): string
+    {
+        if (preg_match('/\bAccess denied\b|\bIntercepted\b/i', $msg))  { return 'blocked'; }
+        if (preg_match('/\bAccess dropped\b|\baction: drop\b/i', $msg)) { return 'dropped'; }
+        if (preg_match('/\bredirect(ed)?\s+to\b/i', $msg))              { return 'redirected'; }
+        // "Warning." is ModSecurity's word for "matched, allowed through".
+        if (preg_match('/\bWarning\b|\bPattern match\b|\bMatched\b/i', $msg)) { return 'detected'; }
+        return 'unknown';
+    }
+
+    /** Rank of certainty that the request was stopped. */
+    private const ACTION_RANK = [
+        'unknown'    => 0,
+        'detected'   => 1,
+        'redirected' => 2,
+        'dropped'    => 3,
+        'blocked'    => 4,
+    ];
+
+    /**
+     * The more consequential of two actions for one transaction.
+     *
+     * A transaction with five Message lines, four warnings and one denial, was
+     * blocked. Taking the last one seen would report it by whichever rule
+     * happened to be written last.
+     */
+    public static function strongerAction(?string $a, ?string $b): string
+    {
+        $a = $a ?: 'unknown';
+        $b = $b ?: 'unknown';
+        $ra = self::ACTION_RANK[$a] ?? 0;
+        $rb = self::ACTION_RANK[$b] ?? 0;
+        return $rb > $ra ? $b : $a;
+    }
+
     private function saveWafEvent(array $e): void {
         if (empty($e['rule_id']) && empty($e['ip_address'])) return;
 
@@ -417,7 +505,14 @@ class WAF {
             'method'     => $e['method']     ?? '',
             'host'       => $e['host']       ?? '',
             'user_agent' => mb_substr((string)($e['user_agent'] ?? ''), 0, 512),
-            'action'     => 'block',
+            // WHAT HAPPENED, not what we assume happened. This was the literal
+            // string 'block' for every row ever written, while the detail
+            // dialog displayed it as fact. On a server running the engine in
+            // DetectionOnly -- a mode this product offers and sets -- every
+            // one of those rows claimed a request had been blocked when it had
+            // been waved through. A security product inventing the one field
+            // that says whether it protected you is the worst row it can hold.
+            'action'     => (string) ($e['action'] ?? 'unknown'),
         ]);
     }
 

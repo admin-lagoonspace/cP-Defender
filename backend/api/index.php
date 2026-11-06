@@ -853,8 +853,13 @@ function routeWAF(string $action, string $method, array $body, array $q, ?array 
     return match($action) {
         'status'     => ['success' => true, 'data' => $waf->getStatus()],
         'stats'      => ['success' => true, 'data' => $waf->getStats()],
+        // Returns {items,total,limit,offset}. It used to return a bare list
+        // capped at 100, so the panel showed the newest hundred of 148,551
+        // events with no way to reach -- or even see the existence of -- the
+        // rest.
         'events'     => ['success' => true, 'data' => $waf->getEvents(
-            (int)($q['limit'] ?? 100), $q['severity'] ?? null, $q['ip'] ?? null
+            (int)($q['limit'] ?? 100), $q['severity'] ?? null, $q['ip'] ?? null,
+            (int)($q['offset'] ?? 0)
         )],
         'categories' => ['success' => true, 'data' => $waf->getRuleCategories()],
 

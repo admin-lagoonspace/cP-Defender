@@ -509,6 +509,34 @@ class Database {
                         WHERE key = 'scan_paused_for_backup'");
         }
 
+        // One-time: the action on every existing WAF event was invented.
+        //
+        // saveWafEvent() wrote the literal string 'block' on every row it ever
+        // inserted, and the detail dialog displayed it as fact. It was never
+        // read from the audit log, so on a server running the engine in
+        // DetectionOnly every one of those rows claimed a request had been
+        // blocked when it had been served. 148,551 rows on the server that
+        // prompted this.
+        //
+        // They are set to 'unknown', which the panel renders as a dash with an
+        // explanation. There is no information to recover here -- the value
+        // was never observed -- and leaving a confident wrong answer in place
+        // is worse than admitting the gap. Events ingested from now on carry
+        // what ModSecurity actually did.
+        $row = $db->query("SELECT value FROM settings WHERE key = 'waf_action_honesty_4330'")
+                  ->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            $has = $db->query("SELECT name FROM sqlite_master
+                                WHERE type='table' AND name='waf_events'")
+                      ->fetch(PDO::FETCH_ASSOC);
+            if ($has) {
+                $db->exec("UPDATE waf_events SET action = 'unknown'
+                            WHERE action IS NULL OR action = '' OR action = 'block'");
+            }
+            $db->exec("INSERT OR REPLACE INTO settings (key, value)
+                       VALUES ('waf_action_honesty_4330', '1')");
+        }
+
         // Queued mail that will never be delivered is deleted after this
         // long. Exim retries until retry_data expires -- days -- so these
         // messages sit there for ever, and a queue nobody can read through is

@@ -51,8 +51,15 @@ t_contains($waf, "'user_agent' => mb_substr", 'and stored, bounded in length');
 // markup would run as script in the dashboard of whoever read the log.
 // Anchored on the WAF loader: other pages render tables with the same
 // phrasing, and the first match in the file is one of those.
-$wafFn  = strpos($js, 'async function loadWAFEvents');
-$render = substr($js, $wafFn, 2200);
+//
+// Taken as the whole function rather than a fixed window of it. It was
+// substr($js, ..., 2200), and when the loader grew past 2200 characters the
+// window stopped before the table markup -- so every one of these assertions
+// failed while the escaping they check was still exactly where it should be.
+// A test that depends on the length of the code it reads reports on its own
+// window, not on the product.
+$render = t_fn_body($js, 'loadWAFEvents', 'js');
+t_ok($render !== '', 'the WAF event renderer is found');
 foreach (['rule_id', 'rule_msg', 'ip_address', 'uri'] as $f) {
     t_contains($render, 'esc(e.' . $f . ')', "the {$f} column is escaped");
 }
@@ -62,11 +69,24 @@ t_ok(strpos($render, '${e.rule_msg}') === false,
     'including the rule message, which quotes the matched request data');
 
 // The dialog uses textContent, not innerHTML, for the same reason.
-$show = substr($js, strpos($js, 'function showWafEvent(id)'), 2200);
+$show = t_fn_body($js, 'showWafEvent', 'js');
 t_contains($show, 'el.textContent =',
     'the dialog sets text, so markup in an event cannot execute');
-t_ok(substr_count($show, '.innerHTML') <= 1,
-    'the only innerHTML in the dialog is the severity badge, which is our own markup');
+
+// Two innerHTML writes now, and both are ours: the severity badge and the
+// action badge. What matters is not the count but that neither carries event
+// data -- so each is checked for being a call to one of our own badge
+// builders rather than an interpolation of a field.
+$ih = [];
+if (preg_match_all('/\.innerHTML\s*=\s*([^;]+);/', $show, $mm)) {
+    $ih = array_map('trim', $mm[1]);
+}
+t_ok($ih !== [], 'the dialog does set innerHTML somewhere, so this is checked');
+foreach ($ih as $expr) {
+    t_ok((bool) preg_match('/^(sevBadge|wafActionBadge)\(/', $expr),
+        'innerHTML in the dialog is built by our own markup helper, not from '
+      . 'event data: ' . $expr);
+}
 
 // -- The dialog itself -------------------------------------------------------
 t_contains($html, 'id="waf-event-modal"', 'the dialog exists');

@@ -1889,17 +1889,105 @@ async function loadWAF() {
   }
 }
 
+// ── WAF event paging ────────────────────────────────────────────────────────
+//
+// Mirrors Bot Shield's pager on purpose: the same control in two places should
+// behave the same way and be learned once. Page size is a reading preference,
+// so it lives in sessionStorage, and every access is wrapped because it throws
+// in a private window.
+const WAF_PAGE_KEY = 'sg.waf.pagesize';
+const WAF_PAGE_SIZES = [50, 100, 200, 500];
+const WafPage = { offset: 0, total: 0 };
+
+function wafPageSize() {
+  let n = 0;
+  try { n = parseInt(sessionStorage.getItem(WAF_PAGE_KEY) || '', 10) || 0; }
+  catch (e) { n = 0; }
+  return WAF_PAGE_SIZES.includes(n) ? n : 50;
+}
+
+function wafSetPageSize(v) {
+  const n = WAF_PAGE_SIZES.includes(Number(v)) ? Number(v) : 50;
+  try { sessionStorage.setItem(WAF_PAGE_KEY, String(n)); } catch (e) { /* not fatal */ }
+  document.querySelectorAll('.waf-page-size').forEach(sel => { sel.value = String(n); });
+  // Page 3 of 50 is not page 3 of 500, and landing past the end would show an
+  // empty table on a server with 148,551 events.
+  WafPage.offset = 0;
+  loadWAFEvents();
+}
+
+/* Changing the severity filter resets to the first page.
+ *
+ * Page 20 of everything is not page 20 of the critical events: keeping the
+ * offset across a filter change lands past the end of the filtered set and
+ * shows an empty table, which reads as "no critical events" when there are
+ * plenty. */
+function wafFilterChanged() {
+  WafPage.offset = 0;
+  loadWAFEvents();
+}
+
+function wafEventsPage(dir) {
+  WafPage.offset = Math.max(0, WafPage.offset + dir * wafPageSize());
+  loadWAFEvents();
+}
+
+/* What ModSecurity actually did with the request.
+ *
+ * 'unknown' is rendered as a dash, not as "Blocked". Every row written before
+ * 4.33.0 carries it, because the old code stored the literal string 'block'
+ * on every event without ever reading the audit log -- so on an engine in
+ * DetectionOnly those rows claimed a block that never happened. A dash with
+ * an explanation is the honest rendering of a value nobody ever observed. */
+function wafActionBadge(a) {
+  const v = String(a || 'unknown').toLowerCase();
+  const MAP = {
+    blocked:    ['badge-red',   'Blocked',    'The request was denied; it never reached the site'],
+    dropped:    ['badge-red',   'Dropped',    'The connection was dropped without a response'],
+    redirected: ['badge-amber', 'Redirected', 'The request was redirected away'],
+    detected:   ['badge-amber', 'Logged',     'The rule matched and the request was SERVED anyway — detection only'],
+  };
+  const hit = MAP[v];
+  if (!hit) {
+    return '<span class="dim" title="Not recorded. Events from before v4.33.0 '
+         + 'stored a fixed value instead of what the WAF did, so this one '
+         + 'cannot be trusted and is not shown.">&mdash;</span>';
+  }
+  return '<span class="badge ' + hit[0] + '" title="' + esc(hit[2]) + '">'
+       + hit[1] + '</span>';
+}
+
 async function loadWAFEvents() {
   const sev = document.getElementById('waf-sev-filter')?.value || '';
+  document.querySelectorAll('.waf-page-size').forEach(sel => {
+    sel.value = String(wafPageSize());
+  });
+
   const res = Demo.active
-    ? { success: true, data: [] }
-    : await API.wafEvents(sev);
+    ? { success: true, data: { items: [], total: 0 } }
+    : await API.wafEvents(sev, wafPageSize(), WafPage.offset);
 
   const tbody = document.getElementById('waf-events-body');
   if (!tbody) return;
-  const events = res?.data || [];
+
+  // The response used to be a bare array and is now an items-plus-total
+  // object. Both shapes are
+  // accepted: a browser holding a cached app.js against a freshly updated
+  // backend, or the reverse, should degrade to one unpaged page rather than
+  // to an empty table.
+  const d = (res && res.data) || {};
+  const events = Array.isArray(d) ? d : (d.items || []);
+  WafPage.total = Array.isArray(d) ? events.length : Number(d.total || 0);
+
   if (!events.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--txt3);padding:24px">No WAF events. Events are ingested from ModSecurity audit log.</td></tr>';
+    // An offset past the end is a navigation mistake, not an empty log, and
+    // saying "no events" there would be wrong.
+    if (WafPage.offset > 0) {
+      WafPage.offset = 0;
+      return loadWAFEvents();
+    }
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--txt3);padding:24px">No WAF events. Events are ingested from ModSecurity audit log.</td></tr>';
+    botPagerNote('wafEvents', WafPage, 0);
     return;
   }
   // Keyed by id so the dialog can render from what is already loaded, without
@@ -1924,8 +2012,11 @@ async function loadWAFEvents() {
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.rule_msg)}</td>
       <td class="mono">${esc(e.ip_address) || '<span class="dim">—</span>'}</td>
       <td class="mono" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.uri)}</td>
+      <td>${wafActionBadge(e.action)}</td>
       <td class="dim">${esc(reltime(e.timestamp))}</td>
     </tr>`).join('');
+
+  botPagerNote('wafEvents', WafPage, events.length);
 }
 
 // ── WAF event detail ────────────────────────────────────────────────────────
@@ -1953,7 +2044,13 @@ function showWafEvent(id) {
   put('wem-ip',     e.ip_address);
   put('wem-method', e.method);
   put('wem-host',   e.host);
-  put('wem-action', e.action);
+  // The dialog showed e.action raw, which for every row written before
+  // 4.33.0 is the invented string 'block' -- stated as fact in the one field
+  // that says whether the request was stopped. Rendered through the same
+  // badge as the table so the two cannot disagree, and so 'unknown' reads as
+  // a dash rather than as the word "unknown".
+  const act = document.getElementById('wem-action');
+  if (act) { act.innerHTML = wafActionBadge(e.action); }
   put('wem-when',   e.timestamp ? new Date(e.timestamp * 1000).toLocaleString()
                                 + ' (' + reltime(e.timestamp) + ')' : '—');
   put('wem-uri',    e.uri);
@@ -2724,6 +2821,9 @@ function botSyncPageSelectors() {
   document.querySelectorAll('.bot-page-size').forEach(s => { s.value = n; });
 }
 
+/* Shared by every paged table: Bot Shield's two, and the WAF event log.
+ * Named for Bot Shield because that is where it was written; kept under that
+ * name rather than renamed across four call sites for the sake of a prefix. */
 function botPagerNote(prefix, state, shown) {
   const from = state.total ? state.offset + 1 : 0;
   setText(prefix + '-note', state.total
