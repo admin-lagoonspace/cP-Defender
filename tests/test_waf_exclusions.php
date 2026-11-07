@@ -2,17 +2,19 @@
 /**
  * An operator must be able to arm the WAF without breaking one customer's site.
  *
- * Triage on the live server found rule 420047 firing on six real requests:
+ * On the live server, rule 420047 is "Bad user-agent (Mozilla/5.0)": 617
+ * hits across 150 sites, firing on /livewire/update, / and /wp-login.php.
+ * A Laravel Livewire endpoint and two ordinary pages — real visitors, matched
+ * on a User-Agent string half the web sends.
  *
- *     rule 420047   6 hits · 1 IPs · 1 site(s)
- *       POST /shop/checkout
- *       Confined to one site and 1 address(es), on ordinary-looking URIs.
+ * With no exclusion mechanism the only two options were to leave the engine
+ * in DetectionOnly across all 132 accounts, or arm it and break application
+ * traffic on 150 of them.
  *
- * That is a shopper checking out, not an attacker. With no exclusion
- * mechanism the only two options were to leave the whole engine in
- * DetectionOnly across 132 accounts, or arm it and have that shop start
- * refusing orders. Neither is a decision anybody should have to make, so
- * this is what the third option has to get right:
+ * The shopfront.test / 420047 / checkout case below is a FIXTURE, not a
+ * production observation. It is the shape triage classifies as a
+ * false-positive risk, written small enough to assert on. What the mechanism
+ * has to get right either way:
  *
  *  - a narrowed exclusion must NOT disable the rule for the other 131
  *    accounts, which is what SecRuleRemoveById would do;

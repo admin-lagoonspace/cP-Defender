@@ -20,11 +20,16 @@ heading or touch VERSION mid-week._
 ### Added
 
 - **WAF rule exclusions**, so the engine can be armed without breaking a
-  customer's site. Triage could already say "arming this rule may break that
-  site" — on the live server rule 420047 was firing on six genuine
-  `POST /shop/checkout` requests from one shopper on one account — but there
-  was nothing to do about it. The choice was to leave all 132 accounts in
-  DetectionOnly, or arm the engine and have that shop start refusing orders.
+  customer's site. Triage could already say a rule looked like it was
+  matching a site's own application rather than an attack, and there was
+  nothing to do about it. The choice was to leave all 132 accounts in
+  DetectionOnly, or arm the engine and find out which sites broke.
+
+  Rule 420047 is the live example: "Bad user-agent (Mozilla/5.0)", 617 hits
+  across 150 sites, firing on `/livewire/update`, `/` and `/wp-login.php` — a
+  Laravel Livewire endpoint and two ordinary pages, not probes. Arming the
+  engine with that rule active would have broken real application traffic on
+  150 accounts.
 
   An exclusion names one rule and may be narrowed to one domain and one URI
   prefix, so switching off a rule for one shop no longer leaves the other 131
