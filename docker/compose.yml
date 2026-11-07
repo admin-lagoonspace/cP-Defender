@@ -1,0 +1,41 @@
+# ServerScrub — local test stack.
+#
+#   docker compose -f docker/compose.yml build
+#   docker compose -f docker/compose.yml run --rm test
+#   docker compose -f docker/compose.yml up panel        # UI on :8777
+#
+# The repo is mounted READ-ONLY at /opt/serverscrub-src. The install copies
+# out of it, so a test run cannot modify the working tree -- which is the
+# whole point of having Shakaal test rather than the agent that wrote the
+# code. A mistake in a test run costs a container, not a commit.
+services:
+  panel:
+    build:
+      context: .
+      args: { PHP_STREAM: "${PHP_STREAM:-7.4}" }
+    image: serverscrub-test:php${PHP_STREAM:-7.4}
+    volumes: [ "..:/opt/serverscrub-src:ro" ]
+    ports: [ "8777:8777" ]
+    command: serve
+    # inotify in the real-time monitor needs its own watches, and the default
+    # container limit is low enough to make the watch cap fire for the wrong
+    # reason.
+    sysctls: { fs.inotify.max_user_watches: "524288" }
+
+  test:
+    build:
+      context: .
+      args: { PHP_STREAM: "${PHP_STREAM:-7.4}" }
+    image: serverscrub-test:php${PHP_STREAM:-7.4}
+    volumes: [ "..:/opt/serverscrub-src:ro" ]
+    command: test
+
+  shell:
+    build:
+      context: .
+      args: { PHP_STREAM: "${PHP_STREAM:-7.4}" }
+    image: serverscrub-test:php${PHP_STREAM:-7.4}
+    volumes: [ "..:/opt/serverscrub-src:ro" ]
+    command: shell
+    stdin_open: true
+    tty: true

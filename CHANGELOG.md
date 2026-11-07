@@ -11,6 +11,12 @@ Bumping Y for a fix inflates the version and hides what actually changed.
 `scripts/check-version-bump.sh` enforces this and `publish.sh` will refuse a
 release where the bump and the commits disagree.
 
+## [Unreleased]
+
+_Work lands here through the week. Gabbar turns this into a dated heading on
+Friday and bumps the version once for the whole batch. Do not add a version
+heading or touch VERSION mid-week._
+
 ## [4.35.1] - 2026-11-06
 
 ### Fixed
