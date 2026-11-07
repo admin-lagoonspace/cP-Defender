@@ -408,6 +408,129 @@ try {
             break;
         }
 
+        /* Rules the operator has switched off, and where.
+         *
+         * This is what makes arming the engine possible at all. Triage can
+         * say rule 420047 fires on real POST /shop/checkout requests on one
+         * site; without a way to exclude it, the only choices were to leave
+         * the whole WAF in DetectionOnly or to break that shop. */
+        if ($sub === 'exclude' || $sub === 'exclusions') {
+            require_once $BASE . '/lib/WAFExclusions.php';
+            $op = $rest[1] ?? 'list';
+
+            if ($op === 'list') {
+                $rows = WAFExclusions::all();
+                if ($JSON) { out($rows); break; }
+                if (!$rows) {
+                    echo "No rule exclusions. Every CRS rule is active." . PHP_EOL;
+                    break;
+                }
+                foreach ($rows as $r) {
+                    printf("  %-4s %s" . PHP_EOL, '#' . $r['id'],
+                           WAFExclusions::describe($r));
+                }
+                echo PHP_EOL . count($rows) . ' exclusion(s). Live in Apache as of the '
+                   . 'last mode change or `waf exclude apply`.' . PHP_EOL;
+                break;
+            }
+
+            if ($op === 'add') {
+                need_root();
+                License::requireValid('WAF management');
+                $ruleId = (string) ($rest[2] ?? '');
+                if ($ruleId === '' || $ruleId[0] === '-') {
+                    fail('usage: serverscrub waf exclude add <ruleId> '
+                       . '[--domain=example.com] [--uri=/path] [--reason="..."]');
+                }
+                $opt = function (string $name) use ($args): string {
+                    foreach ($args as $a) {
+                        if (strpos($a, '--' . $name . '=') === 0) {
+                            return substr($a, strlen($name) + 3);
+                        }
+                    }
+                    return '';
+                };
+                $r = WAFExclusions::add($ruleId, $opt('domain'), $opt('uri'), $opt('reason'));
+                if (empty($r['success'])) { fail($r['error'] ?? 'could not add the exclusion'); }
+
+                /* Writing the row changes nothing on its own: Apache is
+                 * serving the config generated at the last mode change. */
+                $applied = WAFInstaller::setMode(WAFInstaller::currentMode());
+                out(['id'      => $r['id'],
+                     'scope'   => $r['scoped'] ? 'narrowed' : 'server-wide',
+                     'applied' => !empty($applied['success']),
+                     'mode'    => WAFInstaller::currentMode()]);
+                if (empty($applied['success'])) {
+                    echo 'WARNING: the exclusion is recorded but Apache was not '
+                       . 'updated: ' . ($applied['error'] ?? 'unknown error') . PHP_EOL
+                       . 'Run `serverscrub waf exclude apply` once that is resolved.' . PHP_EOL;
+                    exit(1);
+                }
+                if (!$r['scoped']) {
+                    echo 'NOTE: this disables rule ' . $ruleId . ' for every site on the '
+                       . 'server. Narrow it with --domain= if only one site needs it.' . PHP_EOL;
+                }
+                /* @streq is exact. A site served on both the apex and the
+                 * www name is two hosts to ModSecurity, and excluding one
+                 * leaves the other armed -- which looks like the exclusion
+                 * not working at all. */
+                $dom = $opt('domain');
+                if ($dom !== '') {
+                    $other = strpos($dom, 'www.') === 0
+                        ? substr($dom, 4) : 'www.' . $dom;
+                    echo 'NOTE: the host match is exact. If that site is also served as '
+                       . $other . ', add a second exclusion for it.' . PHP_EOL;
+                }
+                echo 'If the rule still fires, it is a phase-1 rule: a narrowed '
+                   . 'exclusion cannot remove one, and it needs a server-wide '
+                   . 'exclusion instead.' . PHP_EOL;
+                break;
+            }
+
+            if ($op === 'rm' || $op === 'remove') {
+                need_root();
+                License::requireValid('WAF management');
+                $id = (int) ($rest[2] ?? 0);
+                if ($id <= 0) { fail('usage: serverscrub waf exclude rm <id>'); }
+                $r = WAFExclusions::remove($id);
+                if (empty($r['success'])) { fail($r['error'] ?? 'could not remove it'); }
+                $applied = WAFInstaller::setMode(WAFInstaller::currentMode());
+                out(['removed' => WAFExclusions::describe($r['removed']),
+                     'applied' => !empty($applied['success'])]);
+                if (empty($applied['success'])) {
+                    echo 'WARNING: removed from the database but Apache was not '
+                       . 'updated: ' . ($applied['error'] ?? 'unknown error') . PHP_EOL;
+                    exit(1);
+                }
+                break;
+            }
+
+            /* Re-render the config from the exclusions as they stand. For
+             * recovering from a failed apply, and for a server whose config
+             * was edited by hand. */
+            if ($op === 'apply') {
+                need_root();
+                License::requireValid('WAF management');
+                $applied = WAFInstaller::setMode(WAFInstaller::currentMode());
+                if (empty($applied['success'])) {
+                    fail($applied['error'] ?? 'could not write the config');
+                }
+                out(['mode'       => WAFInstaller::currentMode(),
+                     'exclusions' => count(WAFExclusions::all())]);
+                break;
+            }
+
+            /* Show what will be written, without writing it. Reading the
+             * directives is the only way to be sure an exclusion says what
+             * the operator meant. */
+            if ($op === 'show') {
+                $txt = WAFExclusions::render();
+                echo $txt === '' ? "No exclusions, so nothing is added to the config." . PHP_EOL : $txt;
+                break;
+            }
+
+            fail('usage: serverscrub waf exclude [list|add|rm|apply|show]');
+        }
         if ($sub !== 'mode') { fail("unknown waf subcommand: $sub"); }
 
         $want = strtolower((string)($rest[1] ?? ''));

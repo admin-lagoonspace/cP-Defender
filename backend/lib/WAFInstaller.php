@@ -7,6 +7,9 @@
  * idempotent and safe across the cycles these classes form. */
 require_once __DIR__ . '/Database.php';
 require_once __DIR__ . '/Logger.php';
+// Rendered into the config writeConfig() generates. Requires only
+// Database and Logger, so no cycle.
+require_once __DIR__ . '/WAFExclusions.php';
 
 /**
  * ServerScrub — ModSecurity + OWASP CRS provisioning
@@ -302,6 +305,19 @@ class WAFInstaller
         @mkdir(self::confDir(), 0750, true);
         $conf = self::confDir() . '/serverscrub-waf.conf';
 
+        /* Fail rather than write a config missing an exclusion. An
+         * exclusion silently dropped here means a rule the operator
+         * switched off is armed against a live site -- the exact
+         * outcome the exclusion was added to prevent. Refusing the
+         * mode change is the safe failure. */
+        try {
+            $excl = WAFExclusions::render();
+        } catch (Throwable $e) {
+            return ['success' => false,
+                    'error'   => 'Could not render the WAF rule exclusions, so the '
+                                 . 'config was not written: ' . $e->getMessage()];
+        }
+
         $rules = '';
         if ($crsDir) {
             $rules = "IncludeOptional " . $crsDir . "/crs-setup.conf\n"
@@ -341,7 +357,7 @@ class WAFInstaller
         SecRuleEngine Off
     </LocationMatch>
 
-{$rules}
+{$rules}{$excl}
 </IfModule>
 CONF;
         if (@file_put_contents($conf, $body) === false) {

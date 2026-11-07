@@ -437,6 +437,23 @@ class WAFTriage
                         . 'across ' . $distinctUris . ' distinct path(s).'];
     }
 
+    /**
+     * A --uri= prefix suggestion from an observed URI.
+     *
+     * The query string is dropped: @beginsWith matches REQUEST_URI including
+     * the query, so suggesting /shop/checkout?step=2 would produce an
+     * exclusion that stops working the moment the parameters differ. Returns
+     * '' when there is nothing safely narrowable, and the caller then offers
+     * only the per-domain form.
+     */
+    public static function uriPrefix(string $uri): string
+    {
+        $uri = (string) strtok($uri, '?');
+        if ($uri === '' || $uri === '/' || $uri[0] !== '/') { return ''; }
+        if (preg_match('/["\'\\\\\s]/', $uri)) { return ''; }
+        return mb_substr($uri, 0, 120);
+    }
+
     /** The report as text, for a terminal or for pasting into a message. */
     public static function text(array $rep): string
     {
@@ -496,6 +513,26 @@ class WAFTriage
                 $hs = array_map(fn($h) => $h['h'] . ' (' . $num($h['c']) . ')',
                                 $r['top_hosts']);
                 if ($hs) { $w('      sites: ' . implode(', ', array_slice($hs, 0, 4))); }
+
+                /* The command to act on it, for the one verdict where the
+                 * operator has to do something before arming. Writing the
+                 * rule id and domain out by hand is where a typo disables
+                 * the wrong rule, or the right rule everywhere. */
+                if ($verdict === 'false-positive-risk') {
+                    $host = $r['top_hosts'][0]['h'] ?? '';
+                    $w('    exclude it for that site before arming:');
+                    $w('      serverscrub waf exclude add ' . $r['rule_id']
+                       . ($host !== '' ? ' --domain=' . $host : '')
+                       . ' --reason="triage: false-positive risk"');
+                    $path = self::uriPrefix($r['uri_sample'][0]['uri'] ?? '');
+                    if ($path !== '') {
+                        $w('    or narrower, only where it fires:');
+                        $w('      serverscrub waf exclude add ' . $r['rule_id']
+                           . ($host !== '' ? ' --domain=' . $host : '')
+                           . ' --uri=' . $path
+                           . ' --reason="triage: false-positive risk"');
+                    }
+                }
                 $w();
             }
         }

@@ -207,6 +207,24 @@ class Database {
                 timestamp   INTEGER NOT NULL DEFAULT (strftime('%s','now'))
             );
 
+            /* Rules the operator has switched off, and where.
+               Re-rendered into serverscrub-waf.conf on every mode change:
+               writeConfig() rebuilds that file from scratch, so an
+               exclusion kept only in the file would vanish the next time
+               the WAF was armed. domain and uri_prefix are empty for a
+               server-wide exclusion. */
+            CREATE TABLE IF NOT EXISTS waf_exclusions (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id     TEXT    NOT NULL,
+                domain      TEXT    NOT NULL DEFAULT (''),
+                uri_prefix  TEXT    NOT NULL DEFAULT (''),
+                reason      TEXT    NOT NULL DEFAULT (''),
+                created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_waf_excl_scope
+                ON waf_exclusions (rule_id, domain, uri_prefix);
+
             CREATE TABLE IF NOT EXISTS security_events (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 type        TEXT    NOT NULL,

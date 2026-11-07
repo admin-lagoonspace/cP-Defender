@@ -17,6 +17,38 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+### Added
+
+- **WAF rule exclusions**, so the engine can be armed without breaking a
+  customer's site. Triage could already say "arming this rule may break that
+  site" — on the live server rule 420047 was firing on six genuine
+  `POST /shop/checkout` requests from one shopper on one account — but there
+  was nothing to do about it. The choice was to leave all 132 accounts in
+  DetectionOnly, or arm the engine and have that shop start refusing orders.
+
+  An exclusion names one rule and may be narrowed to one domain and one URI
+  prefix, so switching off a rule for one shop no longer leaves the other 131
+  accounts unprotected against what it catches.
+
+  ```
+  serverscrub waf exclude add 420047 --domain=shop.example --uri=/shop/checkout \
+      --reason="real checkout traffic"
+  serverscrub waf exclude list
+  serverscrub waf exclude show      # the directives, before they are written
+  serverscrub waf exclude rm 3
+  ```
+
+  Exclusions are held in the database and re-rendered into the Apache config
+  every time it is written. Kept in the config file they would have been erased
+  by the next `waf mode on`, silently, at the moment they mattered most. A
+  render failure now aborts the mode change rather than writing a config
+  missing an exclusion.
+
+- `waf triage` prints the exact `waf exclude add` command for each rule it
+  judges a false-positive risk, with the domain and path it actually fired on.
+  Retyping a rule id by hand is how the wrong rule gets disabled, or the right
+  rule gets disabled everywhere.
+
 ## [4.35.1] - 2026-11-06
 
 ### Fixed
