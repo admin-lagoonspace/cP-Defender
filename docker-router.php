@@ -13,11 +13,8 @@
 $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 
 // Strip the mount prefix cpsrvd would have consumed.
-foreach (['/serverscrub', '/sentinel_gate'] as $prefix) {
-    if (strpos($path, $prefix) === 0) {
-        $path = substr($path, strlen($prefix)) ?: '/';
-        break;
-    }
+if (strpos($path, '/serverscrub') === 0) {
+    $path = substr($path, strlen('/serverscrub')) ?: '/';
 }
 
 if (strpos($path, '/api') === 0) {
