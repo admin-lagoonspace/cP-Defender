@@ -56,6 +56,35 @@ heading or touch VERSION mid-week._
 
 ### Fixed
 
+- **A WAF mode change Apache refused left the rejected config on disk, and
+  the next Apache restart took every site on the server down.**
+
+  `setMode()` wrote the config, ran `apachectl -t`, and on failure returned
+  the error — leaving the rejected file exactly where Apache reads it. Nothing
+  looks wrong when that happens: Apache keeps serving the config it parsed at
+  its last start, and the operator reads the error as "the mode did not
+  change".
+
+  On the production server the file was written at 00:02, the failure was
+  reported at 05:02, and at 10:18 the first restart found it:
+
+  ```
+  AH00526: Syntax error on line 56 of .../REQUEST-913-SCANNER-DETECTION.conf
+  ModSecurity: Found another rule with the same id
+  httpd.service: Control process exited, code=exited status=1
+  [RESTART FAILURE] httpd.conf rebuild exited 25 during forced restart
+  ```
+
+  cPanel retried three times, rebuilt `httpd.conf`, and gave up. nginx
+  returned 502 for all 132 accounts until the include was moved aside by hand.
+
+  Both files are now snapshotted before the write and restored on any
+  failure, byte for byte — and restored to *absent* when there was nothing
+  there before, because an empty config and no config are different things to
+  Apache. The restored config is then validated too: if it was already
+  unparseable, the operator is told while they are still looking at a
+  terminal, instead of at the next reboot.
+
 - **The WAF could not be armed at all on any server upgraded from Sentinel
   Gate.** `serverscrub waf mode on` failed every time with
 

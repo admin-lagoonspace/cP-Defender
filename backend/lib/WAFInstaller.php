@@ -365,23 +365,10 @@ CONF;
         }
         @chmod($conf, 0644);
 
-        // apacheFlavour() returns null on a machine with no Apache, and using
-        // null as an array offset is deprecated in PHP 8.1+ — it emitted a
-        // notice on every call. Look the key up only when there is one.
-        $flavour = self::apacheFlavour();
-        $incDir  = self::$includeDir;
-        if ($incDir === null && $flavour !== null) {
-            $incDir = [
-                'ea4'    => '/etc/apache2/conf.d',
-                'httpd'  => '/etc/httpd/conf.d',
-                'debian' => '/etc/apache2/conf-enabled',
-            ][$flavour] ?? null;
-        }
-        if ($incDir === null || !is_dir($incDir)) {
+        $inc = self::includePath();
+        if ($inc === null) {
             return ['success' => false, 'error' => 'Could not locate the Apache config directory'];
         }
-        $inc = $incDir . '/zz-serverscrub-waf.conf';
-        // zz- prefix so our settings load last and win over earlier includes.
         if (@file_put_contents($inc, "IncludeOptional {$conf}\n") === false) {
             return ['success' => false, 'error' => 'Could not write ' . $inc];
         }
@@ -396,19 +383,113 @@ CONF;
         if ($inc !== '' && is_file($inc)) { @unlink($inc); }
     }
 
-    /** Change enforcement mode: on | detectiononly | off. */
+    /**
+     * Where the Apache include is dropped.
+     *
+     * Resolved in one place because writeConfig() writes it and
+     * restoreConfig() has to put it back. Returns null when there is no
+     * Apache config directory to write into.
+     */
+    public static function includePath(): ?string
+    {
+        // apacheFlavour() returns null on a machine with no Apache, and using
+        // null as an array offset is deprecated in PHP 8.1+ — it emitted a
+        // notice on every call. Look the key up only when there is one.
+        $flavour = self::apacheFlavour();
+        $incDir  = self::$includeDir;
+        if ($incDir === null && $flavour !== null) {
+            $incDir = [
+                'ea4'    => '/etc/apache2/conf.d',
+                'httpd'  => '/etc/httpd/conf.d',
+                'debian' => '/etc/apache2/conf-enabled',
+            ][$flavour] ?? null;
+        }
+        if ($incDir === null || !is_dir($incDir)) { return null; }
+        // zz- prefix so our settings load last and win over earlier includes.
+        return $incDir . '/zz-serverscrub-waf.conf';
+    }
+
+    /**
+     * The contents of both files we own, before we touch them.
+     *
+     * null for a file that does not exist yet, which restoreConfig() turns
+     * back into "not there" rather than into an empty file — an empty
+     * SecRuleEngine config and no config are not the same thing.
+     *
+     * @return array<string,?string> path => contents, or path => null
+     */
+    private static function snapshotConfig(): array
+    {
+        $snap = [];
+        foreach ([self::confDir() . '/serverscrub-waf.conf', self::includePath()] as $p) {
+            if ($p === null) { continue; }
+            $snap[$p] = is_file($p) ? (string) @file_get_contents($p) : null;
+        }
+        return $snap;
+    }
+
+    /** Put both files back exactly as snapshotConfig() found them. */
+    private static function restoreConfig(array $snap): void
+    {
+        foreach ($snap as $p => $contents) {
+            if ($contents === null) { @unlink($p); continue; }
+            @file_put_contents($p, $contents);
+            @chmod($p, 0644);
+        }
+    }
+
+    /**
+     * Change enforcement mode: on | detectiononly | off.
+     *
+     * ── WHY THIS ROLLS BACK ───────────────────────────────────────
+     *
+     * This used to write the config, validate it, and on failure return an
+     * error — leaving the rejected config on disk. Apache goes on serving the
+     * configuration it has already parsed, so nothing looks wrong: the CLI
+     * reports the failure, the operator reads it as "the mode did not change",
+     * and the server keeps running.
+     *
+     * The next restart is what finds out. On the production server that was
+     * ten hours later, and httpd refused to start:
+     *
+     *     AH00526: Syntax error on line 56 of .../REQUEST-913-SCANNER-DETECTION.conf
+     *     ModSecurity: Found another rule with the same id
+     *
+     * cPanel retried three times, rebuilt httpd.conf, gave up. Every site on
+     * the server returned 502 from nginx until the include was moved aside by
+     * hand. 132 accounts, down, because a failed mode change left a file
+     * behind.
+     *
+     * So a config Apache will not accept never survives this call.
+     */
     public static function setMode(string $mode): array
     {
         $map = ['on' => 'On', 'detectiononly' => 'DetectionOnly', 'off' => 'Off'];
         $m = $map[strtolower($mode)] ?? null;
         if ($m === null) { return ['success' => false, 'error' => 'Invalid mode']; }
 
+        $snap = self::snapshotConfig();
+
         $r = self::writeConfig($m, self::crsPath());
-        if (!$r['success']) { return $r; }
+        if (!$r['success']) { self::restoreConfig($snap); return $r; }
 
         $v = self::validateApache();
         if (!$v['ok']) {
-            return ['success' => false, 'error' => 'Apache rejected the change: ' . $v['output']];
+            self::restoreConfig($snap);
+
+            // Validate AGAIN. If what we put back is also broken, the operator
+            // has to learn that now rather than at the next reboot -- the
+            // whole point of this rollback is that nobody discovers a bad
+            // config hours later.
+            $after = self::validateApache();
+            $err = 'Apache rejected the change, so it was rolled back: ' . $v['output'];
+            if (!$after['ok']) {
+                $err .= ' | WARNING: the restored config does not validate either,'
+                      . ' so Apache may already have been unable to restart before'
+                      . ' this change: ' . $after['output'];
+            }
+            return ['success' => false, 'error' => $err, 'rolled_back' => true,
+                    'restored_ok' => (bool) $after['ok']];
         }
         self::reloadApache();
         Database::setSetting('waf_mode', strtolower($mode));
