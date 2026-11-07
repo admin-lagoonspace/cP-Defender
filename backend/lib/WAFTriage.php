@@ -101,17 +101,86 @@ class WAFTriage
     /**
      * Addresses that are not the internet.
      *
-     * 127.0.0.1 appeared in this server's attacker list with 862 hits across
-     * 39 rules and 84 sites. That is not somebody attacking from the machine
-     * itself -- it is the real client address being lost, because cPanel's
-     * nginx reverse proxy terminates the connection and Apache sees loopback
-     * unless mod_remoteip is configured to read X-Forwarded-For.
+     * 127.0.0.1 appeared in this server's attacker list with 848 hits across
+     * 39 rules and 84 sites, and the server's OWN address sat at the top of
+     * it with 1,780. Neither is somebody attacking from the machine: both are
+     * cPanel's nginx, which proxies to Apache for accounts with caching
+     * enabled, and ModSecurity writes its section A from the connection.
+     *
+     * NOT a mod_remoteip misconfiguration, which is what this comment used to
+     * claim and what the tool used to tell the operator to go and fix. On the
+     * server that prompted it mod_remoteip was configured correctly: cPanel
+     * points it at a secret-suffixed header name, nginx sends the plain
+     * X-Forwarded-For, and it rightly declines to trust an unsigned one.
+     * Section A is written from the connection regardless.
+     *
+     * Since 4.35.1 the parser resolves these from the request headers, so new
+     * events carry a real source. Rows written before that cannot be repaired
+     * -- the header is in the audit log, not in the table -- so a window that
+     * reaches back before the upgrade still contains them.
      *
      * It matters twice. Those events have no usable source, so the IP-spread
      * signal is wrong for every rule they appear in. And an operator reading
      * "127.0.0.1, 39 rules" as an attacker and blocking it takes the site
      * down. Separated out and called what it is.
      */
+    /**
+     * This server's own addresses.
+     *
+     * NEEDED BECAUSE THE WORST ROW IN THE REPORT WAS PUBLIC. Filtering
+     * loopback and RFC1918 caught 127.0.0.1 and let 51.68.163.24 -- the
+     * machine itself -- stand as the busiest attacker on the server with
+     * 1,780 hits. An operator acting on the report's top line would have
+     * firewalled their own web server.
+     *
+     * Read from the places that already know, in order of reliability: the
+     * RemoteIPInternalProxy entries cPanel writes into httpd.conf, which are
+     * by definition this server's proxy addresses, and then the hostname's own
+     * resolution. Failing both the filter is simply empty, which is the old
+     * behaviour rather than a wrong answer.
+     */
+    public static function serverAddresses(): array
+    {
+        static $cached = null;
+        if ($cached !== null) { return $cached; }
+
+        $ips = [];
+        foreach (['/etc/apache2/conf/httpd.conf', '/usr/local/apache/conf/httpd.conf'] as $conf) {
+            if (!is_readable($conf)) { continue; }
+            $txt = (string) @file_get_contents($conf);
+            if (preg_match_all('/^\s*RemoteIP(?:Internal|Trusted)Proxy\s+(\S+)/mi', $txt, $m)) {
+                foreach ($m[1] as $tok) {
+                    // Bare addresses only. The CIDR blocks in that list are
+                    // Cloudflare's edge, which is a real intermediary and not
+                    // this machine.
+                    if (strpos($tok, '/') === false
+                        && filter_var($tok, FILTER_VALIDATE_IP) !== false) {
+                        $ips[$tok] = true;
+                    }
+                }
+            }
+            break;
+        }
+
+        $host = gethostname();
+        if ($host !== false) {
+            $resolved = @gethostbynamel($host);
+            if (is_array($resolved)) {
+                foreach ($resolved as $ip) { $ips[$ip] = true; }
+            }
+        }
+
+        $cached = array_keys($ips);
+        return $cached;
+    }
+
+    /** Loopback, a private range, or this very server. */
+    public static function isProxyNotAttacker(string $ip): bool
+    {
+        if (self::isLocalOrPrivate($ip)) { return true; }
+        return in_array($ip, self::serverAddresses(), true);
+    }
+
     private static function isLocalOrPrivate(string $ip): bool
     {
         if ($ip === '') { return true; }
@@ -227,29 +296,48 @@ class WAFTriage
         $attackers = [];
         $proxied   = 0;
         foreach ($rawAttackers as $a) {
-            if (self::isLocalOrPrivate((string) $a['ip_address'])) {
+            if (self::isProxyNotAttacker((string) $a['ip_address'])) {
                 $proxied += (int) $a['hits'];
                 continue;
             }
             if (count($attackers) < 15) { $attackers[] = $a; }
         }
 
+        // The server's own addresses are counted here too. Leaving them out
+        // is what let a public address that happened to be this machine lead
+        // the attacker list.
+        $own    = self::serverAddresses();
+        $ownSql = '';
+        $ownArg = [$since];
+        if ($own) {
+            $ownSql = ' OR ip_address IN (' . implode(',', array_fill(0, count($own), '?')) . ')';
+            $ownArg = array_merge($ownArg, $own);
+        }
         $localTotal = (int) (Database::fetchOne(
             "SELECT COUNT(*) c FROM waf_events
               WHERE timestamp >= ? AND (ip_address = '127.0.0.1' OR ip_address = '::1'
                                         OR ip_address LIKE '10.%' OR ip_address LIKE '192.168.%'
-                                        OR ip_address = '')", [$since])['c'] ?? 0);
+                                        OR ip_address = ''" . $ownSql . ")", $ownArg)['c'] ?? 0);
         if ($localTotal > 0) {
+            $unresolved = (int) (Database::fetchOne(
+                "SELECT COUNT(*) c FROM waf_events
+                  WHERE timestamp >= ? AND ip_source = 'proxy-unresolved'", [$since])['c'] ?? 0);
+            $legacy = max(0, $localTotal - $unresolved);
+
             $notes[] = sprintf(
-                '%s event(s) — %d%% — were recorded from loopback or a private '
-              . 'address. The real client IP is being lost, almost certainly '
-              . 'because a reverse proxy (cPanel ships nginx in front of '
-              . 'Apache) terminates the connection and mod_remoteip is not '
-              . 'reading X-Forwarded-For. Those events cannot be attributed, '
-              . 'the IP-spread signal is understated for every rule they '
-              . 'appear in, and NOTHING in that group should ever be blocked.',
+                '%s event(s) — %d%% — carry a proxy address rather than a '
+              . 'client one: loopback, a private range, or this server\'s own '
+              . 'IP. These are cPanel\'s nginx, not an attacker on the box, '
+              . 'and NOTHING in that group should ever be firewalled. %s of '
+              . 'them predate 4.35.1, which began recovering the address from '
+              . 'the request headers, and cannot be repaired — the header is '
+              . 'in the audit log, not in this table. The remaining %s arrived '
+              . 'with no usable header at all. Either way the IP-spread signal '
+              . 'is understated for every rule they appear in.',
                 number_format($localTotal),
-                $total > 0 ? (int) round($localTotal / $total * 100) : 0);
+                $total > 0 ? (int) round($localTotal / $total * 100) : 0,
+                number_format($legacy),
+                number_format($unresolved));
         }
 
         $hostRecorded = (int) (Database::fetchOne(

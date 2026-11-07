@@ -202,6 +202,8 @@ class Database {
                 host        TEXT,
                 user_agent  TEXT,
                 action      TEXT    DEFAULT 'block',
+                ip_source   TEXT    NOT NULL DEFAULT '',
+                forwarded_for TEXT  NOT NULL DEFAULT '',
                 timestamp   INTEGER NOT NULL DEFAULT (strftime('%s','now'))
             );
 
@@ -471,6 +473,25 @@ class Database {
         }
 
         // Incremental migrations — safe to run on every boot (IF NOT EXISTS / IGNORE)
+        // How the client address in a WAF event was arrived at.
+        //
+        // Every row written before 4.35.1 holds the CONNECTION address from
+        // ModSecurity's section A, which for an account behind cPanel's nginx
+        // is the proxy -- so a live server listed its own IP as the busiest
+        // attacker against itself. The address was in the request headers all
+        // along. These two columns record what was used and what the chain
+        // said, so attribution can be checked instead of assumed.
+        //
+        // Not backfilled: the header is in the audit log, not in this table,
+        // so the old rows genuinely cannot be repaired. They stay labelled ''.
+        $wafCols = array_column($db->query("PRAGMA table_info(waf_events)")->fetchAll(PDO::FETCH_ASSOC), 'name');
+        if (!in_array('ip_source', $wafCols)) {
+            $db->exec("ALTER TABLE waf_events ADD COLUMN ip_source TEXT NOT NULL DEFAULT ''");
+        }
+        if (!in_array('forwarded_for', $wafCols)) {
+            $db->exec("ALTER TABLE waf_events ADD COLUMN forwarded_for TEXT NOT NULL DEFAULT ''");
+        }
+
         // Add cpanel_user column to threats if missing (SQLite ALTER TABLE is append-only)
         $cols = array_column($db->query("PRAGMA table_info(threats)")->fetchAll(PDO::FETCH_ASSOC), 'name');
         if (!in_array('cpanel_user', $cols)) {

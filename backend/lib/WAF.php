@@ -468,6 +468,26 @@ class WAF {
                 // The table has had a user_agent column all along and nothing
                 // ever filled it.
                 $entry['user_agent'] = trim($m[1]);
+            } elseif (preg_match('/^X-Forwarded-For:\s*(.+)/i', $line, $m)) {
+                // WHERE THE CLIENT ACTUALLY IS.
+                //
+                // Section A carries the CONNECTION address, and on an account
+                // with cPanel's nginx caching enabled the connection comes
+                // from nginx -- so the attacker was recorded as 127.0.0.1 or
+                // as the server's own address. On a live server that put the
+                // machine itself at the top of its own attacker list with
+                // 1,780 hits, and loopback fourth with 848, every one of them
+                // a real .env and proc/self/environ probe with no source.
+                //
+                // mod_remoteip is configured correctly and is not at fault:
+                // cPanel points it at a secret-suffixed header name, nginx
+                // sends the plain one, and it rightly ignores an unsigned
+                // X-Forwarded-For. But ModSecurity's section A is written from
+                // the connection either way, so the header is the only place
+                // the address survives into the audit log.
+                $entry['xff'] = trim($m[1]);
+            } elseif (preg_match('/^CF-Connecting-IP:\s*(.+)/i', $line, $m)) {
+                $entry['cf_ip'] = trim($m[1]);
             }
         }
         // Commit only as far as the last terminated entry. Anything after it
@@ -531,13 +551,160 @@ class WAF {
         return $rb > $ra ? $b : $a;
     }
 
+    /**
+     * Cloudflare's published edge ranges, as cPanel already writes them into
+     * /etc/apache2/conf.d/includes/cloudflare.conf. Used only to decide
+     * whether a CF-Connecting-IP header arrived from Cloudflare and can
+     * therefore be believed.
+     */
+    private const CF_RANGES = [
+        '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22',
+        '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18',
+        '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22',
+        '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+        '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+        '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32',
+        '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29',
+        '2c0f:f248::/32',
+    ];
+
+    /** A routable address: not loopback, not RFC1918, not link-local. */
+    public static function isPublicIp(string $ip): bool
+    {
+        return $ip !== '' && filter_var($ip, FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+    }
+
+    /** Is $ip inside $cidr? Handles v4 and v6 by comparing packed bits. */
+    public static function cidrMatch(string $ip, string $cidr): bool
+    {
+        $parts = explode('/', $cidr, 2);
+        if (count($parts) !== 2) { return false; }
+        $net  = @inet_pton($parts[0]);
+        $addr = @inet_pton($ip);
+        if ($net === false || $addr === false) { return false; }
+        if (strlen($net) !== strlen($addr)) { return false; }  // v4 vs v6
+
+        $bits  = (int) $parts[1];
+        $whole = intdiv($bits, 8);
+        $rest  = $bits % 8;
+
+        if ($whole > 0 && strncmp($net, $addr, $whole) !== 0) { return false; }
+        if ($rest === 0) { return true; }
+        $mask = 0xFF << (8 - $rest) & 0xFF;
+        return (ord($net[$whole]) & $mask) === (ord($addr[$whole]) & $mask);
+    }
+
+    private static function isCloudflare(string $ip): bool
+    {
+        foreach (self::CF_RANGES as $r) {
+            if (self::cidrMatch($ip, $r)) { return true; }
+        }
+        return false;
+    }
+
+    /**
+     * Is this address a proxy standing in front of us, rather than a client?
+     *
+     * Loopback and RFC1918 are obvious. The server's OWN address is the one
+     * that caught us out: nginx on this server proxies to Apache over the
+     * public interface for some vhosts, so the connection address was
+     * 51.68.163.24 -- the machine itself -- and it was duly filed as the
+     * busiest attacker on the server.
+     *
+     * Section A gives us the server address for that very connection, so the
+     * comparison needs no configuration to read and no list to maintain.
+     */
+    public static function isProxyAddress(string $ip, string $serverIp = ''): bool
+    {
+        if ($ip === '') { return true; }
+        if (!self::isPublicIp($ip)) { return true; }
+        return $serverIp !== '' && $ip === $serverIp;
+    }
+
+    /** X-Forwarded-For as a list, left (furthest) to right (nearest). */
+    public static function forwardedChain(string $header): array
+    {
+        if (trim($header) === '') { return []; }
+        $out = [];
+        foreach (explode(',', $header) as $tok) {
+            $tok = trim($tok);
+            // Strip a :port or [v6]:port suffix if one is present.
+            if (preg_match('/^\[(.+)\](?::\d+)?$/', $tok, $m)) { $tok = $m[1]; }
+            elseif (substr_count($tok, ':') === 1) { $tok = explode(':', $tok)[0]; }
+            if (filter_var($tok, FILTER_VALIDATE_IP) !== false) { $out[] = $tok; }
+        }
+        return $out;
+    }
+
+    /**
+     * Who actually made the request.
+     *
+     * @return array{ip:string,source:string,chain:string}
+     *
+     * THE RIGHTMOST hop in X-Forwarded-For, not the leftmost. nginx builds the
+     * header with $proxy_add_x_forwarded_for, which APPENDS the address it saw
+     * to whatever the client sent -- so the left of the chain is attacker
+     * controlled and the right-hand entry is the one our own proxy wrote. A
+     * scanner that sends "X-Forwarded-For: 8.8.8.8" would otherwise have us
+     * record, report and potentially firewall Google.
+     *
+     * Only consulted when section A gave a proxy address. A request that
+     * reached Apache directly already has a trustworthy source, and a header
+     * on that request is purely the client's claim.
+     */
+    public static function resolveClientIp(array $e): array
+    {
+        $a     = trim((string) ($e['ip_address'] ?? ''));
+        $chain = self::forwardedChain((string) ($e['xff'] ?? ''));
+        $cf    = trim((string) ($e['cf_ip'] ?? ''));
+        $joined = implode(', ', $chain);
+
+        if (!self::isProxyAddress($a, (string) ($e['server_ip'] ?? ''))) {
+            return ['ip' => $a, 'source' => 'direct', 'chain' => $joined];
+        }
+
+        $hop = '';
+        for ($i = count($chain) - 1; $i >= 0; $i--) {
+            if (self::isPublicIp($chain[$i])) { $hop = $chain[$i]; break; }
+        }
+
+        // Cloudflare overwrites CF-Connecting-IP with the visitor address, so
+        // for a site behind Cloudflare it is better than the chain -- whose
+        // nearest hop is a Cloudflare edge, not the visitor. Believed when the
+        // nearest hop IS Cloudflare, which corroborates it. Accepted without
+        // that corroboration only when there is no chain at all, and labelled
+        // so an operator can see which rows rest on it.
+        if ($cf !== '' && self::isPublicIp($cf) && ($hop === '' || self::isCloudflare($hop))) {
+            return [
+                'ip'     => $cf,
+                'source' => $hop === '' ? 'cf-connecting-ip-uncorroborated' : 'cf-connecting-ip',
+                'chain'  => $joined,
+            ];
+        }
+
+        if ($hop !== '') {
+            return ['ip' => $hop, 'source' => 'x-forwarded-for', 'chain' => $joined];
+        }
+
+        // A proxy address and nothing to replace it with. Kept as it is and
+        // named, rather than guessed at: an unattributable event is a fact
+        // about the log, and inventing a source would be worse than saying so.
+        return ['ip' => $a, 'source' => 'proxy-unresolved', 'chain' => $joined];
+    }
+
     private function saveWafEvent(array $e): void {
         if (empty($e['rule_id']) && empty($e['ip_address'])) return;
+
+        // Resolved BEFORE the duplicate check, or the 60-second window groups
+        // by proxy address and collapses unrelated attackers arriving through
+        // the same nginx into one another.
+        $who = self::resolveClientIp($e);
 
         // Deduplicate: skip if same rule+IP in last 60s
         $exists = Database::fetchOne(
             "SELECT id FROM waf_events WHERE rule_id=? AND ip_address=? AND timestamp > ?",
-            [$e['rule_id'] ?? '', $e['ip_address'] ?? '', time() - 60]
+            [$e['rule_id'] ?? '', $who['ip'], time() - 60]
         );
         if ($exists) return;
 
@@ -545,7 +712,7 @@ class WAF {
             'rule_id'    => $e['rule_id']    ?? '',
             'rule_msg'   => $e['rule_msg']   ?? '',
             'severity'   => $e['severity']   ?? 'medium',
-            'ip_address' => $e['ip_address'] ?? '',
+            'ip_address' => $who['ip'],
             'uri'        => $e['uri']        ?? '',
             'method'     => $e['method']     ?? '',
             'host'       => $e['host']       ?? '',
@@ -558,6 +725,11 @@ class WAF {
             // been waved through. A security product inventing the one field
             // that says whether it protected you is the worst row it can hold.
             'action'     => (string) ($e['action'] ?? 'unknown'),
+            // Kept so the attribution can be audited rather than trusted. An
+            // operator about to firewall an address can see whether it came
+            // from the connection, from a header, or not at all.
+            'ip_source'  => $who['source'],
+            'forwarded_for' => mb_substr($who['chain'], 0, 256),
         ]);
     }
 
