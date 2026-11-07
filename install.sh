@@ -216,6 +216,69 @@ if [[ -d "${OLD_DIR}" && "${OLD_DIR}" != "${INSTALL_DIR}" ]]; then
   ok "  Migration complete — continuing as ServerScrub"
 fi
 
+# ── A Sentinel Gate WAF config left behind ──────────────────────────
+# Deliberately OUTSIDE the migration block above. That block only runs when
+# /usr/local/sentinel-gate still exists, so on a server that migrated once it
+# never runs again -- and anything it missed the first time stays for good.
+#
+# What it missed: /etc/sentinel-gate/waf/ holds a complete second copy of the
+# OWASP CRS, and the Apache include loading it was never removed. Step 9 above
+# renames a file called sentinel-waf.conf; the include has had other names, so
+# the directory and its loader both survived.
+#
+# Both copies define id:913100. Apache refuses the whole config with
+#   AH00526: Found another rule with the same id
+# which means `waf mode on` had never once succeeded on a migrated server. The
+# WAF appeared installed, reported a mode, and could not be armed.
+LEGACY_WAF_DIR="/etc/sentinel-gate"
+if [[ -d "${LEGACY_WAF_DIR}" ]]; then
+  section "Removing a leftover Sentinel Gate WAF config"
+
+  # Find the include by what it POINTS AT, not by its name. Guessing the name
+  # is what left this behind once already.
+  for _d in /etc/apache2/conf.d /usr/local/apache/conf /etc/httpd/conf.d \
+            /etc/apache2/conf-enabled; do
+    [[ -d "${_d}" ]] || continue
+    while IFS= read -r _f; do
+      [[ -n "${_f}" ]] || continue
+
+      # Only remove a file that is NOTHING BUT references to the old path --
+      # our own one-line include. cPanel's modsec2.user.conf also mentions the
+      # old name, and deleting that would take Apache's ModSecurity config
+      # with it.
+      _total=$(grep -cvE '^[[:space:]]*(#|$)' "${_f}" 2>/dev/null || echo 0)
+      _legacy=$(grep -cF "${LEGACY_WAF_DIR}" "${_f}" 2>/dev/null || echo 0)
+      if [[ "${_total}" -gt 0 && "${_total}" -eq "${_legacy}" ]]; then
+        rm -f "${_f}"
+        ok "  Removed stale Apache include ${_f}"
+      else
+        warn "  ${_f} references ${LEGACY_WAF_DIR} but is not ours - left alone"
+        warn "  Remove that line by hand or the duplicate rules remain"
+      fi
+    done < <(grep -rlsF "${LEGACY_WAF_DIR}" "${_d}" --include='*.conf' 2>/dev/null || true)
+  done
+
+  rm -rf "${LEGACY_WAF_DIR}"
+  ok "  Removed ${LEGACY_WAF_DIR} (a second, duplicate copy of the CRS)"
+
+  # NOT removed: /etc/apache2/conf.d/modsec_vendor_configs/sentinel-gate/.
+  # cPanel's modsec2.user.conf loads it with `Include`, not `IncludeOptional`,
+  # so deleting the directory makes Apache fail to start. It is empty and
+  # harmless; the line is cPanel's to remove, through WHM.
+
+  # Validate before reloading. A graceful reload on a config that does not
+  # parse takes Apache down, and this runs on a server with live accounts.
+  if command -v apachectl >/dev/null 2>&1; then
+    if apachectl -t >/dev/null 2>&1; then
+      apachectl graceful >/dev/null 2>&1 || true
+      ok "  Apache config valid, reloaded"
+    else
+      warn "  Apache config still does not validate - NOT reloading."
+      warn "  Run 'apachectl -t' to see what else is wrong."
+    fi
+  fi
+fi
+
 section "Pre-flight checks"
 [[ $EUID -ne 0 ]] && error "Must be run as root"
 

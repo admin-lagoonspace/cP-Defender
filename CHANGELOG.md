@@ -54,6 +54,37 @@ heading or touch VERSION mid-week._
   Retyping a rule id by hand is how the wrong rule gets disabled, or the right
   rule gets disabled everywhere.
 
+### Fixed
+
+- **The WAF could not be armed at all on any server upgraded from Sentinel
+  Gate.** `serverscrub waf mode on` failed every time with
+
+  ```
+  AH00526: Found another rule with the same id
+  ```
+
+  The rename left `/etc/sentinel-gate/waf/` in place, holding a complete
+  second copy of the OWASP CRS, along with the Apache include that loads it.
+  Both copies define `id:913100`, so Apache rejected the config. The failure
+  was reported and `apachectl -t` ran before any reload, so nothing was ever
+  broken — but the panel showed the WAF as installed with a mode, and the
+  engine had never once been armed.
+
+  The installer's migration step renamed one include called
+  `sentinel-waf.conf` and matched on that filename. The real include had a
+  different name, so it and the directory both survived.
+
+  The cleanup now finds a stale include by the path it *references* rather
+  than by its name, and runs on every install rather than only when
+  `/usr/local/sentinel-gate` still exists — inside that condition it could
+  never run again on a server that had already migrated, which is every server
+  with the fault. A file is removed only when every non-comment line in it
+  refers to the old path; cPanel's own `modsec2.user.conf` mentions the old
+  name too, and deleting that would take ModSecurity's whole configuration
+  with it. The old vendor directory under `modsec_vendor_configs/` is
+  deliberately left alone for the same reason: cPanel loads it with `Include`,
+  not `IncludeOptional`, so removing it stops Apache starting.
+
 ## [4.35.1] - 2026-11-06
 
 ### Fixed

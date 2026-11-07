@@ -38,6 +38,11 @@ foreach ($it as $f) {
     // product at all.
     if (preg_match('#/docs/#', $path)) { continue; }
     if (strpos(basename($path), 'test_rebrand') === 0) { continue; }
+    // A test that checks a leftover from the old name is cleaned up has to
+    // name that leftover. tests/test_legacy_waf_cleanup.php guards the removal
+    // of /etc/sentinel-gate/waf, a second copy of the CRS that made the WAF
+    // unarmable on every migrated server.
+    if (strpos(basename($path), 'test_legacy_') === 0) { continue; }
 
     $c = @file_get_contents($path);
     if ($c === false) { continue; }
