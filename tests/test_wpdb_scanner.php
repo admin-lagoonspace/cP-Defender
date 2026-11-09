@@ -111,7 +111,7 @@ t_eq(null, WPDatabaseScanner::parseConfig($tmp . '/nope'),
 $runner = function (array $fixture): callable {
     return function (string $sql) use ($fixture): array {
         foreach ($fixture as $needle => $rows) {
-            if (str_contains($sql, $needle)) return $rows;
+            if ((strpos($sql, $needle) !== false)) return $rows;
         }
         return [];
     };
@@ -144,19 +144,19 @@ $whats = implode(' || ', array_column($admins, 'what'));
 t_contains($whats, 'wpadm01',         'the SQL-inserted account');
 t_contains($whats, 'raw MD5',         'identified by its impossible password hash');
 t_contains($whats, 'james_smith1234', 'and the bcrypt account with a backdated date');
-t_ok(!str_contains($whats, '"alice"'), 'the real administrator is left alone');
+t_ok(!(strpos($whats, '"alice"') !== false), 'the real administrator is left alone');
 
 // The bcrypt/backdated account is the one that defeats every hash-format
 // check, so it must be reported — but at 'high', not 'critical', because the
 // signals are circumstantial and a dormant real account looks the same.
 $gen = array_values(array_filter($admins,
-    fn($f) => str_contains($f['what'], 'james_smith1234')));
+    fn($f) => (strpos($f['what'], 'james_smith1234') !== false)));
 t_eq('high', $gen[0]['severity'],
      'a circumstantial match is high, not critical — a human decides');
 t_contains($gen[0]['action'], 'Confirm with the site owner',
      'and is told to confirm before deleting');
 
-$md5 = array_values(array_filter($admins, fn($f) => str_contains($f['what'], 'wpadm01')));
+$md5 = array_values(array_filter($admins, fn($f) => (strpos($f['what'], 'wpadm01') !== false)));
 t_eq('critical', $md5[0]['severity'], 'a raw MD5 hash is conclusive on its own');
 
 // A site with 20+ administrators is a finding in itself.
@@ -192,7 +192,7 @@ t_eq(1, count($roleF), 'only the fabricated role is reported');
 t_contains($roleF[0]['what'], 'internal_cache_sync', 'by name');
 t_contains($roleF[0]['what'], '2 account', 'with the number of accounts holding it');
 t_eq('critical', $roleF[0]['severity'], 'as critical, because it carries admin power');
-t_ok(!str_contains($roleF[0]['what'], 'shop_manager'),
+t_ok(!(strpos($roleF[0]['what'], 'shop_manager') !== false),
      "WooCommerce's shop_manager is not reported");
 
 // The login token: the durable half of a file backdoor whose file self-deleted.

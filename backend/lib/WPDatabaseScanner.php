@@ -384,7 +384,7 @@ class WPDatabaseScanner
 
             $known = false;
             foreach (self::KNOWN_ROLE_PREFIXES as $pref) {
-                if (str_starts_with($lower, $pref)) { $known = true; break; }
+                if ((strpos($lower, $pref) === 0)) { $known = true; break; }
             }
             if ($known) continue;
 
@@ -555,7 +555,7 @@ class WPDatabaseScanner
             // relay. A fixed address on another domain is also worth saying.
             $isTag = (bool)preg_match('/\[[^\]]+\]/', $to);
             $offsite = !$isTag && $site !== ''
-                       && !str_contains(strtolower($to), strtolower($site));
+                       && !(strpos(strtolower($to), strtolower($site)) !== false);
 
             if (!$isTag && !$offsite) continue;
 

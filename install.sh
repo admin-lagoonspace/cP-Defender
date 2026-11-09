@@ -1122,7 +1122,11 @@ MODRULEEOF
     {
       echo ""
       echo "# ServerScrub WAF rules"
-      echo "Include ${SG_MODSEC_RULES}"
+      # IncludeOptional, not Include: with a plain Include, Apache REFUSES TO
+      # START if this file is ever missing -- a partial uninstall, or an
+      # operator tidying up. Every other include this product writes is
+      # optional for exactly that reason, and this one was not.
+      echo "IncludeOptional ${SG_MODSEC_RULES}"
     } >> "${MODSEC_USER_CONF}"
     ok "Registered WAF Include in ${MODSEC_USER_CONF}"
   else

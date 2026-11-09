@@ -164,25 +164,158 @@ class WAF {
         return ['success' => true, 'mode' => $mode];
     }
 
-    public function getRuleCategories(): array {
-        return [
-            ['id' => '900',  'name' => 'Initialization',       'active' => true,  'rules' => 45],
-            ['id' => '910',  'name' => 'IP Reputation',         'active' => true,  'rules' => 12],
-            ['id' => '911',  'name' => 'Method Enforcement',    'active' => true,  'rules' => 8],
-            ['id' => '912',  'name' => 'DoS Protection',        'active' => true,  'rules' => 16],
-            ['id' => '913',  'name' => 'Scanner Detection',     'active' => true,  'rules' => 94],
-            ['id' => '920',  'name' => 'Protocol Enforcement',  'active' => true,  'rules' => 37],
-            ['id' => '921',  'name' => 'Protocol Attack',       'active' => true,  'rules' => 22],
-            ['id' => '930',  'name' => 'Local File Inclusion',  'active' => true,  'rules' => 54],
-            ['id' => '931',  'name' => 'Remote File Inclusion', 'active' => true,  'rules' => 11],
-            ['id' => '932',  'name' => 'Remote Code Execution', 'active' => true,  'rules' => 23],
-            ['id' => '933',  'name' => 'PHP Injection',         'active' => true,  'rules' => 39],
-            ['id' => '941',  'name' => 'XSS',                   'active' => true,  'rules' => 118],
-            ['id' => '942',  'name' => 'SQL Injection',         'active' => true,  'rules' => 214],
-            ['id' => '943',  'name' => 'Session Fixation',      'active' => true,  'rules' => 7],
-            ['id' => '944',  'name' => 'Java Attack',           'active' => false, 'rules' => 12],
-            ['id' => '949',  'name' => 'Blocking Evaluation',   'active' => true,  'rules' => 4],
+    /**
+     * The OWASP CRS categories actually installed on this server.
+     *
+     * -- WHY THIS READS FILES -------------------------------------------------
+     *
+     * It used to return a literal array: sixteen categories, exact rule
+     * counts, and an Active/Disabled flag on each. It rendered identically on
+     * a server with CRS 4.7.0, with CRS 3.x, and with no CRS installed at all,
+     * and the panel presented every figure as fact. One of those literals was
+     *
+     *     ['id' => '944', 'name' => 'Java Attack', 'active' => false, 'rules' => 12]
+     *
+     * -- a specific, actionable claim about a customer's security posture that
+     * was a hardcoded `false` in PHP source. An operator reading it either
+     * believes the Java rules are off and goes looking for why, or believes
+     * the other fifteen are on and stops looking. This is the same defect as
+     * action = 'block' on 148,551 rows.
+     *
+     * Everything below is derived from the files WAFInstaller::crsPath()
+     * locates, and when they cannot be read the answer is
+     * available => false with a reason, for the panel to say so. A number this
+     * product cannot derive is not displayed as one.
+     *
+     * -- WHAT "LOADED" MEANS AND DOES NOT ------------------------------------
+     *
+     * `loaded` is whether OUR config includes the CRS rules directory, which
+     * is as far as reading files can establish. It is NOT "ModSecurity has
+     * these rules in memory": only a running Apache knows that, and the mode
+     * tile and `include_present` are what qualify it. `excluded` is the number
+     * of rule exclusions the operator has recorded against ids in that
+     * category -- rules the product itself has switched off, which the panel
+     * otherwise shows no trace of.
+     *
+     * -- BOUNDS ---------------------------------------------------------------
+     *
+     * rules/*.conf one level down, at most $maxFiles of them, nothing over
+     * 4 MB read. CRS 4.7.0 is ~35 files of ~40 KB. This is a panel load on a
+     * 132-account server, not a scan.
+     *
+     * @return array{available:bool,reason:?string,crs_path:?string,
+     *               crs_version:?string,loaded:bool,categories:array<int,array>}
+     */
+    public function getRuleCategories(int $maxFiles = 400): array {
+        $dir = WAFInstaller::crsPath();
+        if ($dir === null) {
+            return $this->noCategories(
+                'No OWASP CRS rule files were found on this server, so there are no '
+                . 'categories to report. Install the WAF from this page and they will appear.');
+        }
+
+        $files = glob($dir . '/rules/*.conf') ?: [];
+        if (!$files) {
+            return $this->noCategories(
+                'The OWASP CRS directory ' . $dir . ' holds no rule files that could be read, '
+                . 'so no category counts can be shown.', $dir);
+        }
+        sort($files);
+        $files = array_slice($files, 0, $maxFiles);
+
+        // Which rules has the operator switched off? Recorded by us, so it is
+        // knowable -- and the panel showed no sign of it at all.
+        $excluded = [];
+        try {
+            foreach (WAFExclusions::all() as $row) {
+                $excluded[substr((string) $row['rule_id'], 0, 3)]
+                    = ($excluded[substr((string) $row['rule_id'], 0, 3)] ?? 0) + 1;
+            }
+        } catch (Throwable $e) {
+            // A missing table must not take the panel down; the counts simply
+            // stay at zero and nothing claims otherwise.
+            Logger::warn('Could not read WAF exclusions for the category panel: ' . $e->getMessage());
+        }
+
+        $byId = [];
+        foreach ($files as $f) {
+            $base = basename($f);
+            if (!preg_match('/^(?:REQUEST|RESPONSE)-(\d{3})-(.+)\.conf$/', $base, $m)) { continue; }
+            $size = @filesize($f);
+            if ($size === false || $size > 4194304) { continue; }
+
+            // Comment lines first: CRS ships example rules commented out, and
+            // counting those would inflate every figure on the panel.
+            $body = (string) preg_replace('/^[ \t]*#.*$/m', '',
+                                          (string) @file_get_contents($f));
+            $n = preg_match_all('/(?:^|[,"\s])id:[\'"]?\d+/m', $body);
+
+            $id = $m[1];
+            if (!isset($byId[$id])) {
+                $byId[$id] = ['id' => $id, 'name' => $this->prettyCategory($m[2]),
+                              'rules' => 0, 'files' => [], 'excluded' => (int) ($excluded[$id] ?? 0)];
+            }
+            $byId[$id]['rules'] += (int) $n;
+            $byId[$id]['files'][] = $base;
+        }
+
+        if (!$byId) {
+            return $this->noCategories(
+                'The files in ' . $dir . '/rules are not named the way OWASP CRS names them, so '
+                . 'no categories could be identified from them.', $dir);
+        }
+
+        ksort($byId);
+        $ourConf = (string) @file_get_contents(
+            WAFInstaller::confDir() . '/serverscrub-waf.conf');
+        $loaded  = strpos($ourConf, $dir . '/rules/') !== false;
+
+        $cats = [];
+        foreach ($byId as $c) {
+            $c['loaded'] = $loaded;
+            $cats[] = $c;
+        }
+
+        return ['available'   => true,
+                'reason'      => null,
+                'crs_path'    => $dir,
+                // From the SAME tree the counts were read from, not from a
+                // second path that may hold a different ruleset.
+                'crs_version' => WAFInstaller::crsVersion($dir),
+                'loaded'      => $loaded,
+                'categories'  => $cats];
+    }
+
+    /** One shape for every "we cannot tell you" answer, with the reason in it. */
+    private function noCategories(string $reason, ?string $dir = null): array {
+        return ['available'   => false,
+                'reason'      => $reason,
+                'crs_path'    => $dir,
+                'crs_version' => null,
+                'loaded'      => false,
+                'categories'  => []];
+    }
+
+    /**
+     * REQUEST-942-APPLICATION-ATTACK-SQLI -> "SQL Injection".
+     *
+     * Derived from the file name, which is also returned in `files` so the
+     * operator can check the derivation rather than trust it.
+     */
+    private function prettyCategory(string $raw): string {
+        $raw = (string) preg_replace('/^APPLICATION-ATTACK-/', '', $raw);
+        $known = [
+            'SQLI' => 'SQL Injection', 'XSS' => 'XSS', 'RCE' => 'Remote Code Execution',
+            'LFI' => 'Local File Inclusion', 'RFI' => 'Remote File Inclusion',
+            'PHP' => 'PHP', 'NODEJS' => 'Node.js', 'JAVA' => 'Java', 'DOS' => 'DoS',
+            'IP' => 'IP', 'CRS' => 'CRS', 'HTTP' => 'HTTP', 'MSSQL' => 'MSSQL',
         ];
+        $out = [];
+        foreach (explode('-', $raw) as $w) {
+            if ($w === '') { continue; }
+            $out[] = $known[strtoupper($w)] ?? ucfirst(strtolower($w));
+        }
+        return implode(' ', $out);
     }
 
     /**
@@ -757,18 +890,248 @@ class WAF {
         ];
     }
 
+    /**
+     * Where the custom rules Apache loads are written.
+     *
+     * Overridable so this write path can be exercised without writing into
+     * /etc on a developer's machine. It had never been run anywhere: the
+     * method appended an unvalidated rule to a file Apache loads and then
+     * restarted Apache, which is the 7 Nov outage in a path the rollback fix
+     * never touched.
+     */
+    private static $customRulesPath = null;
+
+    public static function setCustomRulesPath(?string $p): void { self::$customRulesPath = $p; }
+
+    public static function customRulesPath(): string
+    {
+        return self::$customRulesPath ?? MODSEC_CONF . '/serverscrub/custom_rules.conf';
+    }
+
+    /**
+     * Is this rule id already defined by something the product writes?
+     *
+     * Bands keep the two generators apart (see the id map in WAFExclusions),
+     * and this is the check that holds anyway. A duplicate id is not a
+     * warning: Apache answers "ModSecurity: Found another rule with the same
+     * id" and refuses the WHOLE configuration, which on 7 Nov was 132
+     * accounts at 502 for ten hours. It was reproduced by planting a custom
+     * rule at id:15001 -- the id the exclusion generator had already used.
+     *
+     * CRS itself is not scanned: it owns 900,000+ and the custom band is
+     * 20,000-29,999, so there is nothing there to collide with, and reading
+     * ~35 rule files on every add would not be free.
+     *
+     * @return string|null a description of where it is already used
+     */
+    public function ruleIdInUse(int $id): ?string
+    {
+        if (in_array($id, WAFExclusions::generatedIds(), true)) {
+            return 'a generated WAF rule exclusion';
+        }
+        $files = [
+            self::customRulesPath() => 'the custom rules file',
+            WAFInstaller::confDir() . '/serverscrub-waf.conf' => 'our own WAF config',
+        ];
+        foreach ($files as $f => $what) {
+            if (!is_file($f)) { continue; }
+            $body = (string) preg_replace('/^[ \t]*#.*$/m', '', (string) @file_get_contents($f));
+            if (preg_match('/(?:^|[,"\s])id:[\'"]?' . $id . '\b/m', $body)) {
+                return $what . ' (' . $f . ')';
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Add one custom ModSecurity rule.
+     *
+     * -- WHAT THIS USED TO DO -------------------------------------------------
+     *
+     * It appended the rule to a file Apache loads, ran `service httpd
+     * graceful`, and returned ['success' => true] unconditionally. No syntax
+     * check, the return of neither the write nor the restart examined, and any
+     * string accepted as the id -- while the API defaults the id to
+     * uniqid('SG'), so the ordinary call wrote `id:SG6910abc12def3`, which is
+     * a ModSecurity syntax error, into a live config and then restarted
+     * Apache. One API call could take every site on the server down at the
+     * next restart and report that it had worked.
+     *
+     * So, in order: the id must be digits and inside the band reserved for
+     * custom rules; it must not already be in use; the pattern must be
+     * something that can be rendered into a quoted directive at all; the file
+     * is snapshotted before it is touched; `apachectl -t` runs BEFORE any
+     * reload; a rejection is rolled back and the rollback is verified; and the
+     * result says what happened rather than that it succeeded.
+     *
+     * @param string $id      numeric, WAFExclusions::CUSTOM_ID_MIN..CUSTOM_ID_MAX
+     * @param string $pattern a regex for @rx
+     * @param string $action  'block' (deny 403) or 'log' (log only)
+     */
     public function addCustomRule(string $id, string $pattern, string $action = 'block'): array {
-        $confPath = MODSEC_CONF . '/serverscrub/custom_rules.conf';
-        $dir = dirname($confPath);
-        if (!is_dir($dir)) mkdir($dir, 0750, true);
+        $id      = trim($id);
+        $pattern = trim($pattern);
+        $action  = strtolower(trim($action));
+
+        // -- The id ----------------------------------------------------------
+        if (!preg_match('/^[0-9]{1,9}$/', $id)) {
+            return ['success' => false,
+                    'error'   => 'A ModSecurity rule id must be digits only, and "' . $id
+                               . '" is not. ModSecurity rejects a non-numeric id as a syntax '
+                               . 'error, which stops Apache starting.'];
+        }
+        $n = (int) $id;
+        if ($n < WAFExclusions::CUSTOM_ID_MIN || $n > WAFExclusions::CUSTOM_ID_MAX) {
+            return ['success' => false,
+                    'error'   => 'Custom rule ids must be between ' . WAFExclusions::CUSTOM_ID_MIN
+                               . ' and ' . WAFExclusions::CUSTOM_ID_MAX . '. '
+                               . WAFExclusions::ID_BASE . '-' . WAFExclusions::ID_CEIL
+                               . ' is reserved for generated rule exclusions and 900000+ for '
+                               . 'OWASP CRS; reusing an id from either is the duplicate-id '
+                               . 'failure that stops Apache starting.'];
+        }
+        $clash = $this->ruleIdInUse($n);
+        if ($clash !== null) {
+            return ['success' => false,
+                    'error'   => 'Rule id ' . $n . ' is already used by ' . $clash
+                               . '. Apache refuses the whole configuration when one id is '
+                               . 'defined twice ("Found another rule with the same id").'];
+        }
+
+        // -- The pattern -----------------------------------------------------
+        if ($pattern === '') {
+            return ['success' => false, 'error' => 'A rule needs a pattern to match'];
+        }
+        if (strlen($pattern) > 512) {
+            return ['success' => false, 'error' => 'The pattern is longer than 512 characters'];
+        }
+        /* Rejected rather than escaped. addslashes() was all that stood
+         * between a pattern and the quoted directive it is interpolated into,
+         * and a double quote or a newline in it ends that directive and starts
+         * something Apache cannot parse. */
+        if (strpbrk($pattern, "\"\\\r\n") !== false) {
+            return ['success' => false,
+                    'error'   => 'The pattern contains a quote, backslash or newline. Those end '
+                               . 'the quoted ModSecurity directive, so the rule cannot be '
+                               . 'written safely.'];
+        }
+        if (@preg_match('/' . str_replace('/', '\\/', $pattern) . '/', '') === false) {
+            return ['success' => false,
+                    'error'   => 'The pattern is not a valid regular expression, so ModSecurity '
+                               . 'would reject the rule'];
+        }
+
+        // -- The action ------------------------------------------------------
+        /* $action was accepted and then ignored: every rule was `deny`,
+         * whatever the caller asked for. An operator who asked to log and got
+         * blocking hears about it from their customers. */
+        $actions = ['block' => 'deny,status:403', 'log' => 'pass,log'];
+        if (!isset($actions[$action])) {
+            return ['success' => false,
+                    'error'   => 'Unknown action "' . $action . '". Use block or log.'];
+        }
+
+        $confPath = self::customRulesPath();
+        $dir      = dirname($confPath);
+        if (!is_dir($dir) && !@mkdir($dir, 0750, true)) {
+            return ['success' => false, 'error' => 'Could not create ' . $dir];
+        }
 
         $rule = sprintf(
-            'SecRule REQUEST_URI|ARGS|REQUEST_HEADERS "%s" "id:%s,phase:2,deny,status:403,msg:\'ServerScrub-Custom\',log,auditlog"' . "\n",
-            addslashes($pattern),
-            $id
+            'SecRule REQUEST_URI|ARGS|REQUEST_HEADERS "@rx %s" '
+            . '"id:%d,phase:2,%s,msg:\'ServerScrub-Custom\',log,auditlog"' . "\n",
+            $pattern, $n, $actions[$action]
         );
-        file_put_contents($confPath, $rule, FILE_APPEND);
-        exec('service httpd graceful 2>/dev/null || service apache2 graceful 2>/dev/null');
-        return ['success' => true];
+
+        // Snapshotted BEFORE the write, and null means "there was no file" --
+        // restoring that to an empty file is not the same thing to Apache.
+        $snap = [$confPath => is_file($confPath) ? (string) @file_get_contents($confPath) : null];
+        $want = ($snap[$confPath] === null ? '' : $snap[$confPath]) . $rule;
+
+        /* Written whole rather than appended, so a short write -- what a full
+         * filesystem gives you instead of an error -- is detectable, and so
+         * the rollback is an exact byte-for-byte restore. */
+        $wrote = @file_put_contents($confPath, $want);
+        if ($wrote === false || $wrote !== strlen($want)) {
+            $rb = WAFInstaller::restoreConfig($snap);
+            return ['success' => false, 'rolled_back' => $rb['ok'],
+                    'error'   => 'Could not write ' . $confPath
+                               . ($wrote === false
+                                    ? ' at all'
+                                    : ' completely: ' . $wrote . ' of ' . strlen($want)
+                                      . ' bytes, which is what a full filesystem does instead '
+                                      . 'of reporting an error')
+                               . ($rb['ok'] ? '. The file was put back as it was.'
+                                            : '. ' . $this->restoreFailed($confPath))];
+        }
+        @chmod($confPath, 0644);
+
+        // -- Validate BEFORE anything reloads --------------------------------
+        $v = WAFInstaller::validateApache();
+        if (!$v['ok']) {
+            $rb   = WAFInstaller::restoreConfig($snap);
+            $why  = $v['ran']
+                ? 'Apache rejected the rule: ' . $v['output']
+                : 'No Apache syntax check could be run on this server, so the rule was not '
+                  . 'applied -- Apache has said nothing about it either way: ' . $v['output'];
+            $note = $rb['ok']
+                ? ' The file was put back exactly as it was and nothing was reloaded.'
+                : ' ' . $this->restoreFailed($confPath);
+            Logger::warn('Custom WAF rule ' . $n . ' not applied: ' . $why);
+            return ['success' => false, 'rolled_back' => $rb['ok'], 'error' => $why . $note];
+        }
+
+        $reloaded = WAFInstaller::reloadApache();
+        Logger::info('Custom WAF rule ' . $n . ' added (' . $action . ') and validated with '
+                     . (string) $v['binary']);
+
+        return ['success'      => true,
+                'id'           => $n,
+                'action'       => $action,
+                'path'         => $confPath,
+                'validated_by' => $v['binary'],
+                // A rule on disk that Apache has not re-read is not filtering
+                // anything yet, and saying "added" without saying that is the
+                // same class of claim as the rest of this method's history.
+                'live'         => $reloaded,
+                'note'         => $reloaded
+                    ? null
+                    : 'The rule is valid and saved, but Apache could not be reloaded, so it is '
+                      . 'not filtering requests yet. It will take effect at the next reload.'];
     }
+
+    /**
+     * Make a custom-rules file that could not be put back harmless, and say so.
+     *
+     * A rule Apache has already refused, in a file Apache loads, that we
+     * cannot remove, is the outage waiting for the next restart. Older
+     * installs registered this file with `Include` rather than
+     * `IncludeOptional` (install.sh now writes IncludeOptional), so deleting
+     * it could itself stop Apache -- it is emptied down to a comment instead,
+     * which satisfies either form of include and contains no rules.
+     */
+    private function restoreFailed(string $confPath): string
+    {
+        $blank = "# ServerScrub custom rules - emptied after a rollback that failed.\n";
+        @chmod($confPath, 0644);
+        $n = @file_put_contents($confPath, $blank);
+        clearstatcache(true, $confPath);
+        $emptied = $n === strlen($blank) && (string) @file_get_contents($confPath) === $blank;
+
+        if ($emptied) {
+            Logger::error('Custom WAF rules file could not be restored and was emptied: ' . $confPath);
+            return 'The previous contents could NOT be put back, so the file was emptied instead: '
+                 . 'any custom rules it held are gone, but Apache will still start. Re-add them '
+                 . 'once the cause is fixed.';
+        }
+
+        Logger::error('EMERGENCY: invalid custom WAF rule left on disk at ' . $confPath);
+        return 'EMERGENCY: the previous contents could not be put back and the file could not be '
+             . 'emptied either, so a rule Apache has already refused is STILL ON DISK at '
+             . $confPath . '. Apache is running on the configuration it parsed at its last start, '
+             . 'so nothing will look wrong until it is next restarted -- and then it will refuse '
+             . 'to start and take every site on this server with it. Move that file aside BY '
+             . 'HAND, now.';
+    }
+
 }

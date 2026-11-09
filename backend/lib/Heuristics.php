@@ -603,7 +603,7 @@ class Heuristics
         // everything under it, which is what an operator means by it.
         if (strpos($rule, '*') === false) {
             $r = rtrim($rule, '/');
-            return $path === $r || str_starts_with($path, $r . '/');
+            return $path === $r || (strpos($path, $r . '/') === 0);
         }
 
         $re = preg_quote($rule, '#');
@@ -706,7 +706,7 @@ class Heuristics
             // content regex. Both brake the same rule for different reasons:
             // "this file is allowed to do that" vs "this code checks a
             // capability first".
-            $subject = str_starts_with($re, '#') ? $norm : $content;
+            $subject = (strpos($re, '#') === 0) ? $norm : $content;
             if (preg_match($re, $subject)) return false;
         }
 

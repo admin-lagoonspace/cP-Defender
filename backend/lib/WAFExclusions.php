@@ -43,13 +43,71 @@ require_once __DIR__ . '/Logger.php';
 class WAFExclusions
 {
     /**
-     * ModSecurity rule ids 1–99,999 are reserved for local use, so the
-     * generated host-matching rules sit inside that band and cannot collide
-     * with CRS (900,000+). 15,000 leaves room below for anything hand-written
-     * and for WAF::addCustomRule(), where the operator picks the id.
+     * ── THE RULE ID MAP ──────────────────────────────────────────────────────
+     *
+     * ModSecurity ids 1–99,999 are reserved for local use and CRS owns
+     * 900,000+, so nothing here can collide with CRS. What it CAN collide with
+     * is the product's other rule writer. A duplicate id is not a warning:
+     *
+     *     ModSecurity: Found another rule with the same id
+     *
+     * is Apache refusing the entire configuration, and on 7 Nov that was every
+     * one of 132 accounts returning 502 for ten hours. It was reproduced
+     * deliberately by planting a custom rule at id:15001 — the id this class
+     * generates for exclusion row 1 — because the band below 15,000 was
+     * documented as "for addCustomRule()" and addCustomRule() validated
+     * nothing at all.
+     *
+     * So the two writers get DISJOINT bands, enforced at both ends:
+     *
+     *   below 15,000    hand-written rules an operator may already have. We
+     *                   never generate into it.
+     *   15,000–19,999   the generated host/path exclusion rules in this class:
+     *                   ID_BASE + the exclusion's row id, so 5,000 of them.
+     *   20,000–29,999   WAF::addCustomRule(), where the operator picks the id.
+     *                   Enforced there against CUSTOM_ID_MIN/MAX and against
+     *                   generatedIds() — the ids this class has actually
+     *                   emitted — so neither band can be entered from the
+     *                   other side.
      */
     const ID_BASE = 15000;
-    const ID_CEIL = 99999;
+    const ID_CEIL = 19999;
+
+    /** The band WAF::addCustomRule() must stay inside. Disjoint from the above. */
+    const CUSTOM_ID_MIN = 20000;
+    const CUSTOM_ID_MAX = 29999;
+
+    /**
+     * The generated rule id for one exclusion row, or null when that row needs
+     * no rule of its own (a server-wide exclusion is SecRuleRemoveById, which
+     * defines nothing and so cannot clash with anything).
+     */
+    public static function generatedId(array $row): ?int
+    {
+        if ((string) ($row['domain'] ?? '') === '' && (string) ($row['uri_prefix'] ?? '') === '') {
+            return null;
+        }
+        return self::ID_BASE + (int) $row['id'];
+    }
+
+    /**
+     * Every rule id this class currently renders into the Apache config.
+     *
+     * Read by WAF::addCustomRule() before it writes, so a custom rule cannot
+     * be given an id an exclusion is already using. Bands alone would almost
+     * do it; this is the check that holds when a band is widened later.
+     *
+     * @return array<int,int>
+     */
+    public static function generatedIds(): array
+    {
+        $ids = [];
+        foreach (self::all() as $row) {
+            $id = self::generatedId($row);
+            if ($id !== null) { $ids[] = $id; }
+        }
+        return $ids;
+    }
 
     /** @return array<int,array<string,mixed>> newest first */
     public static function all(): array
@@ -195,11 +253,14 @@ class WAFExclusions
                 continue;
             }
 
-            $genId = self::ID_BASE + (int) $row['id'];
+            $genId = (int) self::generatedId($row);
             if ($genId > self::ID_CEIL) {
                 throw new RuntimeException(
                     'Exclusion ' . $row['id'] . ' needs generated rule id ' . $genId
-                    . ', outside the local band ' . self::ID_BASE . '-' . self::ID_CEIL
+                    . ', outside the band ' . self::ID_BASE . '-' . self::ID_CEIL
+                    . ' reserved for generated exclusions. ' . self::CUSTOM_ID_MIN . ' and above '
+                    . 'belongs to custom rules, and reusing an id there is the duplicate-id '
+                    . 'failure that stops Apache starting'
                 );
             }
 

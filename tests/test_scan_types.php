@@ -162,7 +162,7 @@ t_contains($js, 'Select at least one account',
     'starting a custom scan with nothing ticked is refused in the UI too');
 
 $api = t_code($repo . '/backend/api/index.php');
-t_contains($api, "'accounts' =>", 'the account list has an API route');
+t_contains($api, "case 'accounts':", 'the account list has an API route');
 t_contains($api, 'None of those accounts exist',
     'and an account name that is not real is rejected');
 // The request names accounts; the server resolves them. A path in the request

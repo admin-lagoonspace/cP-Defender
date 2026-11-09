@@ -98,6 +98,14 @@ class WAFInstaller
     {
         $modsec = self::modsecPresent();
         $crs    = self::crsPath();
+        // Our config file is only read by Apache if the include that points at
+        // it exists. currentMode() parses the config and knows nothing about
+        // that, so a mode of "on" with the include gone is a blocking WAF
+        // filtering exactly no requests -- which install()'s failure path
+        // produces, because disableConfig() unlinks the include and leaves the
+        // config. Reported so the panel can qualify the mode instead of
+        // claiming protection the server is not delivering.
+        $inc = self::includePath();
         return [
             'modsecurity_installed' => $modsec,
             'modsecurity_version'   => $modsec ? self::modsecVersion() : null,
@@ -109,6 +117,9 @@ class WAFInstaller
             'package_manager'       => self::pkgManager(),
             'can_install'           => self::pkgManager() !== null,
             'managed_by_us'         => is_file(self::confDir() . '/serverscrub-waf.conf'),
+            'include_path'          => $inc,
+            'include_present'       => $inc !== null && is_file($inc),
+            'validator'             => self::validatorBinary(),
         ];
     }
 
@@ -141,7 +152,16 @@ class WAFInstaller
         return $o !== '' ? trim($o) : 'installed';
     }
 
-    private static function crsPath(): ?string
+    /**
+     * Where the OWASP CRS rule files are, or null when none are installed.
+     *
+     * Public because WAF::getRuleCategories() reports category counts read
+     * from these files. It used to return a hardcoded array of sixteen
+     * categories with exact rule counts and Active/Disabled flags, which
+     * rendered identically on a server with CRS 4.7.0, with CRS 3.x and with
+     * no CRS at all.
+     */
+    public static function crsPath(): ?string
     {
         foreach ([
             '/etc/apache2/conf.d/modsec_vendor_configs/OWASP3/crs-setup.conf',
@@ -153,10 +173,22 @@ class WAFInstaller
         return null;
     }
 
-    private static function crsVersion(string $dir): string
+    /**
+     * The CRS version of the tree at $dir.
+     *
+     * Public because WAF::getRuleCategories() reports the version beside
+     * counts read from that same tree, and its own getCRSVersion() looks at a
+     * different path entirely -- so the panel could show counts from one
+     * ruleset and a version from another, or "Not installed" beside 214 rules.
+     */
+    public static function crsVersion(string $dir): string
     {
         $f = $dir . '/crs-setup.conf';
-        if (is_readable($f) && preg_match('/OWASP_CRS.*?ver.*?([\d.]+)/i',
+        /* The capture must START on a digit. CRS writes "# OWASP_CRS ver.4.7.0",
+         * and `.*?([\d.]+)` captured the separating dot as well, so the panel
+         * read ".4.7.0" — a version string nothing matches and nobody can
+         * compare against a release. */
+        if (is_readable($f) && preg_match('/OWASP_CRS.*?ver[^\d\n]*(\d[\d.]*)/i',
                 (string)@file_get_contents($f), $m)) {
             return $m[1];
         }
@@ -227,7 +259,23 @@ class WAFInstaller
         // 2. OWASP CRS
         $crs = self::crsPath();
         if ($crs !== null) {
-            $ok('OWASP CRS already present at ' . $crs);
+            /* "Already present" was accepted without being read. The
+             * production tree was already present AND already defined 913100
+             * twice, so every install and every mode change after 6 Oct wrote
+             * a config that Apache could not parse, and the installer said
+             * the ruleset was fine. */
+            $dups = self::duplicateRuleIds($crs);
+            if ($dups) {
+                $no('The OWASP CRS tree at ' . $crs . ' defines the same rule id more than once');
+                return ['success' => false, 'steps' => $steps,
+                        'error' => 'The OWASP CRS tree already at ' . $crs . ' is corrupt: it '
+                                 . 'defines the same rule id more than once, which Apache refuses '
+                                 . 'with "Found another rule with the same id" — so no config was '
+                                 . 'written and nothing was reloaded. Duplicates: '
+                                 . self::describeDuplicates($dups) . '. Move that directory aside '
+                                 . 'and run the install again to fetch a clean copy.'];
+            }
+            $ok('OWASP CRS already present at ' . $crs . ' — no duplicate rule ids');
         } else {
             $r = self::installCrs();
             if (!$r['success']) {
@@ -249,9 +297,16 @@ class WAFInstaller
         $v = self::validateApache();
         if (!$v['ok']) {
             self::disableConfig();
+            // "Could not check" is not "checked and rejected". Saying the
+            // second when the first happened sends the operator looking for a
+            // syntax error that no program has ever reported.
             return ['success' => false, 'steps' => $steps,
-                    'error' => 'Apache rejected the configuration, so it was removed and '
-                             . 'nothing was reloaded: ' . $v['output']];
+                    'error' => ($v['ran']
+                        ? 'Apache rejected the configuration, so it was removed and '
+                          . 'nothing was reloaded: '
+                        : 'No Apache syntax check could be run, so the configuration was '
+                          . 'removed and nothing was reloaded rather than arming a WAF this '
+                          . 'server cannot be asked about: ') . $v['output']];
         }
         $ok('Apache configuration validated');
 
@@ -265,38 +320,197 @@ class WAFInstaller
                         . 'Review the audit log, then switch to blocking.'];
     }
 
+    /**
+     * Every ModSecurity rule id that is defined more than once in a CRS tree.
+     *
+     * ── WHY THIS EXISTS ──────────────────────────────────────────────────────
+     *
+     * On the production server /etc/serverscrub/waf/coreruleset held TWO
+     * definitions of rule 913100. Apache refused the whole configuration:
+     *
+     *     AH00526: Syntax error on line 56 of REQUEST-913-SCANNER-DETECTION.conf
+     *     ModSecurity: Found another rule with the same id
+     *
+     * so the WAF had not loaded once since 6 Oct while the panel reported it
+     * armed. A clean re-extraction of the identical 4.7.0 tarball parsed
+     * fine — the tree was the fault, not the ruleset, and installCrs()
+     * extracted over whatever was already there and assumed it had worked.
+     *
+     * One duplicate id anywhere in the tree costs every site on the server at
+     * the next Apache restart, so it is worth reading the files to find out.
+     *
+     * ── BOUNDS ───────────────────────────────────────────────────────────────
+     *
+     * Deliberately not a walk: rules/*.conf one level down plus the two setup
+     * files, at most $maxFiles of them, and nothing over 4 MB is read. CRS
+     * 4.7.0 is ~35 files of ~40 KB. confDir() is under /etc and this must not
+     * become able to read an arbitrary tree on a 132-account box.
+     *
+     * Commented-out lines are stripped first: CRS ships example rules in
+     * comments, and counting those would reject a perfectly good ruleset.
+     *
+     * @return array<string,array<int,string>> id => the files defining it
+     */
+    public static function duplicateRuleIds(string $dir, int $maxFiles = 400): array
+    {
+        $files = glob($dir . '/rules/*.conf') ?: [];
+        foreach (['crs-setup.conf', 'REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf'] as $extra) {
+            if (is_file($dir . '/' . $extra)) { $files[] = $dir . '/' . $extra; }
+        }
+        sort($files);
+        $files = array_slice($files, 0, $maxFiles);
+
+        $seen = [];
+        foreach ($files as $f) {
+            $size = @filesize($f);
+            if ($size === false || $size > 4194304) { continue; }
+            $body = (string) @file_get_contents($f);
+            // Strip comment lines so a commented example rule is not counted.
+            $body = preg_replace('/^[ \t]*#.*$/m', '', $body);
+            if (!preg_match_all('/(?:^|[,"\s])id:[\'"]?(\d+)/m', (string) $body, $m)) { continue; }
+            foreach ($m[1] as $id) {
+                $seen[$id][] = basename($f);
+            }
+        }
+
+        $dups = [];
+        foreach ($seen as $id => $where) {
+            if (count($where) > 1) { $dups[(string) $id] = array_values(array_unique($where)); }
+        }
+        return $dups;
+    }
+
+    /** "913100 (REQUEST-913-...conf, REQUEST-913-...conf)" for each duplicate. */
+    private static function describeDuplicates(array $dups): string
+    {
+        $parts = [];
+        foreach ($dups as $id => $where) {
+            $parts[] = $id . ' (' . implode(', ', $where) . ')';
+        }
+        return implode('; ', $parts);
+    }
+
+    /**
+     * Download, stage, check, then swap the CRS tree into place.
+     *
+     * It used to extract straight into confDir() over whatever was there and
+     * report success without looking at the result. Two things follow from
+     * that, and both happened: tar MERGES over an existing tree, so a renamed
+     * or removed rule file from a previous version stays behind next to the new
+     * one — which is how one tree came to define 913100 twice — and a failed
+     * or partial download replaced a working ruleset with a broken one.
+     *
+     * So: a fresh staging directory per attempt, a duplicate-id check on the
+     * staged tree BEFORE it goes anywhere near Apache, an atomic rename into
+     * place (replacing, never merging), the previous tree kept aside until the
+     * new one is known good, and — when our config already points at the tree,
+     * so a syntax check is actually a check of it — `apachectl -t` with the
+     * swap undone if Apache says no.
+     */
     private static function installCrs(): array
     {
         $dir = self::confDir();
         @mkdir($dir, 0750, true);
-        $tgz = $dir . '/crs.tar.gz';
+        $target = $dir . '/coreruleset';
+
+        $stage = $dir . '/.crs-stage-' . getmypid() . '-' . substr(sha1(uniqid('', true)), 0, 8);
+        if (!@mkdir($stage, 0750, true)) {
+            return ['success' => false, 'error' => 'Could not create a CRS staging directory at ' . $stage];
+        }
+        $rmStage = static function () use ($stage) { @exec('rm -rf ' . escapeshellarg($stage)); };
+
+        $tgz = $stage . '/crs.tar.gz';
         $url = sprintf(self::CRS_URL, self::CRS_VERSION);
 
         @exec(sprintf('curl -fsSL --max-time 120 -o %s %s 2>&1',
               escapeshellarg($tgz), escapeshellarg($url)), $o, $c);
         if ($c !== 0 || !is_file($tgz) || filesize($tgz) < 10000) {
+            $rmStage();
             return ['success' => false, 'error' => 'Could not download OWASP CRS: ' . implode(' ', $o)];
         }
 
-        @exec(sprintf('tar -xzf %s -C %s 2>&1', escapeshellarg($tgz), escapeshellarg($dir)), $o2, $c2);
+        @exec(sprintf('tar -xzf %s -C %s 2>&1', escapeshellarg($tgz), escapeshellarg($stage)), $o2, $c2);
         if ($c2 !== 0) {
+            $rmStage();
             return ['success' => false, 'error' => 'Could not extract CRS: ' . implode(' ', $o2)];
         }
         @unlink($tgz);
 
-        $extracted = glob($dir . '/coreruleset-*');
-        if (!$extracted) { return ['success' => false, 'error' => 'CRS archive had unexpected contents']; }
-        $target = $dir . '/coreruleset';
-        @exec('rm -rf ' . escapeshellarg($target));
-        @rename($extracted[0], $target);
+        $extracted = glob($stage . '/coreruleset-*');
+        if (!$extracted || !is_dir($extracted[0])) {
+            $rmStage();
+            return ['success' => false, 'error' => 'CRS archive had unexpected contents'];
+        }
+        $tree = $extracted[0];
 
         // crs-setup.conf.example must be copied to crs-setup.conf — CRS ships
         // the example so a package upgrade cannot overwrite local edits.
-        if (is_file($target . '/crs-setup.conf.example') && !is_file($target . '/crs-setup.conf')) {
-            @copy($target . '/crs-setup.conf.example', $target . '/crs-setup.conf');
+        if (is_file($tree . '/crs-setup.conf.example') && !is_file($tree . '/crs-setup.conf')) {
+            @copy($tree . '/crs-setup.conf.example', $tree . '/crs-setup.conf');
         }
-        @file_put_contents($target . '/.crs-version', self::CRS_VERSION);
-        return ['success' => true];
+        @file_put_contents($tree . '/.crs-version', self::CRS_VERSION);
+
+        // Does the staged tree even look like CRS? 4.7.0 ships ~35 rule files.
+        $ruleFiles = glob($tree . '/rules/*.conf') ?: [];
+        if (count($ruleFiles) < 10) {
+            $rmStage();
+            return ['success' => false,
+                    'error' => 'The extracted CRS tree has only ' . count($ruleFiles)
+                             . ' rule file(s), so it was not installed. Nothing was changed.'];
+        }
+
+        // The 7 Nov check. Done on the staged tree, so a corrupt extraction
+        // never reaches the directory Apache reads.
+        $dups = self::duplicateRuleIds($tree);
+        if ($dups) {
+            $rmStage();
+            return ['success' => false,
+                    'error' => 'The extracted CRS tree defines the same rule id more than once, '
+                             . 'which Apache refuses with "Found another rule with the same id" '
+                             . 'and which takes every site on this server down at its next '
+                             . 'restart. It was NOT installed and nothing was changed. Duplicates: '
+                             . self::describeDuplicates($dups)];
+        }
+
+        // Swap, never merge. tar extracting over a live tree is what left two
+        // copies of 913100 behind.
+        $old = null;
+        if (is_dir($target)) {
+            $old = $target . '.replaced-' . time();
+            if (!@rename($target, $old)) {
+                $rmStage();
+                return ['success' => false,
+                        'error' => 'Could not move the existing CRS tree aside to ' . $old
+                                 . ', so the new one was not installed. Nothing was changed.'];
+            }
+        }
+        if (!@rename($tree, $target)) {
+            if ($old !== null) { @rename($old, $target); }
+            $rmStage();
+            return ['success' => false,
+                    'error' => 'Could not move the new CRS tree into ' . $target
+                             . '. The previous tree was put back.'];
+        }
+        $rmStage();
+
+        /* If our config already includes this tree then a syntax check is a
+         * check OF this tree, and it is worth the seconds it costs. During a
+         * first install the config does not exist yet, so there is nothing for
+         * apachectl to read it from -- install() validates after writeConfig()
+         * and rolls back there. */
+        if (is_file(self::confDir() . '/serverscrub-waf.conf')) {
+            $v = self::validateApache();
+            if ($v['ran'] && !$v['ok']) {
+                @exec('rm -rf ' . escapeshellarg($target));
+                if ($old !== null) { @rename($old, $target); }
+                return ['success' => false,
+                        'error' => 'Apache rejected the configuration with the new CRS tree, so '
+                                 . 'the previous one was put back: ' . $v['output']];
+            }
+        }
+
+        if ($old !== null) { @exec('rm -rf ' . escapeshellarg($old)); }
+        return ['success' => true, 'rule_files' => count($ruleFiles)];
     }
 
     /** Write our include, and reference it from Apache. */
@@ -428,14 +642,153 @@ CONF;
         return $snap;
     }
 
-    /** Put both files back exactly as snapshotConfig() found them. */
-    private static function restoreConfig(array $snap): void
+    /**
+     * Put both files back exactly as snapshotConfig() found them, and report
+     * whether every one of them is genuinely back.
+     *
+     * ── WHY THIS RETURNS A RESULT ────────────────────────────────────────────
+     *
+     * It used to be three unchecked statements — @file_put_contents, @chmod,
+     * @unlink — and setMode() reported 'rolled_back' => true whatever they
+     * did. That reaches the 7 Nov outage state through the fix for the 7 Nov
+     * outage: the config Apache refuses is still on disk, the Apache include
+     * still points at it, and the operator has a sentence in writing telling
+     * them it was put back, so they stop looking.
+     *
+     * Everything that can defeat the restore happens inside the window
+     * `apachectl -t` occupies, which on a 132-account box with the full CRS is
+     * seconds, not milliseconds: /etc fills up, a config-management agent
+     * re-asserts the file, `chattr +i` (several hardening guides apply it to
+     * the Apache conf.d), or the filesystem remounts read-only after an I/O
+     * error.
+     *
+     * So each path is checked, in this order, and none of it is assumed:
+     *
+     *   1. The byte count. file_put_contents() on a full filesystem returns a
+     *      SHORT COUNT, not false — a truncated config written and reported as
+     *      a successful restore is exactly how this fails silently.
+     *   2. A read-back comparison. The count says what the call believes it
+     *      wrote; reading it back says what the filesystem holds.
+     *   3. For a file that did not exist before: unlink()'s return AND a
+     *      file_exists() afterwards, because "restored" means absent, and an
+     *      empty SecRuleEngine config is not the same thing as no config.
+     *
+     * Public because WAF::addCustomRule() writes a second file Apache loads
+     * and must roll it back by the same verified mechanism. One restore
+     * implementation, checked once.
+     *
+     * @param array<string,?string> $snap path => contents, or path => null
+     * @return array{ok:bool,failed:array<int,array{path:string,reason:string}>}
+     */
+    public static function restoreConfig(array $snap): array
     {
+        $failed = [];
         foreach ($snap as $p => $contents) {
-            if ($contents === null) { @unlink($p); continue; }
-            @file_put_contents($p, $contents);
+            if ($contents === null) {
+                // There was no file here before this change, so putting it
+                // back means removing it.
+                if (file_exists($p)) { @unlink($p); }
+                clearstatcache(true, $p);
+                if (file_exists($p)) {
+                    $failed[] = ['path' => $p,
+                                 'reason' => 'it did not exist before this change and could not be removed'];
+                }
+                continue;
+            }
+
+            $want = (string) $contents;
+            $n = @file_put_contents($p, $want);
             @chmod($p, 0644);
+            clearstatcache(true, $p);
+
+            if ($n === false) {
+                $failed[] = ['path' => $p, 'reason' => 'it could not be written at all'];
+                continue;
+            }
+            if ($n !== strlen($want)) {
+                $failed[] = ['path' => $p, 'reason' => sprintf(
+                    'only %d of %d bytes were written — a full filesystem returns a short count, not an error',
+                    $n, strlen($want))];
+                continue;
+            }
+            $back = is_file($p) ? (string) @file_get_contents($p) : null;
+            if ($back !== $want) {
+                $failed[] = ['path' => $p,
+                             'reason' => 'what reads back from it is not what was there before this change'];
+            }
         }
+        return ['ok' => $failed === [], 'failed' => $failed];
+    }
+
+    /**
+     * Last resort when the rollback itself failed: leave Apache nothing of
+     * ours that it cannot parse.
+     *
+     * A rejected config we cannot replace with the previous one is still a
+     * config Apache will refuse at its next restart, and that is the outage.
+     * No ServerScrub WAF config at all is a server with no WAF — worse than
+     * the operator asked for, and infinitely better than a server that will
+     * not start. So the include goes first, because removing it means Apache
+     * never reads the config even if the config itself cannot be removed, and
+     * it lives in a different directory from the config, so a full or
+     * read-only filesystem under /etc/serverscrub does not necessarily stop
+     * it.
+     *
+     * The mode bit is cleared first: a file that was made read-only (or whose
+     * mode a hardening agent re-asserted) is ours to remove.
+     *
+     * @return array{ok:bool,removed:array<int,string>,left:array<int,string>}
+     */
+    private static function neutraliseConfig(): array
+    {
+        $removed = [];
+        $left    = [];
+        foreach ([self::includePath(), self::confDir() . '/serverscrub-waf.conf'] as $p) {
+            if ($p === null) { continue; }
+            if (!file_exists($p)) { $removed[] = $p; continue; }
+            @chmod($p, 0644);
+            if (is_dir($p)) { @rmdir($p); } else { @unlink($p); }
+            clearstatcache(true, $p);
+            if (file_exists($p)) { $left[] = $p; } else { $removed[] = $p; }
+        }
+        return ['ok' => $left === [], 'removed' => $removed, 'left' => $left];
+    }
+
+    /**
+     * What to tell an operator when the rollback itself failed.
+     *
+     * This is the most dangerous state the server can be in, and it is worse
+     * than a failed mode change: a configuration Apache will not parse is on
+     * disk, Apache is still serving the config it parsed at its last start, so
+     * nothing looks wrong — and the next restart, whenever that is, fails.
+     * On 7 Nov that was ten hours later, cPanel gave up after three retries,
+     * and nginx returned 502 for all 132 accounts.
+     *
+     * So it names the file and says what to do with it, now.
+     *
+     * @param array{ok:bool,failed:array<int,array{path:string,reason:string}>} $rb
+     */
+    private static function restoreFailureText(array $rb, array $neu): string
+    {
+        $parts = [];
+        foreach ($rb['failed'] as $f) {
+            $parts[] = $f['path'] . ' (' . $f['reason'] . ')';
+        }
+        $why = 'The previous config could NOT be put back: ' . implode('; ', $parts) . '.';
+
+        if ($neu['ok']) {
+            return $why . ' Our WAF config and its Apache include were REMOVED instead, so Apache '
+                 . 'will still start — but no ServerScrub WAF is loaded and no request is being '
+                 . 'filtered. Removed: ' . implode(', ', $neu['removed']) . '. Fix the cause and '
+                 . 'set the mode again.';
+        }
+
+        return 'EMERGENCY: ' . $why . ' It could not be removed either, so a config Apache has '
+             . 'already refused is STILL ON DISK at ' . implode(', ', $neu['left']) . '. Apache is '
+             . 'running on the configuration it parsed at its last start, so nothing will look '
+             . 'wrong until it is next restarted — and then it will refuse to start and take every '
+             . 'site on this server with it (132 accounts, 7 Nov, ten hours after the write). Move '
+             . 'that file aside BY HAND, now, before anything restarts Apache.';
     }
 
     /**
@@ -461,6 +814,24 @@ CONF;
      * behind.
      *
      * So a config Apache will not accept never survives this call.
+     *
+     * ── WHY NO SYNTAX CHECKER MEANS NO MODE CHANGE ───────────────────────────
+     *
+     * validateApache() has three outcomes, not two, and the one that was
+     * missing is "could not check". With no apachectl on the box the old code
+     * returned ok=false and this method rendered it as "Apache rejected the
+     * change" — a verdict attributed to a program that was never executed,
+     * sending the operator to look for a syntax error that does not exist.
+     *
+     * The deliberate decision: with no checker, the mode is NOT changed and
+     * nothing is written. The alternative is to write an unvalidated
+     * ModSecurity config to a server we cannot ask about it, and that is the
+     * precise shape of the 7 Nov outage — it stays invisible until the next
+     * restart, which is the worst possible time to find out. A host with no
+     * apachectl also has no Apache, and therefore no ModSecurity for this
+     * config to configure, so refusing costs nothing real. The check is made
+     * BEFORE the write, so the config file is never touched at all in that
+     * case and there is no window to roll back.
      */
     public static function setMode(string $mode): array
     {
@@ -468,57 +839,222 @@ CONF;
         $m = $map[strtolower($mode)] ?? null;
         if ($m === null) { return ['success' => false, 'error' => 'Invalid mode']; }
 
+        /* Cheap capability question: is there a binary to check WITH? It does
+         * not run `-t`, which is seconds against the full CRS. Asked before
+         * the write so that on a host with no Apache tools the config file is
+         * never touched and there is no window at all.
+         *
+         * Skipped when a runner is injected, because then the caller is
+         * supplying Apache's answers and the filesystem has nothing to say
+         * about what that host has. The post-write branch below is the real
+         * safety net and is what the suite exercises. */
+        if (self::$runner === null && self::validatorBinary() === null) {
+            return ['success' => false, 'applied' => false, 'rolled_back' => false,
+                    'error' => self::NO_CHECKER_ERR];
+        }
+
         $snap = self::snapshotConfig();
 
         $r = self::writeConfig($m, self::crsPath());
-        if (!$r['success']) { self::restoreConfig($snap); return $r; }
+        if (!$r['success']) {
+            // writeConfig() writes the config first and the include second, so
+            // a part-way failure can leave the config replaced and the include
+            // missing. Roll back — and report it when the rollback fails too.
+            $rb = self::restoreConfig($snap);
+            $r['rolled_back'] = $rb['ok'];
+            if (!$rb['ok']) {
+                $neu = self::neutraliseConfig();
+                $r['neutralised'] = $neu['ok'];
+                $r['error'] = $r['error'] . ' | ' . self::restoreFailureText($rb, $neu);
+                Logger::error('WAF config write failed and the rollback failed: ' . $r['error']);
+            }
+            return $r;
+        }
 
         $v = self::validateApache();
         if (!$v['ok']) {
-            self::restoreConfig($snap);
-
-            // Validate AGAIN. If what we put back is also broken, the operator
-            // has to learn that now rather than at the next reboot -- the
-            // whole point of this rollback is that nobody discovers a bad
-            // config hours later.
-            $after = self::validateApache();
-            $err = 'Apache rejected the change, so it was rolled back: ' . $v['output'];
-            if (!$after['ok']) {
-                $err .= ' | WARNING: the restored config does not validate either,'
-                      . ' so Apache may already have been unable to restart before'
-                      . ' this change: ' . $after['output'];
-            }
-            return ['success' => false, 'error' => $err, 'rolled_back' => true,
-                    'restored_ok' => (bool) $after['ok']];
+            // Nothing is reloaded, and the config comes back off the disk.
+            $rb = self::restoreConfig($snap);
+            return self::rejected($v, $rb);
         }
+
         self::reloadApache();
         Database::setSetting('waf_mode', strtolower($mode));
         Logger::info('WAF mode set to ' . $m);
         return ['success' => true, 'mode' => strtolower($mode)];
     }
 
-    /** Syntax check only — never reloads. */
-    public static function validateApache(): array
+    /**
+     * The answer when the config we wrote did not survive validation.
+     *
+     * Split out of setMode() so the shape of the answer -- and the words in
+     * it -- is in one place: which of the three things happened (Apache said
+     * no / nothing could ask Apache / the rollback itself failed) is the only
+     * thing an operator has to go on at 3am.
+     */
+    private static function rejected(array $v, array $rb): array
     {
-        foreach (['/usr/sbin/apachectl', '/usr/sbin/httpd', 'apachectl', 'apache2ctl'] as $bin) {
-            $r = self::sh(escapeshellarg($bin) . ' -t');
-            if (trim($r['out']) !== '') {
-                $o = explode("\n", $r['out']);
-                return ['ok' => $r['code'] === 0, 'output' => implode("\n", array_slice($o, -5))];
-            }
+        /* The verdict is reported as what it is. A checker that ran and said
+         * no gives Apache's words, which is the only thing that tells the
+         * operator what to fix. A checker that could not be run gives no
+         * verdict at all, and attributing one to Apache sends them looking for
+         * a syntax error that no program has ever reported. */
+        $why = $v['ran']
+            ? 'Apache rejected the change'
+            : 'no Apache syntax check could be run, so the change was not applied';
+
+        if (!$rb['ok']) {
+            /* Deliberately does NOT contain the words "rolled back": nothing
+             * was. It does not speculate about a pre-existing fault either,
+             * which is what the old message did -- this call is what left the
+             * file there, and sending the operator after an older problem
+             * costs the one thing they do not have. */
+            $neu  = self::neutraliseConfig();
+            $text = self::restoreFailureText($rb, $neu);
+            Logger::error('WAF mode change failed AND the rollback failed: ' . $text);
+            return ['success' => false, 'rolled_back' => false, 'restored_ok' => false,
+                    'neutralised' => $neu['ok'], 'left_on_disk' => $neu['left'],
+                    'error' => $why . ': ' . $v['output'] . ' | ' . $text];
         }
-        // No validator available: report it rather than claiming success.
-        return ['ok' => false, 'output' => 'Could not run an Apache syntax check'];
+
+        $err = $why . ', so it was rolled back: ' . $v['output'];
+
+        // Validate AGAIN. If what we put back is also broken, the operator has
+        // to learn that now rather than at the next reboot -- the whole point
+        // of this rollback is that nobody discovers a bad config hours later.
+        // Only meaningful because the restore above is confirmed: otherwise
+        // this would blame a pre-existing fault for a file this call left behind.
+        $after = self::validateApache();
+        if ($after['ran'] && !$after['ok']) {
+            $err .= ' | WARNING: the restored config does not validate either,'
+                  . ' so Apache may already have been unable to restart before'
+                  . ' this change: ' . $after['output'];
+        }
+        /* Read off the restore result, not written as a literal true, even
+         * here where the branch above has already established it. A literal
+         * is how 'rolled_back' => true came to be returned whatever the
+         * restore did, and the next person to add a branch would copy it. */
+        return ['success' => false, 'error' => $err, 'rolled_back' => $rb['ok'],
+                'restored_ok' => $rb['ok'],
+                'restored_validates' => $after['ran'] ? (bool) $after['ok'] : null];
     }
 
-    private static function reloadApache(): void
+    /** @var string[] Candidates, in the order they are tried. */
+    const VALIDATOR_BINS = [
+        '/usr/sbin/apachectl', '/usr/sbin/httpd', '/usr/sbin/apache2ctl',
+        'apachectl', 'apache2ctl', 'httpd',
+    ];
+
+    /** What an operator is told when nothing on the host can check a config. */
+    const NO_CHECKER_ERR =
+        'No Apache syntax checker was found on this server (looked for apachectl, apache2ctl '
+        . 'and httpd), so the WAF mode was NOT changed and no config was written. Apache has '
+        . 'said nothing about this configuration either way - this is not a rejection. '
+        . 'Install the Apache tools so the config can be checked before it goes live.';
+
+    /**
+     * The first Apache binary on this host that can run a syntax check, or
+     * null when there is none.
+     *
+     * Existence is asked of the filesystem, never inferred from output. The
+     * old loop returned on the first candidate that printed ANYTHING, and
+     * sh() folds stderr into out, so an absent binary's "No such file or
+     * directory" counted as a verdict from Apache and every candidate after
+     * the first was unreachable. On a Debian or Ubuntu host - which
+     * includePath() claims to support - /usr/sbin/apachectl does not exist,
+     * so apache2ctl was never reached and a WAF mode could never be set at
+     * all, while the operator was told Apache had rejected their config.
+     */
+    private static function validatorBinary(): ?string
+    {
+        /* Memoised: status() reports it on every panel load and the bare-name
+         * candidates cost a fork each. */
+        static $cached = false;
+        if ($cached !== false) { return $cached; }
+
+        $found = null;
+        foreach (self::VALIDATOR_BINS as $bin) {
+            if (strpos($bin, '/') === 0) {
+                if (is_file($bin) && is_executable($bin)) { $found = $bin; break; }
+                continue;
+            }
+            $r = self::sh('command -v ' . escapeshellarg($bin));
+            if ($r['code'] === 0 && trim($r['out']) !== '') { $found = $bin; break; }
+        }
+        return $cached = $found;
+    }
+
+    /**
+     * Syntax check only - never reloads.
+     *
+     * Three outcomes, because "could not check" and "checked and rejected"
+     * are different facts, and conflating them put words in Apache's mouth:
+     *
+     *   ran=true,  ok=true    Apache parsed the configuration and accepted it.
+     *   ran=true,  ok=false   Apache parsed it and REJECTED it. $output is
+     *                         Apache's own words, which is the only thing
+     *                         that tells an operator what to fix.
+     *   ran=false, ok=false   No syntax checker could be run. NOTHING may be
+     *                         claimed on Apache's behalf, including failure.
+     *
+     * Every candidate is tried. A candidate that cannot be executed -
+     * exit 127, or a shell "not found" on its output - is skipped rather than
+     * believed, which is what made apache2ctl unreachable before.
+     *
+     * @return array{ok:bool,ran:bool,binary:?string,output:string}
+     */
+    public static function validateApache(): array
+    {
+        $absent = [];
+        foreach (self::VALIDATOR_BINS as $bin) {
+            $r   = self::sh(escapeshellarg($bin) . ' -t');
+            $out = trim($r['out']);
+
+            // 127 is the shell's own "command not found", and the message is
+            // checked too because sh() folds stderr into out and some shells
+            // exit 1 on it.
+            if ($r['code'] === 127
+                || preg_match('/(No such file or directory|command not found|not found$)/i', $out)) {
+                $absent[] = $bin;
+                continue;
+            }
+
+            return ['ok' => $r['code'] === 0, 'ran' => true, 'binary' => $bin,
+                    'output' => $out === ''
+                        ? ($r['code'] === 0
+                            ? 'Syntax OK'
+                            : $bin . ' -t exited ' . $r['code'] . ' without saying why')
+                        : implode("
+", array_slice(explode("
+", $out), -5))];
+        }
+
+        return ['ok' => false, 'ran' => false, 'binary' => null,
+                'output' => 'Could not run an Apache syntax check: none of '
+                          . implode(', ', $absent) . ' could be run on this server'];
+    }
+
+    /**
+     * Ask Apache to re-read its configuration, and say whether anything
+     * actually did.
+     *
+     * It used to return void, so every caller assumed it had worked. A rule
+     * that is on disk but not loaded is not protecting anything, and reporting
+     * that as an applied change is the same false claim in a quieter place.
+     * Public so WAF::addCustomRule() reloads the same way, having validated
+     * the same way, rather than firing its own unchecked `service httpd
+     * graceful`.
+     */
+    public static function reloadApache(): bool
     {
         foreach (['/scripts/restartsrv_httpd', '/usr/sbin/apachectl graceful',
                   '/usr/sbin/apache2ctl graceful', 'systemctl reload httpd',
                   'systemctl reload apache2'] as $cmd) {
             $r = self::sh($cmd);
-            if ($r['code'] === 0) { return; }
+            if ($r['code'] === 0) { return true; }
         }
+        Logger::warn('Could not reload Apache: no reload command on this host succeeded');
+        return false;
     }
 
     /** Remove everything we installed. Used by the uninstaller. */

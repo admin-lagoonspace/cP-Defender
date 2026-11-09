@@ -123,15 +123,22 @@ t_ok($snapPos < $writePos,
      'the snapshot is taken BEFORE the write. Taken after, it would capture the '
    . 'broken config and "restoring" it would be a no-op');
 
-t_contains($src, 'if (!$r[\'success\']) { self::restoreConfig($snap); return $r; }',
-           'a write that fails part way through also rolls back: writeConfig() '
-         . 'writes the config first and the include second, so it can leave the '
-         . 'config replaced and the include missing');
+$setModeBody = t_fn_body($src, 'setMode', 'php');
+t_ok(strpos($setModeBody, 'if (!$r[\'success\']) {') !== false
+     && strpos($setModeBody, 'self::restoreConfig($snap)') !== false,
+     'a write that fails part way through also rolls back: writeConfig() '
+   . 'writes the config first and the include second, so it can leave the '
+   . 'config replaced and the include missing');
 
 t_contains($src, 'is_file($p) ? (string) @file_get_contents($p) : null',
            'a file that does not exist is snapshotted as null, not as an empty string');
-t_contains($src, 'if ($contents === null) { @unlink($p); continue; }',
-           'and null restores to absent');
+$restoreBody = t_fn_body($src, 'restoreConfig', 'php');
+t_ok(strpos($restoreBody, 'if ($contents === null)') !== false
+     && strpos($restoreBody, '@unlink($p)') !== false
+     && strpos($restoreBody, 'file_exists($p)') !== false,
+     'and null restores to absent -- and the removal is CHECKED afterwards, '
+   . 'which the version this test was written against was not: it discarded '
+   . 'the result of @unlink and reported the rollback as done either way');
 
 // ── The reload still never runs on a config that failed ────────────────────
 

@@ -56,6 +56,146 @@ heading or touch VERSION mid-week._
 
 ### Fixed
 
+- **The rollback added above could fail and still be reported as a rollback.**
+  Shakaal reproduced it: the config path was replaced with a directory during
+  the `apachectl -t` window, `restoreConfig()` wrote nothing, the Apache
+  include stayed in place pointing at the rejected config, `currentMode()`
+  reported the rejected mode — and `setMode()` returned
+
+  ```
+  "error": "Apache rejected the change, so it was rolled back: ...",
+  "rolled_back": true
+  ```
+
+  That is the 7 Nov outage state, reached through the fix for the 7 Nov
+  outage. The earlier version left the rejected file behind *by choice*; this
+  one left it behind *by accident* and told the operator to stop looking.
+
+  `restoreConfig()` discarded the result of both of its writes:
+  `@file_put_contents` and `@unlink`. It now returns a per-path result, and
+  each path is checked three ways rather than assumed: the byte count against
+  `strlen()` (a full filesystem returns a **short count**, not `false`, so
+  `=== false` would accept a truncated ModSecurity config as a restored one),
+  a read-back comparison against the snapshot, and for a file that did not
+  exist before, `file_exists()` after the unlink. `rolled_back` is read off
+  that result and is never a literal `true` anywhere in the product.
+
+  When the rollback itself fails the product no longer claims one. It says
+  what happened, names the file, and — because a config Apache has already
+  refused is an outage waiting for the next restart — removes our config and
+  its Apache include instead, so Apache will still start with no WAF rather
+  than refuse to start at all. If even that fails the message is explicit:
+  *move that file aside by hand, now, before anything restarts Apache.*
+
+  The old message also blamed a pre-existing fault for a file the call had
+  just left behind (*"Apache may already have been unable to restart before
+  this change"*). That sentence is now only printed when the restore is
+  confirmed, which is the only case in which it can be true.
+
+- **"Apache rejected the change" was printed on servers where Apache was
+  never asked.** With no `apachectl` on the host, `validateApache()` returned
+  "could not check" and `setMode()` rendered it as a rejection — sending the
+  operator to look for a syntax error that no program had ever reported, and
+  rolling back a config that was fine.
+
+  "Could not check" and "checked and rejected" are different facts and are now
+  reported as different facts: the result carries `ran` as well as `ok`, and
+  with no checker the mode is **not changed and nothing is written** at all.
+  Writing an unvalidated ModSecurity config to a server that cannot be asked
+  about it is exactly how 7 Nov stayed invisible for ten hours.
+
+  The candidate loop also could not get past its first entry: it returned on
+  the first binary that produced any output, and `sh()` folds stderr into
+  stdout, so an absent binary's *"No such file or directory"* counted as a
+  verdict. On any Debian or Ubuntu host — which `includePath()` claims to
+  support — `/usr/sbin/apachectl` does not exist, `apache2ctl` was never
+  reached, and a WAF mode could therefore never be set. Every candidate is now
+  tried, and one that cannot be executed is skipped rather than believed.
+
+- **One API call could write a rule Apache cannot parse into a live config and
+  then restart Apache.** `WAF::addCustomRule()` appended to a file registered
+  with cPanel's `modsec2.user.conf`, ran `service httpd graceful`, and
+  returned `['success' => true]` unconditionally — no syntax check anywhere,
+  and the return of neither the write nor the restart examined. The API
+  defaulted the rule id to `uniqid('SG')`, so the ordinary call wrote
+  `id:SG6910abc12def3`; ModSecurity ids are numeric, so that is a syntax error.
+  This was the 7 Nov outage in a code path the rollback fix never touched.
+
+  The id must now be digits and inside the band reserved for custom rules, the
+  pattern must be something that can be rendered into a quoted directive at
+  all (a quote is refused, not escaped), `block` and `log` both do what they
+  say instead of everything being `deny`, the file is snapshotted before it is
+  touched, `apachectl -t` runs **before** any reload, a rejection is rolled
+  back through the same verified restore, and the result reports whether
+  Apache actually re-read the file — a rule on disk that Apache has not loaded
+  is filtering nothing.
+
+- **The two features that generate ModSecurity rules could pick the same id,
+  which stops Apache starting.** `WAFExclusions` generates ids from 15,000 and
+  documented everything below as available to `WAF::addCustomRule()`, which
+  validated nothing: a custom rule at `id:15001` was accepted, and Shakaal
+  reproduced the production error from it — *"Found another rule with the same
+  id (id:15001)"*, Apache refusing the entire configuration.
+
+  The bands are now disjoint and enforced at both ends: 15,000–19,999 for
+  generated exclusions, 20,000–29,999 for custom rules, nothing generated
+  below 15,000 where an operator's hand-written rules live. A custom rule is
+  also checked against the ids the exclusion generator has actually emitted and
+  against the configs we have already written, so the check still holds if a
+  band is widened later.
+
+- **The OWASP CRS tree on the production server was corrupt, and the installer
+  reported it as fine.** Two definitions of rule 913100 existed in one
+  extracted tree, so Apache refused the whole configuration and the WAF had
+  not loaded once since 6 Oct while the panel showed it armed. A clean
+  re-extraction of the identical 4.7.0 tarball parsed, which is what proves
+  the tree was the fault and not the ruleset.
+
+  `installCrs()` ran `tar -xzf` into the live directory and assumed it had
+  worked. tar **merges**: a rule file renamed between CRS versions stays
+  behind next to its replacement, and a half-finished download replaces a
+  working ruleset with a broken one. It now extracts into a fresh staging
+  directory, refuses a tree that defines any id twice (named, with the files),
+  swaps the tree into place with the previous one kept aside until the new one
+  is known good, and validates with `apachectl -t` when our config already
+  points at it. A CRS tree that is *already present* is read rather than
+  trusted, which is the check that would have caught the production state on
+  any day in the preceding month.
+
+- **The product did not parse on PHP 7.4, which `install.sh` accepts.** Thirty
+  `match()` expressions — PHP 8.0 — across `backend/api/index.php` (27, the
+  whole route table), `Firewall.php` and `RootkitScanner.php`, plus 48 calls
+  to `str_contains()`, `str_starts_with()` and `str_ends_with()`, which parse
+  at 7.4 and fatal at run time with *Call to undefined function*. On a 7.4 host
+  the installer's own gate passed and then every API route was a fatal: 70 test
+  files, every one with the same parse error.
+
+  The floor stays where `install.sh` says it is — a server the installer
+  accepts must run the product. The `match()` expressions are `switch`
+  statements and the three string functions are `strpos()`/`substr()` forms.
+  Behaviour is unchanged: every subject is a string, and the arms, their order
+  and their expressions are the same.
+
+  `scripts/preflight.py` cannot catch this class. It lints with whatever
+  interpreter it finds — 8.5 on the development machine — so "all 55 PHP files
+  parse" was true and irrelevant. Linting at the declared floor is Shakaal's
+  to close, in the container.
+
+- Smaller things in the same paths:
+  - `install.sh` registered `custom_rules.conf` with `Include`, not
+    `IncludeOptional`. If that file is ever removed — a partial uninstall, an
+    operator tidying up — **Apache will not start**. Every other include the
+    product writes is optional for exactly this reason.
+  - `WAFInstaller::status()` now reports `include_present` and which validator
+    the host has. Our config is only read by Apache if the include that points
+    at it exists, and `install()`'s failure path removes the include and leaves
+    the config — so the panel could report a blocking WAF that Apache was not
+    loading at all.
+  - `reloadApache()` returned void, so every caller assumed it had worked. It
+    reports whether anything actually reloaded.
+  - The CRS version read out of `crs-setup.conf` came back as `.4.7.0`: the
+    pattern captured the separator from `ver.4.7.0` as part of the number.
+
 - **A WAF mode change Apache refused left the rejected config on disk, and
   the next Apache restart took every site on the server down.**
 

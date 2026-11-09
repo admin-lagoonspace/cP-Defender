@@ -334,23 +334,23 @@ class Firewall {
     }
 
     private function buildIptablesCmd(array $rule, string $op): ?string {
-        $chain = match(strtolower($rule['direction'])) {
-            'in'    => 'INPUT',
-            'out'   => 'OUTPUT',
-            'both'  => 'FORWARD',
-            default => 'INPUT',
-        };
+        switch (strtolower($rule['direction'])) {
+            case 'in': $chain = 'INPUT'; break;
+            case 'out': $chain = 'OUTPUT'; break;
+            case 'both': $chain = 'FORWARD'; break;
+            default: $chain = 'INPUT'; break;
+        }
         $proto = $rule['protocol'] ? "-p {$rule['protocol']}" : '';
         $port  = $rule['port']     ? "--dport {$rule['port']}" : '';
         $src   = $rule['source_ip'] ? "-s {$rule['source_ip']}" : '';
 
-        $action = match(strtoupper($rule['action'])) {
-            'ACCEPT' => 'ACCEPT',
-            'DROP'   => 'DROP',
-            'REJECT' => 'REJECT --reject-with icmp-host-prohibited',
-            'LIMIT'  => 'ACCEPT',
-            default  => 'DROP',
-        };
+        switch (strtoupper($rule['action'])) {
+            case 'ACCEPT': $action = 'ACCEPT'; break;
+            case 'DROP': $action = 'DROP'; break;
+            case 'REJECT': $action = 'REJECT --reject-with icmp-host-prohibited'; break;
+            case 'LIMIT': $action = 'ACCEPT'; break;
+            default: $action = 'DROP'; break;
+        }
 
         $limit = '';
         if ($rule['action'] === 'LIMIT') {

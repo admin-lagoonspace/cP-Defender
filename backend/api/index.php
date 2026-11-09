@@ -180,36 +180,37 @@ if ($user !== null && empty($licenseExempt[$module])) {
 
 // ── Route dispatcher ──────────────────────────────────────────────────────────
 try {
-    $response = match($module) {
-        'auth'       => routeAuth($action, $method, $body, $user),
-        'license'    => routeLicense($action, $method, $body, $user),
-        'dashboard'  => routeDashboard($action, $method, $query, $user),
-        'scanner'    => routeScanner($action, $method, $body, $query, $id, $user),
-        'firewall'   => routeFirewall($action, $method, $body, $query, $id, $user),
-        'waf'        => routeWAF($action, $method, $body, $query, $user),
-        'iprep'      => routeIPRep($action, $method, $body, $query, $user),
-        'events'     => routeEvents($action, $method, $body, $query, $user),
-        'settings'   => routeSettings($action, $method, $body, $user),
-        'logs'       => routeLogs($action, $method, $query, $user),
-        'monitor'    => routeMonitor($action, $method, $body, $query, $user),
-        'storage'    => routeStorage($action, $method, $body, $user),
-        'botshield'  => routeBotShield($action, $method, $body, $query, $user),
-        'cmsguard'   => routeCMSGuard($action, $method, $body, $query, $user),
-        'wpscan'     => routeWPScan($action, $method, $body, $query, $user),
-        'exclusions' => routeExclusions($action, $method, $body, $query, $user),
-        'verdicts'   => routeVerdicts($action, $method, $body, $query, $user),
-        'netguard'   => routeNetGuard($action, $method, $body, $query, $user),
-        'mailguard'  => routeMailGuard($action, $method, $body, $query, $user),
-        'mailqueue'  => routeMailQueue($action, $method, $body, $query, $user),
-        'httpflood'  => routeHttpFlood($action, $method, $body, $query, $user),
-        'rootkit'    => routeRootkit($action, $method, $body, $query, $id, $user),
-        'bruteforce' => routeBruteForce($action, $method, $body, $query, $user),
-        'overview'   => routeOverview($action, $method, $query, $user),
-        'integrity'  => routeIntegrity($action, $method, $body, $query, $id, $user),
-        'phphard'    => routePHPHard($action, $method, $body, $query, $user),
-        'update'     => routeUpdate($action, $method, $body, $user),
-        default      => ['success' => false, 'error' => "Unknown module: $module", 'code' => 404],
-    };
+    switch ($module) {
+        case 'auth':       $response = routeAuth($action, $method, $body, $user); break;
+        case 'license':    $response = routeLicense($action, $method, $body, $user); break;
+        case 'dashboard':  $response = routeDashboard($action, $method, $query, $user); break;
+        case 'scanner':    $response = routeScanner($action, $method, $body, $query, $id, $user); break;
+        case 'firewall':   $response = routeFirewall($action, $method, $body, $query, $id, $user); break;
+        case 'waf':        $response = routeWAF($action, $method, $body, $query, $user); break;
+        case 'iprep':      $response = routeIPRep($action, $method, $body, $query, $user); break;
+        case 'events':     $response = routeEvents($action, $method, $body, $query, $user); break;
+        case 'settings':   $response = routeSettings($action, $method, $body, $user); break;
+        case 'logs':       $response = routeLogs($action, $method, $query, $user); break;
+        case 'monitor':    $response = routeMonitor($action, $method, $body, $query, $user); break;
+        case 'storage':    $response = routeStorage($action, $method, $body, $user); break;
+        case 'botshield':  $response = routeBotShield($action, $method, $body, $query, $user); break;
+        case 'cmsguard':   $response = routeCMSGuard($action, $method, $body, $query, $user); break;
+        case 'wpscan':     $response = routeWPScan($action, $method, $body, $query, $user); break;
+        case 'exclusions': $response = routeExclusions($action, $method, $body, $query, $user); break;
+        case 'verdicts':   $response = routeVerdicts($action, $method, $body, $query, $user); break;
+        case 'netguard':   $response = routeNetGuard($action, $method, $body, $query, $user); break;
+        case 'mailguard':  $response = routeMailGuard($action, $method, $body, $query, $user); break;
+        case 'mailqueue':  $response = routeMailQueue($action, $method, $body, $query, $user); break;
+        case 'httpflood':  $response = routeHttpFlood($action, $method, $body, $query, $user); break;
+        case 'rootkit':    $response = routeRootkit($action, $method, $body, $query, $id, $user); break;
+        case 'bruteforce': $response = routeBruteForce($action, $method, $body, $query, $user); break;
+        case 'overview':   $response = routeOverview($action, $method, $query, $user); break;
+        case 'integrity':  $response = routeIntegrity($action, $method, $body, $query, $id, $user); break;
+        case 'phphard':    $response = routePHPHard($action, $method, $body, $query, $user); break;
+        case 'update':     $response = routeUpdate($action, $method, $body, $user); break;
+        default:
+            $response = ['success' => false, 'error' => "Unknown module: $module", 'code' => 404]; break;
+    }
 } catch (InvalidArgumentException $e) {
     // Bad input from the caller, not a fault in the server. Reported as 400 so
     // the UI can show the reason instead of "Internal server error".
@@ -247,286 +248,289 @@ echo json_encode($response);
 // ════════════════════════════════════════════════════════════════════════════
 
 function routeAuth(string $action, string $method, array $body, ?array $user): array {
-    return match($action) {
-        'login' => (function() use ($body) {
-            $u = trim($body['username'] ?? '');
-            $p = $body['password'] ?? '';
-            if (!$u || !$p) return ['success' => false, 'error' => 'Missing credentials', 'code' => 400];
+    switch ($action) {
+        case 'login':
+            return (function() use ($body) {
+                $u = trim($body['username'] ?? '');
+                $p = $body['password'] ?? '';
+                if (!$u || !$p) return ['success' => false, 'error' => 'Missing credentials', 'code' => 400];
 
-            $role = 'admin';
-            $ok   = false;
+                $role = 'admin';
+                $ok   = false;
 
-            if (INSTALL_MODE === 'standalone') {
-                // ── Standalone mode: local credential check ───────────────────
-                // Demo shortcut still works for testing
-                if ($u === 'demo' && $p === 'demo') {
-                    $ok = true; $role = 'admin';
+                if (INSTALL_MODE === 'standalone') {
+                    // ── Standalone mode: local credential check ───────────────────
+                    // Demo shortcut still works for testing
+                    if ($u === 'demo' && $p === 'demo') {
+                        $ok = true; $role = 'admin';
+                    } else {
+                        $ok   = Auth::validateLocal($u, $p);
+                        $role = 'root';
+                    }
                 } else {
-                    $ok   = Auth::validateLocal($u, $p);
-                    $role = 'root';
+                    // ── cPanel mode: cpcheck / WHM token ─────────────────────────
+                    if ($u === 'demo' && $p === 'demo') {
+                        $ok = true; $role = 'admin';
+                    } elseif (!empty($body['token'])) {
+                        // A valid token proves WHO is calling, not WHAT they may do.
+                        //
+                        // validateWhmToken() asks WHM whether the token works at
+                        // all, and /json-api/version answers for every WHM account
+                        // including resellers. This branch then handed out 'root',
+                        // the top of the hierarchy -- so a reseller with an API
+                        // token could change server-wide settings, while the SAME
+                        // reseller signing in with a password correctly got 'user'
+                        // from the branch directly below. Two paths to one panel
+                        // that disagreed about who you are.
+                        //
+                        // The identity rule is now the same on both.
+                        $ok   = Auth::validateWhmToken($u, $body['token']);
+                        $role = ($u === 'root' || $u === 'cpanel') ? 'root' : 'user';
+                    } else {
+                        $ok   = Auth::validateCpanel($u, $p);
+                        $role = ($u === 'root' || $u === 'cpanel') ? 'admin' : 'user';
+                    }
+                    // SG_DEMO env override for dev servers
+                    if (!$ok && getenv('SG_DEMO') === '1') { $ok = true; $role = 'admin'; }
                 }
-            } else {
-                // ── cPanel mode: cpcheck / WHM token ─────────────────────────
-                if ($u === 'demo' && $p === 'demo') {
-                    $ok = true; $role = 'admin';
-                } elseif (!empty($body['token'])) {
-                    // A valid token proves WHO is calling, not WHAT they may do.
-                    //
-                    // validateWhmToken() asks WHM whether the token works at
-                    // all, and /json-api/version answers for every WHM account
-                    // including resellers. This branch then handed out 'root',
-                    // the top of the hierarchy -- so a reseller with an API
-                    // token could change server-wide settings, while the SAME
-                    // reseller signing in with a password correctly got 'user'
-                    // from the branch directly below. Two paths to one panel
-                    // that disagreed about who you are.
-                    //
-                    // The identity rule is now the same on both.
-                    $ok   = Auth::validateWhmToken($u, $body['token']);
-                    $role = ($u === 'root' || $u === 'cpanel') ? 'root' : 'user';
-                } else {
-                    $ok   = Auth::validateCpanel($u, $p);
-                    $role = ($u === 'root' || $u === 'cpanel') ? 'admin' : 'user';
+
+                if (!$ok) {
+                    Logger::event('login_fail', 'medium', $_SERVER['REMOTE_ADDR'] ?? '', $u, 'Failed login');
+                    return ['success' => false, 'error' => 'Invalid credentials', 'code' => 401];
                 }
-                // SG_DEMO env override for dev servers
-                if (!$ok && getenv('SG_DEMO') === '1') { $ok = true; $role = 'admin'; }
-            }
 
-            if (!$ok) {
-                Logger::event('login_fail', 'medium', $_SERVER['REMOTE_ADDR'] ?? '', $u, 'Failed login');
-                return ['success' => false, 'error' => 'Invalid credentials', 'code' => 401];
-            }
-
-            Logger::info("Login: $u ($role) [" . INSTALL_MODE . "]");
+                Logger::info("Login: $u ($role) [" . INSTALL_MODE . "]");
+                return [
+                    'success' => true,
+                    'token'   => Auth::generateToken($u, $role),
+                    'user'    => ['username' => $u, 'role' => $role, 'mode' => INSTALL_MODE],
+                ];
+            })();
+        // GET auth/auto-login — cPanel SSO: trust REMOTE_USER from cPanel webserver
+        case 'auto-login':
+            return (function() {
+                if (INSTALL_MODE === 'standalone') {
+                    return ['success' => false, 'error' => 'Not available in standalone mode', 'code' => 400];
+                }
+                $token = Auth::autoLoginCpanel();
+                if (!$token) {
+                    return ['success' => false, 'error' => 'No cPanel session', 'code' => 401];
+                }
+                $data = Auth::verifyToken($token);
+                $user = ['username' => $data['sub'], 'role' => $data['role'], 'mode' => INSTALL_MODE];
+                Logger::info("Auto-login: {$data['sub']} ({$data['role']}) via REMOTE_USER");
+                return ['success' => true, 'token' => $token, 'user' => $user];
+            })();
+        case 'status':
             return [
                 'success' => true,
-                'token'   => Auth::generateToken($u, $role),
-                'user'    => ['username' => $u, 'role' => $role, 'mode' => INSTALL_MODE],
+                'version' => SG_VERSION,
+                'status'  => 'online',
+                'mode'    => INSTALL_MODE,
+                'port'    => SG_PORT,
             ];
-        })(),
-
-        // GET auth/auto-login — cPanel SSO: trust REMOTE_USER from cPanel webserver
-        'auto-login' => (function() {
-            if (INSTALL_MODE === 'standalone') {
-                return ['success' => false, 'error' => 'Not available in standalone mode', 'code' => 400];
-            }
-            $token = Auth::autoLoginCpanel();
-            if (!$token) {
-                return ['success' => false, 'error' => 'No cPanel session', 'code' => 401];
-            }
-            $data = Auth::verifyToken($token);
-            $user = ['username' => $data['sub'], 'role' => $data['role'], 'mode' => INSTALL_MODE];
-            Logger::info("Auto-login: {$data['sub']} ({$data['role']}) via REMOTE_USER");
-            return ['success' => true, 'token' => $token, 'user' => $user];
-        })(),
-
-        'status' => [
-            'success' => true,
-            'version' => SG_VERSION,
-            'status'  => 'online',
-            'mode'    => INSTALL_MODE,
-            'port'    => SG_PORT,
-        ],
-        'me'     => ['success' => true, 'user' => $user],
-
+        case 'me': return ['success' => true, 'user' => $user];
         // POST auth/change-password (standalone only)
-        'change-password' => $method === 'POST' ? (function() use ($body, $user) {
-            if (INSTALL_MODE !== 'standalone')
-                return ['success' => false, 'error' => 'Only available in standalone mode', 'code' => 400];
-            Auth::requireRole('root', $user);
-            $newPass = $body['password'] ?? '';
-            if (strlen($newPass) < 8)
-                return ['success' => false, 'error' => 'Password must be at least 8 characters', 'code' => 400];
-            $newUser = $body['username'] ?? Database::setting('local_admin_user', 'admin');
-            Auth::setLocalCredentials($newUser, $newPass);
-            Logger::info("Admin credentials updated by {$user['sub']}");
-            return ['success' => true];
-        })() : ['success' => false, 'code' => 405],
-
-        default  => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'change-password':
+            return $method === 'POST' ? (function() use ($body, $user) {
+                if (INSTALL_MODE !== 'standalone')
+                    return ['success' => false, 'error' => 'Only available in standalone mode', 'code' => 400];
+                Auth::requireRole('root', $user);
+                $newPass = $body['password'] ?? '';
+                if (strlen($newPass) < 8)
+                    return ['success' => false, 'error' => 'Password must be at least 8 characters', 'code' => 400];
+                $newUser = $body['username'] ?? Database::setting('local_admin_user', 'admin');
+                Auth::setLocalCredentials($newUser, $newPass);
+                Logger::info("Admin credentials updated by {$user['sub']}");
+                return ['success' => true];
+            })() : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeLicense(string $action, string $method, array $body, ?array $user): array {
-    return match($action) {
+    switch ($action) {
         // GET license/status — always reachable, including when unlicensed
-        'status', 'index' => ['success' => true, 'license' => License::status()],
-
+        case 'status':
+        case 'index':
+            return ['success' => true, 'license' => License::status()];
         // POST license/activate {key}
-        'activate' => $method === 'POST' ? (function() use ($body, $user) {
-            Auth::requireRole('admin', $user);
-            $key = trim((string)($body['key'] ?? ''));
-            if ($key === '')
-                return ['success' => false, 'error' => 'License key required', 'code' => 400];
-            $r = License::activate($key);
-            // Never log the key itself
-            Logger::info("License activation attempted by {$user['sub']} — result: {$r['status']}");
-            return ['success' => $r['valid'], 'license' => $r,
-                    'error' => $r['valid'] ? null : $r['message']];
-        })() : ['success' => false, 'code' => 405],
-
+        case 'activate':
+            return $method === 'POST' ? (function() use ($body, $user) {
+                Auth::requireRole('admin', $user);
+                $key = trim((string)($body['key'] ?? ''));
+                if ($key === '')
+                    return ['success' => false, 'error' => 'License key required', 'code' => 400];
+                $r = License::activate($key);
+                // Never log the key itself
+                Logger::info("License activation attempted by {$user['sub']} — result: {$r['status']}");
+                return ['success' => $r['valid'], 'license' => $r,
+                        'error' => $r['valid'] ? null : $r['message']];
+            })() : ['success' => false, 'code' => 405];
         // POST license/refresh — force a remote re-check
-        'refresh' => $method === 'POST' ? (function() use ($user) {
-            Auth::requireRole('admin', $user);
-            $r = License::refresh();
-            return ['success' => $r['valid'], 'license' => $r,
-                    'error' => $r['valid'] ? null : $r['message']];
-        })() : ['success' => false, 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'refresh':
+            return $method === 'POST' ? (function() use ($user) {
+                Auth::requireRole('admin', $user);
+                $r = License::refresh();
+                return ['success' => $r['valid'], 'license' => $r,
+                        'error' => $r['valid'] ? null : $r['message']];
+            })() : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeDashboard(string $action, string $method, array $q, ?array $user): array {
-    return match($action) {
-        'stats', 'index' => (function() {
-            $scanner  = new Scanner();
-            $firewall = new Firewall();
-            $waf      = new WAF();
+    switch ($action) {
+        case 'stats':
+        case 'index':
+            return (function() {
+                $scanner  = new Scanner();
+                $firewall = new Firewall();
+                $waf      = new WAF();
 
-            $scanStats = $scanner->getStats();
-            $fwStats   = $firewall->getStats();
-            $wafStats  = $waf->getStats();
+                $scanStats = $scanner->getStats();
+                $fwStats   = $firewall->getStats();
+                $wafStats  = $waf->getStats();
 
-            // Files scanned (from last job)
-            $lastJob = Database::fetchOne("SELECT * FROM scan_jobs WHERE status='done' ORDER BY id DESC LIMIT 1");
+                // Files scanned (from last job)
+                $lastJob = Database::fetchOne("SELECT * FROM scan_jobs WHERE status='done' ORDER BY id DESC LIMIT 1");
 
-            // Recent events
-            $events = Database::fetchAll(
-                "SELECT * FROM security_events ORDER BY timestamp DESC LIMIT 10"
-            );
+                // Recent events
+                $events = Database::fetchAll(
+                    "SELECT * FROM security_events ORDER BY timestamp DESC LIMIT 10"
+                );
 
-            // Timeline data (last 30 days)
-            $timeline = [];
-            for ($i = 29; $i >= 0; $i--) {
-                $day   = mktime(0, 0, 0, date('n'), date('j') - $i);
-                $next  = $day + 86400;
-                $wafH  = Database::fetchOne(
-                    "SELECT COUNT(*) as c FROM waf_events WHERE timestamp >= ? AND timestamp < ?",
-                    [$day, $next]
-                )['c'];
-                $bfH   = Database::fetchOne(
-                    "SELECT COUNT(*) as c FROM security_events WHERE type='brute_force' AND timestamp >= ? AND timestamp < ?",
-                    [$day, $next]
-                )['c'];
-                $malH  = Database::fetchOne(
-                    "SELECT COUNT(*) as c FROM threats WHERE detected_at >= ? AND detected_at < ?",
-                    [$day, $next]
-                )['c'];
-                $timeline[] = [
-                    'date'        => date('Y-m-d', $day),
-                    'waf_blocks'  => (int) $wafH,
-                    'brute_force' => (int) $bfH,
-                    'malware'     => (int) $malH,
+                // Timeline data (last 30 days)
+                $timeline = [];
+                for ($i = 29; $i >= 0; $i--) {
+                    $day   = mktime(0, 0, 0, date('n'), date('j') - $i);
+                    $next  = $day + 86400;
+                    $wafH  = Database::fetchOne(
+                        "SELECT COUNT(*) as c FROM waf_events WHERE timestamp >= ? AND timestamp < ?",
+                        [$day, $next]
+                    )['c'];
+                    $bfH   = Database::fetchOne(
+                        "SELECT COUNT(*) as c FROM security_events WHERE type='brute_force' AND timestamp >= ? AND timestamp < ?",
+                        [$day, $next]
+                    )['c'];
+                    $malH  = Database::fetchOne(
+                        "SELECT COUNT(*) as c FROM threats WHERE detected_at >= ? AND detected_at < ?",
+                        [$day, $next]
+                    )['c'];
+                    $timeline[] = [
+                        'date'        => date('Y-m-d', $day),
+                        'waf_blocks'  => (int) $wafH,
+                        'brute_force' => (int) $bfH,
+                        'malware'     => (int) $malH,
+                    ];
+                }
+
+                return [
+                    'success'   => true,
+                    'scanner'   => $scanStats,
+                    'firewall'  => $fwStats,
+                    'waf'       => $wafStats,
+                    // The dashboard charted brute force from the start and had no
+                    // numbers to put beside it.
+                    'bruteforce'=> BruteForce::stats(),
+                    'events'    => $events,
+                    'timeline'  => $timeline,
+                    'server'    => [
+                        'hostname'   => gethostname(),
+                        'php_version'=> PHP_VERSION,
+                        'uptime'     => shell_exec('uptime -p 2>/dev/null') ?? '',
+                        'load'       => (function_exists('sys_getloadavg') ? sys_getloadavg() : [0, 0, 0]),
+                    ],
                 ];
-            }
-
-            return [
-                'success'   => true,
-                'scanner'   => $scanStats,
-                'firewall'  => $fwStats,
-                'waf'       => $wafStats,
-                // The dashboard charted brute force from the start and had no
-                // numbers to put beside it.
-                'bruteforce'=> BruteForce::stats(),
-                'events'    => $events,
-                'timeline'  => $timeline,
-                'server'    => [
-                    'hostname'   => gethostname(),
-                    'php_version'=> PHP_VERSION,
-                    'uptime'     => shell_exec('uptime -p 2>/dev/null') ?? '',
-                    'load'       => (function_exists('sys_getloadavg') ? sys_getloadavg() : [0, 0, 0]),
-                ],
-            ];
-        })(),
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+            })();
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeScanner(string $action, string $method, array $body, array $q, ?string $id, ?array $user): array {
     $scanner = new Scanner();
-    return match($action) {
+    switch ($action) {
         // Refusing a second scan is a normal outcome, not a server error, so
         // it is checked here and answered with 409 rather than left to the
         // exception handler's "Internal server error".
         // GET scanner/accounts - who is on this server, for the custom scan.
-        'accounts' => ['success' => true, 'data' => Scanner::listAccounts()],
-
+        case 'accounts':
+            return ['success' => true, 'data' => Scanner::listAccounts()];
         // GET scanner/active - the scan in progress, if any.
         //
         // The Stop button used to live behind a progress card that only
         // appeared for a scan THIS browser tab had started. A scan started by
         // cron, or by another admin, or before a page reload, ran with no way
         // to stop it from the interface at all.
-        'active' => ['success' => true, 'data' => Scanner::activeScan()],
-
-        'start'  => $method === 'POST'
-            ? (function () use ($scanner, $body) {
-                $live = Scanner::liveScans();
-                $max  = Scanner::maxConcurrent();
-                if (count($live) >= $max) {
-                    return ['success' => false, 'code' => 409,
-                            'error' => 'Already running ' . count($live) . ' of a maximum '
-                                     . $max . ' scan(s)',
-                            'running' => count($live), 'max' => $max,
-                            'job_id' => (int) $live[count($live) - 1]['id']];
-                }
-                $type = (string) ($body['type'] ?? 'quick');
-                // A custom scan names accounts, not paths. Resolving usernames
-                // against the real account list here means a path typed into
-                // the request cannot send the scanner somewhere of its own
-                // choosing.
-                if ($type === 'custom' && !empty($body['accounts']) && is_array($body['accounts'])) {
-                    $want  = array_map('strval', $body['accounts']);
-                    $homes = [];
-                    foreach (Scanner::listAccounts() as $a) {
-                        if (in_array($a['user'], $want, true)) { $homes[] = $a['home']; }
+        case 'active':
+            return ['success' => true, 'data' => Scanner::activeScan()];
+        case 'start':
+            return $method === 'POST'
+                ? (function () use ($scanner, $body) {
+                    $live = Scanner::liveScans();
+                    $max  = Scanner::maxConcurrent();
+                    if (count($live) >= $max) {
+                        return ['success' => false, 'code' => 409,
+                                'error' => 'Already running ' . count($live) . ' of a maximum '
+                                         . $max . ' scan(s)',
+                                'running' => count($live), 'max' => $max,
+                                'job_id' => (int) $live[count($live) - 1]['id']];
                     }
-                    if (!$homes) {
-                        return ['success' => false, 'code' => 400,
-                                'error' => 'None of those accounts exist on this server'];
+                    $type = (string) ($body['type'] ?? 'quick');
+                    // A custom scan names accounts, not paths. Resolving usernames
+                    // against the real account list here means a path typed into
+                    // the request cannot send the scanner somewhere of its own
+                    // choosing.
+                    if ($type === 'custom' && !empty($body['accounts']) && is_array($body['accounts'])) {
+                        $want  = array_map('strval', $body['accounts']);
+                        $homes = [];
+                        foreach (Scanner::listAccounts() as $a) {
+                            if (in_array($a['user'], $want, true)) { $homes[] = $a['home']; }
+                        }
+                        if (!$homes) {
+                            return ['success' => false, 'code' => 400,
+                                    'error' => 'None of those accounts exist on this server'];
+                        }
+                        $path = implode(',', $homes);
+                    } else {
+                        $path = (string) ($body['path'] ?? '/home');
                     }
-                    $path = implode(',', $homes);
-                } else {
-                    $path = (string) ($body['path'] ?? '/home');
-                }
-                // '@operator': started from WHM by whoever is logged in there. Recorded
-                // so a customer's scan log can say the scan was their host's
-                // doing rather than leaving them to guess.
-                return ['success' => true,
-                        'job_id'  => $scanner->startScan($path, $type, false, '@operator')];
-              })()
-            : ['success' => false, 'error' => 'POST required', 'code' => 405],
-
+                    // '@operator': started from WHM by whoever is logged in there. Recorded
+                    // so a customer's scan log can say the scan was their host's
+                    // doing rather than leaving them to guess.
+                    return ['success' => true,
+                            'job_id'  => $scanner->startScan($path, $type, false, '@operator')];
+                  })()
+                : ['success' => false, 'error' => 'POST required', 'code' => 405];
         // POST scanner/stop-all — stop every running scan and clean up after
         // it. stopScan() takes one job; when several have stacked up, stopping
         // them individually means finding every job id first.
-        'stop-all' => $method === 'POST'
-            ? Scanner::stopAllScans()
-            : ['success' => false, 'error' => 'POST required', 'code' => 405],
-
+        case 'stop-all':
+            return $method === 'POST'
+                ? Scanner::stopAllScans()
+                : ['success' => false, 'error' => 'POST required', 'code' => 405];
         // POST scanner/reap — clear jobs whose worker died and kill clamscan
         // processes those dead workers left behind.
-        'reap' => $method === 'POST'
-            ? (function () {
-                $jobs = Scanner::reapStaleJobs();
-                $pids = Scanner::reapOrphanClamscans();
-                return ['success' => true,
-                        'stale_jobs' => $jobs, 'killed' => count($pids),
-                        'message' => "Cleared {$jobs} stale job(s), killed "
-                                   . count($pids) . ' orphaned clamscan process(es)'];
-              })()
-            : ['success' => false, 'error' => 'POST required', 'code' => 405],
-
+        case 'reap':
+            return $method === 'POST'
+                ? (function () {
+                    $jobs = Scanner::reapStaleJobs();
+                    $pids = Scanner::reapOrphanClamscans();
+                    return ['success' => true,
+                            'stale_jobs' => $jobs, 'killed' => count($pids),
+                            'message' => "Cleared {$jobs} stale job(s), killed "
+                                       . count($pids) . ' orphaned clamscan process(es)'];
+                  })()
+                : ['success' => false, 'error' => 'POST required', 'code' => 405];
         // POST scanner/stop {job_id?} — stop a running scan AND the clamscan it
         // has spawned. There was no way to stop a scan at all: once started it
         // ran to completion whatever the operator did, which is what "the stop
         // button does not stop clamscan" was actually about. The monitor's
         // Stop button stops the monitor, which never runs clamscan.
-        'stop' => $method === 'POST'
-            ? Scanner::stopScan(isset($body['job_id']) ? (int)$body['job_id'] : null)
-            : ['success' => false, 'error' => 'POST required', 'code' => 405],
-
+        case 'stop':
+            return $method === 'POST'
+                ? Scanner::stopScan(isset($body['job_id']) ? (int)$body['job_id'] : null)
+                : ['success' => false, 'error' => 'POST required', 'code' => 405];
         // GET scanner/jobs — the scan log.
         //
         // There was no such thing on this side. The operator could see the
@@ -538,117 +542,117 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
         // requested_by is passed through verbatim here, which it deliberately
         // is NOT on the customer page. Root may see which account asked for a
         // scan; one customer may not see another's name.
-        'jobs' => (function () use ($q) {
-            $limit = max(1, min(200, (int) ($q['limit'] ?? 50)));
-            return ['success' => true, 'data' => Database::fetchAll(
-                "SELECT id, scan_type, status, scan_path, started_at, finished_at,
-                        files_scanned, threats_found, requested_by, ignore_backup,
-                        stop_reason
-                   FROM scan_jobs
-                  ORDER BY COALESCE(started_at, created_at) DESC
-                  LIMIT {$limit}")];
-          })(),
-
+        case 'jobs':
+            return (function () use ($q) {
+                $limit = max(1, min(200, (int) ($q['limit'] ?? 50)));
+                return ['success' => true, 'data' => Database::fetchAll(
+                    "SELECT id, scan_type, status, scan_path, started_at, finished_at,
+                            files_scanned, threats_found, requested_by, ignore_backup,
+                            stop_reason
+                       FROM scan_jobs
+                      ORDER BY COALESCE(started_at, created_at) DESC
+                      LIMIT {$limit}")];
+              })();
         // GET scanner/running — what is in progress, so the UI can offer Stop
-        'running' => ['success' => true, 'data' => Scanner::runningJob(),
-                      'live' => Scanner::liveScans(), 'max' => Scanner::maxConcurrent()],
+        case 'running':
+            return ['success' => true, 'data' => Scanner::runningJob(),
+                          'live' => Scanner::liveScans(), 'max' => Scanner::maxConcurrent()];
+        case 'status':
+            return ['success' => true, 'data' => $scanner->getScanStatus((int)($id ?? $q['job_id'] ?? 0))];
+        case 'stats': return ['success' => true, 'data' => $scanner->getStats()];
+        case 'threats':
+            return (function() use ($q) {
+                $status   = $q['status'] ?? null;
+                $sqlWhere = $status ? 'WHERE status = ?' : '';
+                $params   = $status ? [$status] : [];
 
-        'status' => ['success' => true, 'data' => $scanner->getScanStatus((int)($id ?? $q['job_id'] ?? 0))],
-        'stats'  => ['success' => true, 'data' => $scanner->getStats()],
-
-        'threats' => (function() use ($q) {
-            $status   = $q['status'] ?? null;
-            $sqlWhere = $status ? 'WHERE status = ?' : '';
-            $params   = $status ? [$status] : [];
-
-            // Narrow to one scan, for the drill-down behind the Threats count
-            // in the scan log. Without it the operator could see that a scan
-            // found three things and had no way at all to learn WHICH three:
-            // the threats table is server-wide and sorted by time, so a scan
-            // that ran overnight had its findings scattered through hundreds
-            // of other rows.
-            //
-            // Deliberately NOT filtered by status here. "What happened to it"
-            // is half the question being asked -- a quarantined or deleted
-            // finding is exactly what the operator wants to see, and hiding
-            // resolved rows would make a scan that found three and cleaned
-            // all three look like it found none.
-            if (isset($q['job_id']) && ctype_digit((string) $q['job_id'])) {
-                $sqlWhere = 'WHERE scan_job_id = ?';
-                $params   = [(int) $q['job_id']];
-            }
-            $threats  = Database::fetchAll(
-                "SELECT * FROM threats $sqlWhere ORDER BY detected_at DESC LIMIT 200",
-                $params
-            );
-            // How many findings are still OUTSTANDING, independent of the
-            // filter and of the 200-row page.
-            //
-            // The red count beside the filter used to be `data.length` -- the
-            // number of rows on screen. With the filter on "All" that counts
-            // resolved findings too, so marking all five files not-malware
-            // left the badge reading "5" next to five rows that all said "Not
-            // malware". It looked exactly like the action had failed.
-            //
-            // Computed here, with the same `status='active'` the dashboard and
-            // the sidebar already use, so there is ONE definition of
-            // "outstanding" rather than a second one invented in JavaScript.
-            $active = (int) (Database::fetchOne(
-                "SELECT COUNT(*) AS c FROM threats WHERE status = 'active'"
-            )['c'] ?? 0);
-            return ['success' => true, 'data' => $threats,
-                    'meta' => ['active' => $active]];
-        })(),
-
-        'quarantine' => $method === 'POST' && $id
-            ? (function() use ($scanner, $id) {
-                $threat = Database::fetchOne('SELECT file_path FROM threats WHERE id=?', [(int)$id]);
-                if (!$threat) return ['success' => false, 'error' => 'Threat not found', 'code' => 404];
-                // The result array carries the reason on failure. Wrapping it in
-                // ['success' => ...] as before discarded that, which is how
-                // "there seems to be some issue accessing files" became the
-                // only thing the user ever saw.
-                return $scanner->quarantine($threat['file_path'], (int)$id);
-            })()
-            : ['success' => false, 'error' => 'Invalid request', 'code' => 400],
-
-        'restore' => $method === 'POST' && $id
-            ? ['success' => $scanner->restoreFromQuarantine((int)$id)]
-            : ['success' => false, 'error' => 'Invalid request', 'code' => 400],
-
-        'delete' => $method === 'DELETE' && $id
-            ? $scanner->deleteThreat((int)$id)
-            : ['success' => false, 'error' => 'DELETE required', 'code' => 405],
-
+                // Narrow to one scan, for the drill-down behind the Threats count
+                // in the scan log. Without it the operator could see that a scan
+                // found three things and had no way at all to learn WHICH three:
+                // the threats table is server-wide and sorted by time, so a scan
+                // that ran overnight had its findings scattered through hundreds
+                // of other rows.
+                //
+                // Deliberately NOT filtered by status here. "What happened to it"
+                // is half the question being asked -- a quarantined or deleted
+                // finding is exactly what the operator wants to see, and hiding
+                // resolved rows would make a scan that found three and cleaned
+                // all three look like it found none.
+                if (isset($q['job_id']) && ctype_digit((string) $q['job_id'])) {
+                    $sqlWhere = 'WHERE scan_job_id = ?';
+                    $params   = [(int) $q['job_id']];
+                }
+                $threats  = Database::fetchAll(
+                    "SELECT * FROM threats $sqlWhere ORDER BY detected_at DESC LIMIT 200",
+                    $params
+                );
+                // How many findings are still OUTSTANDING, independent of the
+                // filter and of the 200-row page.
+                //
+                // The red count beside the filter used to be `data.length` -- the
+                // number of rows on screen. With the filter on "All" that counts
+                // resolved findings too, so marking all five files not-malware
+                // left the badge reading "5" next to five rows that all said "Not
+                // malware". It looked exactly like the action had failed.
+                //
+                // Computed here, with the same `status='active'` the dashboard and
+                // the sidebar already use, so there is ONE definition of
+                // "outstanding" rather than a second one invented in JavaScript.
+                $active = (int) (Database::fetchOne(
+                    "SELECT COUNT(*) AS c FROM threats WHERE status = 'active'"
+                )['c'] ?? 0);
+                return ['success' => true, 'data' => $threats,
+                        'meta' => ['active' => $active]];
+            })();
+        case 'quarantine':
+            return $method === 'POST' && $id
+                ? (function() use ($scanner, $id) {
+                    $threat = Database::fetchOne('SELECT file_path FROM threats WHERE id=?', [(int)$id]);
+                    if (!$threat) return ['success' => false, 'error' => 'Threat not found', 'code' => 404];
+                    // The result array carries the reason on failure. Wrapping it in
+                    // ['success' => ...] as before discarded that, which is how
+                    // "there seems to be some issue accessing files" became the
+                    // only thing the user ever saw.
+                    return $scanner->quarantine($threat['file_path'], (int)$id);
+                })()
+                : ['success' => false, 'error' => 'Invalid request', 'code' => 400];
+        case 'restore':
+            return $method === 'POST' && $id
+                ? ['success' => $scanner->restoreFromQuarantine((int)$id)]
+                : ['success' => false, 'error' => 'Invalid request', 'code' => 400];
+        case 'delete':
+            return $method === 'DELETE' && $id
+                ? $scanner->deleteThreat((int)$id)
+                : ['success' => false, 'error' => 'DELETE required', 'code' => 405];
         // Inspect an infected file without running it. Read as data and
         // rendered escaped by the client; nothing includes or evaluates it.
-        'view' => (function() use ($scanner, $id, $q) {
-            $tid = (int)($id ?? $q['id'] ?? 0);
-            if ($tid <= 0) {
-                return ['success' => false, 'error' => 'No threat id given', 'code' => 400];
-            }
-            return $scanner->viewThreat($tid);
-        })(),
-
+        case 'view':
+            return (function() use ($scanner, $id, $q) {
+                $tid = (int)($id ?? $q['id'] ?? 0);
+                if ($tid <= 0) {
+                    return ['success' => false, 'error' => 'No threat id given', 'code' => 400];
+                }
+                return $scanner->viewThreat($tid);
+            })();
         // One action over many selected threats. Each is attempted separately so
         // a single unremovable file does not abort the rest.
-        'bulk' => $method === 'POST'
-            ? (function() use ($scanner, $body) {
-                $ids    = $body['ids'] ?? [];
-                $action = (string)($body['action'] ?? '');
-                if (!is_array($ids) || !$ids) {
-                    return ['success' => false, 'error' => 'No threats selected', 'code' => 400];
-                }
-                return $scanner->bulkAction($ids, $action);
-            })()
-            : ['success' => false, 'error' => 'POST required', 'code' => 405],
-
-        'update-sigs' => $method === 'POST'
-            ? $scanner->updateSignatures()
-            : ['success' => false, 'error' => 'POST required', 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'bulk':
+            return $method === 'POST'
+                ? (function() use ($scanner, $body) {
+                    $ids    = $body['ids'] ?? [];
+                    $action = (string)($body['action'] ?? '');
+                    if (!is_array($ids) || !$ids) {
+                        return ['success' => false, 'error' => 'No threats selected', 'code' => 400];
+                    }
+                    return $scanner->bulkAction($ids, $action);
+                })()
+                : ['success' => false, 'error' => 'POST required', 'code' => 405];
+        case 'update-sigs':
+            return $method === 'POST'
+                ? $scanner->updateSignatures()
+                : ['success' => false, 'error' => 'POST required', 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeFirewall(string $action, string $method, array $body, array $q, ?string $id, ?array $user): array {
@@ -667,58 +671,59 @@ function routeFirewall(string $action, string $method, array $body, array $q, ?s
     $fw = new Firewall();
     Auth::requireRole('admin', $user);
 
-    return match($action) {
-        'status'     => ['success' => true, 'data' => $fw->getCSFStatus()],
-        'stats'      => ['success' => true, 'data' => $fw->getStats()],
+    switch ($action) {
+        case 'status': return ['success' => true, 'data' => $fw->getCSFStatus()];
+        case 'stats': return ['success' => true, 'data' => $fw->getStats()];
         // Paged. This returned every row, and on a live server that was
         // 343,000 of them — enough to lock the browser tab solid.
-        'rules'      => ['success' => true, 'data' => $fw->getRules(
-            (int)($q['limit'] ?? 100), (int)($q['offset'] ?? 0),
-            (string)($q['search'] ?? '')
-        )],
-        'blocked'    => ['success' => true, 'data' => $fw->getBlockedIPs(
-            (int)($q['limit'] ?? 100), (int)($q['offset'] ?? 0)
-        )],
-
-        'block' => $method === 'POST'
-            ? $fw->blockIP(
-                $body['ip'] ?? '',
-                $body['reason'] ?? 'Manual block',
-                !empty($body['permanent']),
-                (int)($body['ttl'] ?? 86400)
-            )
-            : ['success' => false, 'code' => 405],
-
-        'unblock' => $method === 'POST'
-            ? $fw->unblockIP($body['ip'] ?? '')
-            : ['success' => false, 'code' => 405],
-
-        'allow' => $method === 'POST'
-            ? $fw->allowIP($body['ip'] ?? '', $body['comment'] ?? '')
-            : ['success' => false, 'code' => 405],
-
-        'add-rule' => $method === 'POST'
-            ? $fw->addRule($body)
-            : ['success' => false, 'code' => 405],
-
-        'toggle-rule' => $method === 'POST'
-            ? $fw->toggleRule((int)($body['id'] ?? 0), (bool)($body['enabled'] ?? false))
-            : ['success' => false, 'code' => 405],
-
-        'delete-rule' => $method === 'DELETE' && $id
-            ? $fw->deleteRule((int)$id)
-            : ['success' => false, 'code' => 405],
-
-        'geo-block' => $method === 'POST'
-            ? $fw->setGeoBlock($body['countries'] ?? [])
-            : ['success' => false, 'code' => 405],
-
-        'reload' => $method === 'POST'
-            ? $fw->reloadFirewall()
-            : ['success' => false, 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'rules':
+            return ['success' => true, 'data' => $fw->getRules(
+                (int)($q['limit'] ?? 100), (int)($q['offset'] ?? 0),
+                (string)($q['search'] ?? '')
+            )];
+        case 'blocked':
+            return ['success' => true, 'data' => $fw->getBlockedIPs(
+                (int)($q['limit'] ?? 100), (int)($q['offset'] ?? 0)
+            )];
+        case 'block':
+            return $method === 'POST'
+                ? $fw->blockIP(
+                    $body['ip'] ?? '',
+                    $body['reason'] ?? 'Manual block',
+                    !empty($body['permanent']),
+                    (int)($body['ttl'] ?? 86400)
+                )
+                : ['success' => false, 'code' => 405];
+        case 'unblock':
+            return $method === 'POST'
+                ? $fw->unblockIP($body['ip'] ?? '')
+                : ['success' => false, 'code' => 405];
+        case 'allow':
+            return $method === 'POST'
+                ? $fw->allowIP($body['ip'] ?? '', $body['comment'] ?? '')
+                : ['success' => false, 'code' => 405];
+        case 'add-rule':
+            return $method === 'POST'
+                ? $fw->addRule($body)
+                : ['success' => false, 'code' => 405];
+        case 'toggle-rule':
+            return $method === 'POST'
+                ? $fw->toggleRule((int)($body['id'] ?? 0), (bool)($body['enabled'] ?? false))
+                : ['success' => false, 'code' => 405];
+        case 'delete-rule':
+            return $method === 'DELETE' && $id
+                ? $fw->deleteRule((int)$id)
+                : ['success' => false, 'code' => 405];
+        case 'geo-block':
+            return $method === 'POST'
+                ? $fw->setGeoBlock($body['countries'] ?? [])
+                : ['success' => false, 'code' => 405];
+        case 'reload':
+            return $method === 'POST'
+                ? $fw->reloadFirewall()
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 /**
@@ -808,27 +813,28 @@ function routeOverview(string $action, string $method, array $q, ?array $user): 
 function routeBruteForce(string $action, string $method, array $body, array $q, ?array $user): array {
     Auth::requireRole('admin', $user);
 
-    return match($action) {
-        'stats'     => ['success' => true, 'data' => BruteForce::stats()],
-        'timeline'  => ['success' => true,
-                        'data' => BruteForce::timeline((int)($q['days'] ?? 14))],
-        'offenders' => ['success' => true,
-                        'data' => BruteForce::offenders((int)($q['limit'] ?? 100))],
-        'targets'   => ['success' => true, 'data' => BruteForce::topTargets()],
-
+    switch ($action) {
+        case 'stats': return ['success' => true, 'data' => BruteForce::stats()];
+        case 'timeline':
+            return ['success' => true,
+                            'data' => BruteForce::timeline((int)($q['days'] ?? 14))];
+        case 'offenders':
+            return ['success' => true,
+                            'data' => BruteForce::offenders((int)($q['limit'] ?? 100))];
+        case 'targets': return ['success' => true, 'data' => BruteForce::topTargets()];
         // Run the detector now rather than waiting for the next tick.
-        'scan' => $method === 'POST'
-            ? ['success' => true, 'data' => BruteForce::run()]
-            : ['success' => false, 'error' => 'POST required', 'code' => 405],
-
+        case 'scan':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => BruteForce::run()]
+                : ['success' => false, 'error' => 'POST required', 'code' => 405];
         // Unblock an address and forget it. Needed when the detector catches
         // somebody who simply mistyped a password a few times.
-        'release' => $method === 'POST'
-            ? BruteForce::release((string)($body['ip'] ?? ''))
-            : ['success' => false, 'error' => 'POST required', 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'release':
+            return $method === 'POST'
+                ? BruteForce::release((string)($body['ip'] ?? ''))
+                : ['success' => false, 'error' => 'POST required', 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeWAF(string $action, string $method, array $body, array $q, ?array $user): array {
@@ -850,52 +856,59 @@ function routeWAF(string $action, string $method, array $body, array $q, ?array 
     }
 
     $waf = new WAF();
-    return match($action) {
-        'status'     => ['success' => true, 'data' => $waf->getStatus()],
-        'stats'      => ['success' => true, 'data' => $waf->getStats()],
+    switch ($action) {
+        case 'status': return ['success' => true, 'data' => $waf->getStatus()];
+        case 'stats': return ['success' => true, 'data' => $waf->getStats()];
         // Returns {items,total,limit,offset}. It used to return a bare list
         // capped at 100, so the panel showed the newest hundred of 148,551
         // events with no way to reach -- or even see the existence of -- the
         // rest.
-        'events'     => ['success' => true, 'data' => $waf->getEvents(
-            (int)($q['limit'] ?? 100), $q['severity'] ?? null, $q['ip'] ?? null,
-            (int)($q['offset'] ?? 0)
-        )],
-        'categories' => ['success' => true, 'data' => $waf->getRuleCategories()],
-
-        'set-mode' => $method === 'POST'
-            ? $waf->setMode($body['mode'] ?? 'On')
-            : ['success' => false, 'code' => 405],
-
-        'add-rule' => $method === 'POST'
-            ? $waf->addCustomRule($body['id'] ?? uniqid('SG'), $body['pattern'] ?? '', $body['action'] ?? 'block')
-            : ['success' => false, 'code' => 405],
-
-        'ingest-logs' => $method === 'POST'
-            ? ['success' => true, 'ingested' => $waf->ingestModSecLog(),
-               'status' => $waf->ingestStatus()]
-            : ['success' => false, 'code' => 405],
-
+        case 'events':
+            return ['success' => true, 'data' => $waf->getEvents(
+                (int)($q['limit'] ?? 100), $q['severity'] ?? null, $q['ip'] ?? null,
+                (int)($q['offset'] ?? 0)
+            )];
+        case 'categories': return ['success' => true, 'data' => $waf->getRuleCategories()];
+        case 'set-mode':
+            return $method === 'POST'
+                ? $waf->setMode($body['mode'] ?? 'On')
+                : ['success' => false, 'code' => 405];
+        /* The id is NOT defaulted. It used to default to uniqid('SG'), which
+         * produced `id:SG6910abc12def3` -- ModSecurity ids are numeric, so
+         * that is a syntax error written into a config Apache loads, followed
+         * by a graceful restart of Apache. addCustomRule() rejects it now, and
+         * sending no id gets the same rejection with the same explanation. */
+        case 'add-rule':
+            return $method === 'POST'
+                ? $waf->addCustomRule((string) ($body['id'] ?? ''),
+                                      (string) ($body['pattern'] ?? ''),
+                                      (string) ($body['action'] ?? 'block'))
+                : ['success' => false, 'code' => 405];
+        case 'ingest-logs':
+            return $method === 'POST'
+                ? ['success' => true, 'ingested' => $waf->ingestModSecLog(),
+                   'status' => $waf->ingestStatus()]
+                : ['success' => false, 'code' => 405];
         // GET waf/ingest-status — whether we are reading a ModSecurity log at
         // all. An empty events table means "no attacks" or "we never looked",
         // and those render identically; this is what tells them apart.
-        'ingest-status' => ['success' => true, 'data' => $waf->ingestStatus()],
-
+        case 'ingest-status':
+            return ['success' => true, 'data' => $waf->ingestStatus()];
         // GET waf/parse-test — what the parser makes of the real log on this
         // server. The address parsing has been wrong twice because the log was
         // not laid out as assumed; this reports ground truth instead.
-        'parse-test' => ['success' => true,
-                         'data' => $waf->parseTest((int)($q['limit'] ?? 5))],
-
+        case 'parse-test':
+            return ['success' => true,
+                             'data' => $waf->parseTest((int)($q['limit'] ?? 5))];
         // POST waf/reingest {clear} — read the log again from the start.
         // Events already stored keep whatever was parsed at the time, so a
         // parser fix does nothing for them without this.
-        'reingest' => $method === 'POST'
-            ? $waf->reingest(!empty($body['clear']))
-            : ['success' => false, 'error' => 'POST required', 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'reingest':
+            return $method === 'POST'
+                ? $waf->reingest(!empty($body['clear']))
+                : ['success' => false, 'error' => 'POST required', 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeIPRep(string $action, string $method, array $body, array $q, ?array $user): array {
@@ -963,14 +976,15 @@ function routeIPRep(string $action, string $method, array $body, array $q, ?arra
     }
 
     $rep = new IPReputation();
-    return match($action) {
-        'check' => ['success' => true, 'data' => $rep->check($q['ip'] ?? $body['ip'] ?? '')],
-        'bulk'  => $method === 'POST'
-            ? ['success' => true, 'data' => $rep->bulkCheck($body['ips'] ?? [])]
-            : ['success' => false, 'code' => 405],
-        'top-attackers' => ['success' => true, 'data' => $rep->getTopAttackingIPs()],
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+    switch ($action) {
+        case 'check': return ['success' => true, 'data' => $rep->check($q['ip'] ?? $body['ip'] ?? '')];
+        case 'bulk':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => $rep->bulkCheck($body['ips'] ?? [])]
+                : ['success' => false, 'code' => 405];
+        case 'top-attackers': return ['success' => true, 'data' => $rep->getTopAttackingIPs()];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeEvents(string $action, string $method, array $body, array $q, ?array $user): array {
@@ -981,418 +995,417 @@ function routeEvents(string $action, string $method, array $body, array $q, ?arr
         Auth::requireRole('admin', $user);
     }
 
-    return match($action) {
-        'list', 'index' => (function() use ($q) {
-            $limit    = (int)($q['limit'] ?? 50);
-            $severity = $q['severity'] ?? null;
-            $where    = $severity ? 'WHERE severity = ?' : '';
-            $params   = $severity ? [$severity, $limit] : [$limit];
-            $events   = Database::fetchAll(
-                "SELECT * FROM security_events $where ORDER BY timestamp DESC LIMIT ?",
-                $params
-            );
-            $unresolved = Database::fetchOne(
-                "SELECT COUNT(*) as c FROM security_events WHERE resolved = 0"
-            )['c'];
-            return ['success' => true, 'data' => $events, 'unresolved' => (int) $unresolved];
-        })(),
-
+    switch ($action) {
+        case 'list':
+        case 'index':
+            return (function() use ($q) {
+                $limit    = (int)($q['limit'] ?? 50);
+                $severity = $q['severity'] ?? null;
+                $where    = $severity ? 'WHERE severity = ?' : '';
+                $params   = $severity ? [$severity, $limit] : [$limit];
+                $events   = Database::fetchAll(
+                    "SELECT * FROM security_events $where ORDER BY timestamp DESC LIMIT ?",
+                    $params
+                );
+                $unresolved = Database::fetchOne(
+                    "SELECT COUNT(*) as c FROM security_events WHERE resolved = 0"
+                )['c'];
+                return ['success' => true, 'data' => $events, 'unresolved' => (int) $unresolved];
+            })();
         // The id may arrive as a query parameter or in the body; accept both,
         // and report what actually changed rather than an unconditional
         // success. Reporting success for an id that matched no row is how a
         // button appears to work while doing nothing.
-        'resolve' => $method === 'POST'
-            ? (function() use ($q, $body) {
-                $id = (int)($body['id'] ?? $q['id'] ?? 0);
-                if ($id <= 0) {
-                    return ['success' => false, 'error' => 'An event id is required', 'code' => 400];
-                }
-                Database::query("UPDATE security_events SET resolved=1 WHERE id=?", [$id]);
-                $still = Database::fetchOne(
-                    "SELECT COUNT(*) AS c FROM security_events WHERE id=? AND resolved=0", [$id]
-                )['c'];
-                if ((int)$still !== 0) {
-                    return ['success' => false, 'error' => 'Event ' . $id . ' was not found', 'code' => 404];
-                }
-                Logger::info('Security event resolved: #' . $id);
-                return ['success' => true, 'resolved' => 1];
-            })()
-            : ['success' => false, 'code' => 405],
-
+        case 'resolve':
+            return $method === 'POST'
+                ? (function() use ($q, $body) {
+                    $id = (int)($body['id'] ?? $q['id'] ?? 0);
+                    if ($id <= 0) {
+                        return ['success' => false, 'error' => 'An event id is required', 'code' => 400];
+                    }
+                    Database::query("UPDATE security_events SET resolved=1 WHERE id=?", [$id]);
+                    $still = Database::fetchOne(
+                        "SELECT COUNT(*) AS c FROM security_events WHERE id=? AND resolved=0", [$id]
+                    )['c'];
+                    if ((int)$still !== 0) {
+                        return ['success' => false, 'error' => 'Event ' . $id . ' was not found', 'code' => 404];
+                    }
+                    Logger::info('Security event resolved: #' . $id);
+                    return ['success' => true, 'resolved' => 1];
+                })()
+                : ['success' => false, 'code' => 405];
         // POST events/resolve-bulk {ids:[...]} — clearing a page of events one
         // click at a time was the only option.
-        'resolve-bulk' => $method === 'POST'
-            ? (function() use ($body) {
-                $ids = array_values(array_unique(array_filter(
-                    array_map('intval', (array)($body['ids'] ?? [])),
-                    fn($i) => $i > 0
-                )));
-                if (!$ids) {
-                    return ['success' => false, 'error' => 'No events selected', 'code' => 400];
-                }
-                // Chunked: SQLite has a hard limit on bound variables, and a
-                // select-all over a busy events table can exceed it.
-                $done = 0;
-                foreach (array_chunk($ids, 200) as $chunk) {
-                    $in = implode(',', array_fill(0, count($chunk), '?'));
-                    $before = (int) Database::fetchOne(
-                        "SELECT COUNT(*) AS c FROM security_events WHERE id IN ($in) AND resolved=0",
-                        $chunk
+        case 'resolve-bulk':
+            return $method === 'POST'
+                ? (function() use ($body) {
+                    $ids = array_values(array_unique(array_filter(
+                        array_map('intval', (array)($body['ids'] ?? [])),
+                        fn($i) => $i > 0
+                    )));
+                    if (!$ids) {
+                        return ['success' => false, 'error' => 'No events selected', 'code' => 400];
+                    }
+                    // Chunked: SQLite has a hard limit on bound variables, and a
+                    // select-all over a busy events table can exceed it.
+                    $done = 0;
+                    foreach (array_chunk($ids, 200) as $chunk) {
+                        $in = implode(',', array_fill(0, count($chunk), '?'));
+                        $before = (int) Database::fetchOne(
+                            "SELECT COUNT(*) AS c FROM security_events WHERE id IN ($in) AND resolved=0",
+                            $chunk
+                        )['c'];
+                        Database::query(
+                            "UPDATE security_events SET resolved=1 WHERE id IN ($in)", $chunk
+                        );
+                        $done += $before;
+                    }
+                    Logger::info('Security events resolved in bulk: ' . $done . ' of ' . count($ids));
+                    return ['success' => true, 'resolved' => $done, 'requested' => count($ids)];
+                })()
+                : ['success' => false, 'code' => 405];
+        case 'resolve-all':
+            return $method === 'POST'
+                ? (function() {
+                    $n = (int) Database::fetchOne(
+                        "SELECT COUNT(*) AS c FROM security_events WHERE resolved=0"
                     )['c'];
-                    Database::query(
-                        "UPDATE security_events SET resolved=1 WHERE id IN ($in)", $chunk
-                    );
-                    $done += $before;
-                }
-                Logger::info('Security events resolved in bulk: ' . $done . ' of ' . count($ids));
-                return ['success' => true, 'resolved' => $done, 'requested' => count($ids)];
-            })()
-            : ['success' => false, 'code' => 405],
-
-        'resolve-all' => $method === 'POST'
-            ? (function() {
-                $n = (int) Database::fetchOne(
-                    "SELECT COUNT(*) AS c FROM security_events WHERE resolved=0"
-                )['c'];
-                Database::query("UPDATE security_events SET resolved=1 WHERE resolved=0");
-                Logger::info('All security events resolved: ' . $n);
-                return ['success' => true, 'resolved' => $n];
-            })()
-            : ['success' => false, 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+                    Database::query("UPDATE security_events SET resolved=1 WHERE resolved=0");
+                    Logger::info('All security events resolved: ' . $n);
+                    return ['success' => true, 'resolved' => $n];
+                })()
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeSettings(string $action, string $method, array $body, ?array $user): array {
     Auth::requireRole('admin', $user);
-    return match($action) {
-        'get', 'index' => (function() {
-            $rows = Database::fetchAll("SELECT key, value FROM settings ORDER BY key");
-            $out  = [];
-            foreach ($rows as $r) $out[$r['key']] = $r['value'];
-            return ['success' => true, 'data' => $out];
-        })(),
-
-        'set' => $method === 'POST'
-            ? (function() use ($body) {
-                foreach ($body as $k => $v) {
-                    if (preg_match('/^[a-z_]+$/', $k)) {
-                        Database::setSetting($k, (string)$v);
+    switch ($action) {
+        case 'get':
+        case 'index':
+            return (function() {
+                $rows = Database::fetchAll("SELECT key, value FROM settings ORDER BY key");
+                $out  = [];
+                foreach ($rows as $r) $out[$r['key']] = $r['value'];
+                return ['success' => true, 'data' => $out];
+            })();
+        case 'set':
+            return $method === 'POST'
+                ? (function() use ($body) {
+                    foreach ($body as $k => $v) {
+                        if (preg_match('/^[a-z_]+$/', $k)) {
+                            Database::setSetting($k, (string)$v);
+                        }
                     }
-                }
-                return ['success' => true];
-            })()
-            : ['success' => false, 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+                    return ['success' => true];
+                })()
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeLogs(string $action, string $method, array $q, ?array $user): array {
     Auth::requireRole('admin', $user);
-    return match($action) {
-        'recent' => ['success' => true, 'data' => Logger::getRecentLogs((int)($q['lines'] ?? 200))],
-
+    switch ($action) {
+        case 'recent':
+            return ['success' => true, 'data' => Logger::getRecentLogs((int)($q['lines'] ?? 200))];
         // GET logs/days — which days have a log at all
-        'days' => ['success' => true, 'data' => Logger::getLogDays((int)($q['limit'] ?? 30))],
-
+        case 'days':
+            return ['success' => true, 'data' => Logger::getLogDays((int)($q['limit'] ?? 30))];
         // GET logs/query?date=&level=&search=&lines= — parsed, filtered rows
-        'query' => ['success' => true, 'data' => Logger::query(
-            (string)($q['date']   ?? ''),
-            (string)($q['level']  ?? ''),
-            (string)($q['search'] ?? ''),
-            min(2000, max(1, (int)($q['lines'] ?? 500)))
-        )],
-
-        default  => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'query':
+            return ['success' => true, 'data' => Logger::query(
+                (string)($q['date']   ?? ''),
+                (string)($q['level']  ?? ''),
+                (string)($q['search'] ?? ''),
+                min(2000, max(1, (int)($q['lines'] ?? 500)))
+            )];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeMonitor(string $action, string $method, array $body, array $q, ?array $user): array {
     Auth::requireRole('admin', $user);
     $monitor = new RealTimeMonitor();
 
-    return match($action) {
-        'status'  => ['success' => true, 'data' => $monitor->getStatus()],
-        'stats'   => ['success' => true, 'data' => $monitor->getDashboardStats()],
-
-        'start'   => $method === 'POST'
-            ? $monitor->start()
-            : ['success' => false, 'code' => 405],
-
-        'stop'    => $method === 'POST'
-            ? $monitor->stop()
-            : ['success' => false, 'code' => 405],
-
-        'restart' => $method === 'POST'
-            ? $monitor->restart()
-            : ['success' => false, 'code' => 405],
-
-        'detections' => [
-            'success' => true,
-            'data'    => $monitor->getRecentDetections((int)($q['limit'] ?? 50))
-        ],
-
-        'logs' => [
-            'success' => true,
-            'data'    => $monitor->getRecentLogs((int)($q['lines'] ?? 100))
-        ],
-
-        'add-path' => $method === 'POST' && !empty($body['path'])
-            ? $monitor->addWatchPath($body['path'])
-            : ['success' => false, 'error' => 'POST with {path} required', 'code' => 400],
-
-        'remove-path' => $method === 'POST' && !empty($body['path'])
-            ? $monitor->removeWatchPath($body['path'])
-            : ['success' => false, 'error' => 'POST with {path} required', 'code' => 400],
-
-        'install-service' => $method === 'POST'
-            ? $monitor->installService()
-            : ['success' => false, 'code' => 405],
-
-        'service-status' => ['success' => true, 'data' => $monitor->getServiceStatus()],
-
-        'enable-service'  => $method === 'POST'
-            ? $monitor->enableService()
-            : ['success' => false, 'code' => 405],
-
-        'disable-service' => $method === 'POST'
-            ? $monitor->disableService()
-            : ['success' => false, 'code' => 405],
-
-        'service-logs' => [
-            'success' => true,
-            'data'    => $monitor->getServiceLogs((int)($q['lines'] ?? 50))
-        ],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+    switch ($action) {
+        case 'status': return ['success' => true, 'data' => $monitor->getStatus()];
+        case 'stats': return ['success' => true, 'data' => $monitor->getDashboardStats()];
+        case 'start':
+            return $method === 'POST'
+                ? $monitor->start()
+                : ['success' => false, 'code' => 405];
+        case 'stop':
+            return $method === 'POST'
+                ? $monitor->stop()
+                : ['success' => false, 'code' => 405];
+        case 'restart':
+            return $method === 'POST'
+                ? $monitor->restart()
+                : ['success' => false, 'code' => 405];
+        case 'detections':
+            return [
+                'success' => true,
+                'data'    => $monitor->getRecentDetections((int)($q['limit'] ?? 50))
+            ];
+        case 'logs':
+            return [
+                'success' => true,
+                'data'    => $monitor->getRecentLogs((int)($q['lines'] ?? 100))
+            ];
+        case 'add-path':
+            return $method === 'POST' && !empty($body['path'])
+                ? $monitor->addWatchPath($body['path'])
+                : ['success' => false, 'error' => 'POST with {path} required', 'code' => 400];
+        case 'remove-path':
+            return $method === 'POST' && !empty($body['path'])
+                ? $monitor->removeWatchPath($body['path'])
+                : ['success' => false, 'error' => 'POST with {path} required', 'code' => 400];
+        case 'install-service':
+            return $method === 'POST'
+                ? $monitor->installService()
+                : ['success' => false, 'code' => 405];
+        case 'service-status': return ['success' => true, 'data' => $monitor->getServiceStatus()];
+        case 'enable-service':
+            return $method === 'POST'
+                ? $monitor->enableService()
+                : ['success' => false, 'code' => 405];
+        case 'disable-service':
+            return $method === 'POST'
+                ? $monitor->disableService()
+                : ['success' => false, 'code' => 405];
+        case 'service-logs':
+            return [
+                'success' => true,
+                'data'    => $monitor->getServiceLogs((int)($q['lines'] ?? 50))
+            ];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ── Storage Management ────────────────────────────────────────────────────────
 function routeStorage(string $action, string $method, array $body, ?array $user): array {
     Auth::requireRole('admin', $user);
 
-    return match($action) {
-
+    switch ($action) {
         // GET storage/quarantine-usage — where quarantine points right now.
         // The settings page hard-coded /usr/local/serverscrub/quarantine into
         // a label, so it kept naming the root partition long after the default
         // moved to /home, and there was no way to see the real location without
         // the CLI.
-        'quarantine-usage' => (function() {
-            $u = Scanner::quarantineUsage();
-            $u['writable'] = is_dir($u['dir']) && is_writable($u['dir']);
-            return ['success' => true, 'data' => $u];
-        })(),
-
+        case 'quarantine-usage':
+            return (function() {
+                $u = Scanner::quarantineUsage();
+                $u['writable'] = is_dir($u['dir']) && is_writable($u['dir']);
+                return ['success' => true, 'data' => $u];
+            })();
         // POST storage/quarantine-check {path} — prove the app can actually
         // read and write there, by writing. Checking is_writable() alone is a
         // guess: it says nothing about a read-only mount, a full volume or
         // SELinux, all of which fail only at the moment a file is moved in --
         // which is the moment a threat is found.
-        'quarantine-check' => $method === 'POST'
-            ? (function() use ($body) {
-                $dir = trim((string)($body['path'] ?? ''));
-                if ($dir === '' || $dir[0] !== '/') {
-                    return ['success' => false, 'data' => ['writable' => false,
-                        'reason' => 'an absolute path is required'], 'code' => 400];
-                }
-                if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
-                    return ['success' => false, 'data' => ['writable' => false,
-                        'reason' => 'directory does not exist and could not be created']];
-                }
-                $probe = rtrim($dir, '/') . '/.sg-write-test-' . getmypid();
-                if (@file_put_contents($probe, 'x') === false) {
-                    return ['success' => false, 'data' => ['writable' => false,
-                        'reason' => 'not writable by ' . (function_exists('posix_getpwuid')
-                            ? (posix_getpwuid(posix_geteuid())['name'] ?? 'this user')
-                            : 'this user')]];
-                }
-                $readBack = @file_get_contents($probe);
-                @unlink($probe);
-                if ($readBack !== 'x') {
-                    return ['success' => false, 'data' => ['writable' => false,
-                        'reason' => 'written but could not be read back']];
-                }
+        case 'quarantine-check':
+            return $method === 'POST'
+                ? (function() use ($body) {
+                    $dir = trim((string)($body['path'] ?? ''));
+                    if ($dir === '' || $dir[0] !== '/') {
+                        return ['success' => false, 'data' => ['writable' => false,
+                            'reason' => 'an absolute path is required'], 'code' => 400];
+                    }
+                    if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
+                        return ['success' => false, 'data' => ['writable' => false,
+                            'reason' => 'directory does not exist and could not be created']];
+                    }
+                    $probe = rtrim($dir, '/') . '/.sg-write-test-' . getmypid();
+                    if (@file_put_contents($probe, 'x') === false) {
+                        return ['success' => false, 'data' => ['writable' => false,
+                            'reason' => 'not writable by ' . (function_exists('posix_getpwuid')
+                                ? (posix_getpwuid(posix_geteuid())['name'] ?? 'this user')
+                                : 'this user')]];
+                    }
+                    $readBack = @file_get_contents($probe);
+                    @unlink($probe);
+                    if ($readBack !== 'x') {
+                        return ['success' => false, 'data' => ['writable' => false,
+                            'reason' => 'written but could not be read back']];
+                    }
 
-                $free = @disk_free_space($dir);
-                return ['success' => true, 'data' => [
-                    'writable'   => true,
-                    'path'       => $dir,
-                    'free_bytes' => $free === false ? null : (int)$free,
-                    'on_root'    => strpos(realpath($dir) ?: $dir, '/usr/local') === 0,
-                ]];
-            })()
-            : ['success' => false, 'code' => 405],
-
+                    $free = @disk_free_space($dir);
+                    return ['success' => true, 'data' => [
+                        'writable'   => true,
+                        'path'       => $dir,
+                        'free_bytes' => $free === false ? null : (int)$free,
+                        'on_root'    => strpos(realpath($dir) ?: $dir, '/usr/local') === 0,
+                    ]];
+                })()
+                : ['success' => false, 'code' => 405];
         // POST storage/quarantine-move {path} — relocate, moving the files.
         // Quarantined files are evidence: they are moved, never deleted.
-        'quarantine-move' => $method === 'POST'
-            ? (function() use ($body) {
-                $r = Scanner::moveQuarantine(trim((string)($body['path'] ?? '')));
-                return ($r['success'] ?? false)
-                    ? ['success' => true, 'data' => $r]
-                    : ['success' => false, 'error' => $r['error'] ?? 'Move failed', 'data' => $r];
-            })()
-            : ['success' => false, 'code' => 405],
-
+        case 'quarantine-move':
+            return $method === 'POST'
+                ? (function() use ($body) {
+                    $r = Scanner::moveQuarantine(trim((string)($body['path'] ?? '')));
+                    return ($r['success'] ?? false)
+                        ? ['success' => true, 'data' => $r]
+                        : ['success' => false, 'error' => $r['error'] ?? 'Move failed', 'data' => $r];
+                })()
+                : ['success' => false, 'code' => 405];
         // GET storage/stats
-        'stats' => (function() {
-            $quarDir = Database::storagePath('quarantine');
-            $logDir  = Database::storagePath('logs');
-            $dbFile  = SG_DB;
+        case 'stats':
+            return (function() {
+                $quarDir = Database::storagePath('quarantine');
+                $logDir  = Database::storagePath('logs');
+                $dbFile  = SG_DB;
 
-            function sg_dir_size(string $dir): int {
-                $size = 0;
-                if (!is_dir($dir)) return 0;
-                foreach (new RecursiveIteratorIterator(
-                    new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)
-                ) as $f) { $size += $f->getSize(); }
-                return $size;
-            }
-            function sg_file_count(string $dir, string $ext = ''): int {
-                if (!is_dir($dir)) return 0;
-                $i = 0;
-                foreach (new RecursiveIteratorIterator(
-                    new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)
-                ) as $f) {
-                    if ($ext === '' || $f->getExtension() === ltrim($ext, '.')) $i++;
+                function sg_dir_size(string $dir): int {
+                    $size = 0;
+                    if (!is_dir($dir)) return 0;
+                    foreach (new RecursiveIteratorIterator(
+                        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)
+                    ) as $f) { $size += $f->getSize(); }
+                    return $size;
                 }
-                return $i;
-            }
+                function sg_file_count(string $dir, string $ext = ''): int {
+                    if (!is_dir($dir)) return 0;
+                    $i = 0;
+                    foreach (new RecursiveIteratorIterator(
+                        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)
+                    ) as $f) {
+                        if ($ext === '' || $f->getExtension() === ltrim($ext, '.')) $i++;
+                    }
+                    return $i;
+                }
 
-            return ['success' => true, 'data' => [
-                'quarantine' => [
-                    'path'       => $quarDir,
-                    'size_bytes' => sg_dir_size($quarDir),
-                    'files'      => sg_file_count($quarDir, 'quarantine'),
-                    'writable'   => is_writable($quarDir),
-                ],
-                'logs' => [
-                    'path'            => $logDir,
-                    'size_bytes'      => sg_dir_size($logDir),
-                    'files'           => sg_file_count($logDir, 'log'),
-                    'writable'        => is_writable($logDir),
-                    'monitor_log_bytes' => file_exists($logDir . '/monitor.log')
-                        ? filesize($logDir . '/monitor.log') : 0,
-                ],
-                'database' => [
-                    'path'       => $dbFile,
-                    'size_bytes' => file_exists($dbFile) ? filesize($dbFile) : 0,
-                    'rows'       => [
-                        'waf_events'      => (int)(Database::fetchOne("SELECT COUNT(*) as c FROM waf_events")['c'] ?? 0),
-                        'security_events' => (int)(Database::fetchOne("SELECT COUNT(*) as c FROM security_events")['c'] ?? 0),
-                        'threats'         => (int)(Database::fetchOne("SELECT COUNT(*) as c FROM threats")['c'] ?? 0),
-                        'cron_log'        => (int)(Database::fetchOne("SELECT COUNT(*) as c FROM cron_log")['c'] ?? 0),
+                return ['success' => true, 'data' => [
+                    'quarantine' => [
+                        'path'       => $quarDir,
+                        'size_bytes' => sg_dir_size($quarDir),
+                        'files'      => sg_file_count($quarDir, 'quarantine'),
+                        'writable'   => is_writable($quarDir),
                     ],
-                ],
-                // What "blank = default" actually resolves to ON THIS SERVER.
-                //
-                // The settings card hard-coded /usr/local/serverscrub/quarantine
-                // as the placeholder for the custom-path box. That is only the
-                // last-resort default: config.php prefers /home/.serverscrub or
-                // /var/.serverscrub whenever either is writable, which on a
-                // cPanel box means quarantine lives under /home and the panel
-                // was naming the wrong partition.
-                //
-                // That is not cosmetic. An operator reading it would size the
-                // wrong filesystem, and this product has already shipped one
-                // bug from the same assumption: an update rolled itself back
-                // after chmod'ing ${INSTALL_DIR}/quarantine on a server whose
-                // quarantine was at /home/.serverscrub/quarantine.
-                'defaults' => [
-                    'quarantine_dir' => QUARANTINE_DIR,
-                    'log_dir'        => SG_LOGS,
-                ],
-                'settings' => [
-                    'quarantine_dir'            => Database::setting('quarantine_dir', ''),
-                    'log_dir'                   => Database::setting('log_dir', ''),
-                    'log_retention_days'        => (int)Database::setting('log_retention_days', '30'),
-                    'quarantine_retention_days' => (int)Database::setting('quarantine_retention_days', '90'),
-                    'db_max_waf_events'         => (int)Database::setting('db_max_waf_events', '100000'),
-                    'db_max_security_events'    => (int)Database::setting('db_max_security_events', '50000'),
-                    'db_max_cron_log'           => (int)Database::setting('db_max_cron_log', '1000'),
-                    'monitor_log_max_mb'        => (int)Database::setting('monitor_log_max_mb', '50'),
-                ],
-            ]];
-        })(),
-
+                    'logs' => [
+                        'path'            => $logDir,
+                        'size_bytes'      => sg_dir_size($logDir),
+                        'files'           => sg_file_count($logDir, 'log'),
+                        'writable'        => is_writable($logDir),
+                        'monitor_log_bytes' => file_exists($logDir . '/monitor.log')
+                            ? filesize($logDir . '/monitor.log') : 0,
+                    ],
+                    'database' => [
+                        'path'       => $dbFile,
+                        'size_bytes' => file_exists($dbFile) ? filesize($dbFile) : 0,
+                        'rows'       => [
+                            'waf_events'      => (int)(Database::fetchOne("SELECT COUNT(*) as c FROM waf_events")['c'] ?? 0),
+                            'security_events' => (int)(Database::fetchOne("SELECT COUNT(*) as c FROM security_events")['c'] ?? 0),
+                            'threats'         => (int)(Database::fetchOne("SELECT COUNT(*) as c FROM threats")['c'] ?? 0),
+                            'cron_log'        => (int)(Database::fetchOne("SELECT COUNT(*) as c FROM cron_log")['c'] ?? 0),
+                        ],
+                    ],
+                    // What "blank = default" actually resolves to ON THIS SERVER.
+                    //
+                    // The settings card hard-coded /usr/local/serverscrub/quarantine
+                    // as the placeholder for the custom-path box. That is only the
+                    // last-resort default: config.php prefers /home/.serverscrub or
+                    // /var/.serverscrub whenever either is writable, which on a
+                    // cPanel box means quarantine lives under /home and the panel
+                    // was naming the wrong partition.
+                    //
+                    // That is not cosmetic. An operator reading it would size the
+                    // wrong filesystem, and this product has already shipped one
+                    // bug from the same assumption: an update rolled itself back
+                    // after chmod'ing ${INSTALL_DIR}/quarantine on a server whose
+                    // quarantine was at /home/.serverscrub/quarantine.
+                    'defaults' => [
+                        'quarantine_dir' => QUARANTINE_DIR,
+                        'log_dir'        => SG_LOGS,
+                    ],
+                    'settings' => [
+                        'quarantine_dir'            => Database::setting('quarantine_dir', ''),
+                        'log_dir'                   => Database::setting('log_dir', ''),
+                        'log_retention_days'        => (int)Database::setting('log_retention_days', '30'),
+                        'quarantine_retention_days' => (int)Database::setting('quarantine_retention_days', '90'),
+                        'db_max_waf_events'         => (int)Database::setting('db_max_waf_events', '100000'),
+                        'db_max_security_events'    => (int)Database::setting('db_max_security_events', '50000'),
+                        'db_max_cron_log'           => (int)Database::setting('db_max_cron_log', '1000'),
+                        'monitor_log_max_mb'        => (int)Database::setting('monitor_log_max_mb', '50'),
+                    ],
+                ]];
+            })();
         // POST storage/prune — run cleanup immediately
-        'prune' => $method === 'POST' ? (function() {
-            $quarDir = Database::storagePath('quarantine');
-            $logDir  = Database::storagePath('logs');
+        case 'prune':
+            return $method === 'POST' ? (function() {
+                $quarDir = Database::storagePath('quarantine');
+                $logDir  = Database::storagePath('logs');
 
-            $logDays   = (int)Database::setting('log_retention_days', '30');
-            $logCutoff = time() - ($logDays * 86400);
-            $logsDeleted = 0;
-            if (is_dir($logDir)) {
-                foreach (glob($logDir . '/*.log') as $f) {
-                    if (filemtime($f) < $logCutoff && basename($f) !== 'monitor.log') {
-                        @unlink($f); $logsDeleted++;
+                $logDays   = (int)Database::setting('log_retention_days', '30');
+                $logCutoff = time() - ($logDays * 86400);
+                $logsDeleted = 0;
+                if (is_dir($logDir)) {
+                    foreach (glob($logDir . '/*.log') as $f) {
+                        if (filemtime($f) < $logCutoff && basename($f) !== 'monitor.log') {
+                            @unlink($f); $logsDeleted++;
+                        }
                     }
                 }
-            }
 
-            $maxMonMB = (int)Database::setting('monitor_log_max_mb', '50');
-            $monLog   = $logDir . '/monitor.log';
-            $monRotated = false;
-            if (file_exists($monLog) && filesize($monLog) > ($maxMonMB * 1048576)) {
-                @rename($monLog, $monLog . '.' . date('Ymd-His') . '.old');
-                $monRotated = true;
-            }
+                $maxMonMB = (int)Database::setting('monitor_log_max_mb', '50');
+                $monLog   = $logDir . '/monitor.log';
+                $monRotated = false;
+                if (file_exists($monLog) && filesize($monLog) > ($maxMonMB * 1048576)) {
+                    @rename($monLog, $monLog . '.' . date('Ymd-His') . '.old');
+                    $monRotated = true;
+                }
 
-            $qDays   = (int)Database::setting('quarantine_retention_days', '90');
-            $qCutoff = time() - ($qDays * 86400);
-            $qDel    = 0;
-            if (is_dir($quarDir)) {
-                foreach (new RecursiveIteratorIterator(
-                    new RecursiveDirectoryIterator($quarDir, FilesystemIterator::SKIP_DOTS)
-                ) as $f) {
-                    if ($f->isFile() && $f->getMTime() < $qCutoff) {
-                        @unlink($f->getPathname()); $qDel++;
+                $qDays   = (int)Database::setting('quarantine_retention_days', '90');
+                $qCutoff = time() - ($qDays * 86400);
+                $qDel    = 0;
+                if (is_dir($quarDir)) {
+                    foreach (new RecursiveIteratorIterator(
+                        new RecursiveDirectoryIterator($quarDir, FilesystemIterator::SKIP_DOTS)
+                    ) as $f) {
+                        if ($f->isFile() && $f->getMTime() < $qCutoff) {
+                            @unlink($f->getPathname()); $qDel++;
+                        }
+                    }
+                    foreach (glob($quarDir . '/????-??-??') as $d) {
+                        if (is_dir($d) && count(scandir($d)) === 2) @rmdir($d);
                     }
                 }
-                foreach (glob($quarDir . '/????-??-??') as $d) {
-                    if (is_dir($d) && count(scandir($d)) === 2) @rmdir($d);
-                }
-            }
 
-            $dbPruned = Database::pruneOldRecords();
-            Logger::info("Storage pruned: logs=$logsDeleted, quarantine=$qDel, monitor_rotated=" . ($monRotated?'yes':'no'));
+                $dbPruned = Database::pruneOldRecords();
+                Logger::info("Storage pruned: logs=$logsDeleted, quarantine=$qDel, monitor_rotated=" . ($monRotated?'yes':'no'));
 
-            return ['success' => true, 'data' => [
-                'logs_deleted'       => $logsDeleted,
-                'monitor_rotated'    => $monRotated,
-                'quarantine_deleted' => $qDel,
-                'db_pruned'          => $dbPruned,
-            ]];
-        })() : ['success' => false, 'code' => 405],
-
+                return ['success' => true, 'data' => [
+                    'logs_deleted'       => $logsDeleted,
+                    'monitor_rotated'    => $monRotated,
+                    'quarantine_deleted' => $qDel,
+                    'db_pruned'          => $dbPruned,
+                ]];
+            })() : ['success' => false, 'code' => 405];
         // POST storage/save-settings
-        'save-settings' => $method === 'POST' ? (function() use ($body) {
-            $allowed = [
-                'quarantine_dir', 'log_dir', 'log_retention_days',
-                'quarantine_retention_days', 'db_max_waf_events',
-                'db_max_security_events', 'db_max_cron_log', 'monitor_log_max_mb',
-            ];
-            foreach ($allowed as $key) {
-                if (!array_key_exists($key, $body)) continue;
-                $val = trim((string)$body[$key]);
-                if (in_array($key, ['quarantine_dir', 'log_dir']) && $val !== '') {
-                    if (!str_starts_with($val, '/'))
-                        return ['success' => false, 'error' => "$key must be an absolute path", 'code' => 400];
-                    if (!is_dir($val) && !@mkdir($val, 0750, true))
-                        return ['success' => false, 'error' => "Cannot create directory: $val", 'code' => 400];
+        case 'save-settings':
+            return $method === 'POST' ? (function() use ($body) {
+                $allowed = [
+                    'quarantine_dir', 'log_dir', 'log_retention_days',
+                    'quarantine_retention_days', 'db_max_waf_events',
+                    'db_max_security_events', 'db_max_cron_log', 'monitor_log_max_mb',
+                ];
+                foreach ($allowed as $key) {
+                    if (!array_key_exists($key, $body)) continue;
+                    $val = trim((string)$body[$key]);
+                    if (in_array($key, ['quarantine_dir', 'log_dir']) && $val !== '') {
+                        if (!(strpos($val, '/') === 0))
+                            return ['success' => false, 'error' => "$key must be an absolute path", 'code' => 400];
+                        if (!is_dir($val) && !@mkdir($val, 0750, true))
+                            return ['success' => false, 'error' => "Cannot create directory: $val", 'code' => 400];
+                    }
+                    Database::setSetting($key, $val);
                 }
-                Database::setSetting($key, $val);
-            }
-            return ['success' => true];
-        })() : ['success' => false, 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+                return ['success' => true];
+            })() : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1400,35 +1413,43 @@ function routeStorage(string $action, string $method, array $body, ?array $user)
 // ════════════════════════════════════════════════════════════════════════════
 function routeBotShield(string $action, string $method, array $body, array $q, ?array $user): array {
     $bs = new BotShield();
-    return match($action) {
-        'stats'           => ['success' => true, 'data' => $bs->getStats()],
+    switch ($action) {
+        case 'stats': return ['success' => true, 'data' => $bs->getStats()];
         // Paged, and the page carries its own total so the UI can say "50 of
         // 1,284" rather than showing fifty rows and implying that is all.
-        'events'          => ['success' => true,
-                              'data' => $bs->getBotEvents(
-                                  (int)($q['limit'] ?? BotShield::MIN_PAGE),
-                                  (int)($q['offset'] ?? 0))],
-        'blocked'         => ['success' => true,
-                              'data' => $bs->getBlockedBots(
-                                  (int)($q['limit'] ?? BotShield::MIN_PAGE),
-                                  (int)($q['offset'] ?? 0))],
-        'whitelist'       => $method === 'GET'
-            ? ['success' => true, 'data' => $bs->getWhitelistedBots()]
-            : ['success' => $bs->addWhitelist($body['pattern'] ?? '', $body['note'] ?? '')],
-        'remove-whitelist'=> $method === 'POST'
-            ? ['success' => $bs->removeWhitelist((int)($body['id'] ?? 0))]
-            : ['success' => false, 'code' => 405],
-        'block'           => $method === 'POST'
-            ? ['success' => $bs->blockBot($body['ip'] ?? '', $body['ua'] ?? '', $body['reason'] ?? 'Manual')]
-            : ['success' => false, 'code' => 405],
-        'unblock'         => $method === 'POST'
-            ? ['success' => $bs->unblockBot($body['ip'] ?? '')]
-            : ['success' => false, 'code' => 405],
-        'scan', 'analyze' => $method === 'POST'
-            ? ['success' => true, 'data' => $bs->runAnalysis()]
-            : ['success' => false, 'code' => 405],
-        default           => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'events':
+            return ['success' => true,
+                                  'data' => $bs->getBotEvents(
+                                      (int)($q['limit'] ?? BotShield::MIN_PAGE),
+                                      (int)($q['offset'] ?? 0))];
+        case 'blocked':
+            return ['success' => true,
+                                  'data' => $bs->getBlockedBots(
+                                      (int)($q['limit'] ?? BotShield::MIN_PAGE),
+                                      (int)($q['offset'] ?? 0))];
+        case 'whitelist':
+            return $method === 'GET'
+                ? ['success' => true, 'data' => $bs->getWhitelistedBots()]
+                : ['success' => $bs->addWhitelist($body['pattern'] ?? '', $body['note'] ?? '')];
+        case 'remove-whitelist':
+            return $method === 'POST'
+                ? ['success' => $bs->removeWhitelist((int)($body['id'] ?? 0))]
+                : ['success' => false, 'code' => 405];
+        case 'block':
+            return $method === 'POST'
+                ? ['success' => $bs->blockBot($body['ip'] ?? '', $body['ua'] ?? '', $body['reason'] ?? 'Manual')]
+                : ['success' => false, 'code' => 405];
+        case 'unblock':
+            return $method === 'POST'
+                ? ['success' => $bs->unblockBot($body['ip'] ?? '')]
+                : ['success' => false, 'code' => 405];
+        case 'scan':
+        case 'analyze':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => $bs->runAnalysis()]
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1436,17 +1457,19 @@ function routeBotShield(string $action, string $method, array $body, array $q, ?
 // ════════════════════════════════════════════════════════════════════════════
 function routeCMSGuard(string $action, string $method, array $body, array $q, ?array $user): array {
     $cg = new CMSGuard();
-    return match($action) {
-        'stats'    => ['success' => true, 'data' => $cg->getStats()],
-        'installs' => ['success' => true, 'data' => $cg->getInstalls()],
-        'scan'     => $method === 'POST'
-            ? ['success' => true, 'data' => $cg->runScan()]
-            : ['success' => false, 'code' => 405],
-        'check'    => $method === 'POST'
-            ? ['success' => true, 'data' => $cg->checkInstall((int)($body['id'] ?? 0))]
-            : ['success' => false, 'code' => 405],
-        default    => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+    switch ($action) {
+        case 'stats': return ['success' => true, 'data' => $cg->getStats()];
+        case 'installs': return ['success' => true, 'data' => $cg->getInstalls()];
+        case 'scan':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => $cg->runScan()]
+                : ['success' => false, 'code' => 405];
+        case 'check':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => $cg->checkInstall((int)($body['id'] ?? 0))]
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1459,79 +1482,79 @@ function routeCMSGuard(string $action, string $method, array $body, array $q, ?a
 // hunts for -- and the product was still wrong. There was no way to say so
 // from the panel.
 function routeExclusions(string $action, string $method, array $body, array $q, ?array $user): array {
-    return match($action) {
-        'list' => ['success' => true, 'data' => [
-            'user'    => Heuristics::userExclusions(),
-            'raw'     => Database::setting(Heuristics::SETTING, ''),
-            'builtin' => Heuristics::builtinExclusions(),
-        ]],
-
-        'save' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  $list = Heuristics::setExclusions((string)($body['raw'] ?? ''));
-                  return ['success' => true, 'data' => ['user' => $list]];
-              })()
-            : ['success' => false, 'code' => 405],
-
+    switch ($action) {
+        case 'list':
+            return ['success' => true, 'data' => [
+                'user'    => Heuristics::userExclusions(),
+                'raw'     => Database::setting(Heuristics::SETTING, ''),
+                'builtin' => Heuristics::builtinExclusions(),
+            ]];
+        case 'save':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      $list = Heuristics::setExclusions((string)($body['raw'] ?? ''));
+                      return ['success' => true, 'data' => ['user' => $list]];
+                  })()
+                : ['success' => false, 'code' => 405];
         // One click from a threat row. The operator is looking at the finding
         // when they decide it is wrong, which is the only moment they have all
         // the context.
-        'add' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  $path = (string)($body['path'] ?? '');
-                  if ($path === '') {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'No path given'];
-                  }
-                  return ['success' => true,
-                          'data' => ['user' => Heuristics::addExclusion($path)]];
-              })()
-            : ['success' => false, 'code' => 405],
-
+        case 'add':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      $path = (string)($body['path'] ?? '');
+                      if ($path === '') {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'No path given'];
+                      }
+                      return ['success' => true,
+                              'data' => ['user' => Heuristics::addExclusion($path)]];
+                  })()
+                : ['success' => false, 'code' => 405];
         // Bulk. One vendor tree routinely produces several findings at once,
         // and excluding them individually is how an exclusion list becomes its
         // own unreadable mess.
-        'add-many' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  $paths = (array)($body['paths'] ?? []);
-                  if ($paths === []) {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'No paths given'];
-                  }
-                  if (count($paths) > 200) {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'Refusing more than 200 at once — '
-                                       . 'an exclusion list that long is not '
-                                       . 'reviewable'];
-                  }
-                  $before = count(Heuristics::userExclusions());
-                  $list   = Heuristics::userExclusions();
-                  foreach ($paths as $path) {
-                      $list = Heuristics::addExclusion((string)$path);
-                  }
-                  return ['success' => true, 'data' => [
-                      'user'  => $list,
-                      'added' => max(0, count($list) - $before),
-                  ]];
-              })()
-            : ['success' => false, 'code' => 405],
-
+        case 'add-many':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      $paths = (array)($body['paths'] ?? []);
+                      if ($paths === []) {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'No paths given'];
+                      }
+                      if (count($paths) > 200) {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'Refusing more than 200 at once — '
+                                           . 'an exclusion list that long is not '
+                                           . 'reviewable'];
+                      }
+                      $before = count(Heuristics::userExclusions());
+                      $list   = Heuristics::userExclusions();
+                      foreach ($paths as $path) {
+                          $list = Heuristics::addExclusion((string)$path);
+                      }
+                      return ['success' => true, 'data' => [
+                          'user'  => $list,
+                          'added' => max(0, count($list) - $before),
+                      ]];
+                  })()
+                : ['success' => false, 'code' => 405];
         // Would this path be scanned? Lets the operator check a rule before
         // trusting it, rather than finding out at the next scan.
-        'test' => (function () use ($q) {
-                  $path = (string)($q['path'] ?? '');
-                  return ['success' => true, 'data' => [
-                      'path'     => $path,
-                      'excluded' => $path !== '' && Heuristics::isExcluded($path),
-                      'by'       => $path !== '' ? Heuristics::excludedBy($path) : null,
-                  ]];
-              })(),
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'test':
+            return (function () use ($q) {
+                      $path = (string)($q['path'] ?? '');
+                      return ['success' => true, 'data' => [
+                          'path'     => $path,
+                          'excluded' => $path !== '' && Heuristics::isExcluded($path),
+                          'by'       => $path !== '' ? Heuristics::excludedBy($path) : null,
+                      ]];
+                  })();
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1547,72 +1570,72 @@ function routeExclusions(string $action, string $method, array $body, array $q, 
 // is full of eval(base64_decode(...)) and always will be; excluding
 // /opt/ai-bolit/ would also hide anything an attacker later dropped beside it.
 function routeVerdicts(string $action, string $method, array $body, array $q, ?array $user): array {
-    return match($action) {
-        'list' => ['success' => true, 'data' => [
-            'verdicts' => Verdicts::listAll((int)($q['limit'] ?? 500)),
-            'stats'    => Verdicts::stats(),
-        ]],
-
+    switch ($action) {
+        case 'list':
+            return ['success' => true, 'data' => [
+                'verdicts' => Verdicts::listAll((int)($q['limit'] ?? 500)),
+                'stats'    => Verdicts::stats(),
+            ]];
         // One finding.
-        'clear' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  $id = (int)($body['id'] ?? 0);
-                  if ($id <= 0) {
-                      return ['success' => false, 'error' => 'No finding id given',
-                              'code' => 400];
-                  }
-                  return Verdicts::clearThreat(
-                      $id,
-                      (string)($body['note'] ?? ''),
-                      (string)($user['username'] ?? '')
-                  );
-              })()
-            : ['success' => false, 'code' => 405],
-
+        case 'clear':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      $id = (int)($body['id'] ?? 0);
+                      if ($id <= 0) {
+                          return ['success' => false, 'error' => 'No finding id given',
+                                  'code' => 400];
+                      }
+                      return Verdicts::clearThreat(
+                          $id,
+                          (string)($body['note'] ?? ''),
+                          (string)($user['username'] ?? '')
+                      );
+                  })()
+                : ['success' => false, 'code' => 405];
         // Several findings. Five rows from one vendor tree is the normal case --
         // that is exactly what ai-bolit produced -- so clearing them one
         // confirmation at a time is the wrong shape of work.
-        'clear-many' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  $ids = $body['ids'] ?? [];
-                  if (!is_array($ids) || !$ids) {
-                      return ['success' => false, 'error' => 'No findings given',
-                              'code' => 400];
-                  }
-                  // Bounded: an unbounded list here means an unbounded number of
-                  // hash_file() calls in one request on a box that is already
-                  // running a scan.
-                  if (count($ids) > 500) {
-                      return ['success' => false,
-                              'error' => 'Too many at once (max 500)', 'code' => 400];
-                  }
-                  return Verdicts::clearMany(
-                      $ids,
-                      (string)($body['note'] ?? ''),
-                      (string)($user['username'] ?? '')
-                  );
-              })()
-            : ['success' => false, 'code' => 405],
-
+        case 'clear-many':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      $ids = $body['ids'] ?? [];
+                      if (!is_array($ids) || !$ids) {
+                          return ['success' => false, 'error' => 'No findings given',
+                                  'code' => 400];
+                      }
+                      // Bounded: an unbounded list here means an unbounded number of
+                      // hash_file() calls in one request on a box that is already
+                      // running a scan.
+                      if (count($ids) > 500) {
+                          return ['success' => false,
+                                  'error' => 'Too many at once (max 500)', 'code' => 400];
+                      }
+                      return Verdicts::clearMany(
+                          $ids,
+                          (string)($body['note'] ?? ''),
+                          (string)($user['username'] ?? '')
+                      );
+                  })()
+                : ['success' => false, 'code' => 405];
         // Changed your mind. The file becomes reportable again immediately.
-        'revoke' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  return Verdicts::revoke((int)($body['id'] ?? 0));
-              })()
-            : ['success' => false, 'code' => 405],
-
-        'prune' => $method === 'POST'
-            ? (function () use ($user) {
-                  Auth::requireRole('admin', $user);
-                  return Verdicts::pruneMissing();
-              })()
-            : ['success' => false, 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'revoke':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      return Verdicts::revoke((int)($body['id'] ?? 0));
+                  })()
+                : ['success' => false, 'code' => 405];
+        case 'prune':
+            return $method === 'POST'
+                ? (function () use ($user) {
+                      Auth::requireRole('admin', $user);
+                      return Verdicts::pruneMissing();
+                  })()
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1627,43 +1650,42 @@ function routeVerdicts(string $action, string $method, array $body, array $q, ?a
 function routeHttpFlood(string $action, string $method, array $body, array $q, ?array $user): array {
     Auth::requireRole('admin', $user);
 
-    return match($action) {
-        'status' => ['success' => true, 'data' => HttpFlood::status()],
-
+    switch ($action) {
+        case 'status': return ['success' => true, 'data' => HttpFlood::status()];
         // What it WOULD act on, without acting. The panel can show findings
         // before anybody turns blocking on.
-        'analyse' => ['success' => true, 'data' => HttpFlood::analyse()],
-
-        'offenders' => ['success' => true,
-                        'data' => HttpFlood::offenders((int)($q['limit'] ?? 100))],
-
-        'run' => $method === 'POST'
-            ? HttpFlood::enforce()
-            : ['success' => false, 'code' => 405],
-
-        'release' => $method === 'POST'
-            ? HttpFlood::release((string)($body['ip'] ?? ''))
-            : ['success' => false, 'code' => 405],
-
-        'save' => $method === 'POST'
-            ? (function () use ($body) {
-                  foreach ([
-                      'hf_enabled', 'hf_monitor_only', 'hf_window',
-                      'hf_miss_threshold', 'hf_rate_threshold',
-                      'hf_endpoint_threshold', 'hf_block_secs',
-                  ] as $k) {
-                      if (array_key_exists($k, $body)) {
-                          Database::setSetting($k, (string) $body[$k]);
+        case 'analyse':
+            return ['success' => true, 'data' => HttpFlood::analyse()];
+        case 'offenders':
+            return ['success' => true,
+                            'data' => HttpFlood::offenders((int)($q['limit'] ?? 100))];
+        case 'run':
+            return $method === 'POST'
+                ? HttpFlood::enforce()
+                : ['success' => false, 'code' => 405];
+        case 'release':
+            return $method === 'POST'
+                ? HttpFlood::release((string)($body['ip'] ?? ''))
+                : ['success' => false, 'code' => 405];
+        case 'save':
+            return $method === 'POST'
+                ? (function () use ($body) {
+                      foreach ([
+                          'hf_enabled', 'hf_monitor_only', 'hf_window',
+                          'hf_miss_threshold', 'hf_rate_threshold',
+                          'hf_endpoint_threshold', 'hf_block_secs',
+                      ] as $k) {
+                          if (array_key_exists($k, $body)) {
+                              Database::setSetting($k, (string) $body[$k]);
+                          }
                       }
-                  }
-                  // Report the EFFECTIVE values, clamped, so the panel never
-                  // shows a threshold the detector is not actually using.
-                  return ['success' => true, 'data' => HttpFlood::status()];
-              })()
-            : ['success' => false, 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+                      // Report the EFFECTIVE values, clamped, so the panel never
+                      // shows a threshold the detector is not actually using.
+                      return ['success' => true, 'data' => HttpFlood::status()];
+                  })()
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1681,62 +1703,61 @@ function routeHttpFlood(string $action, string $method, array $body, array $q, ?
 function routeMailQueue(string $action, string $method, array $body, array $q, ?array $user): array {
     Auth::requireRole('admin', $user);
 
-    return match($action) {
-        'summary' => ['success' => true, 'data' => MailQueue::summary()],
-
+    switch ($action) {
+        case 'summary': return ['success' => true, 'data' => MailQueue::summary()];
         // The listing. Filtering happens against a cached snapshot, so paging
         // and refining a search do not re-run `exim -bp` on a large queue.
-        'search' => ['success' => true, 'data' => MailQueue::search([
-            'direction'       => (string)($q['direction'] ?? 'any'),
-            'state'           => (string)($q['state'] ?? 'any'),
-            'older_than_mins' => (int)($q['older'] ?? 0),
-            'field'           => (string)($q['field'] ?? ''),
-            'op'              => (string)($q['op'] ?? 'contains'),
-            'text'            => (string)($q['text'] ?? ''),
-            'negate'          => !empty($q['negate']),
-            'sort'            => (string)($q['sort'] ?? 'newest'),
-            'limit'           => (int)($q['limit'] ?? 100),
-            'offset'          => (int)($q['offset'] ?? 0),
-            'refresh'         => !empty($q['refresh']),
-        ])],
-
+        case 'search':
+            return ['success' => true, 'data' => MailQueue::search([
+                'direction'       => (string)($q['direction'] ?? 'any'),
+                'state'           => (string)($q['state'] ?? 'any'),
+                'older_than_mins' => (int)($q['older'] ?? 0),
+                'field'           => (string)($q['field'] ?? ''),
+                'op'              => (string)($q['op'] ?? 'contains'),
+                'text'            => (string)($q['text'] ?? ''),
+                'negate'          => !empty($q['negate']),
+                'sort'            => (string)($q['sort'] ?? 'newest'),
+                'limit'           => (int)($q['limit'] ?? 100),
+                'offset'          => (int)($q['offset'] ?? 0),
+                'refresh'         => !empty($q['refresh']),
+            ])];
         // What the main log says about one message. Time-limited: exigrep
         // scans the whole of exim_mainlog, which on a busy server is hundreds
         // of megabytes.
-        'log' => ['success' => true,
-                  'data' => MailQueue::deliveryLog((string)($q['id'] ?? ''))],
-
+        case 'log':
+            return ['success' => true,
+                      'data' => MailQueue::deliveryLog((string)($q['id'] ?? ''))];
         // Actions reuse MailGuard's implementations rather than reimplementing
         // the id validation, the caps and the "left the queue" check. Two
         // copies of a destructive path is one too many.
-        'deliver' => $method === 'POST'
-            ? (function () use ($body) {
-                  if (empty($body['confirm'])) {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'Forcing delivery must be confirmed — it '
-                                       . 'sends the selected messages and thaws '
-                                       . 'any that are frozen'];
-                  }
-                  $r = MailGuard::deliverMessages((array)($body['ids'] ?? []));
-                  MailQueue::invalidate();
-                  return ['success' => true, 'data' => $r];
-              })()
-            : ['success' => false, 'code' => 405],
-
-        'delete' => $method === 'POST'
-            ? (function () use ($body) {
-                  if (empty($body['confirm'])) {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'Deleting queued mail must be confirmed'];
-                  }
-                  $r = MailGuard::deleteMessages((array)($body['ids'] ?? []));
-                  MailQueue::invalidate();
-                  return ['success' => true, 'data' => $r];
-              })()
-            : ['success' => false, 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'deliver':
+            return $method === 'POST'
+                ? (function () use ($body) {
+                      if (empty($body['confirm'])) {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'Forcing delivery must be confirmed — it '
+                                           . 'sends the selected messages and thaws '
+                                           . 'any that are frozen'];
+                      }
+                      $r = MailGuard::deliverMessages((array)($body['ids'] ?? []));
+                      MailQueue::invalidate();
+                      return ['success' => true, 'data' => $r];
+                  })()
+                : ['success' => false, 'code' => 405];
+        case 'delete':
+            return $method === 'POST'
+                ? (function () use ($body) {
+                      if (empty($body['confirm'])) {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'Deleting queued mail must be confirmed'];
+                      }
+                      $r = MailGuard::deleteMessages((array)($body['ids'] ?? []));
+                      MailQueue::invalidate();
+                      return ['success' => true, 'data' => $r];
+                  })()
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1749,49 +1770,48 @@ function routeMailQueue(string $action, string $method, array $body, array $q, ?
 // for. Throttling exists, takes an explicit limit, and is reversible by setting
 // it back.
 function routeMailGuard(string $action, string $method, array $body, array $q, ?array $user): array {
-    return match($action) {
-        'status' => ['success' => true, 'data' => MailGuard::status()],
-
-        'senders' => ['success' => true,
-                      'data' => MailGuard::topSenders((int)($q['hours'] ?? 24),
-                                                      (int)($q['limit'] ?? 25))],
-
+    switch ($action) {
+        case 'status': return ['success' => true, 'data' => MailGuard::status()];
+        case 'senders':
+            return ['success' => true,
+                          'data' => MailGuard::topSenders((int)($q['hours'] ?? 24),
+                                                          (int)($q['limit'] ?? 25))];
         // Looking in the queue. Read-only and bounded: the panel shows a
         // page, never the whole queue -- `exim -bp` on 93,000 messages is
         // megabytes of text on a server that is already struggling.
-        'queue' => ['success' => true,
-                    'data' => MailGuard::queueList(
-                        !empty($q['frozen']),
-                        (int)($q['limit'] ?? 200),
-                        (string)($q['search'] ?? ''))],
-
+        case 'queue':
+            return ['success' => true,
+                        'data' => MailGuard::queueList(
+                            !empty($q['frozen']),
+                            (int)($q['limit'] ?? 200),
+                            (string)($q['search'] ?? ''))];
         // Headers only, never the body. The body is a customer's private mail
         // and nothing here needs it to tell a relay from a receipt.
-        'message' => ['success' => true,
-                      'data' => MailGuard::messageHeaders((string)($q['id'] ?? ''))],
-
+        case 'message':
+            return ['success' => true,
+                          'data' => MailGuard::messageHeaders((string)($q['id'] ?? ''))];
         // The only destructive route in this module. Per-message, confirmed,
         // capped, and logged with what was destroyed BEFORE destroying it --
         // afterwards there is nothing left to log.
-        'delete' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  if (empty($body['confirm'])) {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'Deleting queued mail must be confirmed '
-                                       . 'explicitly — the queue holds real customer '
-                                       . 'mail alongside anything else'];
-                  }
-                  $ids = (array)($body['ids'] ?? []);
-                  if ($ids === []) {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'Select the messages to delete. There is no '
-                                       . '"empty the queue" action by design.'];
-                  }
-                  return ['success' => true, 'data' => MailGuard::deleteMessages($ids)];
-              })()
-            : ['success' => false, 'code' => 405],
-
+        case 'delete':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      if (empty($body['confirm'])) {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'Deleting queued mail must be confirmed '
+                                           . 'explicitly — the queue holds real customer '
+                                           . 'mail alongside anything else'];
+                      }
+                      $ids = (array)($body['ids'] ?? []);
+                      if ($ids === []) {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'Select the messages to delete. There is no '
+                                           . '"empty the queue" action by design.'];
+                      }
+                      return ['success' => true, 'data' => MailGuard::deleteMessages($ids)];
+                  })()
+                : ['success' => false, 'code' => 405];
         // One message in full: sender, recipients, subject, attachments and
         // the first 1,000 characters of the body.
         //
@@ -1800,39 +1820,39 @@ function routeMailGuard(string $action, string $method, array $body, array $q, ?
         // that is still true of the automatic detection, and this runs only
         // when an operator opens a specific message. Reading a customer's mail
         // should leave a mark.
-        'view' => ['success' => true,
-                   'data' => MailGuard::messageView(
-                       (string)($q['id'] ?? ''),
-                       (string)($user['username'] ?? ''))],
-
+        case 'view':
+            return ['success' => true,
+                       'data' => MailGuard::messageView(
+                           (string)($q['id'] ?? ''),
+                           (string)($user['username'] ?? ''))];
         // An operator judging an attachment malicious. Recorded with its
         // sha256 so the malware scanner can recognise the same bytes on disk.
-        'flag-attachment' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  return MailGuard::flagAttachment(
-                      (string)($body['id'] ?? ''),
-                      (string)($body['filename'] ?? ''),
-                      (string)($body['sha256'] ?? ''),
-                      (string)($body['content_type'] ?? ''),
-                      (int)($body['bytes'] ?? 0),
-                      (string)($body['note'] ?? ''),
-                      (string)($user['username'] ?? ''));
-              })()
-            : ['success' => false, 'code' => 405],
-
-        'unflag-attachment' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  return MailGuard::unflagAttachment(
-                      (string)($body['id'] ?? ''), (string)($body['filename'] ?? ''));
-              })()
-            : ['success' => false, 'code' => 405],
-
-        'flagged' => ['success' => true,
-                      'data' => MailGuard::flaggedAttachments(
-                          (int)($q['limit'] ?? 200))],
-
+        case 'flag-attachment':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      return MailGuard::flagAttachment(
+                          (string)($body['id'] ?? ''),
+                          (string)($body['filename'] ?? ''),
+                          (string)($body['sha256'] ?? ''),
+                          (string)($body['content_type'] ?? ''),
+                          (int)($body['bytes'] ?? 0),
+                          (string)($body['note'] ?? ''),
+                          (string)($user['username'] ?? ''));
+                  })()
+                : ['success' => false, 'code' => 405];
+        case 'unflag-attachment':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      return MailGuard::unflagAttachment(
+                          (string)($body['id'] ?? ''), (string)($body['filename'] ?? ''));
+                  })()
+                : ['success' => false, 'code' => 405];
+        case 'flagged':
+            return ['success' => true,
+                          'data' => MailGuard::flaggedAttachments(
+                              (int)($q['limit'] ?? 200))];
         // Force a delivery attempt — cPanel's "Deliver" button.
         //
         // Confirmed like deletion, and for a sharper reason: this SENDS. On a
@@ -1840,68 +1860,67 @@ function routeMailGuard(string $action, string $method, array $body, array $q, ?
         // pushes selected queue entries out to the internet is the wrong
         // control to build. Capped in MailGuard at 100 because each one is a
         // live SMTP conversation, not a local unlink.
-        'deliver' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  if (empty($body['confirm'])) {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'Forcing delivery must be confirmed '
-                                       . 'explicitly — it sends the selected '
-                                       . 'messages, and thaws any that are frozen'];
-                  }
-                  $ids = (array)($body['ids'] ?? []);
-                  if ($ids === []) {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'Select the messages to deliver. There is '
-                                       . 'no "flush the whole queue" action by design.'];
-                  }
-                  return ['success' => true,
-                          'data' => MailGuard::deliverMessages($ids)];
-              })()
-            : ['success' => false, 'code' => 405],
-
-        'settings' => ['success' => true, 'data' => MailGuard::settings()],
-
+        case 'deliver':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      if (empty($body['confirm'])) {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'Forcing delivery must be confirmed '
+                                           . 'explicitly — it sends the selected '
+                                           . 'messages, and thaws any that are frozen'];
+                      }
+                      $ids = (array)($body['ids'] ?? []);
+                      if ($ids === []) {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'Select the messages to deliver. There is '
+                                           . 'no "flush the whole queue" action by design.'];
+                      }
+                      return ['success' => true,
+                              'data' => MailGuard::deliverMessages($ids)];
+                  })()
+                : ['success' => false, 'code' => 405];
+        case 'settings': return ['success' => true, 'data' => MailGuard::settings()];
         // Saves through MailGuard's own clamps and reports anything it had to
         // adjust, so the panel never displays a threshold the detector is not
         // actually using.
-        'save-settings' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  return ['success' => true,
-                          'data' => MailGuard::saveSettings($body)];
-              })()
-            : ['success' => false, 'code' => 405],
-
+        case 'save-settings':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      return ['success' => true,
+                              'data' => MailGuard::saveSettings($body)];
+                  })()
+                : ['success' => false, 'code' => 405];
         // Read the log and judge it now. Safe: it only records.
-        'scan' => $method === 'POST'
-            ? (function () use ($user) {
-                  Auth::requireRole('admin', $user);
-                  return ['success' => true, 'data' => MailGuard::run()];
-              })()
-            : ['success' => false, 'code' => 405],
-
+        case 'scan':
+            return $method === 'POST'
+                ? (function () use ($user) {
+                      Auth::requireRole('admin', $user);
+                      return ['success' => true, 'data' => MailGuard::run()];
+                  })()
+                : ['success' => false, 'code' => 405];
         // Cap an account through cPanel's own per-account hourly limit, which
         // is the mechanism cPanel already enforces -- rather than a second one
         // exim would not consult. The caller must name the number: there is no
         // default, because the right cap for a newsletter is not the right cap
         // for a contact form.
-        'throttle' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  $acct = (string)($body['account'] ?? '');
-                  if (!isset($body['per_hour'])) {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'per_hour is required — pick a limit '
-                                       . 'deliberately rather than accepting a default'];
-                  }
-                  return ['success' => true,
-                          'data' => MailGuard::throttle($acct, (int)$body['per_hour'])];
-              })()
-            : ['success' => false, 'code' => 405],
-
-        default => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'throttle':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      $acct = (string)($body['account'] ?? '');
+                      if (!isset($body['per_hour'])) {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'per_hour is required — pick a limit '
+                                           . 'deliberately rather than accepting a default'];
+                      }
+                      return ['success' => true,
+                              'data' => MailGuard::throttle($acct, (int)$body['per_hour'])];
+                  })()
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1915,57 +1934,56 @@ function routeMailGuard(string $action, string $method, array $body, array $q, ?
 // blocked, and the addresses that must never be blocked include the operator's
 // own and the backup servers.
 function routeNetGuard(string $action, string $method, array $body, array $q, ?array $user): array {
-    return match($action) {
-        'status' => ['success' => true, 'data' => NetworkGuard::status()],
-
+    switch ($action) {
+        case 'status': return ['success' => true, 'data' => NetworkGuard::status()];
         // Run both detectors now. Safe to call: they only record.
-        'scan'   => $method === 'POST'
-            ? (function () use ($user) {
-                  Auth::requireRole('admin', $user);
-                  return ['success' => true, 'data' => NetworkGuard::run()];
-              })()
-            : ['success' => false, 'code' => 405],
-
+        case 'scan':
+            return $method === 'POST'
+                ? (function () use ($user) {
+                      Auth::requireRole('admin', $user);
+                      return ['success' => true, 'data' => NetworkGuard::run()];
+                  })()
+                : ['success' => false, 'code' => 405];
         // Outbound policy. DRY RUN unless explicitly told otherwise, because
         // getting this wrong breaks the server's own DNS, updates and backups
         // rather than blocking an attacker.
-        'egress-preview' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  $ports = array_map('intval', (array)($body['ports'] ?? []));
-                  return ['success' => true,
-                          'data' => NetworkGuard::applyEgress($ports, true)];
-              })()
-            : ['success' => false, 'code' => 405],
-
-        'egress-apply' => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  // The caller has to say so in as many words. A missing flag
-                  // is treated as "no", never as "probably yes".
-                  if (empty($body['confirm'])) {
-                      return ['success' => false, 'code' => 400,
-                              'error' => 'Outbound filtering must be confirmed '
-                                       . 'explicitly. Preview it first.'];
-                  }
-                  $ports = array_map('intval', (array)($body['ports'] ?? []));
-                  return ['success' => true,
-                          'data' => NetworkGuard::applyEgress($ports, false)];
-              })()
-            : ['success' => false, 'code' => 405],
-
-        'egress-clear' => $method === 'POST'
-            ? (function () use ($user) {
-                  Auth::requireRole('admin', $user);
-                  return ['success' => true, 'data' => NetworkGuard::clearEgress()];
-              })()
-            : ['success' => false, 'code' => 405],
-
-        'egress-defaults' => ['success' => true,
-                              'data' => NetworkGuard::defaultEgressPorts()],
-
-        default  => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'egress-preview':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      $ports = array_map('intval', (array)($body['ports'] ?? []));
+                      return ['success' => true,
+                              'data' => NetworkGuard::applyEgress($ports, true)];
+                  })()
+                : ['success' => false, 'code' => 405];
+        case 'egress-apply':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      // The caller has to say so in as many words. A missing flag
+                      // is treated as "no", never as "probably yes".
+                      if (empty($body['confirm'])) {
+                          return ['success' => false, 'code' => 400,
+                                  'error' => 'Outbound filtering must be confirmed '
+                                           . 'explicitly. Preview it first.'];
+                      }
+                      $ports = array_map('intval', (array)($body['ports'] ?? []));
+                      return ['success' => true,
+                              'data' => NetworkGuard::applyEgress($ports, false)];
+                  })()
+                : ['success' => false, 'code' => 405];
+        case 'egress-clear':
+            return $method === 'POST'
+                ? (function () use ($user) {
+                      Auth::requireRole('admin', $user);
+                      return ['success' => true, 'data' => NetworkGuard::clearEgress()];
+                  })()
+                : ['success' => false, 'code' => 405];
+        case 'egress-defaults':
+            return ['success' => true,
+                                  'data' => NetworkGuard::defaultEgressPorts()];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1984,67 +2002,67 @@ function routeNetGuard(string $action, string $method, array $body, array $q, ?a
 // administrator logging in through a VPN. The operator resolves a finding
 // after acting on it; the software does not act for them.
 function routeWPScan(string $action, string $method, array $body, array $q, ?array $user): array {
-    return match($action) {
-        'stats'    => ['success' => true, 'data' => WPDatabaseScanner::stats()],
-        'findings' => ['success' => true,
-                       'data' => WPDatabaseScanner::openFindings((int)($q['limit'] ?? 200))],
-
+    switch ($action) {
+        case 'stats': return ['success' => true, 'data' => WPDatabaseScanner::stats()];
+        case 'findings':
+            return ['success' => true,
+                           'data' => WPDatabaseScanner::openFindings((int)($q['limit'] ?? 200))];
         // Synchronous, with a budget. One connection and six queries per
         // install and this server has 503 of them, so the sweep stops when the
         // budget runs out and the next run resumes where it stopped. A request
         // that ran to completion over 503 installs would time out and leave
         // the operator with nothing.
-        'sweep'    => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  $budget = max(30, min(900, (int)($body['budget'] ?? 240)));
-                  $r = WPDatabaseScanner::sweep(null, $budget);
-                  Logger::info(sprintf('WP database sweep via API: %d/%d installs, '
-                                     . '%d findings', $r['scanned'], $r['installs'],
-                                       $r['findings']));
-                  return ['success' => true, 'data' => $r];
-              })()
-            : ['success' => false, 'code' => 405],
-
+        case 'sweep':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      $budget = max(30, min(900, (int)($body['budget'] ?? 240)));
+                      $r = WPDatabaseScanner::sweep(null, $budget);
+                      Logger::info(sprintf('WP database sweep via API: %d/%d installs, '
+                                         . '%d findings', $r['scanned'], $r['installs'],
+                                           $r['findings']));
+                      return ['success' => true, 'data' => $r];
+                  })()
+                : ['success' => false, 'code' => 405];
         // One install, on demand. Returns the findings without recording them,
         // so an operator can check a site they are working on without adding
         // rows to the list they are working through.
-        'install'  => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  $path = (string)($body['path'] ?? '');
-                  if ($path === '' || !is_dir($path)) {
-                      return ['success' => false, 'error' => 'No such install', 'code' => 400];
-                  }
-                  return ['success' => true,
-                          'data' => (new WPDatabaseScanner())->scanInstall($path)];
-              })()
-            : ['success' => false, 'code' => 405],
-
+        case 'install':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      $path = (string)($body['path'] ?? '');
+                      if ($path === '' || !is_dir($path)) {
+                          return ['success' => false, 'error' => 'No such install', 'code' => 400];
+                      }
+                      return ['success' => true,
+                              'data' => (new WPDatabaseScanner())->scanInstall($path)];
+                  })()
+                : ['success' => false, 'code' => 405];
         // Which drop-ins an install carries. Reported, not judged: real Redis
         // and Memcached caches exist. What the operator needs to know is that
         // the file is there at all, because it runs before every plugin on
         // every request including wp-login.php.
-        'dropins'  => (function () use ($q) {
-                  $path = (string)($q['path'] ?? '');
-                  if ($path === '' || !is_dir($path)) {
-                      return ['success' => false, 'error' => 'No such install', 'code' => 400];
-                  }
-                  return ['success' => true, 'data' => Heuristics::auditDropins($path)];
-              })(),
-
-        'resolve'  => $method === 'POST'
-            ? (function () use ($body, $user) {
-                  Auth::requireRole('admin', $user);
-                  $ok = WPDatabaseScanner::resolve((int)($body['id'] ?? 0),
-                                                   (string)($body['status'] ?? 'resolved'));
-                  return ['success' => $ok,
-                          'error' => $ok ? null : 'Unknown status'];
-              })()
-            : ['success' => false, 'code' => 405],
-
-        default    => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'dropins':
+            return (function () use ($q) {
+                      $path = (string)($q['path'] ?? '');
+                      if ($path === '' || !is_dir($path)) {
+                          return ['success' => false, 'error' => 'No such install', 'code' => 400];
+                      }
+                      return ['success' => true, 'data' => Heuristics::auditDropins($path)];
+                  })();
+        case 'resolve':
+            return $method === 'POST'
+                ? (function () use ($body, $user) {
+                      Auth::requireRole('admin', $user);
+                      $ok = WPDatabaseScanner::resolve((int)($body['id'] ?? 0),
+                                                       (string)($body['status'] ?? 'resolved'));
+                      return ['success' => $ok,
+                              'error' => $ok ? null : 'Unknown status'];
+                  })()
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2062,15 +2080,16 @@ function routeRootkit(string $action, string $method, array $body, array $q, ?st
     }
 
     $rk = new RootkitScanner();
-    return match($action) {
-        'status'   => ['success' => true, 'data' => $rk->getStatus()],
-        'scans'    => ['success' => true, 'data' => $rk->getScans((int)($q['limit'] ?? 10))],
-        'findings' => ['success' => true, 'data' => $rk->getFindings((int)($id ?? 0))],
-        'scan'     => $method === 'POST'
-            ? ['success' => true, 'data' => $rk->runScan($body['tool'] ?? 'rkhunter')]
-            : ['success' => false, 'code' => 405],
-        default    => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+    switch ($action) {
+        case 'status': return ['success' => true, 'data' => $rk->getStatus()];
+        case 'scans': return ['success' => true, 'data' => $rk->getScans((int)($q['limit'] ?? 10))];
+        case 'findings': return ['success' => true, 'data' => $rk->getFindings((int)($id ?? 0))];
+        case 'scan':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => $rk->runScan($body['tool'] ?? 'rkhunter')]
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2078,25 +2097,29 @@ function routeRootkit(string $action, string $method, array $body, array $q, ?st
 // ════════════════════════════════════════════════════════════════════════════
 function routeIntegrity(string $action, string $method, array $body, array $q, ?string $id, ?array $user): array {
     $fi = new FileIntegrity();
-    return match($action) {
-        'stats'      => ['success' => true, 'data' => $fi->getStats()],
-        'baselines'  => ['success' => true, 'data' => $fi->getBaselines()],
-        'changes'    => ['success' => true, 'data' => $fi->getChanges($q['status'] ?? '')],
-        'paths'      => ['success' => true, 'data' => $fi->getWatchedPaths()],
-        'baseline'   => $method === 'POST'
-            ? ['success' => true, 'data' => $fi->createBaseline($body['path'] ?? '/home')]
-            : ['success' => false, 'code' => 405],
-        'check'      => $method === 'POST'
-            ? ['success' => true, 'data' => $fi->runCheck($body['path'] ?? '')]
-            : ['success' => false, 'code' => 405],
-        'reset'      => $method === 'POST'
-            ? ['success' => $fi->resetBaseline($body['path'] ?? '')]
-            : ['success' => false, 'code' => 405],
-        'acknowledge'=> $method === 'POST'
-            ? ['success' => $fi->acknowledgeChange((int)($body['id'] ?? 0))]
-            : ['success' => false, 'code' => 405],
-        default      => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+    switch ($action) {
+        case 'stats': return ['success' => true, 'data' => $fi->getStats()];
+        case 'baselines': return ['success' => true, 'data' => $fi->getBaselines()];
+        case 'changes': return ['success' => true, 'data' => $fi->getChanges($q['status'] ?? '')];
+        case 'paths': return ['success' => true, 'data' => $fi->getWatchedPaths()];
+        case 'baseline':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => $fi->createBaseline($body['path'] ?? '/home')]
+                : ['success' => false, 'code' => 405];
+        case 'check':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => $fi->runCheck($body['path'] ?? '')]
+                : ['success' => false, 'code' => 405];
+        case 'reset':
+            return $method === 'POST'
+                ? ['success' => $fi->resetBaseline($body['path'] ?? '')]
+                : ['success' => false, 'code' => 405];
+        case 'acknowledge':
+            return $method === 'POST'
+                ? ['success' => $fi->acknowledgeChange((int)($body['id'] ?? 0))]
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2104,130 +2127,133 @@ function routeIntegrity(string $action, string $method, array $body, array $q, ?
 // ════════════════════════════════════════════════════════════════════════════
 function routePHPHard(string $action, string $method, array $body, array $q, ?array $user): array {
     $ph = new PHPHardening();
-    return match($action) {
-        'stats'            => ['success' => true, 'data' => $ph->getStats()],
-        'settings'         => ['success' => true, 'data' => $ph->getCurrentSettings()],
-        'recommendations'  => ['success' => true, 'data' => $ph->getRecommendations()],
-        'accounts'         => ['success' => true, 'data' => $ph->getCpanelAccounts()],
-        'account-settings' => ['success' => true, 'data' => $ph->getAccountPHPSettings($q['account'] ?? '')],
-        'apply'            => $method === 'POST'
-            ? ['success' => true, 'data' => $ph->applyHardening($body['settings'] ?? [])]
-            : ['success' => false, 'code' => 405],
-        'apply-account'    => $method === 'POST'
-            ? ['success' => true, 'data' => $ph->applyAccountHardening($body['account'] ?? '', $body['settings'] ?? [])]
-            : ['success' => false, 'code' => 405],
-        default            => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+    switch ($action) {
+        case 'stats': return ['success' => true, 'data' => $ph->getStats()];
+        case 'settings': return ['success' => true, 'data' => $ph->getCurrentSettings()];
+        case 'recommendations': return ['success' => true, 'data' => $ph->getRecommendations()];
+        case 'accounts': return ['success' => true, 'data' => $ph->getCpanelAccounts()];
+        case 'account-settings':
+            return ['success' => true, 'data' => $ph->getAccountPHPSettings($q['account'] ?? '')];
+        case 'apply':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => $ph->applyHardening($body['settings'] ?? [])]
+                : ['success' => false, 'code' => 405];
+        case 'apply-account':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => $ph->applyAccountHardening($body['account'] ?? '', $body['settings'] ?? [])]
+                : ['success' => false, 'code' => 405];
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }
 
 function routeUpdate(string $action, string $method, array $body, ?array $user): array {
     Auth::requireRole('admin', $user);
-    return match($action) {
+    switch ($action) {
         // Return cached update status (no network call — fast)
-        'status' => ['success' => true, 'data' => UpdateChecker::getCachedStatus()],
-
+        case 'status':
+            return ['success' => true, 'data' => UpdateChecker::getCachedStatus()];
         // Everything the Updates panel needs: the version comparison, whether
         // unattended updating is on, any live run, and -- when it will not
         // update -- the reason in words. "Will not update" with no reason is
         // what this field exists to prevent.
-        'auto'   => ['success' => true, 'data' => Updater::status()],
-
-        'set-auto' => $method === 'POST' ? (function () use ($body) {
-            foreach (['auto_update', 'auto_update_major'] as $k) {
-                if (array_key_exists($k, $body)) {
-                    Database::setSetting($k, !empty($body[$k]) ? '1' : '0');
-                }
-            }
-            if (!empty($body['autoupdate_time'])
-                && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string)$body['autoupdate_time'])) {
-                Database::setSetting('autoupdate_time', (string)$body['autoupdate_time']);
-            }
-            Logger::info('Automatic update settings changed: auto='
-                . Database::setting('auto_update', '1')
-                . ' major=' . Database::setting('auto_update_major', '0')
-                . ' at ' . Database::setting('autoupdate_time', '04:30'));
+        case 'auto':
             return ['success' => true, 'data' => Updater::status()];
-        })() : ['success' => false, 'code' => 405],
-
+        case 'set-auto':
+            return $method === 'POST' ? (function () use ($body) {
+                foreach (['auto_update', 'auto_update_major'] as $k) {
+                    if (array_key_exists($k, $body)) {
+                        Database::setSetting($k, !empty($body[$k]) ? '1' : '0');
+                    }
+                }
+                if (!empty($body['autoupdate_time'])
+                    && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string)$body['autoupdate_time'])) {
+                    Database::setSetting('autoupdate_time', (string)$body['autoupdate_time']);
+                }
+                Logger::info('Automatic update settings changed: auto='
+                    . Database::setting('auto_update', '1')
+                    . ' major=' . Database::setting('auto_update_major', '0')
+                    . ' at ' . Database::setting('autoupdate_time', '04:30'));
+                return ['success' => true, 'data' => Updater::status()];
+            })() : ['success' => false, 'code' => 405];
         // Resume automatic updates after three failures paused them. Separate
         // from the toggle on purpose: clearing the counter is an assertion that
         // somebody has looked at update.log, which flipping a switch is not.
-        'clear-failures' => $method === 'POST' ? (function () {
-            Updater::clearFailures();
-            return ['success' => true, 'data' => Updater::status()];
-        })() : ['success' => false, 'code' => 405],
-
+        case 'clear-failures':
+            return $method === 'POST' ? (function () {
+                Updater::clearFailures();
+                return ['success' => true, 'data' => Updater::status()];
+            })() : ['success' => false, 'code' => 405];
         // Force an immediate live check against GitHub
-        'check'  => $method === 'POST'
-            ? ['success' => true, 'data' => UpdateChecker::checkForUpdates()]
-            : ['success' => false, 'code' => 405],
-
+        case 'check':
+            return $method === 'POST'
+                ? ['success' => true, 'data' => UpdateChecker::checkForUpdates()]
+                : ['success' => false, 'code' => 405];
         // POST update/run — start the updater DETACHED.
         // It must not run inside this request: the update replaces the very PHP
         // that is serving it, so a synchronous call would be killed partway
         // through, leaving a half-applied install with nothing to report it.
-        'run' => $method === 'POST' ? (function() {
-            $state = '/var/lib/serverscrub/update-state.json';
+        case 'run':
+            return $method === 'POST' ? (function() {
+                $state = '/var/lib/serverscrub/update-state.json';
 
-            // Refuse to start a second run over a live one.
-            if (is_readable($state)) {
-                $cur = json_decode((string)file_get_contents($state), true);
-                if (is_array($cur) && ($cur['status'] ?? '') === 'running'
-                    && (time() - (int)($cur['updated_at'] ?? 0)) < 900) {
-                    return ['success' => false, 'error' => 'An update is already running',
-                            'data' => $cur, 'code' => 409];
+                // Refuse to start a second run over a live one.
+                if (is_readable($state)) {
+                    $cur = json_decode((string)file_get_contents($state), true);
+                    if (is_array($cur) && ($cur['status'] ?? '') === 'running'
+                        && (time() - (int)($cur['updated_at'] ?? 0)) < 900) {
+                        return ['success' => false, 'error' => 'An update is already running',
+                                'data' => $cur, 'code' => 409];
+                    }
                 }
-            }
 
-            $script = SG_ROOT . '/update.sh';
-            if (!is_file($script)) {
-                return ['success' => false, 'error' => 'update.sh not found', 'code' => 500];
-            }
+                $script = SG_ROOT . '/update.sh';
+                if (!is_file($script)) {
+                    return ['success' => false, 'error' => 'update.sh not found', 'code' => 500];
+                }
 
-            @mkdir('/var/lib/serverscrub', 0755, true);
-            // Seed the state immediately so the UI has something to poll before
-            // the script has had a chance to write anything itself.
-            @file_put_contents($state, json_encode([
-                'status' => 'running', 'phase' => 'starting', 'percent' => 1,
-                'message' => 'Starting update…',
-                'from_version' => SG_VERSION, 'to_version' => '',
-                'updated_at' => time(),
-            ]));
+                @mkdir('/var/lib/serverscrub', 0755, true);
+                // Seed the state immediately so the UI has something to poll before
+                // the script has had a chance to write anything itself.
+                @file_put_contents($state, json_encode([
+                    'status' => 'running', 'phase' => 'starting', 'percent' => 1,
+                    'message' => 'Starting update…',
+                    'from_version' => SG_VERSION, 'to_version' => '',
+                    'updated_at' => time(),
+                ]));
 
-            $log = SG_LOGS . '/update.log';
-            // setsid + nohup so the updater survives this request ending, and
-            // </dev/null so it can never block waiting on input.
-            $cmd = sprintf('setsid nohup bash %s --yes </dev/null >> %s 2>&1 & echo $!',
-                escapeshellarg($script), escapeshellarg($log));
-            $pid = trim((string)@shell_exec($cmd));
+                $log = SG_LOGS . '/update.log';
+                // setsid + nohup so the updater survives this request ending, and
+                // </dev/null so it can never block waiting on input.
+                $cmd = sprintf('setsid nohup bash %s --yes </dev/null >> %s 2>&1 & echo $!',
+                    escapeshellarg($script), escapeshellarg($log));
+                $pid = trim((string)@shell_exec($cmd));
 
-            Logger::info('Update started from dashboard (pid ' . $pid . ')');
-            return ['success' => true, 'started' => true, 'pid' => $pid];
-        })() : ['success' => false, 'code' => 405],
-
+                Logger::info('Update started from dashboard (pid ' . $pid . ')');
+                return ['success' => true, 'started' => true, 'pid' => $pid];
+            })() : ['success' => false, 'code' => 405];
         // GET update/progress — read the state file the updater writes.
         // Deliberately outside SG_ROOT: the update rsyncs over the install dir
         // with --delete, so state kept inside would vanish mid-run.
-        'progress' => (function() {
-            $state = '/var/lib/serverscrub/update-state.json';
-            if (!is_readable($state)) {
-                return ['success' => true, 'data' => ['status' => 'idle', 'percent' => 0]];
-            }
-            $d = json_decode((string)file_get_contents($state), true);
-            if (!is_array($d)) {
-                return ['success' => true, 'data' => ['status' => 'idle', 'percent' => 0]];
-            }
-            // A 'running' state that has stopped being written means the updater
-            // died outright (OOM, kill). Report it rather than spinning forever.
-            if (($d['status'] ?? '') === 'running'
-                && (time() - (int)($d['updated_at'] ?? 0)) > 900) {
-                $d['status']  = 'failed';
-                $d['message'] = 'Update stopped responding. Check logs/update.log.';
-            }
-            $d['current_version'] = SG_VERSION;
-            return ['success' => true, 'data' => $d];
-        })(),
-
-        default  => ['success' => false, 'error' => 'Not found', 'code' => 404],
-    };
+        case 'progress':
+            return (function() {
+                $state = '/var/lib/serverscrub/update-state.json';
+                if (!is_readable($state)) {
+                    return ['success' => true, 'data' => ['status' => 'idle', 'percent' => 0]];
+                }
+                $d = json_decode((string)file_get_contents($state), true);
+                if (!is_array($d)) {
+                    return ['success' => true, 'data' => ['status' => 'idle', 'percent' => 0]];
+                }
+                // A 'running' state that has stopped being written means the updater
+                // died outright (OOM, kill). Report it rather than spinning forever.
+                if (($d['status'] ?? '') === 'running'
+                    && (time() - (int)($d['updated_at'] ?? 0)) > 900) {
+                    $d['status']  = 'failed';
+                    $d['message'] = 'Update stopped responding. Check logs/update.log.';
+                }
+                $d['current_version'] = SG_VERSION;
+                return ['success' => true, 'data' => $d];
+            })();
+        default: return ['success' => false, 'error' => 'Not found', 'code' => 404];
+    }
 }

@@ -177,7 +177,7 @@ $api = t_code($repo . '/backend/api/index.php');
 t_contains($api, "'code' => 409",
     'a second scan is refused with 409, not reported as a server error');
 t_contains($api, 'Scanner::liveScans()', 'the route counts running scans against the cap');
-t_contains($api, "'reap' =>", 'and there is a way to clean up after dead workers');
+t_contains($api, "case 'reap':", 'and there is a way to clean up after dead workers');
 
 // -- The pgid recorded must be one we own -----------------------------------
 // posix_setsid() fails when the process is already a group leader. Falling
@@ -234,7 +234,7 @@ t_contains($db, "SELECT value FROM settings WHERE key='sg_mig_scan_concurrency_1
 t_contains($db, "'scan_batch_timeout',      '600'", 'and the per-batch timeout is seeded');
 
 $api = t_code($repo . '/backend/api/index.php');
-t_contains($api, "'stop-all' =>", 'stopping everything is exposed over the API');
+t_contains($api, "case 'stop-all':", 'stopping everything is exposed over the API');
 t_contains($api, 'Scanner::maxConcurrent()', 'and the cap is reported to the UI');
 
 $cli = t_code($repo . '/backend/cli/serverscrub.php');

@@ -1895,16 +1895,38 @@ async function loadWAF() {
   loadWAFEvents();
 
   // CRS Categories
+  /* THE WHOLE PANEL WAS A HARDCODED ARRAY in WAF.php -- sixteen categories,
+   * exact rule counts and an Active/Disabled badge on each, rendered the same
+   * on a server with CRS 4.7.0, with CRS 3.x and with no CRS at all. It is
+   * read from the installed rule files now, and when they cannot be read the
+   * panel says that instead of filling the space with numbers. "Could not
+   * read" must not look like an answer. */
   const catContainer = document.getElementById('waf-categories');
-  if (catContainer && cats?.data) {
-    catContainer.innerHTML = cats.data.map(c => `
+  if (catContainer) {
+    const d = cats?.data;
+    const list = Array.isArray(d) ? d : (d?.categories || []);
+    if (!cats?.success) {
+      catContainer.innerHTML = '<div style="font-size:.72rem;color:var(--txt3)">'
+        + 'The OWASP CRS categories could not be read from the server.</div>';
+    } else if (!list.length) {
+      catContainer.innerHTML = '<div style="font-size:.72rem;color:var(--txt3)">'
+        + esc(d?.reason || 'No OWASP CRS rule files could be read, so there are no category '
+            + 'counts to show.') + '</div>';
+    } else {
+      catContainer.innerHTML = list.map(c => `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
         <div>
-          <div style="font-size:.78rem;font-weight:600">${c.id} — ${c.name}</div>
-          <div style="font-size:.65rem;color:var(--txt3)">${c.rules} rules</div>
+          <div style="font-size:.78rem;font-weight:600">${esc(c.id)} — ${esc(c.name)}</div>
+          <div style="font-size:.65rem;color:var(--txt3)">${fmtNum(c.rules || 0)} rules read from ${esc((c.files || []).join(', '))}${c.excluded ? ' · ' + fmtNum(c.excluded) + ' excluded by you' : ''}</div>
         </div>
-        <span class="badge ${c.active ? 'badge-green' : 'badge-gray'}">${c.active ? 'Active' : 'Disabled'}</span>
-      </div>`).join('');
+        <span class="badge ${c.loaded ? 'badge-green' : 'badge-gray'}">${c.loaded ? 'Included' : 'Not included'}</span>
+      </div>`).join('')
+      + '<div style="font-size:.62rem;color:var(--txt3);padding-top:8px">'
+      + 'Counted from ' + esc(d?.crs_path || 'the installed rule files')
+      + (d?.crs_version ? ' (CRS ' + esc(d.crs_version) + ')' : '')
+      + '. "Included" means our configuration loads the file — the mode tile above is what '
+      + 'says whether the engine is enforcing.</div>';
+    }
   }
 }
 

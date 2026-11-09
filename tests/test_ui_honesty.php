@@ -95,7 +95,9 @@ t_contains($live, '_scanStallTicks', 'a stalled scan is detected and reported');
 $api = file_get_contents($repo . '/frontend/js/api.js');
 $router = file_get_contents($repo . '/backend/api/index.php');
 
-preg_match_all("/^\s+'([a-z]+)'\s*=> route/m", $router, $m);
+// Single-quoted: in a double-quoted PHP string "\$" is a literal dollar, so
+// the pattern reached PCRE as an end-of-line anchor and matched nothing.
+preg_match_all('/^\s+case \'([a-z]+)\':\s+\$response = route/m', $router, $m);
 $serverModules = array_unique($m[1]);
 t_ok(count($serverModules) > 5, 'router modules were detected');
 

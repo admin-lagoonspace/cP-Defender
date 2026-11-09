@@ -623,8 +623,8 @@ class MailGuard
     {
         $r = strtolower($reason);
 
-        if ($code === '421' || str_contains($r, 'unusual rate')
-            || str_contains($r, 'rate-limit') || str_contains($r, 'rate limit')) {
+        if ($code === '421' || (strpos($r, 'unusual rate') !== false)
+            || (strpos($r, 'rate-limit') !== false) || (strpos($r, 'rate limit') !== false)) {
             return ['severity' => 'high',
                     'what' => 'A receiving provider is rate-limiting this server',
                     'action' => 'The IP\'s sending reputation is damaged -- usually '
@@ -634,15 +634,15 @@ class MailGuard
                               . 'sending, confirm SPF/DKIM/DMARC, and let it '
                               . 'recover.'];
         }
-        if ($code === '452' || str_contains($r, 'out of storage')
-            || str_contains($r, 'quota') || str_contains($r, 'mailbox full')) {
+        if ($code === '452' || (strpos($r, 'out of storage') !== false)
+            || (strpos($r, 'quota') !== false) || (strpos($r, 'mailbox full') !== false)) {
             return ['severity' => 'medium',
                     'what' => 'A recipient mailbox is full',
                     'action' => 'Nothing is wrong with this server. Tell whoever '
                               . 'owns that address -- their mail is bouncing and '
                               . 'they do not know.'];
         }
-        if (str_contains($r, 'routing defer') || str_contains($r, 'retry time')) {
+        if ((strpos($r, 'routing defer') !== false) || (strpos($r, 'retry time') !== false)) {
             return ['severity' => 'low',
                     'what' => 'Exim is backing off after an earlier failure',
                     'action' => 'A symptom, not a cause. The real error is in the '

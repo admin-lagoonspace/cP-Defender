@@ -378,7 +378,7 @@ class BotShield {
         foreach ($whitelistRows as $row) {
             $pat = $row['pattern'];
             // Support plain substring or /regex/ patterns
-            if (str_starts_with($pat, '/')) {
+            if ((strpos($pat, '/') === 0)) {
                 if (@preg_match($pat, $ua)) return true;
             } else {
                 if (stripos($ua, $pat) !== false) return true;

@@ -112,7 +112,7 @@ t_contains($cron, 'sort($nowLive);',
    . 'mistaken for a scan starting');
 
 // ── Root side: there is a scan log, and it names the account ────────────────
-t_contains($api, "'jobs' => (function () use (\$q) {",
+t_contains($api, "case 'jobs':\n            return (function () use (\$q) {",
      'THE MISSING HISTORY: GET scanner/jobs exists — the server\'s own '
    . 'administrator could previously see the scan running this second and '
    . 'nothing at all about the ones before it');

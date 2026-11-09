@@ -51,7 +51,7 @@ t_contains($rs, "Auth::requireRole('admin', \$user);",
 
 // ── THE BUG: the token path out-ranked the password path ────────────────────
 
-$login = substr($api, (int) strpos($api, "'login' =>"), 2600);
+$login = substr($api, (int) strpos($api, "case 'login':"), 2600);
 
 // The cPanel branch only. Standalone mode assigns 'root' after a local
 // credential check and is right to: there is one operator on that install, no

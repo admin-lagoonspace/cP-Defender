@@ -51,7 +51,7 @@ class Auth {
             ]
         ]);
         $resp = @file_get_contents($url, false, $ctx);
-        return $resp !== false && str_contains($resp, '"status":1');
+        return $resp !== false && (strpos($resp, '"status":1') !== false);
     }
 
     public static function generateToken(string $username, string $role = 'user'): string {
@@ -128,7 +128,7 @@ class Auth {
             ];
         }
 
-        if (!str_starts_with($auth, 'Bearer ')) {
+        if (!(strpos($auth, 'Bearer ') === 0)) {
             self::deny('Missing authorization token');
         }
 

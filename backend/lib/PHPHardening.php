@@ -311,7 +311,7 @@ class PHPHardening {
             preg_match_all('/^\s*([^=;\s][^=\s]*)\s*=\s*(.+)$/m', $pi, $matches, PREG_SET_ORDER);
             foreach ($matches as $m) {
                 $key = trim($m[1]);
-                if (str_starts_with($key, ';')) continue;
+                if ((strpos($key, ';') === 0)) continue;
                 $settings[$key] = trim($m[2]);
             }
         }

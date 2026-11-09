@@ -17,7 +17,7 @@ $uri  = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $uri  = '/' . ltrim($uri, '/');
 
 // ── API requests ──────────────────────────────────────────────────────────────
-if (str_starts_with($uri, '/backend/api')) {
+if ((strpos($uri, '/backend/api') === 0)) {
     // Let index.php parse the full URI — it strips the /backend/api/ prefix
     require $root . '/backend/api/index.php';
     exit;

@@ -415,7 +415,7 @@ $bursts = array_values(array_filter($f, fn($x) => $x['type'] === 'account_send_b
 t_eq(1, count($bursts),
      'only the real customer account is reported as a sending burst');
 t_contains($bursts[0]['what'], 'inditdel', 'and it is the right one');
-t_ok(!str_contains($bursts[0]['what'], 'mailnull'),
+t_ok(!(strpos($bursts[0]['what'], 'mailnull') !== false),
      'mailnull is NOT reported as an account sending spam');
 
 // But its volume is not thrown away: 3,114/hour through exim's own user is
@@ -426,7 +426,7 @@ t_ok(count($sysf) >= 1, 'system-account volume is still reported');
 $all = implode(' || ', array_column($sysf, 'what'));
 t_contains($all, 'mailnull', 'naming the account');
 t_contains($all, '3,114', 'with the volume');
-$mn = array_values(array_filter($sysf, fn($x) => str_contains($x['what'], 'mailnull')));
+$mn = array_values(array_filter($sysf, fn($x) => (strpos($x['what'], 'mailnull') !== false)));
 t_eq('medium', $mn[0]['severity'],
      'at medium — it is a pointer, not the thing to act on');
 t_contains($mn[0]['action'], 'bounces',
@@ -669,9 +669,9 @@ $a = MailGuard::failureReason(str_replace('51.68.163.24', '1.2.3.4', $rate));
 $b = MailGuard::failureReason($rate);
 t_eq($b['reason'], $a['reason'],
      'the same failure from a different IP normalises to the same reason');
-t_ok(!str_contains($b['reason'], '51.68.163.24'),
+t_ok(!(strpos($b['reason'], '51.68.163.24') !== false),
      'the IP is stripped');
-t_ok(!str_contains($b['reason'], '1xIgCl'),
+t_ok(!(strpos($b['reason'], '1xIgCl') !== false),
      'and the message id');
 t_contains(strtolower($b['reason']), 'unusual rate',
      'while the sentence that identifies the problem survives');
@@ -807,7 +807,7 @@ $api = (string)file_get_contents(dirname(__DIR__) . '/backend/api/index.php');
 // its own now, and a bare strpos() found whichever appeared first in the file
 // -- a test passing or failing on the ORDER of two functions is not a test.
 $mgRoute = t_fn_body($api, 'routeMailGuard', 'php');
-$rt  = substr($mgRoute, (int)strpos($mgRoute, "'deliver' => \$method === 'POST'"), 1400);
+$rt  = substr($mgRoute, (int)strpos($mgRoute, "case 'deliver':"), 1400);
 t_ok($rt !== '', 'there is a mailguard/deliver route');
 t_contains($rt, "Auth::requireRole('admin'", 'restricted to admins');
 t_contains($rt, "empty(\$body['confirm'])",

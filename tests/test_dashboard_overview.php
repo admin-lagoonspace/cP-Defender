@@ -40,7 +40,7 @@ t_contains($chart, 'A donut of nothing is a circle',
 // ── Headline figures compare periods ────────────────────────────────────────
 $api = t_code($repo . '/backend/api/index.php');
 t_contains($api, 'function routeOverview', 'the overview is a route');
-t_contains($api, "'overview'   => routeOverview", 'and is dispatched');
+t_contains($api, "case 'overview':   \$response = routeOverview", 'and is dispatched');
 
 // Percentage change has awkward cases, and faking them is worse than omitting.
 t_contains($api, 'return $cur === 0 ? 0.0 : null;',

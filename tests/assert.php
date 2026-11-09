@@ -99,7 +99,7 @@ function t_shell(string $path): string
 {
     $out = [];
     foreach (explode("\n", (string)file_get_contents($path)) as $i => $line) {
-        if ($i === 0 && str_starts_with($line, '#!')) { $out[] = $line; continue; }
+        if ($i === 0 && (strpos($line, '#!') === 0)) { $out[] = $line; continue; }
 
         $sq = false; $dq = false; $cut = null;
         $len = strlen($line);

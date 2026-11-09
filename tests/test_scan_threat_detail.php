@@ -34,7 +34,7 @@ t_contains($api, "\$sqlWhere = 'WHERE scan_job_id = ?';",
 
 // The status filter must NOT survive here. "What happened to it" is half the
 // question; a scan that found two and cleaned both would otherwise show none.
-$threatsRoute = substr($api, (int) strpos($api, "'threats' => (function"), 1400);
+$threatsRoute = substr($api, (int) strpos($api, "case 'threats':"), 1400);
 $jobPos = strpos($threatsRoute, "scan_job_id = ?");
 $stPos  = strpos($threatsRoute, "WHERE status = ?");
 t_ok($jobPos !== false && ($stPos === false || $stPos < $jobPos),

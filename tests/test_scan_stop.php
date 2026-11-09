@@ -109,7 +109,8 @@ t_ok(strpos($fn, "toast('Scan stopped', 'info')") === false,
 
 // -- The API exposes it ------------------------------------------------------
 $api = t_code($repo . '/backend/api/index.php');
-t_contains($api, "'stop' => " . '$method' . " === 'POST'", 'scanner/stop is routed');
+t_contains($api, "case 'stop':\n            return " . '$method' . " === 'POST'",
+     'scanner/stop is routed');
 t_contains($api, "'running'", 'and the UI can ask whether a scan is in progress');
 
 // -- A failed systemd unit must be clearable ---------------------------------

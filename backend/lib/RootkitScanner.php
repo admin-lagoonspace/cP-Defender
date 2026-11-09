@@ -116,12 +116,12 @@ class RootkitScanner {
         $infectedCount = 0;
 
         foreach ($findings as $f) {
-            match ($f['finding_type']) {
-                'warning'  => $warningsCount++,
-                'infected' => $infectedCount++,
-                'clean'    => $cleanCount++,
-                default    => null,
-            };
+            switch ($f['finding_type']) {
+                case 'warning': $warningsCount++; break;
+                case 'infected': $infectedCount++; break;
+                case 'clean': $cleanCount++; break;
+                default: null; break;
+            }
         }
 
         $status = ($infectedCount > 0) ? 'infected'

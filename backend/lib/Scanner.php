@@ -45,7 +45,7 @@ class Scanner {
         if (file_exists($sigFile)) {
             $lines = file($sigFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
             foreach ($lines as $line) {
-                if (str_starts_with($line, '#')) continue;
+                if ((strpos($line, '#') === 0)) continue;
                 $parts = explode(':', $line, 3);
                 if (count($parts) === 3) {
                     $this->customSignatures[] = [
@@ -2726,30 +2726,30 @@ This file was removed and not kept. Restore it from your backups
 
     private function classifyThreat(string $name): string {
         $n = strtolower($name);
-        if (str_contains($n, 'backdoor'))    return 'backdoor';
-        if (str_contains($n, 'malware'))     return 'malware';
-        if (str_contains($n, 'trojan'))      return 'trojan';
-        if (str_contains($n, 'phishing'))    return 'phishing';
-        if (str_contains($n, 'miner'))       return 'cryptominer';
-        if (str_contains($n, 'shell'))       return 'webshell';
-        if (str_contains($n, 'spam'))        return 'spam';
+        if ((strpos($n, 'backdoor') !== false))    return 'backdoor';
+        if ((strpos($n, 'malware') !== false))     return 'malware';
+        if ((strpos($n, 'trojan') !== false))      return 'trojan';
+        if ((strpos($n, 'phishing') !== false))    return 'phishing';
+        if ((strpos($n, 'miner') !== false))       return 'cryptominer';
+        if ((strpos($n, 'shell') !== false))       return 'webshell';
+        if ((strpos($n, 'spam') !== false))        return 'spam';
         return 'malware';
     }
 
     private function classifySigName(string $sig): string {
-        if (str_contains($sig, 'shell'))     return 'webshell';
-        if (str_contains($sig, 'eval'))      return 'obfuscated';
-        if (str_contains($sig, 'miner'))     return 'cryptominer';
-        if (str_contains($sig, 'spam'))      return 'spam';
-        if (str_contains($sig, 'backdoor'))  return 'backdoor';
+        if ((strpos($sig, 'shell') !== false))     return 'webshell';
+        if ((strpos($sig, 'eval') !== false))      return 'obfuscated';
+        if ((strpos($sig, 'miner') !== false))     return 'cryptominer';
+        if ((strpos($sig, 'spam') !== false))      return 'spam';
+        if ((strpos($sig, 'backdoor') !== false))  return 'backdoor';
         return 'suspicious';
     }
 
     private function getSeverity(string $name): string {
         $n = strtolower($name);
-        if (str_contains($n, 'critical') || str_contains($n, 'backdoor') || str_contains($n, 'shell')) return 'critical';
-        if (str_contains($n, 'trojan') || str_contains($n, 'malware')) return 'high';
-        if (str_contains($n, 'phishing') || str_contains($n, 'miner')) return 'medium';
+        if ((strpos($n, 'critical') !== false) || (strpos($n, 'backdoor') !== false) || (strpos($n, 'shell') !== false)) return 'critical';
+        if ((strpos($n, 'trojan') !== false) || (strpos($n, 'malware') !== false)) return 'high';
+        if ((strpos($n, 'phishing') !== false) || (strpos($n, 'miner') !== false)) return 'medium';
         return 'low';
     }
 
