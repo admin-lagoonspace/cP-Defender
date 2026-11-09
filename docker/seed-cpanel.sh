@@ -263,22 +263,91 @@ ln -sf /etc/apache2/logs/modsec_audit.log /usr/local/apache/logs/modsec_audit.lo
 cat > /usr/local/cpanel/3rdparty/bin/clamscan <<'EOF'
 #!/usr/bin/env bash
 # Stub clamscan. Flags anything containing the EICAR test signature.
+#
+# IT MUST UNDERSTAND --file-list. Scanner::scanBatch() does NOT pass file
+# paths as arguments; it writes them to a temp file and runs:
+#
+#   timeout N nice -nX ionice -c3 clamscan --infected --no-summary #       --max-filesize=50M --max-scansize=200M --file-list=/tmp/sg-scan-XXXX
+#
+# The first version of this stub only looked at positional arguments, so it
+# received a list file it ignored, scanned nothing, printed nothing, and every
+# scan reported "0 threats found" -- with the seeded EICAR file sitting in
+# /home/acct3/public_html the whole time. A stub that silently agrees that
+# there is nothing wrong is worse than no stub.
+#
+# --infected / -i means print ONLY infected files. --no-summary suppresses the
+# trailer. Scanner parses `^(.+):\s+(.+)\s+FOUND$`, so that is the only line
+# shape that matters.
 found=0
+quiet=0
+declare -a TARGETS=()
+
 for arg in "$@"; do
-    [[ "$arg" == -* ]] && continue
-    [[ -f "$arg" ]] || continue
-    if grep -qa 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE' "$arg" 2>/dev/null; then
-        echo "${arg}: Eicar-Test-Signature FOUND"
-        found=1
+    case "$arg" in
+        --file-list=*)
+            lf="${arg#--file-list=}"
+            [[ -f "$lf" ]] || continue
+            while IFS= read -r line; do
+                [[ -n "$line" ]] && TARGETS+=("$line")
+            done < "$lf"
+            ;;
+        -i|--infected)   quiet=1 ;;
+        --no-summary)    nosum=1 ;;
+        -*)              ;;   # every other flag is accepted and ignored
+        *)               TARGETS+=("$arg") ;;
+    esac
+done
+
+scan_one() {
+    local f="$1"
+    [[ -f "$f" ]] || return 0
+    if grep -qa 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE' "$f" 2>/dev/null; then
+        echo "${f}: Eicar-Test-Signature FOUND"
+        found=$(( found + 1 ))
+    elif [[ "$quiet" != "1" ]]; then
+        echo "${f}: OK"
+    fi
+}
+
+for t in "${TARGETS[@]}"; do
+    if [[ -d "$t" ]]; then
+        while IFS= read -r f; do scan_one "$f"; done < <(find "$t" -type f 2>/dev/null)
     else
-        echo "${arg}: OK"
+        scan_one "$t"
     fi
 done
-echo "----------- SCAN SUMMARY -----------"
-echo "Infected files: ${found}"
-exit $(( found ))
+
+if [[ "${nosum:-0}" != "1" ]]; then
+    echo "----------- SCAN SUMMARY -----------"
+    echo "Infected files: ${found}"
+fi
+# Real clamscan: 0 = clean, 1 = virus found, 2 = error.
+[[ "$found" -gt 0 ]] && exit 1
+exit 0
 EOF
 chmod +x /usr/local/cpanel/3rdparty/bin/clamscan
+
+# A signature DATABASE, or the stub binary is never called.
+#
+# Scanner::runClamScan() starts with:
+#
+#     if ($bin === null || !self::clamSignaturesPresent()) {
+#         return $this->runPatternScan($path, $jobId);
+#     }
+#
+# and clamSignaturesPresent() looks for main.cvd/main.cld/daily.cvd/daily.cld
+# in four fixed directories. With the stub binary present but no database, that
+# returned false and EVERY scan silently took the pattern-engine fallback. So
+# the ClamAV detection path, the quarantine path and the verdict gate behind it
+# were never executed here -- while the seeded EICAR file sat unflagged and the
+# scan reported "0 threats found" as a success.
+#
+# These are empty placeholder files. They make clamSignaturesPresent() true;
+# the stub binary does the deciding, and it only ever flags EICAR. This is NOT
+# a real signature match and the report must keep saying so.
+mkdir -p /usr/local/cpanel/3rdparty/share/clamav
+: > /usr/local/cpanel/3rdparty/share/clamav/daily.cld
+: > /usr/local/cpanel/3rdparty/share/clamav/main.cld
 ln -sf "$(command -v php)" /usr/local/cpanel/3rdparty/bin/php 2>/dev/null || true
 
 # One genuinely-flagged file, so a scan that finds nothing is distinguishable

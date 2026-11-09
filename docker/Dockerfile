@@ -37,11 +37,31 @@ RUN dnf -y install dnf-plugins-core epel-release \
  && dnf -y module enable "php:${PHP_STREAM}" \
  && dnf -y install \
       php-cli php-common php-pdo php-mbstring php-json php-xml php-posix \
+      php-pecl-zip \
       sqlite python3 \
       cronie procps-ng findutils tar unzip gzip which diffutils \
       shadow-utils iproute hostname \
+      ipset \
  && dnf clean all \
  && rm -rf /var/cache/dnf
+
+# ZipArchive comes from php-pecl-zip on AlmaLinux 8, NOT from php-common.
+# Without it tests/test_packaging.php died with `Class "ZipArchive" not found`,
+# so the one check that the release artefact is well-formed -- and that tests/
+# is absent from it -- never ran in the container at all.
+RUN php -r 'exit(class_exists("ZipArchive") ? 0 : 1);' \
+ || { echo "FATAL: ZipArchive missing in php:${PHP_STREAM}"; exit 1; }
+
+# ipset is here because install.sh's dependency bootstrap wants it, and the
+# layer above ends with `dnf clean all`. So install.sh had to re-download all
+# repository metadata to fetch one package, and `up panel` sat on
+# "[INFO] Installing: ipset" for minutes before the server ever started.
+#
+# THE COST, stated rather than hidden: with every dependency already present,
+# install.sh takes the "All runtime dependencies already present" branch, so
+# the dnf-install branch of the bootstrap is NOT exercised here. That belongs
+# in the report's "not tested" list, which is a better trade than a test target
+# nobody will wait for.
 
 # php-posix is not in every stream under that name; if it is missing the
 # product still runs (it guards every posix_* call), but say so at build time
@@ -59,8 +79,10 @@ RUN { \
     } > /etc/serverscrub-test-env
 
 COPY seed-cpanel.sh /usr/local/bin/seed-cpanel.sh
+COPY seed-logs.sh   /usr/local/bin/seed-logs.sh
 COPY entrypoint.sh  /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/seed-cpanel.sh /usr/local/bin/entrypoint.sh
+COPY apachectl-stub.sh /usr/sbin/apachectl
+RUN chmod +x /usr/local/bin/seed-cpanel.sh /usr/local/bin/seed-logs.sh              /usr/local/bin/entrypoint.sh /usr/sbin/apachectl  && ln -sf /usr/sbin/apachectl /usr/sbin/apache2ctl
 
 # The install expects to be root on a server. It is root in a container too,
 # which is the point: permissions, ownership and the 0700 database directory

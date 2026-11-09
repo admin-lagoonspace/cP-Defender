@@ -8,26 +8,76 @@
 # out of it, so a test run cannot modify the working tree -- which is the
 # whole point of having Shakaal test rather than the agent that wrote the
 # code. A mistake in a test run costs a container, not a commit.
+#
+# ── WHY python/ AND php/ ARE MASKED ──────────────────────────────────────────
+#
+# The repo carries the WINDOWS embeddable interpreters at python/python.exe and
+# php/php.exe, because the developer's machine has no system Python or PHP.
+# Mounting the repo makes those visible inside the Linux container, where
+# Docker Desktop reports them as -rwxrwxrwx and binfmt happily "runs" them:
+#
+#   $ /opt/serverscrub-src/python/python.exe -c 'print(1)'
+#   <3>WSL (9 - ) ERROR: UtilBindVsockAnyPort:317: socket failed 1
+#
+# tests/run.php, tests/test_monitor.php and scripts/preflight.py all pick an
+# interpreter by trying repo-local python.exe FIRST and testing only is_file().
+# So inside the container they chose the Windows binary over /usr/bin/python3,
+# and the entire Python daemon surface -- the real-time monitor, its watch and
+# resource limits, the backup and new-directory logic -- was not executed at
+# all. Three test files "CRASHED" with a WSL socket error and the 3.6
+# compatibility check failed with exit 1 and no message.
+#
+# The anonymous volumes below shadow those two directories with empty, Linux
+# directories, so is_file() is false and the candidate lists fall through to
+# python3 and php on PATH. The product's own picker is still wrong -- it should
+# test that an interpreter RUNS, not that a file exists -- and that is a
+# finding, not something this file should hide.
+#
+# logs/ is masked for a different reason: parts of the suite write to
+# <repo>/logs instead of SG_ROOT/logs, which a read-only mount turns into
+# "Failed to open stream: Read-only file system" inside the assertion text.
+# An empty writable directory keeps the source tree read-only AND lets those
+# tests run, so the log-path bug stays visible as a finding rather than as 20
+# unrelated failures.
+
+x-src-masks: &src-masks
+  - "..:/opt/serverscrub-src:ro"
+  - "/opt/serverscrub-src/python"
+  - "/opt/serverscrub-src/php"
+  - "/opt/serverscrub-src/logs"
+
 services:
   panel:
     build:
       context: .
       args: { PHP_STREAM: "${PHP_STREAM:-7.4}" }
     image: serverscrub-test:php${PHP_STREAM:-7.4}
-    volumes: [ "..:/opt/serverscrub-src:ro" ]
+    volumes: *src-masks
     ports: [ "8777:8777" ]
     command: serve
-    # inotify in the real-time monitor needs its own watches, and the default
-    # container limit is low enough to make the watch cap fire for the wrong
-    # reason.
-    sysctls: { fs.inotify.max_user_watches: "524288" }
+    # NO sysctls here, deliberately. fs.inotify.* is NOT in a separate kernel
+    # namespace, so runc refuses to create the container at all:
+    #
+    #   sysctl "fs.inotify.max_user_watches" is not in a separate kernel
+    #   namespace
+    #
+    # `up panel` failed on every attempt with that line present -- the UI was
+    # unreachable for a reason that had nothing to do with the product. inotify
+    # limits belong to the HOST kernel; on Docker Desktop that is the WSL2 VM:
+    #
+    #   wsl -d docker-desktop sysctl -w fs.inotify.max_user_watches=524288
+    #
+    # The monitor is supposed to bound its own watches, and
+    # tests/test_monitor_resources.py asserts that, so a low host limit should
+    # surface as the monitor declining to over-watch rather than as a silent
+    # miss.
 
   test:
     build:
       context: .
       args: { PHP_STREAM: "${PHP_STREAM:-7.4}" }
     image: serverscrub-test:php${PHP_STREAM:-7.4}
-    volumes: [ "..:/opt/serverscrub-src:ro" ]
+    volumes: *src-masks
     command: test
 
   shell:
@@ -35,7 +85,7 @@ services:
       context: .
       args: { PHP_STREAM: "${PHP_STREAM:-7.4}" }
     image: serverscrub-test:php${PHP_STREAM:-7.4}
-    volumes: [ "..:/opt/serverscrub-src:ro" ]
+    volumes: *src-masks
     command: shell
     stdin_open: true
     tty: true

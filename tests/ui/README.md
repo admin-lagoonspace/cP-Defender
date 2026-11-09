@@ -32,6 +32,11 @@ of these has shipped.
 | Dashboard | MODE reading `On` regardless of the engine. It was a hardcoded string. |
 | Malware scanner | A refresh button with no feedback. It appeared dead because nothing indicated it was working. |
 | Any panel | A count rendered where the query failed. Zero and "could not read" must look different. |
+| WAF — mode | A mode tile reading `on` while no Apache include exists. `WAFInstaller::currentMode()` parses `SecRuleEngine` out of our own config file and never checks that the include which makes Apache *read* that file is present. Delete `/etc/apache2/conf.d/zz-serverscrub-waf.conf` and reload the panel: if it still says the WAF is blocking, that is protection the product is not delivering. |
+| WAF — mode | "Rolled back" after a failed mode change, without the panel having checked the disk. See finding 1 — the claim is unconditional. |
+| WAF — exclusions | An empty exclusions list styled as a healthy/green state. No exclusions is the *default*, and it is also what a failed read looks like. |
+| WAF — exclusions | A row claiming to be applied when `setMode()` returned a failure. `waf exclude add` writes the row first and re-applies the config second; the row exists even when Apache was never updated. |
+| Any panel | A plain-text PHP fatal or a stack trace. When the database cannot be opened, every route returns an uncaught `PDOException` as text with absolute paths, not the JSON envelope. See finding 6. |
 
 ## Must be present
 
