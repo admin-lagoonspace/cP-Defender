@@ -601,6 +601,54 @@ def is_cleared(conn, path, digest):
         return False
 
 
+_SUPPRESSED = None
+_SUPPRESSED_AT = 0.0
+_SUPPRESS_TTL = 60.0
+
+
+def is_suppressed(conn, name):
+    """Has an operator switched this signature off by name?
+
+    The scan honours suppressions through ThreatStore::record(); this is the
+    realtime side, which writes its own rows. Without this check, suppressing
+    a signature would silence the scan and leave the daemon recording the same
+    finding every time a file changed -- the operator would have switched it
+    off and watched it keep arriving, which is worse than no suppression at
+    all because it looks like the feature is broken.
+
+    Re-read every 60 seconds. The daemon runs for days, and a suppression
+    added during an incident has to take effect without restarting it.
+    """
+    global _SUPPRESSED, _SUPPRESSED_AT
+    if not name:
+        return None
+
+    now = time.time()
+    if _SUPPRESSED is None or (now - _SUPPRESSED_AT) > _SUPPRESS_TTL:
+        rows = []
+        try:
+            for r in conn.execute(
+                    'SELECT id, name, is_prefix FROM signature_suppressions'):
+                rows.append((int(r[0]), r[1] or '', int(r[2] or 0) == 1))
+        except Exception as e:
+            # No table yet, or an unreadable database. Failing closed here
+            # would mean failing SILENT: the finding is recorded, which is the
+            # safe direction.
+            log.debug('is_suppressed: %s', e)
+            rows = []
+        _SUPPRESSED = rows
+        _SUPPRESSED_AT = now
+
+    for sid, nm, prefix in _SUPPRESSED:
+        bare = nm.rstrip('*')
+        if prefix:
+            if bare and name.startswith(bare):
+                return sid
+        elif name == nm:
+            return sid
+    return None
+
+
 def db_threat(conn, path, name, sev='high'):
     """Record a realtime detection, unless an operator verdict covers it.
 
@@ -612,6 +660,21 @@ def db_threat(conn, path, name, sev='high'):
 
     if is_cleared(conn, path, digest):
         log.debug('suppressed by verdict: %s', path)
+        return 0
+
+    # A signature an operator has switched off is not a finding -- and the
+    # match is counted, because a hole in the defence that nobody can see is
+    # indistinguishable from a scanner that has stopped working.
+    sup_id = is_suppressed(conn, name)
+    if sup_id:
+        try:
+            conn.execute(
+                'UPDATE signature_suppressions SET hits = hits + 1, '
+                "last_hit_at = strftime('%s','now') WHERE id = ?", (sup_id,))
+            conn.commit()
+        except Exception as e:
+            log.debug('is_suppressed count: %s', e)
+        log.debug('suppressed by signature: %s (%s)', path, name)
         return 0
 
     try:
