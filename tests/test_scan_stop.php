@@ -68,7 +68,11 @@ t_eq(true, Scanner::isCancelled($jobId2),
 
 $sc = t_code($repo . '/backend/lib/Scanner.php');
 $loopStart = strpos($sc, 'foreach ($this->walkFiles($path) as $file)');
-$loopEnd   = strpos($sc, 'self::recordProgress($jobId, $scanned, count($threats));', $loopStart);
+// Bounded by the CALL, not by its argument list. Pinning the whole line meant
+// the slice collapsed to 400 characters the moment the progress counters were
+// made cumulative across paths -- and then failed an assertion about a
+// cancellation check that was still there, three lines further down.
+$loopEnd   = strpos($sc, 'self::recordProgress(', $loopStart);
 $loop      = substr($sc, $loopStart, max(0, $loopEnd - $loopStart) + 400);
 t_contains($loop, 'self::isCancelled($jobId)',
     'the scan loop checks for cancellation between batches');

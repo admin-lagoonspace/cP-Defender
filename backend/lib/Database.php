@@ -388,6 +388,12 @@ class Database {
                 -- A single clamscan invocation that exceeds this is abandoned;
                 -- one was found holding 13 minutes of CPU on one file.
                 ('scan_batch_timeout',      '600'),
+                -- The bound on destructive action at scale: how many files ONE
+                -- signature may account for in one scan before the product
+                -- stops quarantining and asks a human. 0 disables it, which is
+                -- how 154,323 customer files were quarantined from one
+                -- third-party signature on 10 Nov. See MassDetection.
+                ('scan_mass_signature_max', '500'),
                 -- Hold a malware scan while a backup is running. OFF since
                 -- 4.31.2, on an operator's instruction: on a server whose
                 -- backups overlap the scan window this did not delay the

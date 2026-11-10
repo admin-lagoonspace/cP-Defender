@@ -208,11 +208,24 @@ try {
     // operator would believe the tree had been examined when most of it had
     // not.
     $final = Database::fetchOne('SELECT status FROM scan_jobs WHERE id=?', [$jobId]);
-    $wasCancelled = in_array($final['status'] ?? '', ['cancelling', 'cancelled'], true);
+    /* 'halted' is in this list because the mass-detection bound sets it, and
+     * writing 'done' over it would erase the one record that a scan stopped
+     * itself rather than finished -- which is the difference between "your
+     * server was scanned" and "the scan refused to continue because one
+     * signature matched 500 files". */
+    $wasCancelled = in_array($final['status'] ?? '', ['cancelling', 'cancelled', 'halted'], true);
+    $endStatus    = ($final['status'] ?? '') === 'halted' ? 'halted'
+                  : ($wasCancelled ? 'cancelled' : 'done');
 
+    /* threats_found comes from the TABLE, not from this process's count.
+     * count($threats) is what this worker happened to collect in memory, and
+     * on a 120-path sweep it was being overwritten per path -- job 12457
+     * recorded 32,003 of 154,323. The rows are the fact. */
+    $trueFound = (int) (Database::fetchOne(
+        'SELECT COUNT(*) AS c FROM threats WHERE scan_job_id=?', [$jobId])['c'] ?? count($threats));
     Database::query(
         'UPDATE scan_jobs SET status=?,finished_at=?,threats_found=? WHERE id=?',
-        [$wasCancelled ? 'cancelled' : 'done', time(), count($threats), $jobId]
+        [$endStatus, time(), $trueFound, $jobId]
     );
     Database::setSetting('last_scan', (string)time());
 

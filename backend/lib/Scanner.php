@@ -23,6 +23,9 @@ require_once __DIR__ . '/Logger.php';
 // own dependencies in makes the file safe to include from anywhere.
 require_once __DIR__ . '/Verdicts.php';
 require_once __DIR__ . '/ThreatStore.php';
+// The bound on destructive action at scale. Consulted before anything is
+// quarantined, disabled or deleted.
+require_once __DIR__ . '/MassDetection.php';
 
 class Scanner {
 
@@ -1099,7 +1102,8 @@ class Scanner {
         Logger::event('malware_detected', $this->getSeverity($threatName), '',
                       $filePath, "Malware detected: {$threatName}");
 
-        $this->applyThreatPolicy($filePath, $threatId, $this->getSeverity($threatName), $threatName);
+        $this->applyThreatPolicy($filePath, $threatId, $this->getSeverity($threatName),
+                                 $threatName, $jobId);
 
         return ['id' => $threatId, 'file' => $filePath, 'name' => $threatName];
     }
@@ -1123,6 +1127,23 @@ class Scanner {
         $batch   = [];
         $scanned = 0;
 
+        /* CUMULATIVE ACROSS PATHS, not per path.
+         *
+         * A server-wide sweep is called once per account web root -- about 120
+         * of them on the production box -- and both of these counters were
+         * local to one call, so each path's progress write overwrote the
+         * previous one with its own total. Job 12457 therefore reported
+         * threats_found = 32,003, the FIRST account's share, while the threats
+         * table held 154,323 rows for it: the one number an operator would
+         * look at understated the incident five-fold, and files_scanned went
+         * DOWN every time a smaller account started.
+         *
+         * The base is read once per path, not per batch. */
+        $base = Database::fetchOne(
+            'SELECT files_scanned, threats_found FROM scan_jobs WHERE id=?', [$jobId]);
+        $baseFiles   = (int) ($base['files_scanned'] ?? 0);
+        $baseThreats = (int) ($base['threats_found'] ?? 0);
+
         foreach ($this->walkFiles($path) as $file) {
             $batch[] = $file;
             if (count($batch) < $batchSize) { continue; }
@@ -1130,7 +1151,7 @@ class Scanner {
             $threats = array_merge($threats, $this->scanBatch($bin, $batch, $jobId));
             $scanned += count($batch);
             $batch = [];
-            self::recordProgress($jobId, $scanned, count($threats));
+            self::recordProgress($jobId, $baseFiles + $scanned, $baseThreats + count($threats));
 
             // Stop between batches when asked.
             //
@@ -1141,14 +1162,14 @@ class Scanner {
             // harmless.
             if (self::isCancelled($jobId)) {
                 Logger::info("Scan job {$jobId} cancelled after {$scanned} file(s)");
-                self::recordProgress($jobId, $scanned, count($threats));
+                self::recordProgress($jobId, $baseFiles + $scanned, $baseThreats + count($threats));
                 return $threats;
             }
 
             // Stand down while a backup runs. Between batches, so the check is
             // cheap and the scan never stops mid-clamscan.
             if (!self::waitOutBackup($jobId)) {
-                self::recordProgress($jobId, $scanned, count($threats));
+                self::recordProgress($jobId, $baseFiles + $scanned, $baseThreats + count($threats));
                 return $threats;
             }
         }
@@ -1158,7 +1179,7 @@ class Scanner {
             $scanned += count($batch);
         }
 
-        self::recordProgress($jobId, $scanned, count($threats));
+        self::recordProgress($jobId, $baseFiles + $scanned, $baseThreats + count($threats));
         return $threats;
     }
 
@@ -1224,13 +1245,21 @@ class Scanner {
         $threats = [];
         $scanned = 0;
 
+        // Cumulative across paths, for the same reason as runClamScan(): a
+        // sweep calls this once per account and both counters were local to
+        // one call, so each path overwrote the last one's totals.
+        $base = Database::fetchOne(
+            'SELECT files_scanned, threats_found FROM scan_jobs WHERE id=?', [$jobId]);
+        $baseFiles   = (int) ($base['files_scanned'] ?? 0);
+        $baseThreats = (int) ($base['threats_found'] ?? 0);
+
         foreach ($this->getPhpFiles($path) as $file) {
             // Counted before the size check: the file WAS examined and skipped,
             // and a progress counter that stalls on a directory of large files
             // looks identical to a dead scan.
             $scanned++;
             if ($scanned % 100 === 0) {
-                self::recordProgress($jobId, $scanned, count($threats));
+                self::recordProgress($jobId, $baseFiles + $scanned, $baseThreats + count($threats));
             }
 
             if (filesize($file) > SCAN_MAX_SIZE) continue;
@@ -1335,7 +1364,7 @@ class Scanner {
         }
 
 
-        self::recordProgress($jobId, $scanned, count($threats));
+        self::recordProgress($jobId, $baseFiles + $scanned, $baseThreats + count($threats));
         return $threats;
     }
 
@@ -1633,8 +1662,29 @@ This file was removed and not kept. Restore it from your backups
      * exactly alike.
      */
     public function applyThreatPolicy(string $filePath, int $threatId, string $severity,
-                                      string $threatName = ''): array
+                                      string $threatName = '', int $jobId = 0): array
     {
+        /* THE BOUND ON DESTRUCTIVE ACTION AT SCALE.
+         *
+         * Before anything is moved, disabled or deleted. On 10 Nov one
+         * third-party signature quarantined 154,323 customer files across
+         * twelve accounts over 59 hours, and nothing stopped it or said so.
+         * Past the bound the finding is FLAGGED and left in place, the scan
+         * halts, and an operator is told -- see MassDetection. */
+        if ($jobId <= 0 && $threatId > 0) {
+            $jr = Database::fetchOne('SELECT scan_job_id FROM threats WHERE id=?', [$threatId]);
+            $jobId = (int) ($jr['scan_job_id'] ?? 0);
+        }
+        $bound = MassDetection::allow($jobId, $threatName);
+        if (!$bound['act']) {
+            Database::query(
+                "UPDATE threats SET action_taken=? WHERE id=?",
+                ['flagged: mass detection bound (' . $bound['limit'] . ' from one signature)',
+                 $threatId]
+            );
+            return ['action' => 'flagged', 'reason' => $bound['reason']];
+        }
+
         // A third-party feed does not get to touch a customer's files until
         // somebody has seen what it finds on THIS server.
         //
