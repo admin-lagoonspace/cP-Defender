@@ -194,6 +194,9 @@ function openPage(name) {
 
   State.currentPage = name;
   startMonitorPolling(name);
+  // The pill is in the topbar, so it is on every page; the dashboard is the
+  // only page that would otherwise supply it.
+  refreshTopStatus();
 
   // Trigger page-specific data load.
   //
@@ -593,6 +596,104 @@ async function resumeAutoUpdates() {
   }
 }
 
+/* ══ THE TOPBAR STATUS PILL ═══════════════════════════════════════════════════
+ *
+ * It was static markup. `<div class="status-pill" id="top-status">` with a
+ * green dot and the word "Protected", on EVERY page, and `grep top-status
+ * app.js` returned nothing at all -- no code had ever updated it. Observed in
+ * a browser: a fresh install said "Protected" above the scanner card's own
+ * grey "Not yet scanned", and an API answering 500 said "Protected" above the
+ * card's own "API unreachable".
+ *
+ * Same class as MODE = 'On', action = 'block' on 148,551 events, Coverage
+ * 98.7% and "944 Java Attack / Disabled" -- all four of which were removed.
+ * This one survived every pass because it lived in the HTML rather than in the
+ * JS, so reading app.js could never surface it.
+ *
+ * It is driven from the SAME figures as the scanner card, and it has the same
+ * four states, because two badges on one screen disagreeing is how the
+ * original defect was finally noticed:
+ *
+ *   down    the API did not answer. Nothing is being reported, and the pill
+ *           says so rather than keeping the last good answer on screen.
+ *   unknown the threat count could not be read from the response.
+ *   never   nothing has been scanned yet. Zero open threats across zero scans
+ *           is not a clean bill of health.
+ *   threat  open threats, with the count.
+ *   clean   a scan ran and nothing is open. The only green state, and the only
+ *           one that pulses.
+ */
+function setTopStatus(state, text, title) {
+  const pill = document.getElementById('top-status');
+  if (!pill) { return; }
+  pill.className = 'status-pill sp-' + state;
+  pill.title = title || '';
+  const span = document.getElementById('top-status-text');
+  if (span) { span.textContent = text; }
+}
+
+/**
+ * The pill's state for one scanner-stats payload.
+ *
+ * Deliberately the same two inputs the card uses -- the open-threat count and
+ * whether any scan has ever finished -- read the same way: a count is a number
+ * or it is unknown, and `|| 0` is what made undefined, a failed fetch and a
+ * real zero indistinguishable.
+ */
+function topStatusFor(sc) {
+  const threats = Number.isFinite(sc?.active) ? sc.active : null;
+  if (threats === null) {
+    return ['unknown', 'Status unknown',
+            'The open-threat count could not be read from the server.'];
+  }
+  if (!sc?.last_scan?.finished_at) {
+    return ['never', 'Not yet scanned',
+            'Nothing has been scanned on this server yet, so there is nothing '
+            + 'to report either way.'];
+  }
+  if (threats > 0) {
+    return ['threat', fmtNum(threats) + ' threat' + (threats > 1 ? 's' : '') + ' open',
+            'Open threats across every scan. Scanner > Threats lists them.'];
+  }
+  return ['clean', 'No open threats', 'The last scan finished and nothing is open.'];
+}
+
+/** Apply the pill from a payload the caller already has. No extra request. */
+function applyTopStatus(sc) {
+  const [state, text, title] = topStatusFor(sc);
+  setTopStatus(state, text, title);
+}
+
+/**
+ * Refresh the pill on a page that does not load dashboard stats.
+ *
+ * The pill is in the topbar, so it is on every page, while the figures behind
+ * it arrive only when the dashboard loads. Without this it would hold the last
+ * answer -- or "Checking…" for ever on a panel opened straight onto the
+ * firewall page.
+ *
+ * Throttled to once every 15 seconds: scanner/stats is four indexed counts and
+ * one row, but it has no business firing on every click of the nav bar. A GET
+ * does not raise the busy overlay, so the refresh is invisible unless it
+ * changes something.
+ */
+let _topStatusAt = 0;
+async function refreshTopStatus(force) {
+  const now = Date.now();
+  if (!force && now - _topStatusAt < 15000) { return; }
+  _topStatusAt = now;
+
+  if (Demo.active) { applyTopStatus(Demo.mockDashStats()?.scanner); return; }
+
+  const r = await API.scanStats();
+  if (!r?.success) {
+    setTopStatus('down', 'API unreachable',
+                 (r && (r.detail || r.error)) || 'The ServerScrub API did not answer.');
+    return;
+  }
+  applyTopStatus(r.data);
+}
+
 async function refreshDashboard() {
   checkForUpdates();   // non-blocking — uses cached result
 
@@ -621,6 +722,11 @@ async function refreshDashboard() {
     if (icon)   icon.textContent = '⛔';
     if (status) { status.textContent = 'Status unknown'; status.style.color = 'var(--red)'; }
     if (badge)  { badge.className = 'badge badge-red'; badge.textContent = 'API unreachable'; }
+    // The topbar pill too, or the page carries a green "Protected" beside its
+    // own "API unreachable" -- which is exactly what it did.
+    setTopStatus('down', 'API unreachable',
+                 (data && (data.detail || data.error))
+                 || 'The ServerScrub API did not answer.');
     // Prefer the server's detail over the generic line: pointing the user at a
     // log file they then have to go and read is a worse answer than the error.
     if (meta)   meta.textContent = (data && (data.detail || data.error))
@@ -738,6 +844,10 @@ async function refreshDashboard() {
     // Green is earned by a scan that ran and found nothing, and by nothing else.
     scanStatus.title = 'No open threats, as of the last scan.';
   }
+
+  // One source for both badges: the card and the pill cannot disagree if they
+  // are computed from the same two figures by the same code.
+  applyTopStatus(sc);
 
   const ls = sc?.last_scan_stats || null;
   if (!lastJob?.finished_at) {

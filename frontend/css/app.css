@@ -180,15 +180,46 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
   display: flex; align-items: center; gap: 14px; padding: 0 22px;
 }
 
+/* ── THE TOPBAR STATUS PILL ───────────────────────────────────────────────────
+ *
+ * The DEFAULT IS NOT GREEN, deliberately. This pill was static markup reading
+ * "Protected" in green, on every page, that no line of JavaScript ever
+ * touched: it said Protected on a server that had never been scanned, and it
+ * said Protected beside the dashboard's own "API unreachable". A badge that
+ * cannot be wrong because it never changes is the purest form of the defect
+ * this product keeps shipping -- the same class as MODE = 'On', action =
+ * 'block' on 148,551 events, and "Coverage 98.7%".
+ *
+ * So the colour lives in a state class that setTopStatus() in app.js applies
+ * from real data, and the unstyled pill -- which is what shows if the script
+ * fails to run at all -- is grey and says "Checking…". Green is a claim and
+ * has to be earned; grey is not.
+ */
 .status-pill {
   display: flex; align-items: center; gap: 7px;
-  font-size: .75rem; font-weight: 600; color: var(--green2);
+  font-size: .75rem; font-weight: 600; color: var(--txt2);
 }
 .status-dot {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--green2);
+  width: 7px; height: 7px; border-radius: 50%; background: var(--txt3);
+  box-shadow: 0 0 0 2px rgba(255,255,255,.04);
+}
+/* A scan ran and found nothing open. The only state that is allowed to pulse,
+ * because it is the only one that means "being watched and all is well". */
+.status-pill.sp-clean      { color: var(--green2); }
+.status-pill.sp-clean .status-dot {
+  background: var(--green2);
   box-shadow: 0 0 0 2px var(--green-dim);
   animation: pulse-dot 2.4s ease-in-out infinite;
 }
+/* Open threats. */
+.status-pill.sp-threat     { color: var(--red); }
+.status-pill.sp-threat .status-dot { background: var(--red); box-shadow: 0 0 0 2px rgba(239,83,80,.18); }
+/* Never scanned, or the count could not be read: grey, and NOT pulsing. */
+.status-pill.sp-unknown    { color: var(--txt2); }
+.status-pill.sp-unknown .status-dot { background: var(--txt3); }
+/* The API did not answer. Red and still: nothing is being reported at all. */
+.status-pill.sp-down       { color: var(--red); }
+.status-pill.sp-down .status-dot   { background: var(--red); box-shadow: none; }
 @keyframes pulse-dot {
   0%,100% { box-shadow: 0 0 0 2px var(--green-dim); }
   50%     { box-shadow: 0 0 0 5px rgba(44,182,125,.06); }

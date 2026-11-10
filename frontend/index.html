@@ -168,9 +168,17 @@
   </nav>
 
   <div class="topbar-right">
-    <div class="status-pill" id="top-status">
+    <!-- Driven by setTopStatus() in app.js from the same figures as the
+         scanner card. It read "Protected", in green, as static markup that no
+         code ever updated: on a server that had never been scanned, and
+         directly above the dashboard's own "API unreachable". The initial
+         state is what shows before the first answer arrives, and if the script
+         never runs it is what stays, so it says what is true then -- that
+         nothing has been read yet. -->
+    <div class="status-pill sp-unknown" id="top-status"
+         title="Reading the server's status…">
       <div class="status-dot"></div>
-      <span>Protected</span>
+      <span id="top-status-text">Checking…</span>
     </div>
     <div class="avatar" id="user-avatar" title="Logout" onclick="Auth.logout()">RB</div>
   </div>
