@@ -338,7 +338,17 @@ class License
         if ($localkey !== '') {
             $decoded = self::decodeLocalKey($localkey);
             if ($decoded !== null) {
-                $age = (time() - (int)$decoded['checkdate']) / 86400;
+                /* Clamped at zero. A checkdate in the FUTURE makes the age
+                 * negative, which stays under LOCALKEY_DAYS for ever: the key
+                 * reads as freshly verified, never degrades, and the product
+                 * silently stops re-verifying it. Not an outsider's hole --
+                 * localSalt() is random_bytes(32) in a 0700 root-owned
+                 * database, so forging a key means already having root -- but
+                 * a server whose clock is set ahead, or corrected backwards
+                 * after a key was issued, gets there without trying. Treated
+                 * as "checked just now", so the key expires on schedule from
+                 * the moment the clock is sane again. */
+                $age = max(0, time() - (int)$decoded['checkdate']) / 86400;
 
                 if ($age < self::LOCALKEY_DAYS) {
                     return self::fromResults($decoded['results'], false);

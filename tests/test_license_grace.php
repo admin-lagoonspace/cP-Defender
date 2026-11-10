@@ -170,3 +170,45 @@ t_ok($decoded->invoke(null, $key) !== null, 'a back-dated key still verifies');
 $tampered = substr($key, 0, 40) . (($key[40] === 'a') ? 'b' : 'a') . substr($key, 41);
 t_eq(null, $decoded->invoke(null, $tampered),
      'and a tampered one does not, which is what the two md5 layers are for');
+
+// ── A key dated in the FUTURE must not be immortal ─────────────────────────
+//
+// Shakaal went looking for a way to extend the window indefinitely and found
+// one: `$age = (time() - checkdate) / 86400` goes NEGATIVE for a future date,
+// so `$age < LOCALKEY_DAYS` stayed true for ever. A key dated ten years ahead
+// read as freshly verified, never degraded, and the product silently stopped
+// re-verifying it.
+//
+// Not an outsider's hole -- localSalt() is random_bytes(32) in a 0700
+// root-owned database, so forging a key means already having root -- and it
+// fails open, so no customer loses protection. The realistic causes are a
+// clock set ahead, or one corrected backwards after a key was issued. The age
+// is clamped at zero, which treats such a key as "checked just now": it then
+// expires on schedule from the moment the clock is sane again.
+
+foreach ([365, 3650] as $daysAhead) {
+    $key = $build->invoke(null, $activeResults, time() + ($daysAhead * 86400));
+    Database::setSetting('license_key', 'TEST-KEY-0000');
+    Database::setSetting('license_localkey', $key);
+    Database::setSetting('license_remote_next_try', (string) (time() + 3600));
+    $cache->setValue(null, null);
+
+    $st = License::status();
+    // Clamped to "checked now", so it is inside the key lifetime and usable --
+    // failing open is deliberate -- but the clamp is what stops it being
+    // usable for ever.
+    t_ok($st['protection_allowed'] === true,
+         'a key dated ' . $daysAhead . ' days ahead still protects the server: '
+       . 'a clock problem must not switch the WAF and the scanner off');
+}
+
+// The clamp itself, asserted where it lives, because the behavioural
+// difference only shows up LOCALKEY_DAYS after the clock is corrected -- which
+// no test can wait for.
+$lic = t_code(dirname(__DIR__) . '/backend/lib/License.php');
+t_contains($lic, "\$age = max(0, time() - (int)\$decoded['checkdate']) / 86400;",
+     'THE CLAMP: the age cannot be negative, so a future-dated key is treated '
+   . 'as checked now rather than as permanently fresh, and it expires on '
+   . 'schedule once the clock is right');
+t_ok(strpos($lic, "\$age = (time() - (int)\$decoded['checkdate']) / 86400;") === false,
+     'and the unclamped form is gone');
