@@ -35,6 +35,9 @@ declare(strict_types=1);
  * idempotent and safe across the cycles these classes form. */
 require_once __DIR__ . '/Verdicts.php';
 require_once __DIR__ . '/Database.php';
+// Suppression by signature NAME, which is the only lever an operator had
+// short of switching ClamAV off entirely.
+require_once __DIR__ . '/SignatureSuppressions.php';
 class ThreatStore
 {
     /** Findings suppressed by a verdict this process, for the scan summary. */
@@ -61,6 +64,28 @@ class ThreatStore
             // Nothing sane to do with a pathless finding, and it cannot be
             // judged or cleared later. Record it rather than lose it.
             return Database::insert('threats', $row);
+        }
+
+        /* A SUPPRESSED SIGNATURE IS NOT A FINDING.
+         *
+         * Here, rather than in the scanner, because this is the one place
+         * every detection source passes through -- the scan, the realtime
+         * daemon, the WordPress heuristics -- and because no signature update
+         * can touch it. freshclam replaces the whole database and a
+         * third-party feed rewrites its own directory, so a suppression
+         * written there would expire silently at the next update.
+         *
+         * The match is COUNTED. A suppressed signature is a hole in the
+         * defence, and one nobody can see is indistinguishable from a scanner
+         * that has stopped working. */
+        $sigName = trim((string) ($row['threat_name'] ?? ''));
+        if ($sigName !== '') {
+            $sup = SignatureSuppressions::match($sigName);
+            if ($sup !== null) {
+                SignatureSuppressions::noteHit((int) $sup['id']);
+                self::$suppressed++;
+                return null;
+            }
         }
 
         $hash = strtolower(trim((string) ($row['hash'] ?? '')));

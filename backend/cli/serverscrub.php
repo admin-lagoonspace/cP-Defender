@@ -42,6 +42,7 @@ require_once $BASE . '/lib/Signatures.php';
 // a switch arm is how a CLI path dies with 'Class not found' the first time
 // somebody uses it, which for a recovery tool is the worst possible moment.
 require_once $BASE . '/lib/QuarantineRestore.php';
+require_once $BASE . '/lib/SignatureSuppressions.php';
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 $argv0 = 'serverscrub';
@@ -871,6 +872,150 @@ try {
         break;
     }
 
+    /* Suppressing ONE signature, by name.
+     *
+     * The only lever before this was turning ClamAV off, which on 10 Nov was
+     * the choice between a signature that quarantined 154,323 customer files
+     * and no antivirus at all on a 132-account server. */
+    case 'signatures': {
+        $sub = $rest[0] ?? 'help';
+        if ($sub !== 'suppress') {
+            fail('usage: serverscrub signatures suppress [list|add <name> [--reason=...]|rm <id>]');
+        }
+        $op = $rest[1] ?? 'list';
+
+        if ($op === 'list') {
+            $sum = SignatureSuppressions::summary();
+            if ($JSON) { out($sum); break; }
+            echo 'Suppressed signatures: ' . (int) $sum['count']
+               . ' (matched ' . number_format((int) $sum['hits']) . ' file(s) since)' . PHP_EOL;
+            foreach ($sum['items'] as $r) {
+                echo '  #' . $r['id'] . '  ' . $r['name'] . PHP_EOL;
+                echo '      hits: ' . number_format((int) $r['hits'])
+                   . ($r['last_hit_at'] ? ', last ' . gmdate('Y-m-d H:i', (int) $r['last_hit_at']) . 'Z' : '')
+                   . ', added by ' . $r['created_by']
+                   . ' on ' . gmdate('Y-m-d', (int) $r['created_at']) . PHP_EOL;
+                if (trim((string) $r['reason']) !== '') {
+                    echo '      reason: ' . $r['reason'] . PHP_EOL;
+                }
+            }
+            if ((int) $sum['count'] > 0) {
+                echo PHP_EOL . 'Each of these is a hole in the defence: every other signature '
+                   . 'still applies, but nothing this one matches is reported.' . PHP_EOL;
+            }
+            break;
+        }
+
+        if ($op === 'add') {
+            need_root();
+            License::requireValid('signature suppression');
+            $name = (string) ($rest[2] ?? '');
+            if ($name === '' || strpos($name, '--') === 0) {
+                fail('usage: serverscrub signatures suppress add <signature-name> [--reason="..."]');
+            }
+            $reason = '';
+            foreach ($rest as $a) {
+                if (strpos($a, '--reason=') === 0) { $reason = substr($a, 9); }
+            }
+            $who = function_exists('posix_getpwuid')
+                ? (string) (@posix_getpwuid(posix_geteuid())['name'] ?? 'root') : 'root';
+            $r = SignatureSuppressions::add($name, $reason, 'cli:' . $who);
+            if (empty($r['success'])) { fail((string) ($r['error'] ?? 'could not suppress it')); }
+            out(['id' => $r['id'], 'name' => $name,
+                 'prefix' => !empty($r['prefix']) ? 'yes' : 'no']);
+            echo PHP_EOL . 'Nothing this signature matches will be reported from now on. It is '
+               . 'counted and listed on the Scanner page.' . PHP_EOL
+               . 'Files it has already quarantined are still in quarantine: '
+               . 'serverscrub quarantine restore --signature=' . escapeshellarg($name) . PHP_EOL;
+            break;
+        }
+
+        if ($op === 'rm' || $op === 'remove') {
+            need_root();
+            $id = (int) ($rest[2] ?? 0);
+            if ($id <= 0) { fail('usage: serverscrub signatures suppress rm <id>'); }
+            $r = SignatureSuppressions::remove($id);
+            if (empty($r['success'])) { fail((string) ($r['error'] ?? 'could not remove it')); }
+            out(['removed' => $r['removed']['name'] ?? '',
+                 'hits_while_suppressed' => (int) ($r['removed']['hits'] ?? 0)]);
+            break;
+        }
+
+        fail('usage: serverscrub signatures suppress [list|add <name> [--reason=...]|rm <id>]');
+    }
+
+    /* Suppressing ONE signature, by name.
+     *
+     * The only lever before this was turning ClamAV off, which on 10 Nov was
+     * the choice between a signature that quarantined 154,323 customer files
+     * and no antivirus at all on a 132-account server. */
+    case 'signatures': {
+        $sub = $rest[0] ?? 'help';
+        if ($sub !== 'suppress') {
+            fail('usage: serverscrub signatures suppress [list|add <name> [--reason=...]|rm <id>]');
+        }
+        $op = $rest[1] ?? 'list';
+
+        if ($op === 'list') {
+            $sum = SignatureSuppressions::summary();
+            if ($JSON) { out($sum); break; }
+            echo 'Suppressed signatures: ' . (int) $sum['count']
+               . ' (matched ' . number_format((int) $sum['hits']) . ' file(s) since)' . PHP_EOL;
+            foreach ($sum['items'] as $r) {
+                echo '  #' . $r['id'] . '  ' . $r['name'] . PHP_EOL;
+                echo '      hits: ' . number_format((int) $r['hits'])
+                   . ($r['last_hit_at'] ? ', last ' . gmdate('Y-m-d H:i', (int) $r['last_hit_at']) . 'Z' : '')
+                   . ', added by ' . $r['created_by']
+                   . ' on ' . gmdate('Y-m-d', (int) $r['created_at']) . PHP_EOL;
+                if (trim((string) $r['reason']) !== '') {
+                    echo '      reason: ' . $r['reason'] . PHP_EOL;
+                }
+            }
+            if ((int) $sum['count'] > 0) {
+                echo PHP_EOL . 'Each of these is a hole in the defence: every other signature '
+                   . 'still applies, but nothing this one matches is reported.' . PHP_EOL;
+            }
+            break;
+        }
+
+        if ($op === 'add') {
+            need_root();
+            License::requireValid('signature suppression');
+            $name = (string) ($rest[2] ?? '');
+            if ($name === '' || strpos($name, '--') === 0) {
+                fail('usage: serverscrub signatures suppress add <signature-name> [--reason="..."]');
+            }
+            $reason = '';
+            foreach ($rest as $a) {
+                if (strpos($a, '--reason=') === 0) { $reason = substr($a, 9); }
+            }
+            $who = function_exists('posix_getpwuid')
+                ? (string) (@posix_getpwuid(posix_geteuid())['name'] ?? 'root') : 'root';
+            $r = SignatureSuppressions::add($name, $reason, 'cli:' . $who);
+            if (empty($r['success'])) { fail((string) ($r['error'] ?? 'could not suppress it')); }
+            out(['id' => $r['id'], 'name' => $name,
+                 'prefix' => !empty($r['prefix']) ? 'yes' : 'no']);
+            echo PHP_EOL . 'Nothing this signature matches will be reported from now on. It is '
+               . 'counted and listed on the Scanner page.' . PHP_EOL
+               . 'Files it has already quarantined are still in quarantine: '
+               . 'serverscrub quarantine restore --signature=' . escapeshellarg($name) . PHP_EOL;
+            break;
+        }
+
+        if ($op === 'rm' || $op === 'remove') {
+            need_root();
+            $id = (int) ($rest[2] ?? 0);
+            if ($id <= 0) { fail('usage: serverscrub signatures suppress rm <id>'); }
+            $r = SignatureSuppressions::remove($id);
+            if (empty($r['success'])) { fail((string) ($r['error'] ?? 'could not remove it')); }
+            out(['removed' => $r['removed']['name'] ?? '',
+                 'hits_while_suppressed' => (int) ($r['removed']['hits'] ?? 0)]);
+            break;
+        }
+
+        fail('usage: serverscrub signatures suppress [list|add <name> [--reason=...]|rm <id>]');
+    }
+
     case 'license': {
         $sub = $rest[0] ?? 'status';
         switch ($sub) {
@@ -970,7 +1115,7 @@ Usage: serverscrub <command> [args] [--json]
   waf-parse-test [n]           Show what the parser reads from the ModSecurity log
   waf-reingest [--clear]       Re-read the audit log from the beginning
   quarantine status            Show where quarantine is and how big
-  quarantine sweep             Apply retention now: expire, reconcile and retire records\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  quarantine restore <scope>   Put quarantined files back. DRY RUN unless --apply.\n                               Scope: --job=N --signature=NAME --account=USER\n                               --ext=tar,gz,zip --path=/abs/file --id=N[,N...]\n                               Also: --limit=N --batch=N --mode=0644 --clear-verdict\n  license status               Show license state
+  quarantine sweep             Apply retention now: expire, reconcile and retire records\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  quarantine restore <scope>   Put quarantined files back. DRY RUN unless --apply.\n  signatures suppress list     Signatures switched off by name, and what they hid\n  signatures suppress add <n>  Stop reporting one signature (--reason=\"...\")\n  signatures suppress rm <id>  Put a signature back in service\n  signatures suppress list     Signatures switched off by name, and what they hid\n  signatures suppress add <n>  Stop reporting one signature (--reason=\"...\")\n  signatures suppress rm <id>  Put a signature back in service\n                               Scope: --job=N --signature=NAME --account=USER\n                               --ext=tar,gz,zip --path=/abs/file --id=N[,N...]\n                               Also: --limit=N --batch=N --mode=0644 --clear-verdict\n  license status               Show license state
   license activate <key>       Store and verify a license key
   license refresh              Force a re-check against the server
   license identity             Show the domain/IP this server reports

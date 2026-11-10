@@ -67,6 +67,7 @@ require_once __DIR__ . '/../lib/FirewallEngine.php';
 require_once __DIR__ . '/../lib/RootkitEngine.php';
 require_once __DIR__ . '/../lib/BlocklistRegistry.php';
 require_once __DIR__ . '/../lib/WAFInstaller.php';
+require_once __DIR__ . '/../lib/SignatureSuppressions.php';
 
 // ── CORS & Headers ────────────────────────────────────────────────────────────
 header('Content-Type: application/json');
@@ -505,6 +506,25 @@ function routeDashboard(string $action, string $method, array $q, ?array $user):
 function routeScanner(string $action, string $method, array $body, array $q, ?string $id, ?array $user): array {
     $scanner = new Scanner();
     switch ($action) {
+        /* Signatures switched off by name. Read by the Scanner page, because a
+         * suppressed signature is a hole in the defence and one nobody can see
+         * is indistinguishable from a scanner that has stopped working. */
+        case 'suppressions':
+            return ['success' => true, 'data' => SignatureSuppressions::summary()];
+
+        case 'suppress':
+            if ($method !== 'POST') { return ['success' => false, 'code' => 405]; }
+            Auth::requireRole('admin', $user);
+            return SignatureSuppressions::add(
+                (string) ($body['name'] ?? ''),
+                (string) ($body['reason'] ?? ''),
+                'panel:' . (string) ($user['sub'] ?? 'unknown'));
+
+        case 'unsuppress':
+            if ($method !== 'POST') { return ['success' => false, 'code' => 405]; }
+            Auth::requireRole('admin', $user);
+            return SignatureSuppressions::remove((int) ($body['id'] ?? 0));
+
         // Refusing a second scan is a normal outcome, not a server error, so
         // it is checked here and answered with 409 rather than left to the
         // exception handler's "Internal server error".

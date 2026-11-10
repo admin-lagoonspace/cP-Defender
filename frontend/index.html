@@ -745,6 +745,51 @@
         </div>
       </div>
 
+      <!-- Suppressed signatures.
+           On 10 Nov one third-party ClamAV signature matched 154,323 customer
+           files -- README.md and CHANGELOG.md inside node_modules, because the
+           rule hunts long hex strings and a changelog is full of git SHAs. The
+           only lever the product offered was turning ClamAV off, which on a
+           132-account server is not a choice anybody should have to make.
+
+           This card exists because a suppressed signature is a HOLE IN THE
+           DEFENCE. One nobody can see is indistinguishable from a scanner that
+           has stopped working, so every suppression is listed here with how
+           many files it has hidden since, who added it, and why. -->
+      <div class="card mt-5">
+        <div class="card-header">
+          <div class="card-title">Suppressed signatures</div>
+          <span id="sigsup-summary" class="dim" style="font-size:.76rem;margin-left:10px"></span>
+          <button class="btn btn-ghost btn-sm" style="margin-left:auto"
+                  onclick="doRefresh(this, loadSuppressions)">&#8634; Reload</button>
+        </div>
+        <div class="card-body">
+          <div style="font-size:.82rem;color:var(--txt3);margin-bottom:12px">
+            A suppression switches off <strong>one signature everywhere</strong>.
+            Every other signature still applies to every file, but nothing this
+            one matches is reported, and the count below is what it has hidden.
+            Prefer a verdict above if the question is one file.
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="sigsup-table">
+              <thead>
+                <tr>
+                  <th>Signature</th>
+                  <th>Matched since</th>
+                  <th>Last match</th>
+                  <th>Added by</th>
+                  <th>Why</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="sigsup-tbody">
+                <tr><td colspan="6" class="dim">Loading&hellip;</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- Scan exclusions.
            This exists because the product reported five HIGH threats against
            ai-bolit -- Imunify360's own scanner, shipped by CloudLinux. The

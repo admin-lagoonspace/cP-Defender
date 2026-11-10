@@ -229,6 +229,7 @@ function openPage(name) {
                                                           adoptRunningScan(),
                                                           loadExclusions(),
                                                           loadScanJobs(),
+                                                          loadSuppressions(),
                                                    loadVerdicts()])],
     firewall:   ['Loading firewall…',  () => loadFirewall()],
     waf:        ['Loading WAF…',       () => Promise.all([loadWAF(),
@@ -7038,6 +7039,66 @@ async function saveMailSettings() {
 // of text, and rendering all of it would hang the browser on exactly the server
 // that needs this most.
 
+
+/**
+ * Signatures switched off by name.
+ *
+ * A suppressed signature is a hole in the defence, so the panel shows the hole:
+ * every suppression, how many files it has hidden since, when it last hid one,
+ * who added it and why. One that nobody can see is indistinguishable from a
+ * scanner that has stopped working -- and on 10 Nov the alternative to this
+ * card was turning ClamAV off on a 132-account server.
+ */
+async function loadSuppressions() {
+  const r = await API.sigSuppressions();
+  const body = g('sigsup-tbody');
+  const sum  = g('sigsup-summary');
+  if (!body) { return; }
+
+  if (!r?.success) {
+    // Not an empty list: "could not read" and "none" are different answers,
+    // and the dangerous one must not render as the safe one.
+    body.innerHTML = '<tr><td colspan="6" class="dim">The suppression list '
+                   + 'could not be read, so it is not known whether any '
+                   + 'signature is switched off.</td></tr>';
+    if (sum) { sum.textContent = 'unknown'; }
+    return;
+  }
+
+  const d = r.data || {};
+  const items = d.items || [];
+  if (sum) {
+    sum.textContent = items.length === 0
+      ? 'none — every signature is reporting'
+      : items.length + ' suppressed · ' + fmtNum(d.hits || 0) + ' file(s) hidden since';
+  }
+  if (items.length === 0) {
+    body.innerHTML = '<tr><td colspan="6" class="dim">No signatures are '
+                   + 'suppressed. Every signature is reported.</td></tr>';
+    return;
+  }
+  body.innerHTML = items.map(x => '<tr>'
+    + '<td style="font-family:var(--font-mono);font-size:.72rem">' + esc(x.name) + '</td>'
+    + '<td>' + fmtNum(x.hits || 0) + '</td>'
+    + '<td>' + (x.last_hit_at ? esc(reltime(x.last_hit_at)) : '—') + '</td>'
+    + '<td>' + esc(x.created_by || '') + '</td>'
+    + '<td>' + esc(x.reason || '') + '</td>'
+    + '<td><button class="btn btn-ghost btn-sm" onclick="unsuppressSignature(' + Number(x.id)
+    + ')">Put back</button></td>'
+    + '</tr>').join('');
+}
+
+async function unsuppressSignature(id) {
+  if (!confirm('Report this signature again? Anything it matches will be '
+             + 'treated as a finding from the next scan.')) { return; }
+  const r = await API.sigUnsuppress(Number(id));
+  if (!r?.success) {
+    toast('Could not remove the suppression: ' + (r?.error || 'unknown error'), 'error');
+    return;
+  }
+  toast('Signature is reporting again', 'success');
+  loadSuppressions();
+}
 
 async function loadExclusions() {
   const r = await API.exclList();
