@@ -56,6 +56,67 @@ heading or touch VERSION mid-week._
 
 ### Fixed
 
+- **Customer scan requests had been silently refused for two and a half days,
+  on every account.** A customer clicked "Scan my account", the request landed
+  in their home, the page said "Queued", and nothing ever happened.
+
+  The pickup takes an `flock` on `/tmp/serverscrub/user-scans.lock` and keeps
+  the handle open, because closing it drops the lock. It then spawns the scan
+  worker as a detached child — and **the child inherited the open descriptor,
+  and with it the lock**. The pickup exits; the lock lives as long as the scan.
+  Established on the server with `fuser`, not inferred:
+
+  ```
+  $ fuser -v /tmp/serverscrub/user-scans.lock
+  root  2223916  F....  php          <- the pickup, long gone
+  root  3824534  F....  sh
+  root  3824535  F....  timeout
+  root  3824536  F....  clamscan     <- holding a lock it knows nothing about
+  ```
+
+  The nightly sweep had started on Sunday at 02:00 and was still running two
+  days and eleven hours later, so the lock's lifetime had become the *scan's*
+  lifetime instead of the pickup's, and every customer request on a 132-account
+  server was refused from Sunday onwards.
+
+  The descriptors are now closed in the child by the shell that spawns it, so
+  nothing the worker runs — the worker, `sh`, `timeout`, `clamscan` — can hold
+  a lock it never asked for. The pickup also releases the lock where the pickup
+  ends, rather than relying on its own process exiting, and records which PID
+  holds it so a refusal can say something useful. The container demonstrates
+  both halves: a child spawned the new way does not hold the file and the next
+  pickup can take the lock while that child is still running; the same child
+  spawned the old way does inherit it.
+
+- **The same bug suppressed the only evidence of itself.** A refused pickup
+  returned with no log line, exit 0, and without updating the timestamp that
+  shows when requests were last looked at — so the one clue pointed at
+  "nothing is running" while the service was running fine every five seconds
+  and refusing every time. Finding it meant converting a Unix timestamp by
+  hand on the server.
+
+  There are two timestamps now, because they answer different questions: an
+  *attempt* is recorded before the lock is taken, on every tick, and a *run*
+  only when the pickup actually got the lock. A fresh attempt beside a stale
+  run is the signature of this fault, and both are printed by
+  `serverscrub-scheduler --status`, which is the command an operator already
+  runs to ask whether anything is happening. A refusal is logged on the first
+  occurrence and then at most once every ten minutes — the pickup runs every
+  five seconds, so a line per refusal is 17,280 a day — with how many
+  customers are waiting, and a diagnosis that names the holder: *"the pickup
+  that took this lock was PID 2223916, which no longer exists, so the lock is
+  held by a descriptor it leaked to a child"*, plus the live processes holding
+  the file. That sentence is what an afternoon with `fuser` produced.
+
+- **The customer's page said "Queued" indefinitely.** A request that nothing
+  has acted on for five minutes now reads "Not started" in amber rather than
+  "Queued" in green, says it has not started, and says why when the privileged
+  side knows — and that it is the host's side, not theirs, because a stuck
+  lock is not something a customer can do anything about. The decision comes
+  from the age of the request file in their own home, which is the one signal
+  on that page that does not depend on the hourly report, the database, or the
+  pickup working at all.
+
 - **The topbar said "Protected" on every page, and nothing ever set it.** The
   status pill was static markup — a green dot and the word Protected, from the
   moment the page loaded until it was closed. Rendered in a browser, it said
