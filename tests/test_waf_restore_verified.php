@@ -386,6 +386,21 @@ t_contains($reasonOf($r), 'could not be opened',
 WAFInstaller::setRunner($okRunner);
 WAFInstaller::setMode('detectiononly');
 
+/* The "I could not identify the other ruleset" form only appears when there
+ * is no other ruleset to identify, so this block has to say that it needs
+ * that and make it true. The test container seeds a cPanel vendor ruleset
+ * defining 900990 — as a real cPanel server does — and with it present the
+ * explanation correctly takes its OTHER form, naming the ruleset it found, so
+ * `could not identify` is absent and the two assertions below failed against
+ * correct behaviour.
+ *
+ * This is the FOURTH test to assume a bare machine and fail on the one shaped
+ * like a customer's server (scan_types, waf_categories_real, waf_crs_tree,
+ * now this). See tests/env.php — the pattern has a home, and the durable fix
+ * is an override on FOREIGN_RULE_GLOBS, as setCrsPath() was for crsPath(). */
+require_once __DIR__ . '/env.php';
+t_env_without_foreign_rulesets();
+
 // A tree of ours that is internally consistent, so the explanation takes its
 // "I could not identify the other ruleset" form -- the one that was producing
 // the stray punctuation.

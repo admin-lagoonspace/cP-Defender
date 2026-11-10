@@ -168,6 +168,23 @@ $foreignDir = $sandbox . '/crs-foreign';
 file_put_contents($foreignDir . '/crs-setup.conf',
     "SecAction \"id:900990,phase:1,pass,nolog\"\n");
 
+/* This block asserts what happens when NO other ruleset is installed, so it
+ * has to say so and make it true. The test container seeds a cPanel vendor
+ * ruleset at /etc/apache2/conf.d/modsec_vendor_configs/OWASP3/, which defines
+ * 900990 — exactly as a real cPanel server does — so on that machine there IS
+ * a second ruleset and foreignRuleIdCollisions() correctly found it. The
+ * assertion below was failing against CORRECT behaviour, on the only machine
+ * shaped like a customer's server.
+ *
+ * The locations are a const with no override, so the only way to describe the
+ * world this block needs is to create it. t_env_without_foreign_rulesets()
+ * moves them aside, prints what it moved, and puts them back on shutdown. The
+ * durable fix is an injectable override on FOREIGN_RULE_GLOBS, the way
+ * setCrsPath() solved the identical problem for crsPath(); until then this is
+ * honest about being a workaround rather than silent about it. */
+require_once __DIR__ . '/env.php';
+t_env_without_foreign_rulesets();
+
 // The scan looks in a fixed list of platform locations; the sandbox is not one
 // of them, which is itself worth asserting, because a check that claims to
 // have looked everywhere while looking nowhere is the failure mode here.
