@@ -130,8 +130,9 @@ Database::query('DELETE FROM firewall_rules');
 
 $migrate = new ReflectionMethod('Database', 'migrate');
 // Required before PHP 8.1; the floor is 7.4, where this file otherwise died
-// here and took the rest of its assertions with it.
-$migrate->setAccessible(true);
+// here and took the rest of its assertions with it. Deprecated in 8.5, so it
+// is called only where it does something.
+if (PHP_VERSION_ID < 80100) { $migrate->setAccessible(true); }
 $reopen = function () use ($migrate) {
     $migrate->invoke(null, Database::get());
     return (int)(Database::fetchOne('SELECT COUNT(*) c FROM firewall_rules')['c'] ?? 0);

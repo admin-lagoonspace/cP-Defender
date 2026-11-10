@@ -511,9 +511,17 @@ class License
      * checkdate is stored inside the serialised payload, not in the string —
      * decodeLocalKey() has to unserialise before it can verify the inner hash.
      */
-    private static function buildLocalKey(array $results): string
+    private static function buildLocalKey(array $results, ?int $when = null): string
     {
-        $results['checkdate'] = date('Ymd');
+        /* $when exists so the stale, grace and past-grace branches of status()
+         * can be exercised. A key this function signs is always dated today,
+         * and the checkdate is bound into both md5 layers, so a test cannot
+         * age one afterwards without forging a signature -- which left three
+         * branches of the licence logic established by reading the call graph
+         * rather than by running it. Signing a correctly-dated key through the
+         * product's own signer is not a weakening: anyone who can call this
+         * already holds the salt. Production passes nothing and gets today. */
+        $results['checkdate'] = date('Ymd', $when ?? time());
         // Bind to this machine so a key lifted from one server is rejected on another
         $results['domain'] = self::hostname();
         $results['ip']     = self::serverIp();
