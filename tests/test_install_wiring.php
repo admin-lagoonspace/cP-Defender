@@ -135,3 +135,39 @@ t_contains($install, 'acls=any', 'the installer still writes acls=any');
 t_ok(strpos($test, 'pgrep -x cpsrvd') === false,
     'cpsrvd is not looked up by exact process name');
 t_contains($test, "pgrep -f '[c]psrvd'", 'it is matched on the full command line');
+
+// ── The self-test must judge the install it was asked for ──────────────────
+//
+// `install.sh --mode standalone` on a cPanel server ended in:
+//
+//   [FAIL] AppConfig MISSING: /var/cpanel/apps/serverscrub.conf
+//   [FAIL] WHM CGI dir MISSING: /usr/local/cpanel/whostmgr/docroot/cgi/serverscrub
+//   [FAIL] Driver file MISSING: .../ConfigObj/Driver/ServerScrub.pm -- re-run install.sh
+//     PASS: 23   FAIL: 8   WARN: 3
+//     Installation verification failed -- 8 test(s) failed
+//
+// and exit 1 -- on an install that had worked. The WHM block was gated on
+// `[[ -d /usr/local/cpanel ]]`, the filesystem, rather than on the mode the
+// operator chose, for a WHM plugin they had deliberately not installed.
+//
+// The exit code is load-bearing, which is why this is not cosmetic: the test
+// container's entrypoint called install.sh from do_install under `set -e`, so
+// a SUCCESSFUL standalone install killed the panel before `exec php -S` ran.
+// Anything that trusts an installer's exit code -- a provisioning script, or
+// the release automation -- reads a correct install as a failed one.
+$tsh2 = t_shell($repo . '/test.sh');
+
+t_contains($tsh2, 'if [[ -d /usr/local/cpanel && "${INSTALL_MODE}" == "cpanel" ]]; then',
+     'the WHM plugin checks are gated on the INSTALL MODE as well as on cPanel '
+   . 'being present. INSTALL_MODE is read at the top of the file and used '
+   . 'correctly in two other places; this was the one that was not');
+
+t_contains($tsh2, 'pass "WHM plugin checks not applicable',
+     'and a standalone install on a cPanel box records them as not applicable '
+   . 'rather than as eight failures: not applicable is not a failure, and it '
+   . 'is not a warning either -- it is the installer doing what it was told');
+
+t_ok(strpos($tsh2, 'exit $FAIL') !== false,
+     'the exit code is still the failure count, so a REAL failure still stops '
+   . 'automation. The fix is to stop counting non-failures, not to stop '
+   . 'reporting them');

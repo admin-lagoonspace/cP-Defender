@@ -265,6 +265,14 @@ class BruteForce
             $path = self::sourcePath($key);
             if ($path === null) { continue; }
 
+            /* The stat cache is PHP-process-wide and is NOT invalidated by
+             * another process appending to the file, nor by this one. A
+             * stale size compares equal to the stored offset and the whole
+             * read is skipped -- "no new lines" from a log that has grown.
+             * Harmless from cron, where every run is a fresh process; wrong
+             * anywhere the same process reads twice, which is the daemon, the
+             * test suite and any future long-running caller. */
+            clearstatcache(true, $path);
             $size   = (int) @filesize($path);
             $offKey = 'bf_offset_' . $key;
             $offset = (int) (Database::setting($offKey, '0') ?? 0);

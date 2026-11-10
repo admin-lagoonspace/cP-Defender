@@ -493,6 +493,9 @@ class WAF {
             return 0;
         }
 
+        // Same reason as BruteForce::collect(): a cached size equals the
+        // stored offset and the ingest decides the log has not grown.
+        clearstatcache(true, $path);
         $size   = (int) @filesize($path);
         $offset = (int) (Database::setting('waf_ingest_offset', '0') ?? 0);
 

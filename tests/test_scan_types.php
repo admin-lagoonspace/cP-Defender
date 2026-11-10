@@ -72,11 +72,66 @@ $home = $ctx['sandbox'] . '/srv';
 
 Database::setSetting('scan_paths', $home);
 
-$accts = [];
-foreach (Scanner::listAccounts() as $a) { $accts[$a['user']] = $a; }
+/* ── BOTH SHAPES OF HOST, DELIBERATELY ──────────────────────────────────────
+ *
+ * These assertions used to depend on the machine they ran on. listAccounts()
+ * reads cPanel's account list first and is right to -- on a server that is
+ * the authoritative list -- and falls back to home directories under the scan
+ * roots only when there is no cPanel. So on a laptop the sandbox accounts were
+ * found and all of this passed; on anything shaped like a cPanel server the
+ * real accounts were found instead and seven assertions inverted:
+ *
+ *   - scan_types: an account with a web root says so — expected true, got null
+ *   - scan_types: a quick scan walks the web roots — expected array(2), got array(8)
+ *
+ * The cost was not the red lines. It was that the bounding of a QUICK scan --
+ * the thing standing between a customer and a "quick" scan that walks all 132
+ * home directories -- was verified only where it does not matter.
+ *
+ * Scanner::setCpanelUsersDir() makes the choice explicit, so each shape is
+ * asserted on purpose and on every host.
+ */
+$cpUsers = $ctx['sandbox'] . '/varcpanel/users';
+@mkdir($cpUsers, 0777, true);
+foreach (['alice', 'bob', 'carol', 'root'] as $u) {
+    file_put_contents($cpUsers . '/' . $u, "USER=$u\nDNS=$u.test\n");
+}
+
+/** Every account listAccounts() reports, keyed by user. */
+$listAccounts = static function (): array {
+    $byUser = [];
+    foreach (Scanner::listAccounts() as $a) { $byUser[$a['user']] = $a; }
+    return $byUser;
+};
+
+// ── Shape 1: a cPanel server. The account list is cPanel's, not the disk's.
+Scanner::setCpanelUsersDir($cpUsers);
+$accts = $listAccounts();
 
 t_ok(isset($accts['alice']) && isset($accts['bob']) && isset($accts['carol']),
-    'every account under the scan root is listed');
+    'ON A CPANEL-SHAPED HOST: the accounts come from cPanel\'s own list');
+t_ok(!isset($accts['root']),
+    'and root is not offered as a customer account');
+t_ok(!isset($accts['.serverscrub']),
+    'nor is our own directory, which is not in cPanel\'s list at all');
+t_eq($home . '/alice', $accts['alice']['home'] ?? null,
+    'with the home directory resolved under the configured scan root');
+t_eq(true,  $accts['alice']['has_web'] ?? null, 'an account with a web root says so');
+t_eq(false, $accts['carol']['has_web'] ?? null, 'and one without says so too');
+
+$qc = Scanner::resolveScanPaths('quick', $home);
+sort($qc['paths']);
+t_eq([$home . '/alice/public_html', $home . '/bob/public_html'], $qc['paths'],
+    'AND THE QUICK SCAN IS BOUNDED THERE TOO: two web roots, not every home '
+  . 'directory on the server. This is the assertion that was only ever '
+  . 'evaluated on a machine with no cPanel');
+
+// ── Shape 2: no cPanel. The fallback walks the scan roots.
+Scanner::setCpanelUsersDir($ctx['sandbox'] . '/no-cpanel-here');
+$accts = $listAccounts();
+
+t_ok(isset($accts['alice']) && isset($accts['bob']) && isset($accts['carol']),
+    'WITH NO CPANEL: every account under the scan root is listed instead');
 t_ok(!isset($accts['.serverscrub']),
     'our own directory is not offered as an account');
 t_eq(true,  $accts['alice']['has_web'], 'an account with a web root says so');

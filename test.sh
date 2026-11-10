@@ -84,7 +84,31 @@ warn "HTTP API checks skipped — use the direct PHP test (section 5) to verify 
 # ── 7. WHM plugin registration ────────────────────────────────────────────────
 section "WHM Plugin Registration"
 
-if [[ -d /usr/local/cpanel ]]; then
+# GATED ON THE MODE, NOT ON THE FILESYSTEM.
+#
+# This block used to run whenever /usr/local/cpanel existed, so a deliberate
+# `install.sh --mode standalone` on a cPanel server produced
+#
+#   [FAIL] AppConfig MISSING: /var/cpanel/apps/serverscrub.conf
+#   [FAIL] WHM CGI dir MISSING: ...
+#   [FAIL] Driver file MISSING: ... -- re-run install.sh
+#     PASS: 23   FAIL: 8   WARN: 3
+#     Installation verification failed -- 8 test(s) failed
+#
+# and exit 1, on an install that had worked perfectly. The advice was to
+# re-upload the zip and re-run the installer, for a WHM plugin the operator
+# had explicitly chosen not to install.
+#
+# The non-zero exit is load-bearing: the container's entrypoint called this
+# from do_install under `set -e`, so a SUCCESSFUL standalone install killed
+# the panel before `exec php -S` ever ran. Any provisioning script that
+# trusts an installer's exit code reads a correct install as a failed one --
+# and an installer that cries wolf trains the operator to ignore the one line
+# that matters.
+#
+# INSTALL_MODE is read at line 39 and used correctly at lines 191 and 214;
+# this was the one place it was not.
+if [[ -d /usr/local/cpanel && "${INSTALL_MODE}" == "cpanel" ]]; then
   # AppConfig file
   APPCONF="/var/cpanel/apps/serverscrub.conf"
   [[ -f "$APPCONF" ]]  && pass "AppConfig file exists: $APPCONF"  || fail "AppConfig MISSING: $APPCONF — WHM plugin won't appear"
@@ -270,6 +294,11 @@ if [[ -d /usr/local/cpanel ]]; then
   done
   $DYNUI_FOUND || warn "cPanel user-level dynamicui plugin not found (WHM-only plugin is fine)"
 
+elif [[ -d /usr/local/cpanel ]]; then
+  # cPanel is here, but the operator asked for standalone. Not applicable is
+  # not a failure, and it is not a warning either -- it is the install doing
+  # what it was told.
+  pass "WHM plugin checks not applicable — installed with --mode ${INSTALL_MODE}"
 else
   warn "cPanel not found — skipping WHM tests"
 fi

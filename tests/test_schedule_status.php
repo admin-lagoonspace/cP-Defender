@@ -46,9 +46,31 @@ t_ok($statusPos !== false && $runPos !== false && $statusPos < $runPos,
 t_contains($statusBlock, 'exit(0)', 'and it exits rather than falling through into the run loop');
 
 // -- Behaviour: every task the scheduler knows about is reported -------------
+//
+// Run against the SANDBOX install, the way tests/test_router.php drives the
+// API. A bare `php scheduler.php --status` inherits config.php's defaults, so
+// SG_ROOT becomes the source tree and SG_DB a database inside it. On a
+// developer's machine that happens to be writable and this passed; against a
+// read-only checkout -- which is how the test container is deliberately
+// mounted -- the scheduler could not open that database and the whole file
+// crashed, taking every assertion after this line with it. The subprocess is
+// now told where the install is, which is what cron does on a real server.
 $php = PHP_BINARY;
 $out = [];
-@exec(escapeshellarg($php) . ' ' . escapeshellarg($sched) . ' --status 2>&1', $out);
+$runner = sys_get_temp_dir() . '/sg-sched-' . getmypid() . '.php';
+file_put_contents($runner,
+      '<?php' . "\n"
+    /* SG_ROOT is deliberately NOT redirected: the scheduler resolves its own
+     * libraries through it (require_once SG_ROOT . '/backend/lib/...'), so a
+     * data-only sandbox would stop the script loading at all. Only the paths
+     * that have to be WRITABLE are moved. */
+    . 'define("SG_DB", ' . var_export($ctx['sandbox'] . '/database/serverscrub.db', true) . ');' . "\n"
+    . 'define("SG_LOGS", ' . var_export($ctx['sandbox'] . '/logs', true) . ');' . "\n"
+    . 'define("SG_INSTALL_MARKER", ' . var_export($ctx['sandbox'] . '/installed-at', true) . ');' . "\n"
+    . '$argv = [' . var_export($sched, true) . ', "--status"]; $argc = 2;' . "\n"
+    . 'require ' . var_export($sched, true) . ';' . "\n");
+@exec(escapeshellarg($php) . ' ' . escapeshellarg($runner) . ' 2>&1', $out);
+@unlink($runner);
 $text = implode("\n", $out);
 
 t_contains($text, 'TASK', 'the report has a header');

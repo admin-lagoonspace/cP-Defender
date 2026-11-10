@@ -41,6 +41,11 @@ BruteForce::ensureSchema();
 $fwCalls = [];
 $ref = new ReflectionClass('FirewallEngine');
 $bp  = $ref->getProperty('backend');
+// Explicit, because PHP 8.1 made this implicit and 7.4 -- the floor
+// install.sh accepts -- did not. Without it this file aborted at this line
+// under 7.4 with "Cannot access non-public member", and every assertion
+// after it silently never ran.
+$bp->setAccessible(true);
 $bp->setValue(null, 'iptables');
 FirewallEngine::setRunner(function ($cmd) use (&$fwCalls) {
     $fwCalls[] = $cmd;
