@@ -590,6 +590,85 @@ class Scanner {
      *        privileges. Empty means an older row, from before this was
      *        recorded.
      */
+    /**
+     * Every descriptor this process has open above stderr, on Linux.
+     *
+     * ── WHY THIS EXISTS: THE 8 NOV OUTAGE OF CUSTOMER SCANS ──────────────────
+     *
+     * UserScanRequest::lock() takes an flock on /tmp/serverscrub/user-scans.lock
+     * and deliberately keeps the handle open, because closing it drops the
+     * lock. Then the pickup calls startScan(), which spawns scan.php detached
+     * through the shell -- AND THE CHILD INHERITS THAT OPEN DESCRIPTOR, and
+     * with it the lock. The pickup exits; the lock lives as long as the scan.
+     *
+     * On the production server, established with fuser and ps rather than
+     * inferred:
+     *
+     *     $ fuser -v /tmp/serverscrub/user-scans.lock
+     *     root 2223916 F.... php          <- the pickup, long gone
+     *     root 3824534 F.... sh
+     *     root 3824535 F.... timeout
+     *     root 3824536 F.... clamscan     <- holding a lock it knows nothing about
+     *
+     * The nightly sweep started Sun 02:00 and was still running 2 days 11
+     * hours later, so every customer scan request on a 132-account server had
+     * been refused, silently, since Sunday. The lock's lifetime had become the
+     * SCAN's lifetime instead of the pickup's.
+     *
+     * PHP has no portable way to open a stream close-on-exec: fopen() has no
+     * 'e' mode and the stream layer does not expose the fd. What it does have
+     * is the shell, which every spawn here goes through -- so the descriptors
+     * are closed in the child by the shell itself, with `N>&-`, which works
+     * identically on 7.4 and 8.5 because it is not PHP doing it.
+     *
+     * Linux only, deliberately: /proc is how a process can enumerate its own
+     * descriptors, the product runs on AlmaLinux, and on a host without /proc
+     * this returns nothing and the command is unchanged. The one platform that
+     * matters is the one where it works.
+     *
+     * @return int[] ascending, 0/1/2 excluded
+     */
+    public static function fdsAboveStderr(): array
+    {
+        $dir = '/proc/self/fd';
+        if (!is_dir($dir)) { return []; }
+
+        $out = [];
+        foreach ((array) @scandir($dir) as $f) {
+            if (!ctype_digit((string) $f)) { continue; }
+            $n = (int) $f;
+            // 0, 1 and 2 are the child's stdin/stdout/stderr and are
+            // redirected explicitly by the caller.
+            if ($n < 3) { continue; }
+            $out[] = $n;
+        }
+        sort($out);
+        return $out;
+    }
+
+    /**
+     * Shell redirections that close inherited descriptors in the child.
+     *
+     * Returns '' when there is nothing to close, so the command is untouched
+     * on a host where the descriptors cannot be enumerated.
+     *
+     * Capped at 64: a process holding more than that has a different problem,
+     * and an unbounded list would be appended to a command line.
+     *
+     * @param int[]|null $fds for tests; defaults to this process's own
+     */
+    public static function closeFdSuffix(?array $fds = null): string
+    {
+        $fds = $fds ?? self::fdsAboveStderr();
+        $out = '';
+        foreach (array_slice($fds, 0, 64) as $n) {
+            $n = (int) $n;
+            if ($n < 3) { continue; }
+            $out .= ' ' . $n . '>&-';
+        }
+        return $out;
+    }
+
     public function startScan(string $path = '/home', string $type = 'quick',
                               bool $ignoreBackup = false,
                               string $requestedBy = ''): int {
@@ -661,15 +740,20 @@ class Scanner {
 
         // Launch async via background process with CPU throttling
         $nice = self::getCpuNice();
+        /* The close-list is what stops this child inheriting the caller's
+         * open descriptors -- including UserScanRequest's pickup lock, which
+         * it held for two and a half days on the production server because
+         * clamscan had a copy of the descriptor. See fdsAboveStderr(). */
         $cmd  = sprintf(
-            'nice -n%d %s %s/backend/cron/scan.php --job-id=%d --path=%s > %s/scan_%d.log 2>&1 &',
+            'nice -n%d %s %s/backend/cron/scan.php --job-id=%d --path=%s > %s/scan_%d.log 2>&1%s &',
             $nice,
             escapeshellarg(self::phpBinary()),
             SG_ROOT,
             $jobId,
             escapeshellarg($path),
             SG_LOGS,
-            $jobId
+            $jobId,
+            self::closeFdSuffix()
         );
         exec($cmd);
 
