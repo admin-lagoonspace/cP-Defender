@@ -27,10 +27,14 @@ $work    = $ctx['sandbox'] . '/victim';
 @mkdir($work, 0777, true);
 
 /** Create an infected file and a threat row for it. */
-function seed_threat(string $path, string $body = "<?php eval(base64_decode('aGk=')); ?>"): int
+function seed_threat(string $path, string $body = ''): int
 {
     @mkdir(dirname($path), 0777, true);
-    file_put_contents($path, $body);
+    // Inert by default: what these tests act on is the threat ROW and the file
+    // at that path, never the contents. The old default was a real
+    // eval(base64_decode(...)) payload, which is a fixture the developer's own
+    // antivirus deletes while the test is reading it.
+    file_put_contents($path, $body !== '' ? $body : t_inert_payload('a finding to act on'));
     return Database::insert('threats', [
         'file_path'   => $path,
         'threat_name' => 'SG.TEST.sample',

@@ -46,8 +46,13 @@ function mkFinding(string $sandbox, string $name, string $body,
 
 // ── The core promise ────────────────────────────────────────────────────────
 
-// A real one: ai-bolit genuinely contains this, which is why it was flagged.
-$benign = "<?php\n// Revisium PROCUREOR\n\$x = eval(base64_decode(\$sig));\n";
+/* ai-bolit -- Imunify360's own scanner -- genuinely carries the patterns it
+ * hunts for, which is why this product flagged five of its files as HIGH. That
+ * is the case this test is about, and it does NOT need the pattern reproduced
+ * here: the mechanism is "these bytes at this path", and the bytes only have to
+ * differ from each other. A fixture that a real scanner matches is one the
+ * developer's antivirus deletes mid-test. */
+$benign = t_inert_payload('stands in for a line of ai-bolit that was flagged');
 
 [$id, $path] = mkFinding($sandbox, 'procu2.php', $benign);
 
@@ -60,7 +65,10 @@ t_ok(Verdicts::isCleared($path, hash('sha256', $benign)),
      'those exact bytes at that exact path are cleared');
 
 // THE test. One byte changes and the clearance must not carry over.
-$backdoored = $benign . "\n@eval(\$_POST['c']);\n";
+// One byte different is the whole requirement. This was a China Chopper
+// pattern; Windows Defender reported it as Backdoor:PHP/Chopper.E!dha on the
+// developer's machine, Severe and Active, every time the suite ran.
+$backdoored = $benign . "// and then something changed\n";
 file_put_contents($path, $backdoored);
 
 t_ok(!Verdicts::isCleared($path, hash('sha256', $backdoored)),

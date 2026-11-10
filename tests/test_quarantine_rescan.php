@@ -37,7 +37,9 @@ file_put_contents($root . '/site/public_html/index.php', '<?php echo 1;');
 
 $quar = $root . '/.serverscrub/quarantine/2026-09-27';
 @mkdir($quar, 0777, true);
-file_put_contents($quar . '/evil.php_12.quarantine', '<?php eval(base64_decode("aGk="));');
+// Inert: this test is about the WALK skipping the directory, not about
+// what is in the file. See t_inert_payload().
+file_put_contents($quar . '/evil.php_12.quarantine', t_inert_payload('a quarantined file'));
 
 Database::setSetting('quarantine_dir', $root . '/.serverscrub/quarantine');
 
@@ -56,7 +58,7 @@ t_ok(!$sawQuar,
 // The directory rule must hold on its own. A file inside quarantine that is
 // NOT named .quarantine would still be re-detected if only the filename guard
 // were doing the work.
-file_put_contents($quar . '/plain_name.php', '<?php eval(base64_decode("aGk="));');
+file_put_contents($quar . '/plain_name.php', t_inert_payload('a quarantined file not named .quarantine'));
 $found1b = [];
 foreach ($walk->invoke($scanner, $root) as $f) { $found1b[] = str_replace(chr(92), '/', $f); }
 $sawPlainInQuar = false;
@@ -193,7 +195,7 @@ Database::setSetting('quarantine_dir', $ctx['sandbox'] . '/somewhere-else');
 
 $legacy = $root . '/.sentinel-gate/quarantine/2026-09-27';
 @mkdir($legacy, 0777, true);
-file_put_contents($legacy . '/old_one.php', '<?php eval(base64_decode("aGk="));');
+file_put_contents($legacy . '/old_one.php', t_inert_payload('a file in a legacy quarantine directory'));
 
 $modern = $root . '/.serverscrub/cache';
 @mkdir($modern, 0777, true);

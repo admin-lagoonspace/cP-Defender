@@ -36,7 +36,10 @@ $scanner = new Scanner();
 /** An infected file plus the threat row that refers to it. */
 function mk(string $dir, string $name, string $severity): array {
     $path = $dir . '/' . $name;
-    file_put_contents($path, "<?php /* pretend malware */ eval(base64_decode('aGk=')); ");
+    // Inert. The policy under test is decided from the SEVERITY on the
+    // threat row, never from the bytes; "pretend malware" that a scanner
+    // genuinely matches is a fixture that fights the developer's antivirus.
+    file_put_contents($path, t_inert_payload('a finding of ' . $severity . ' severity'));
     $id = Database::insert('threats', [
         'file_path'   => $path,
         'threat_name' => 'Test.' . $severity,

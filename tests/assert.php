@@ -141,3 +141,47 @@ function t_fn_body(string $src, string $name, string $lang = 'js'): string {
         : strlen($src);
     return substr($src, $start, $end - $start);
 }
+
+/**
+ * Fixture content for a file that stands in for malware.
+ *
+ * ── WHY NO FIXTURE HERE CONTAINS A REAL SIGNATURE ────────────────────────────
+ *
+ * Because the user's own antivirus acted on this suite, on their workstation,
+ * while it ran. Windows Defender reported two Severe, Active detections against
+ * files this suite had just written:
+ *
+ *     Backdoor:PHP/Remoteshell.B      shell.php_5.quarantine
+ *     Backdoor:PHP/Chopper.E!dha      shell.php_5.quarantine
+ *
+ * Three consequences, worst first. Defender can quarantine or delete a fixture
+ * WHILE A TEST IS READING IT, which presents as a failure in the code under
+ * test -- it cost an hour here, chasing a hash mismatch that was an antivirus
+ * holding the file open. It fires on the developer's machine every single run.
+ * And a payload that reaches the repository is shipped to every customer, whose
+ * scanners then react to the product.
+ *
+ * tests/test_integrity.php learned this first and wrote it down: an earlier
+ * draft of it used a real eval($_POST[...]) payload, and Defender quarantined
+ * the fixture on write, so the file existed and every read returned permission
+ * denied.
+ *
+ * What these tests actually exercise is mechanics -- paths, hashes, ownership,
+ * modes, batching, refusals, whether a walk skips a directory. None of it needs
+ * the bytes to be malicious, and the bytes being malicious has never once been
+ * what a test asserted. Where a test genuinely needs something a scanner
+ * matches -- the pattern engine and the WordPress heuristics do -- that is a
+ * different problem with a different answer (EICAR, which every scanner
+ * recognises and none treats as a backdoor, as docker/seed-cpanel.sh uses),
+ * and those fixtures are left alone deliberately rather than neutered into
+ * passing.
+ *
+ * Do not "improve" this back into something realistic.
+ */
+function t_inert_payload(string $note = 'stands in for a malicious file'): string
+{
+    return "<?php\n// INERT TEST FIXTURE - " . $note . "\n"
+         . "// Deliberately contains no pattern any scanner matches; see\n"
+         . "// t_inert_payload() in tests/assert.php for why.\n"
+         . "\$x = 1;\n";
+}
