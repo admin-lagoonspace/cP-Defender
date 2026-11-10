@@ -1,0 +1,90 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ServerScrub — REAL Apache, REAL ModSecurity.
+#
+# The 2026-11-09 report had to say, in plain terms, that no ModSecurity parser
+# had ever seen WAFExclusions::render() or the custom-rule directive, and that
+# "matches the CRS documentation" was the whole of the evidence. That is the
+# same shape of gap that produced the 7 Nov outage, where a config everybody
+# believed was fine was rejected by httpd ten hours later.
+#
+# AlmaLinux 8 AppStream ships both:
+#
+#   httpd         2.4.37
+#   mod_security  2.9.6     (the 2.x engine, which is what cPanel/EA4 runs)
+#
+# so there is no excuse for not running it. `apachectl -t` in this image is
+# Apache genuinely parsing the configuration and ModSecurity genuinely loading
+# the rules -- a duplicate id, a bad action, a ctl in a place it is not allowed,
+# an unknown operator, all of it is caught here for real.
+#
+# ── LAYOUT: WHY httpd IS POINTED AT /etc/apache2 ──────────────────────────────
+#
+# WAFInstaller::apacheFlavour() tests /etc/apache2/conf.d FIRST and calls that
+# "ea4", because on a cPanel box EasyApache 4 really does live at /etc/apache2.
+# seed-cpanel.sh builds that layout. Stock AlmaLinux httpd reads
+# /etc/httpd/conf.d instead, so without the include below the product would
+# write a correct config into a directory this Apache never reads, and every
+# `apachectl -t` would pass by ignoring it -- a green light that proves nothing,
+# which is worse than no light at all.
+#
+# So httpd is told to read /etc/apache2/conf.d/*.conf, which is exactly where
+# includePath() puts our file on a cPanel server.
+#
+# ── WHAT THIS STILL IS NOT ────────────────────────────────────────────────────
+#
+# Not cPanel. No cpsrvd, no WHM, no EasyApache, no /scripts/restartsrv_httpd.
+# Rule EVALUATION against live traffic is only lightly exercised here; what
+# this image proves is that Apache and ModSecurity ACCEPT the configuration the
+# product generates, and reject the ones it should reject.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+FROM almalinux:8
+
+ARG PHP_STREAM=8.2
+
+RUN dnf -y install dnf-plugins-core epel-release \
+ && dnf -y module reset php \
+ && dnf -y module enable "php:${PHP_STREAM}" \
+ && dnf -y install \
+      php-cli php-common php-pdo php-mbstring php-json php-xml php-posix \
+      php-pecl-zip \
+      httpd mod_security mod_security_crs \
+      sqlite python3 ipset \
+      cronie procps-ng findutils tar unzip gzip which diffutils \
+      shadow-utils iproute hostname \
+ && dnf clean all \
+ && rm -rf /var/cache/dnf
+
+# Prove the module is really there and really loadable, at build time, rather
+# than discovering at test time that every validation passed vacuously.
+RUN test -f /usr/lib64/httpd/modules/mod_security2.so \
+ || { echo "FATAL: mod_security2.so missing"; exit 1; }
+
+# Make this Apache read the EA4-shaped directory the product writes into.
+# Without it, apachectl -t would never look at our config.
+RUN printf '%s\n' \
+      '# Added by docker/Dockerfile.waf — see the header there.' \
+      '# EA4 (and so WAFInstaller::includePath()) uses /etc/apache2/conf.d.' \
+      'IncludeOptional /etc/apache2/conf.d/*.conf' \
+      > /etc/httpd/conf.d/zz-ea4-shim.conf \
+ && mkdir -p /etc/apache2/conf.d
+
+RUN { \
+      echo "php=$(php -r 'echo PHP_VERSION;')"; \
+      echo "sqlite_cli=$(sqlite3 --version | awk '{print $1}')"; \
+      echo "python=$(python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"; \
+      echo "httpd=$(httpd -v | head -1 | sed 's/.*\///;s/ .*//')"; \
+      echo "modsecurity=$(rpm -q --qf '%{VERSION}' mod_security)"; \
+      echo "crs_pkg=$(rpm -q --qf '%{VERSION}' mod_security_crs)"; \
+      echo "php_stream=${PHP_STREAM}"; \
+    } > /etc/serverscrub-test-env
+
+COPY seed-cpanel.sh /usr/local/bin/seed-cpanel.sh
+COPY seed-logs.sh   /usr/local/bin/seed-logs.sh
+COPY waf-live.sh    /usr/local/bin/waf-live.sh
+RUN chmod +x /usr/local/bin/seed-cpanel.sh /usr/local/bin/seed-logs.sh \
+             /usr/local/bin/waf-live.sh
+
+WORKDIR /opt/serverscrub-src
+ENTRYPOINT ["/usr/local/bin/waf-live.sh"]
+CMD ["all"]
