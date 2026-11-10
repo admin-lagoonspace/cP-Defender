@@ -88,6 +88,17 @@ class WAFInstaller
      */
     private static ?string $includeDir = null;
 
+    /**
+     * Where the OWASP CRS tree is, when it is not where crsPath() would look.
+     *
+     * Same reason as confDir() and includeDir(): without it, the only code
+     * path that reads real rule files could not be pointed at a tree a test
+     * controls.
+     */
+    private static ?string $crsPathOverride = null;
+
+    public static function setCrsPath(?string $dir): void { self::$crsPathOverride = $dir; }
+
     public static function setConfDir(?string $dir): void { self::$confDir = $dir; }
     public static function setIncludeDir(?string $dir): void { self::$includeDir = $dir; }
     public static function confDir(): string { return self::$confDir ?? self::SG_CONF_DIR; }
@@ -163,7 +174,23 @@ class WAFInstaller
      */
     public static function crsPath(): ?string
     {
+        /* The override wins outright, and only a tree that is really there is
+         * returned -- a test that silently fell through to the system CRS
+         * would be asserting against whatever the host happens to have.
+         *
+         * setConfDir() and setIncludeDir() exist so the write paths can be
+         * exercised off /etc; this one was missing, so the category feature
+         * could only be tested on a machine with NO system CRS -- and every
+         * machine that resembles a cPanel server has one, at the vendor path
+         * tried first below. That is the same shape as the scan_types test
+         * defect, and it is why 13 assertions failed on the live-WAF image. */
+        if (self::$crsPathOverride !== null) {
+            return is_file(self::$crsPathOverride . '/crs-setup.conf')
+                ? self::$crsPathOverride : null;
+        }
         foreach ([
+            // The vendor tree first, deliberately: on a cPanel server that is
+            // the one Apache loads, so it is the one whose rules are live.
             '/etc/apache2/conf.d/modsec_vendor_configs/OWASP3/crs-setup.conf',
             '/etc/httpd/modsecurity.d/owasp-crs/crs-setup.conf',
             self::confDir() . '/coreruleset/crs-setup.conf',
@@ -184,13 +211,29 @@ class WAFInstaller
     public static function crsVersion(string $dir): string
     {
         $f = $dir . '/crs-setup.conf';
-        /* The capture must START on a digit. CRS writes "# OWASP_CRS ver.4.7.0",
-         * and `.*?([\d.]+)` captured the separating dot as well, so the panel
-         * read ".4.7.0" — a version string nothing matches and nobody can
-         * compare against a release. */
-        if (is_readable($f) && preg_match('/OWASP_CRS.*?ver[^\d\n]*(\d[\d.]*)/i',
-                (string)@file_get_contents($f), $m)) {
-            return $m[1];
+        $body = is_readable($f) ? (string) @file_get_contents($f) : '';
+
+        /* What CRS 4.7.0 actually writes, on one line, is
+         *
+         *     #    ver:'OWASP_CRS/4.7.0',\
+         *
+         * so "ver" comes BEFORE the name and the number follows a slash. The
+         * pattern here expected the opposite order and matched nothing against
+         * the real file: a tree we installed ourselves survived on the
+         * .crs-version marker installCrs() writes, and any tree we did not
+         * install -- cPanel's vendor OWASP3 tree, a distro package, a
+         * hand-installed one -- reported "unknown", which the panel rendered
+         * as the literal "vunknown".
+         *
+         * Both orders are tried, because the 3.x files write
+         * "# OWASP_CRS ver.3.3.4" and some packagers rewrite the header. The
+         * capture starts on a digit either way: `.*?([\d.]+)` used to take the
+         * separator with it and read ".4.7.0". */
+        foreach (['#OWASP_CRS/(\d[\d.]*)#',
+                  '#OWASP_CRS.*?ver[^\d\n]*(\d[\d.]*)#i'] as $re) {
+            if ($body !== '' && preg_match($re, $body, $m)) {
+                return rtrim($m[1], '.');
+            }
         }
         return is_file($dir . '/.crs-version')
             ? trim((string)@file_get_contents($dir . '/.crs-version'))
@@ -353,31 +396,186 @@ class WAFInstaller
      */
     public static function duplicateRuleIds(string $dir, int $maxFiles = 400): array
     {
+        $seen = self::collectRuleIds(self::crsRuleFiles($dir, $maxFiles));
+
+        $dups = [];
+        foreach ($seen as $id => $where) {
+            // Counted BEFORE de-duplicating the file names: the production
+            // fault was one id in two files, but the same id twice inside one
+            // file is the identical error from Apache, and uniquing first
+            // hides it.
+            if (count($where) > 1) { $dups[(string) $id] = array_values(array_unique($where)); }
+        }
+        return $dups;
+    }
+
+    /**
+     * The rule files in one CRS tree: exactly what the generated config
+     * includes, and nothing else.
+     *
+     * rules/*.conf one level down plus the setup files. A leftover that does
+     * not end in .conf is not loaded by Apache, so it is not a second
+     * definition of anything -- reporting it would refuse an install over a
+     * file Apache never reads.
+     *
+     * @return string[]
+     */
+    private static function crsRuleFiles(string $dir, int $maxFiles = 400): array
+    {
         $files = glob($dir . '/rules/*.conf') ?: [];
         foreach (['crs-setup.conf', 'REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf'] as $extra) {
             if (is_file($dir . '/' . $extra)) { $files[] = $dir . '/' . $extra; }
         }
         sort($files);
-        $files = array_slice($files, 0, $maxFiles);
+        return array_slice($files, 0, $maxFiles);
+    }
 
+    /**
+     * id => the files that define it, across the given files.
+     *
+     * Comment lines are stripped first: CRS ships example rules commented out,
+     * and counting those would condemn a perfectly good ruleset. Nothing over
+     * 4 MB is read, because this runs on a production box.
+     *
+     * @param string[] $files
+     * @return array<string,array<int,string>>
+     */
+    private static function collectRuleIds(array $files, bool $fullPaths = false): array
+    {
         $seen = [];
         foreach ($files as $f) {
             $size = @filesize($f);
             if ($size === false || $size > 4194304) { continue; }
-            $body = (string) @file_get_contents($f);
-            // Strip comment lines so a commented example rule is not counted.
-            $body = preg_replace('/^[ \t]*#.*$/m', '', $body);
+            $body = preg_replace('/^[ \t]*#.*$/m', '', (string) @file_get_contents($f));
             if (!preg_match_all('/(?:^|[,"\s])id:[\'"]?(\d+)/m', (string) $body, $m)) { continue; }
             foreach ($m[1] as $id) {
-                $seen[$id][] = basename($f);
+                $seen[$id][] = $fullPaths ? $f : basename($f);
             }
         }
+        return $seen;
+    }
 
-        $dups = [];
-        foreach ($seen as $id => $where) {
-            if (count($where) > 1) { $dups[(string) $id] = array_values(array_unique($where)); }
+    /**
+     * Where else on this host a ModSecurity ruleset might be loaded from.
+     *
+     * Not a search: a fixed list of the places the platforms we support put
+     * one, so this cannot turn into a walk of /etc on a 132-account box. One
+     * level of subdirectory under the cPanel vendor directory, because that is
+     * how cPanel stores a vendor ruleset (modsec_vendor_configs/<vendor>/).
+     *
+     * @return string[] globs
+     */
+    const FOREIGN_RULE_GLOBS = [
+        '/etc/apache2/conf.d/modsec_vendor_configs/*/*.conf',
+        '/etc/apache2/conf.d/modsec_vendor_configs/*/rules/*.conf',
+        '/etc/httpd/modsecurity.d/*.conf',
+        '/etc/httpd/modsecurity.d/*/*.conf',
+        '/etc/httpd/modsecurity.d/*/rules/*.conf',
+        '/etc/modsecurity/*.conf',
+        '/etc/apache2/modsecurity.d/*.conf',
+    ];
+
+    /**
+     * Rule ids that OUR tree defines and some OTHER ruleset on this host
+     * defines too.
+     *
+     * ── WHY ──────────────────────────────────────────────────────────────────
+     *
+     * duplicateRuleIds() checks a tree against itself. It cannot see a second
+     * CRS that Apache already loads from somewhere else, and cPanel ships a
+     * vendor ruleset, so that configuration is one to expect on a customer's
+     * server. Both trees are individually valid; loaded together Apache says
+     *
+     *     AH00526: Syntax error on line 818 of .../crs-setup.conf:
+     *     ModSecurity: Found another rule with the same id
+     *
+     * and refuses the whole configuration -- which sends the operator looking
+     * for the fault inside our tree, where there is none. This is what the
+     * message needs in order to be actionable.
+     *
+     * The rollback is what keeps the server safe; this is only about saying
+     * something true about why. It is best-effort by nature: it reads a fixed
+     * list of locations, not Apache's resolved configuration, so a ruleset
+     * included from somewhere unusual will not be found. Callers must say so
+     * rather than implying our tree is clean when they did not look everywhere
+     * -- see duplicateIdExplanation().
+     *
+     * @return array<string,array<int,string>> id => the foreign files defining it
+     */
+    public static function foreignRuleIdCollisions(string $ourDir, int $maxFiles = 600): array
+    {
+        $ours = self::collectRuleIds(self::crsRuleFiles($ourDir));
+        if (!$ours) { return []; }
+
+        $ourReal = realpath($ourDir);
+        $confReal = realpath(self::confDir());
+
+        $foreign = [];
+        foreach (self::FOREIGN_RULE_GLOBS as $glob) {
+            foreach (glob($glob) ?: [] as $f) {
+                $real = realpath($f);
+                if ($real === false) { continue; }
+                // Never count our own tree, or anything else under our own
+                // config directory, as a foreign definition.
+                if ($ourReal !== false && strpos($real, $ourReal) === 0) { continue; }
+                if ($confReal !== false && strpos($real, $confReal) === 0) { continue; }
+                $foreign[$real] = true;
+                if (count($foreign) >= $maxFiles) { break 2; }
+            }
         }
-        return $dups;
+        if (!$foreign) { return []; }
+
+        $theirs = self::collectRuleIds(array_keys($foreign), true);
+
+        $clash = [];
+        foreach ($theirs as $id => $where) {
+            if (isset($ours[(string) $id])) {
+                $clash[(string) $id] = array_values(array_unique($where));
+            }
+        }
+        ksort($clash);
+        return $clash;
+    }
+
+    /**
+     * The sentence to add when Apache has refused a config for a duplicate
+     * rule id. Says which other ruleset defines it, or says plainly that it
+     * could not be identified and where it looked -- "could not find it" must
+     * not read as "our tree is at fault".
+     */
+    public static function duplicateIdExplanation(?string $crsDir = null): string
+    {
+        $dir = $crsDir ?? self::crsPath();
+        if ($dir === null) { return ''; }
+
+        $clash = self::foreignRuleIdCollisions($dir);
+        if ($clash) {
+            $parts = [];
+            foreach (array_slice($clash, 0, 5, true) as $id => $where) {
+                $parts[] = $id . ' (also defined in ' . implode(', ', $where) . ')';
+            }
+            return ' ANOTHER MODSECURITY RULESET ON THIS SERVER DEFINES THE SAME RULE ID: '
+                 . implode('; ', $parts)
+                 . (count($clash) > 5 ? ' and ' . (count($clash) - 5) . ' more' : '')
+                 . '. Each ruleset is valid on its own; Apache cannot load both, because a '
+                 . 'rule id has to be unique across the whole configuration. Disable one of '
+                 . 'them -- on cPanel, the vendor ruleset is switched off in WHM > '
+                 . 'ModSecurity Vendors -- and set the mode again. Nothing in '
+                 . $dir . ' defines an id twice.';
+        }
+
+        $dups = self::duplicateRuleIds($dir);
+        if ($dups) {
+            return ' The tree at ' . $dir . ' itself defines the same id more than once: '
+                 . self::describeDuplicates($dups) . '.';
+        }
+
+        return ' Apache reports a duplicate rule id, and the tree at ' . $dir
+             . ' defines each of its own ids exactly once, so the second definition is in a '
+             . 'ruleset this check could not identify. It looked in: '
+             . implode(', ', self::FOREIGN_RULE_GLOBS) . '. A second OWASP CRS loaded by '
+             . 'Apache is the usual cause (cPanel ships a vendor ruleset); `apachectl -t` '
+             . 'names the file it was reading when it stopped.';
     }
 
     /** "913100 (REQUEST-913-...conf, REQUEST-913-...conf)" for each duplicate. */
@@ -501,11 +699,18 @@ class WAFInstaller
         if (is_file(self::confDir() . '/serverscrub-waf.conf')) {
             $v = self::validateApache();
             if ($v['ran'] && !$v['ok']) {
+                /* Explained BEFORE the swap is undone, while the tree Apache
+                 * objected to is still on disk to be read. A new CRS colliding
+                 * with a ruleset the host already loads is the likeliest
+                 * failure here -- cPanel ships a vendor ruleset -- and it is
+                 * the one whose raw message points at the wrong file. */
+                $extra = stripos((string) $v['output'], 'same id') !== false
+                    ? self::duplicateIdExplanation($target) : '';
                 @exec('rm -rf ' . escapeshellarg($target));
                 if ($old !== null) { @rename($old, $target); }
                 return ['success' => false,
                         'error' => 'Apache rejected the configuration with the new CRS tree, so '
-                                 . 'the previous one was put back: ' . $v['output']];
+                                 . 'the previous one was put back: ' . $v['output'] . $extra];
             }
         }
 
@@ -664,9 +869,11 @@ CONF;
      *
      * So each path is checked, in this order, and none of it is assumed:
      *
-     *   1. The byte count. file_put_contents() on a full filesystem returns a
-     *      SHORT COUNT, not false — a truncated config written and reported as
-     *      a successful restore is exactly how this fails silently.
+     *   1. The byte count, from writeAll() rather than file_put_contents():
+     *      a truncated config written and reported as a successful restore is
+     *      exactly how this fails silently, and file_put_contents() answers a
+     *      partial write with false and a suppressed warning, so the size of
+     *      the truncation is lost. See writeAll().
      *   2. A read-back comparison. The count says what the call believes it
      *      wrote; reading it back says what the filesystem holds.
      *   3. For a file that did not exist before: unlink()'s return AND a
@@ -697,17 +904,17 @@ CONF;
             }
 
             $want = (string) $contents;
-            $n = @file_put_contents($p, $want);
+            $n = self::writeAll($p, $want);
             @chmod($p, 0644);
             clearstatcache(true, $p);
 
-            if ($n === false) {
-                $failed[] = ['path' => $p, 'reason' => 'it could not be written at all'];
+            if ($n === null) {
+                $failed[] = ['path' => $p, 'reason' => 'it could not be opened for writing'];
                 continue;
             }
             if ($n !== strlen($want)) {
                 $failed[] = ['path' => $p, 'reason' => sprintf(
-                    'only %d of %d bytes were written — a full filesystem returns a short count, not an error',
+                    'only %d of its %d bytes were written, which is what a full filesystem does',
                     $n, strlen($want))];
                 continue;
             }
@@ -718,6 +925,48 @@ CONF;
             }
         }
         return ['ok' => $failed === [], 'failed' => $failed];
+    }
+
+    /**
+     * Write a file and report how many bytes of it landed.
+     *
+     * ── WHY NOT file_put_contents() ──────────────────────────────────────────
+     *
+     * Because it cannot tell a partial write from a failure. On a short write
+     * it emits "Only 500 of 1080 bytes written, possibly out of free disk
+     * space" and then returns FALSE -- and the warning is suppressed by the @
+     * this code has to carry, so all that reaches the caller is "something
+     * went wrong". That was measured, not assumed: a stream wrapper that
+     * accepts half its input makes file_put_contents() return false, not a
+     * count. (The widely repeated "it returns a short count" is true of
+     * fwrite(), not of file_put_contents().)
+     *
+     * ENOSPC on /etc while rolling a WAF config back is one of the real
+     * scenarios this exists for, and "only 500 of 1080 bytes were written" is
+     * a different instruction to an operator than "it could not be written":
+     * the first says the file on disk is now truncated and the filesystem is
+     * full. fwrite() reports the count, so the count is what is reported.
+     *
+     * Bounded: the loop stops the moment a write makes no progress, so a
+     * stream that keeps accepting zero bytes cannot spin.
+     *
+     * @return int|null bytes written, or null if the path could not be opened
+     */
+    private static function writeAll(string $path, string $data): ?int
+    {
+        $h = @fopen($path, 'wb');
+        if ($h === false) { return null; }
+
+        $len     = strlen($data);
+        $written = 0;
+        while ($written < $len) {
+            $n = @fwrite($h, substr($data, $written));
+            if ($n === false || $n <= 0) { break; }   // a full filesystem writes 0
+            $written += $n;
+        }
+        @fflush($h);
+        @fclose($h);
+        return $written;
     }
 
     /**
@@ -789,6 +1038,53 @@ CONF;
              . 'wrong until it is next restarted — and then it will refuse to start and take every '
              . 'site on this server with it (132 accounts, 7 Nov, ten hours after the write). Move '
              . 'that file aside BY HAND, now, before anything restarts Apache.';
+    }
+
+    /**
+     * Re-write the WAF config so a change to the exclusions takes effect.
+     *
+     * Adding or removing a row changes nothing on its own: Apache is serving the
+     * config generated at the last mode change, so the config has to be written
+     * again from the exclusions as they now stand.
+     *
+     * ── WHY THIS IS NOT JUST setMode(currentMode()) ──────────────────────────────
+     *
+     * Because that is what it was, and on a server where the WAF has never been
+     * armed -- which is every server, the first time an operator uses this
+     * feature -- currentMode() returns the literal 'unknown', setMode('unknown')
+     * misses its map lookup, and the operator got:
+     *
+     *     applied:               no
+     *     mode:                  unknown
+     *     WARNING: the exclusion is recorded but Apache was not updated: Invalid mode
+     *     Run `serverscrub waf exclude apply` once that is resolved.
+     *
+     * "Invalid mode" about a mode they never supplied -- the CLI generated the
+     * value itself -- with advice to resolve something that is not broken, and a
+     * non-zero exit for a command that had done exactly what was asked. The row
+     * IS saved, and it takes effect the first time the mode is set, which is the
+     * opposite of what the operator was just told.
+     *
+     * @return array{applied:bool,configured:bool,mode:string,message:?string}
+     */
+    public static function reapplyConfig(): array
+    {
+        $mode = self::currentMode();
+
+        if ($mode === 'unknown') {
+            return ['applied' => false, 'configured' => false, 'mode' => $mode,
+                    'message' => 'the WAF is not configured on this server yet, so there is '
+                               . 'nothing to apply. The exclusion is saved and will be included '
+                               . 'the first time the mode is set — run `serverscrub waf install`, '
+                               . 'or `serverscrub waf mode detectiononly` if ModSecurity is '
+                               . 'already installed.'];
+        }
+
+        $r = self::setMode($mode);
+        return ['applied'    => !empty($r['success']),
+                'configured' => true,
+                'mode'       => $mode,
+                'message'    => empty($r['success']) ? (string) ($r['error'] ?? 'unknown error') : null];
     }
 
     /**
@@ -902,6 +1198,15 @@ CONF;
         $why = $v['ran']
             ? 'Apache rejected the change'
             : 'no Apache syntax check could be run, so the change was not applied';
+
+        /* "Found another rule with the same id" is the one Apache message an
+         * operator cannot act on as it stands: it names the file it was
+         * reading, which is usually ours, when the second definition is in a
+         * different ruleset entirely. So this says which one, or says plainly
+         * that it could not tell. */
+        if ($v['ran'] && stripos((string) $v['output'], 'same id') !== false) {
+            $why .= '.' . self::duplicateIdExplanation();
+        }
 
         if (!$rb['ok']) {
             /* Deliberately does NOT contain the words "rolled back": nothing

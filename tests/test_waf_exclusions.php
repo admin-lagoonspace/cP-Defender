@@ -188,3 +188,62 @@ t_contains($txt, '--uri=/shop/checkout',
 $rep['rules'][0]['verdict'] = 'arm';
 t_ok(strpos(WAFTriage::text($rep), 'waf exclude add') === false,
      'a rule triage judges safe to arm carries no exclusion suggestion');
+
+// ── On a server where the WAF has never been armed ─────────────────────────
+//
+// The first thing an operator does after upgrading, to get this feature, is
+// `waf exclude add`. On a server that has never run `waf mode`, that printed:
+//
+//     id:                    1
+//     scope:                 server-wide
+//     applied:               no
+//     mode:                  unknown
+//     WARNING: the exclusion is recorded but Apache was not updated: Invalid mode
+//     Run `serverscrub waf exclude apply` once that is resolved.
+//
+// and exited 1. "Invalid mode" about a mode the operator never supplied -- the
+// CLI generated the value itself by passing currentMode() straight back into
+// setMode() -- with advice to resolve something that is not broken. The row IS
+// saved and takes effect the first time the mode is set, which is the opposite
+// of what that message says.
+$cliDir = $sandbox . '/excl-unarmed';
+@mkdir($cliDir, 0700, true);
+WAFInstaller::setConfDir($cliDir);
+WAFInstaller::setIncludeDir($cliDir);
+t_eq('unknown', WAFInstaller::currentMode(),
+     'with no config on disk the mode is unknown — the state every server is '
+   . 'in before the WAF is first armed');
+
+$re = WAFInstaller::reapplyConfig();
+t_ok($re['applied'] === false, 'there is nothing to apply, and it says so');
+t_ok($re['configured'] === false,
+     'AND IT DISTINGUISHES THE TWO CASES: "the WAF is not set up here" is not '
+   . '"writing the config failed", and only one of them is a problem');
+t_ok(strpos((string) $re['message'], 'Invalid mode') === false,
+     'the operator is NOT told "Invalid mode" about a mode they never gave');
+t_contains((string) $re['message'], 'not configured on this server yet',
+     'they are told what is actually true');
+t_contains((string) $re['message'], 'saved',
+     'and that the exclusion is saved, because it is, and it will be applied '
+   . 'the moment the mode is set');
+t_contains((string) $re['message'], 'waf install',
+     'with the command that gets them from here to there');
+
+// And with the WAF configured, the same helper really does re-write the config.
+WAFInstaller::setRunner(fn(string $cmd) => ['out' => 'Syntax OK', 'code' => 0]);
+WAFInstaller::setMode('detectiononly');
+$re = WAFInstaller::reapplyConfig();
+t_ok($re['applied'] === true && $re['configured'] === true,
+     'once the WAF is configured the same call re-renders the config, which is '
+   . 'what makes a new exclusion take effect');
+t_eq('detectiononly', $re['mode'], 'without changing the mode it is in');
+
+/* The three CLI commands that change the exclusions -- add, rm, apply -- all
+ * go through it. The fault was one line repeated in three places, and three
+ * copies is how one of them gets fixed and the others do not. */
+$cli = t_code($repo . '/backend/cli/serverscrub.php');
+t_eq(3, substr_count($cli, 'WAFInstaller::reapplyConfig()'),
+     'add, rm and apply all re-render the config through the same call');
+t_ok(strpos($cli, 'setMode(WAFInstaller::currentMode())') === false,
+     'and none of them passes currentMode() straight back into setMode(), '
+   . 'which is what produced "Invalid mode" from a value the CLI generated');

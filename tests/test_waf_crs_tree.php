@@ -140,3 +140,77 @@ t_contains($inst, 'duplicateRuleIds',
      'A CRS TREE THAT IS ALREADY PRESENT IS READ, NOT TRUSTED: "already '
    . 'present at /etc/serverscrub/waf/coreruleset" was printed in green for a '
    . 'month about a tree Apache was refusing');
+
+// ── A SECOND ruleset that Apache already loads (N4) ────────────────────────
+//
+// duplicateRuleIds() checks a tree against itself, so it cannot see a CRS
+// included from somewhere else -- and cPanel ships a vendor ruleset, so that
+// is a configuration to expect on a customer's server. Both trees are valid
+// alone; together Apache says
+//
+//     AH00526: Syntax error on line 818 of .../crs-setup.conf:
+//     ModSecurity: Found another rule with the same id
+//
+// and names the file it was READING, which is ours and is clean. Shakaal
+// reproduced exactly that against real ModSecurity 2.9.6 with the distro
+// mod_security_crs 3.3.4 installed alongside. The rollback held and nothing
+// went live; what was missing was a message an operator could act on.
+
+$ours = $sandbox . '/crs-ours';
+@mkdir($ours . '/rules', 0700, true);
+file_put_contents($ours . '/crs-setup.conf',
+    "SecAction \"id:900990,phase:1,pass,nolog\"\n");
+file_put_contents($ours . '/rules/REQUEST-913-SCANNER-DETECTION.conf',
+    "SecRule ARGS \"@rx a\" \"id:913100,phase:1,deny\"\n");
+
+$foreignDir = $sandbox . '/crs-foreign';
+@mkdir($foreignDir, 0700, true);
+file_put_contents($foreignDir . '/crs-setup.conf',
+    "SecAction \"id:900990,phase:1,pass,nolog\"\n");
+
+// The scan looks in a fixed list of platform locations; the sandbox is not one
+// of them, which is itself worth asserting, because a check that claims to
+// have looked everywhere while looking nowhere is the failure mode here.
+t_eq([], WAFInstaller::foreignRuleIdCollisions($ours),
+     'with no OTHER ruleset in any of the locations it knows about, there is '
+   . 'no collision to report -- and it does not invent one from our own tree, '
+   . 'which defines 900990 itself');
+
+$globs = WAFInstaller::FOREIGN_RULE_GLOBS;
+t_ok(count($globs) >= 5,
+     'the places a second ModSecurity ruleset lives are a FIXED LIST, not a '
+   . 'search: this runs on a 132-account box and must not become a walk of /etc');
+$joined = implode(' ', $globs);
+t_contains($joined, 'modsec_vendor_configs',
+     "cPanel's vendor directory is one of them — that is the ruleset a cPanel "
+   . 'server actually ships');
+t_contains($joined, '/etc/httpd/modsecurity.d',
+     'and so is the RHEL/AlmaLinux package path, which is where the collision '
+   . 'was reproduced');
+
+// The message. With nothing found it must say so, and must NOT imply our tree
+// is at fault -- that is the sentence that sent the operator to the wrong file.
+WAFInstaller::setCrsPath($ours);
+$msg = WAFInstaller::duplicateIdExplanation();
+t_ok($msg !== '', 'a duplicate-id rejection is explained rather than passed through raw');
+t_contains($msg, 'could not identify',
+     'WHEN IT CANNOT TELL, IT SAYS IT CANNOT TELL. "we looked and found '
+   . 'nothing" must not be reported as "your tree is broken"');
+t_contains($msg, 'defines each of its own ids exactly once',
+     'and it states what it DID establish — that our tree is internally '
+   . 'consistent — rather than leaving the operator to assume either way');
+t_contains($msg, 'modsec_vendor_configs',
+     'and names where it looked, so the operator can look somewhere else');
+
+// And when our own tree is the one at fault, it says that instead. The tree is
+// passed explicitly here: crsPath() takes crs-setup.conf as the marker that a
+// directory IS a CRS tree, and this fixture is only a rules/ directory.
+t_contains(WAFInstaller::duplicateIdExplanation($twice), 'itself defines the same id more than once',
+     'a tree that really does define an id twice is named as the cause');
+WAFInstaller::setCrsPath(null);
+
+$src2 = t_code($repo . '/backend/lib/WAFInstaller.php');
+$rej  = t_fn_body($src2, 'rejected', 'php');
+t_contains($rej, 'duplicateIdExplanation',
+     'and a mode change that Apache refused for a duplicate id carries the '
+   . 'explanation, which is the path the operator actually hits');

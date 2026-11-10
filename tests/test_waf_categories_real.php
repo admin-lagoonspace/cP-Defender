@@ -36,6 +36,14 @@ $cdir = $sandbox . '/cat-conf';
 WAFInstaller::setConfDir($cdir);
 WAFInstaller::setIncludeDir($sandbox . '/cat-inc');
 @mkdir($sandbox . '/cat-inc', 0700, true);
+
+/* Pointed at a tree this file controls. Without the override these assertions
+ * passed only on a machine with NO system CRS and failed on every machine that
+ * resembles a cPanel server, because crsPath() prefers the vendor tree at
+ * /etc/apache2/conf.d/modsec_vendor_configs/OWASP3 -- correctly, since on a
+ * server that is the tree Apache loads. All 13 of these failed on the
+ * real-Apache image for that reason and none of them was a product fault. */
+WAFInstaller::setCrsPath($cdir . '/coreruleset');
 $waf = new WAF();
 
 // ── With no CRS on the box, the answer is "I cannot tell you" ──────────────
@@ -52,9 +60,16 @@ t_ok(strlen((string) $none['reason']) > 20,
 
 $crs = $cdir . '/coreruleset';
 @mkdir($crs . '/rules', 0700, true);
+/* The version header exactly as CRS 4.7.0 writes it: "ver" first, the name
+ * after it, the number behind a slash. The product's pattern expected the
+ * opposite order and matched nothing against the real file, so any tree the
+ * product did not install itself reported "unknown" and the panel printed
+ * "vunknown". No .crs-version marker here, deliberately -- that marker is
+ * written by installCrs() and would hide the defect. */
 file_put_contents($crs . '/crs-setup.conf',
-    "# OWASP_CRS ver.4.7.0-fixture\nSecAction \"id:900000,phase:1,pass,nolog\"\n");
-file_put_contents($crs . '/.crs-version', '4.7.0');
+      "# OWASP CRS setup\n"
+    . "SecAction \\\n \"id:900990,\\\n  phase:1,\\\n  pass,\\\n  nolog,\\\n"
+    . "  ver:'OWASP_CRS/4.7.0',\\\n  setvar:tx.crs_setup_version=4070\"\n");
 
 // Three real rules, one COMMENTED OUT. CRS ships example rules in comments,
 // and counting those inflates every number on the panel.
@@ -70,7 +85,10 @@ file_put_contents($crs . '/rules/REQUEST-913-SCANNER-DETECTION.conf',
 $r = $waf->getRuleCategories();
 t_ok(!empty($r['available']), 'with a CRS tree present, the data is available');
 t_eq($crs, $r['crs_path'], 'and the path it was read from is reported');
-t_eq('4.7.0', $r['crs_version'], 'along with the version actually installed');
+t_eq('4.7.0', $r['crs_version'],
+     'along with the version actually installed, read from the header a real '
+   . 'CRS 4.7.0 tree carries -- not from the .crs-version marker, which only '
+   . 'exists in a tree the product installed itself');
 
 $byId = [];
 foreach ($r['categories'] as $c) { $byId[$c['id']] = $c; }

@@ -241,3 +241,132 @@ t_ok(strpos($src, "'rolled_back' => true") === false
      'rolled_back is never a literal true anywhere: it is derived from what '
    . 'restoreConfig() reported, in WAFInstaller and in WAF::addCustomRule '
    . 'alike. The outage was reported to the operator as a completed rollback');
+
+// ── 7. The two subtlest checks, each pinned on its own ─────────────────────
+//
+// Shakaal mutation-tested the restore and found that deleting EITHER the
+// short-write check or the byte-readback left the whole suite green. Those two
+// checks are the fix, and nothing guarded them.
+//
+// ENOSPC cannot be produced in a sandbox, so the filesystem is replaced by one
+// that misbehaves in each of the ways that matter. Each case below asserts the
+// EXACT reason reported, because the three failure branches all end in
+// ok => false: only the reason distinguishes them, so only the reason can tell
+// you that the branch you think is doing the work is the one that did.
+//
+// The wrapper is not a realistic filesystem. It asks one question per case:
+// "was the path openable?", "was the byte count looked at?", "was the file
+// read back?"
+
+class SgRestoreProbe
+{
+    /** 'short'  — accepts half the data and then refuses: a full filesystem. */
+    /** 'lying'  — reports every byte written and keeps half: a cache that
+     *             loses the tail, or anything that rewrites the file after us. */
+    /** 'honest' — behaves. */
+    public static $mode = 'short';
+    public static $stored = '';
+    public static $pos = 0;
+    public static $calls = 0;
+    public $context;
+
+    public function stream_open($path, $mode, $options, &$opened)
+    {
+        if (strpos($mode, 'r') === 0) { self::$pos = 0; return true; }
+        self::$stored = '';
+        self::$calls  = 0;
+        return true;
+    }
+
+    public function stream_write($data)
+    {
+        self::$calls++;
+        if (self::$mode === 'short') {
+            // Half, once, and nothing after that. fwrite() reports the count
+            // it managed; file_put_contents() would report false and lose it.
+            if (self::$calls > 1) { return 0; }
+            $n = (int) floor(strlen($data) / 2);
+            self::$stored .= substr($data, 0, $n);
+            return $n;
+        }
+        if (self::$mode === 'lying') {
+            self::$stored .= substr($data, 0, (int) floor(strlen($data) / 2));
+            return strlen($data);
+        }
+        self::$stored .= $data;
+        return strlen($data);
+    }
+
+    public function stream_read($count)
+    {
+        $chunk = substr(self::$stored, self::$pos, $count);
+        self::$pos += strlen($chunk);
+        return $chunk;
+    }
+
+    public function stream_eof() { return self::$pos >= strlen(self::$stored); }
+    public function stream_stat() { return $this->url_stat('', 0); }
+    public function stream_close() { return true; }
+    public function stream_flush() { return true; }
+
+    public function url_stat($path, $flags)
+    {
+        return ['dev' => 0, 'ino' => 0, 'mode' => 0100644, 'nlink' => 1, 'uid' => 0,
+                'gid' => 0, 'rdev' => 0, 'size' => strlen(self::$stored), 'atime' => 0,
+                'mtime' => 0, 'ctime' => 0, 'blksize' => -1, 'blocks' => -1];
+    }
+}
+
+stream_wrapper_register('sgprobe', 'SgRestoreProbe');
+$probePath = 'sgprobe://restore-target.conf';
+$snapshot  = str_repeat("SecRuleEngine DetectionOnly\n", 40);   // 1,080 bytes
+$half      = (int) floor(strlen($snapshot) / 2);
+
+$reasonOf = static function (array $r) {
+    return (string) ($r['failed'][0]['reason'] ?? '');
+};
+
+// (a) The honest case first, so a failure below cannot be the harness.
+SgRestoreProbe::$mode = 'honest';
+$r = WAFInstaller::restoreConfig([$probePath => $snapshot]);
+t_ok(!empty($r['ok']), 'a filesystem that behaves restores cleanly through the probe');
+t_eq($snapshot, SgRestoreProbe::$stored, 'with every byte of the snapshot written');
+
+// (b) A FULL FILESYSTEM: half the config written, and the count says so.
+//     This is the case the whole check exists for. If the byte comparison is
+//     removed, the readback catches it instead and the reason changes — which
+//     is why the reason is what is asserted.
+SgRestoreProbe::$mode = 'short';
+$r = WAFInstaller::restoreConfig([$probePath => $snapshot]);
+t_ok(empty($r['ok']),
+     'A SHORT WRITE IS A FAILED RESTORE: half a ModSecurity config is still a '
+   . 'config Apache will refuse, and the operator must not be told the '
+   . 'previous one was put back');
+t_eq($half, strlen(SgRestoreProbe::$stored),
+     'sanity: half of it really is on disk');
+t_contains($reasonOf($r), 'only ' . $half . ' of its ' . strlen($snapshot) . ' bytes',
+     'AND THE COUNT IS WHAT CAUGHT IT: the reason names how much was written, '
+   . 'which is both the proof that the byte comparison ran and the one thing '
+   . 'that tells an operator the file on disk is now truncated and /etc is '
+   . 'full. A "could not be written" message here would mean the comparison '
+   . 'was gone and something else had noticed');
+
+// (c) A filesystem that reports success and did not keep it. Only reading the
+//     file back can see this.
+SgRestoreProbe::$mode = 'lying';
+$r = WAFInstaller::restoreConfig([$probePath => $snapshot]);
+t_ok(empty($r['ok']),
+     'THE FILE IS READ BACK AND COMPARED: the byte count is what the call '
+   . 'believes it wrote, not what the filesystem holds');
+t_contains($reasonOf($r), 'reads back',
+     'and the reason says the readback is what failed, so removing that check '
+   . 'cannot pass unnoticed');
+
+// (d) A path that cannot be opened at all — a different branch, a different
+//     reason, and the one a directory in the way produces.
+SgRestoreProbe::$mode = 'honest';
+$r = WAFInstaller::restoreConfig(['sgprobe-missing://nope' => $snapshot]);
+t_ok(empty($r['ok']), 'a path that cannot be opened is a failed restore');
+t_contains($reasonOf($r), 'could not be opened',
+     'with its own reason: three failure branches all end in ok => false, so '
+   . 'the reason is the only way to know which of them did the work');

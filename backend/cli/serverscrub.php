@@ -77,6 +77,7 @@ function need_root(): void {
 }
 function valid_ip(string $ip): bool { return filter_var($ip, FILTER_VALIDATE_IP) !== false; }
 
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 try {
     switch ($cmd) {
@@ -455,16 +456,21 @@ try {
 
                 /* Writing the row changes nothing on its own: Apache is
                  * serving the config generated at the last mode change. */
-                $applied = WAFInstaller::setMode(WAFInstaller::currentMode());
+                $applied = WAFInstaller::reapplyConfig();
                 out(['id'      => $r['id'],
                      'scope'   => $r['scoped'] ? 'narrowed' : 'server-wide',
-                     'applied' => !empty($applied['success']),
-                     'mode'    => WAFInstaller::currentMode()]);
-                if (empty($applied['success'])) {
+                     'applied' => $applied['applied'],
+                     'mode'    => $applied['mode']]);
+                if (!$applied['applied'] && $applied['configured']) {
                     echo 'WARNING: the exclusion is recorded but Apache was not '
-                       . 'updated: ' . ($applied['error'] ?? 'unknown error') . PHP_EOL
+                       . 'updated: ' . $applied['message'] . PHP_EOL
                        . 'Run `serverscrub waf exclude apply` once that is resolved.' . PHP_EOL;
                     exit(1);
+                }
+                if (!$applied['configured']) {
+                    /* NOT an error, and NOT exit 1: the command did what was
+                     * asked. There is simply no config to update yet. */
+                    echo 'NOTE: ' . $applied['message'] . PHP_EOL;
                 }
                 if (!$r['scoped']) {
                     echo 'NOTE: this disables rule ' . $ruleId . ' for every site on the '
@@ -494,13 +500,16 @@ try {
                 if ($id <= 0) { fail('usage: serverscrub waf exclude rm <id>'); }
                 $r = WAFExclusions::remove($id);
                 if (empty($r['success'])) { fail($r['error'] ?? 'could not remove it'); }
-                $applied = WAFInstaller::setMode(WAFInstaller::currentMode());
+                $applied = WAFInstaller::reapplyConfig();
                 out(['removed' => WAFExclusions::describe($r['removed']),
-                     'applied' => !empty($applied['success'])]);
-                if (empty($applied['success'])) {
+                     'applied' => $applied['applied']]);
+                if (!$applied['applied'] && $applied['configured']) {
                     echo 'WARNING: removed from the database but Apache was not '
-                       . 'updated: ' . ($applied['error'] ?? 'unknown error') . PHP_EOL;
+                       . 'updated: ' . $applied['message'] . PHP_EOL;
                     exit(1);
+                }
+                if (!$applied['configured']) {
+                    echo 'NOTE: ' . $applied['message'] . PHP_EOL;
                 }
                 break;
             }
@@ -511,12 +520,19 @@ try {
             if ($op === 'apply') {
                 need_root();
                 License::requireValid('WAF management');
-                $applied = WAFInstaller::setMode(WAFInstaller::currentMode());
-                if (empty($applied['success'])) {
-                    fail($applied['error'] ?? 'could not write the config');
+                $applied = WAFInstaller::reapplyConfig();
+                if (!$applied['applied'] && $applied['configured']) {
+                    fail($applied['message'] ?? 'could not write the config');
                 }
-                out(['mode'       => WAFInstaller::currentMode(),
+                out(['mode'       => $applied['mode'],
+                     'applied'    => $applied['applied'],
                      'exclusions' => count(WAFExclusions::all())]);
+                if (!$applied['configured']) {
+                    /* Exit 0: nothing failed, there is nothing to do. An
+                     * operator running this before the WAF exists needs the
+                     * next step, not an error. */
+                    echo 'NOTE: ' . $applied['message'] . PHP_EOL;
+                }
                 break;
             }
 
