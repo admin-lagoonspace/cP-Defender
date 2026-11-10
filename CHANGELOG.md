@@ -19,6 +19,61 @@ heading or touch VERSION mid-week._
 
 ### Added
 
+- **`serverscrub quarantine restore` — there was no supported way to put a
+  quarantined file back.** On 10 Nov one third-party ClamAV signature
+  quarantined 154,323 customer files in a single scan, across at least twelve
+  unrelated accounts; 154,252 of them were `README.md` and `CHANGELOG.md`
+  inside `node_modules` and `vendor` trees, matched by a rule that hunts long
+  hex strings — which is what a changelog full of git SHAs looks like. The CLI
+  had status, sweep, prune and move; the one restore function took a single id,
+  was reachable only from an API route, guessed the quarantine directory from a
+  date instead of reading the path it had recorded, verified nothing, restored
+  no ownership, and returned a bare boolean.
+
+  Restore is scoped — by job, signature (exact or one trailing `*`), account,
+  extension, absolute path, or a list of finding ids — and an unscoped restore
+  is refused, because "everything" would put real detections back alongside the
+  false ones. It is a **dry run by default**: `--apply` is the only thing that
+  moves a file, and the dry run prints the signatures, accounts and extensions
+  the scope covers so it can be checked before anything happens.
+
+  Everything else follows from the file being a customer's: the quarantined
+  copy is hashed against the hash recorded when it was taken and a mismatch is
+  a failure rather than a skip; a file that exists at the original path again
+  is never overwritten and is reported separately, because the customer may
+  have replaced it; ownership and mode come from the record where there is one
+  and from the directory the file is going back into where there is not, with
+  the report saying which, since root writing a customer's file back as
+  root:root breaks the site a different way; the work is paged by id in batches
+  so 154,323 files is not one transaction and an interrupted run re-runs
+  without doing anything twice; and the report is restored, skipped-with-reason
+  and failed-with-reason with examples, never a bare count. The legacy
+  quarantine directories are searched too — `quarantine status` reports
+  `/home/.sentinel-gate/quarantine`, and a file quarantined before the rename
+  is not under the current path — and the CLI prints where it looked when it
+  says a copy is missing.
+
+  Owner, group and mode are now recorded **at quarantine time**, so a future
+  restore is exact rather than inferred.
+
+- **A way to switch off one signature by name**, instead of switching off
+  ClamAV. `serverscrub signatures suppress add|list|rm`, and a card on the
+  Scanner page. A suppression names a signature exactly, or a family with one
+  trailing `*` (a prefix under eight characters is refused — `{HEX}*` would
+  disable a whole class of rules from six characters).
+
+  It lives in the product's own database, not in a signature file: freshclam
+  replaces the whole database and a third-party feed rewrites its own
+  directory, so a suppression written there would expire at the next update,
+  silently. The check sits where detections are recorded, which every source
+  passes through.
+
+  And it is never invisible. Every match is counted and the last one
+  timestamped, the panel lists each suppression with how many files it has
+  hidden since and who added it and why, and both suppressing and restoring a
+  signature are security events. A hole in the defence that nobody can see is
+  indistinguishable from a scanner that has stopped working.
+
 - **WAF rule exclusions**, so the engine can be armed without breaking a
   customer's site. Triage could already say a rule looked like it was
   matching a site's own application rather than an attack, and there was
@@ -55,6 +110,39 @@ heading or touch VERSION mid-week._
   rule gets disabled everywhere.
 
 ### Fixed
+
+- **The product quarantined 154,323 customer files from one signature and
+  nothing stopped it.** The scan ran for 59 hours doing it. The verdict gate
+  exists so the product cannot *claim* what it has not verified; this is the
+  same rule applied to what it *does*. One signature accounting for an
+  implausible number of a run's findings is evidence about the signature, not
+  about the customer's files.
+
+  Past a bound — 500 files from one signature in one scan, as a setting — a
+  finding is **flagged and left in place**, the scan **halts** with a status of
+  `halted` and a reason that is not "cancelled", and a critical event carries
+  the facts that make the case readable: how many accounts, which extensions,
+  and the two commands that undo it and stop it recurring. Findings are still
+  recorded, so the operator can judge the signature on the evidence.
+
+  An absolute count rather than a share: share-of-files-scanned is unknowable
+  at the moment it matters, since the walk may be 1% done; share-of-detections
+  is 100% on a three-file scan and cannot distinguish the case it is for; and
+  per-account spread, which is strong evidence, is also what a reseller's mass
+  defacement looks like — so it is reported in the alarm and not used to
+  decide. The bound is per signature, so the one finding in that run which
+  might have been real is still acted on.
+
+- **A scan's own threat count was wrong by five-fold.** Job 12457 recorded
+  `threats_found = 32,003` while the threats table held 154,323 rows for it:
+  32,003 was the first account's share. A server-wide sweep calls the scan once
+  per account web root — about 120 of them — and both progress counters were
+  local to one call, so each path overwrote the previous path's totals, and
+  `files_scanned` went *down* whenever a smaller account started. The counters
+  are cumulative across paths now, and the figure a finished job records is
+  counted from the rows rather than from whatever the worker held in memory.
+  The one number an operator would have looked at was understating the incident
+  while it happened.
 
 - **Customer scan requests had been silently refused for two and a half days,
   on every account.** A customer clicked "Scan my account", the request landed
