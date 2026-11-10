@@ -397,6 +397,36 @@ class License
                              (string) (time() + self::REMOTE_RETRY_SECS));
     }
 
+    /**
+     * Remember that the licence server answered, and said no.
+     *
+     * ── WHY A DEFINITIVE "NO" IS ALSO BACKED OFF ─────────────────────────────
+     *
+     * noteRemoteFailure() covers an unreachable server. A server that answers
+     * "Invalid" is not a failure -- but it is just as expensive, and it was
+     * re-asked on EVERY request, because nothing is cached for a key that is
+     * not Active: measured in the test container against the real licence
+     * server, 1,456 ms for the first call and ~500 ms for each one after it,
+     * added to every page load and every API call on a server whose licence
+     * needs attention. The licence screen itself was the slowest page in the
+     * product.
+     *
+     * The answer cannot change inside the window unless the operator does
+     * something, and when they do, both paths that matter ignore it: the
+     * "refresh" button and the scheduler run as background checks, and
+     * refresh() and activate() clear the window outright. So an operator who
+     * has just fixed their licence sees the change immediately; a request
+     * that merely happens to arrive does not pay for the news.
+     */
+    private static function noteRemoteNegative(string $status): void
+    {
+        if (self::$background) { return; }   // a deliberate refresh re-asks
+        self::log('remote check: server answered "' . $status . '" — not re-asking for '
+                  . self::REMOTE_RETRY_SECS . 's on the request path');
+        Database::setSetting('license_remote_next_try',
+                             (string) (time() + self::REMOTE_RETRY_SECS));
+    }
+
     private static function remoteCheck(string $key): ?array
     {
         // Not while we are backing off from a failure. Returning null here is
@@ -437,6 +467,7 @@ class License
             $expected = md5(self::verificationSecret() . $checkToken);
             if (!hash_equals($expected, (string)$results['md5hash'])) {
                 self::log('remote check: md5hash mismatch — response not trusted');
+                self::noteRemoteNegative('signature mismatch');
                 // The licence server answered, and the answer was signed with a
                 // different secret to ours. That is a configuration mismatch
                 // between this server and the WHMCS addon, not a bad key -- and
@@ -457,6 +488,10 @@ class License
         if ($results['status'] === 'Active') {
             Database::setSetting('license_localkey', self::buildLocalKey($results));
             Database::setSetting('license_checked_at', (string)time());
+        } else {
+            // An Active answer is cached as a local key, so only this branch
+            // can repeat a round trip on every request.
+            self::noteRemoteNegative((string) $results['status']);
         }
 
         return self::fromResults($results, false);
