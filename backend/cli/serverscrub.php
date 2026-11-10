@@ -38,6 +38,10 @@ require_once $BASE . '/lib/IPReputation.php';
 require_once $BASE . '/lib/License.php';
 require_once $BASE . '/lib/UserReport.php';
 require_once $BASE . '/lib/Signatures.php';
+// Loaded at the top rather than inside the command: a require_once buried in
+// a switch arm is how a CLI path dies with 'Class not found' the first time
+// somebody uses it, which for a recovery tool is the worst possible moment.
+require_once $BASE . '/lib/QuarantineRestore.php';
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 $argv0 = 'serverscrub';
@@ -726,8 +730,143 @@ try {
             break;
         }
 
+        /* Putting files back.
+         *
+         * DRY RUN IS THE DEFAULT, and --apply is the only way to move
+         * anything. On 10 Nov one third-party ClamAV signature quarantined
+         * 154,323 customer files -- 154,252 of them markdown inside
+         * node_modules -- and there was no supported way to reverse any of it.
+         * The first thing an operator needs is to see what a scope covers;
+         * the second is to be able to hand back the 72 archives in it without
+         * touching the other 154,251 files. */
+        case 'restore': {
+            need_root();
+            License::requireValid('quarantine restore');
+
+            $flag = static function (string $name) use ($rest): ?string {
+                foreach ($rest as $a) {
+                    if (strpos($a, '--' . $name . '=') === 0) {
+                        return substr($a, strlen($name) + 3);
+                    }
+                }
+                return null;
+            };
+            $has = static function (string $name) use ($rest): bool {
+                return in_array('--' . $name, $rest, true);
+            };
+
+            $scope = [];
+            foreach (['job', 'signature', 'account', 'path', 'id', 'ext'] as $k) {
+                $v = $flag($k);
+                if ($v !== null && $v !== '') { $scope[$k] = $v; }
+            }
+            // --threat-name as a spelling of --signature: it is what the
+            // threats table calls the column, and both names are in the
+            // incident report an operator will be reading from.
+            $tn = $flag('threat-name');
+            if ($tn !== null && $tn !== '') { $scope['signature'] = $tn; }
+
+            $apply = $has('apply');
+            $opts  = [
+                'apply'         => $apply,
+                'limit'         => (int) ($flag('limit') ?? 0),
+                'batch'         => (int) ($flag('batch') ?? QuarantineRestore::DEFAULT_BATCH),
+                'by'            => 'cli:' . (function_exists('posix_getpwuid')
+                                             ? (string) (@posix_getpwuid(posix_geteuid())['name'] ?? 'root')
+                                             : 'root'),
+                'clear_verdict' => $has('clear-verdict'),
+            ];
+            $modeFlag = $flag('mode');
+            if ($modeFlag !== null && $modeFlag !== '') {
+                $opts['mode'] = (int) octdec(ltrim($modeFlag, '0') === '' ? '0' : $modeFlag);
+            }
+
+            $count = QuarantineRestore::count($scope);
+            if (isset($count['error'])) { fail($count['error']); }
+
+            if (!$apply) {
+                // What it covers, before anything moves. A number on its own
+                // is not enough to decide with: the breakdown is what tells an
+                // operator whether the scope is the one they meant.
+                $b = QuarantineRestore::breakdown($scope);
+                echo 'DRY RUN - nothing will be moved. Add --apply to restore.' . PHP_EOL . PHP_EOL;
+                echo 'Scope:        ' . $count['desc'] . PHP_EOL;
+                echo 'Files:        ' . number_format($count['count']) . PHP_EOL;
+                echo 'Bytes:        ' . number_format($count['bytes']) . PHP_EOL;
+                if (!empty($b['signatures'])) {
+                    echo 'Signatures:' . PHP_EOL;
+                    foreach ($b['signatures'] as $r) {
+                        echo '  ' . str_pad(number_format((int) $r['c']), 9, ' ', STR_PAD_LEFT)
+                           . '  ' . $r['k'] . PHP_EOL;
+                    }
+                }
+                if (!empty($b['accounts'])) {
+                    echo 'Accounts:' . PHP_EOL;
+                    foreach ($b['accounts'] as $r) {
+                        echo '  ' . str_pad(number_format((int) $r['c']), 9, ' ', STR_PAD_LEFT)
+                           . '  ' . $r['k'] . PHP_EOL;
+                    }
+                }
+                if (!empty($b['extensions'])) {
+                    echo 'Extensions:' . PHP_EOL;
+                    foreach ($b['extensions'] as $e => $n) {
+                        echo '  ' . str_pad(number_format((int) $n), 9, ' ', STR_PAD_LEFT)
+                           . '  ' . $e . PHP_EOL;
+                    }
+                }
+            }
+
+            $r = QuarantineRestore::run($scope, $opts);
+            if (empty($r['success'])) { fail((string) ($r['error'] ?? 'restore failed')); }
+
+            echo PHP_EOL;
+            echo ($r['dry_run'] ? 'WOULD restore:   ' : 'Restored:        ')
+               . number_format((int) $r['restored']) . ' file(s), '
+               . number_format((int) $r['bytes']) . ' bytes' . PHP_EOL;
+            echo 'Examined:        ' . number_format((int) $r['considered'])
+               . ' of ' . number_format((int) $r['matched']) . ' in scope' . PHP_EOL;
+
+            foreach (['skipped' => 'Skipped', 'failed' => 'FAILED'] as $k => $label) {
+                if (empty($r[$k])) { continue; }
+                echo $label . ':' . PHP_EOL;
+                foreach ($r[$k] as $reason => $n) {
+                    echo '  ' . str_pad(number_format((int) $n), 9, ' ', STR_PAD_LEFT)
+                       . '  ' . $reason . PHP_EOL;
+                    foreach (($r['examples'][$k][$reason] ?? []) as $ex) {
+                        echo '             e.g. ' . $ex . PHP_EOL;
+                    }
+                }
+            }
+            if (!empty($r['skipped']['the quarantined copy is not on disk any more'])) {
+                echo '  Looked in: ' . implode(', ', QuarantineRestore::searchedDirs()) . PHP_EOL;
+            }
+            if (!$r['dry_run']) {
+                $own = $r['ownership'];
+                echo 'Ownership:       ' . (int) $own['from_record'] . ' from the record, '
+                   . (int) $own['inferred'] . ' inferred from the directory, '
+                   . (int) $own['not_changed'] . ' not set' . PHP_EOL;
+                echo 'Still in quarantine for this scope: '
+                   . number_format((int) $r['remaining']) . PHP_EOL;
+                if ((int) $r['verdicts'] > 0) {
+                    echo 'Cleared as not-malware: ' . (int) $r['verdicts'] . PHP_EOL;
+                }
+            }
+
+            /* The thing an operator will otherwise find out the hard way:
+             * restoring does not stop the next scan doing it again. Both
+             * levers are named rather than one being chosen for them. */
+            if (!$r['dry_run'] && (int) $r['restored'] > 0 && empty($opts['clear_verdict'])) {
+                echo PHP_EOL
+                   . 'NOTE: these files are back, and the next scan will match them again.' . PHP_EOL
+                   . '      Suppress the signature:  serverscrub signatures suppress add <name> --reason="..."' . PHP_EOL
+                   . '      or clear the files:      add --clear-verdict to this command' . PHP_EOL;
+            }
+            break;
+        }
+
         default:
-            fail('usage: serverscrub quarantine [status|sweep|prune [days]|move <dir>]');
+            fail('usage: serverscrub quarantine [status|sweep|prune [days]|move <dir>'
+               . '|restore <scope> [--apply]]');
         }
         break;
     }
@@ -831,7 +970,7 @@ Usage: serverscrub <command> [args] [--json]
   waf-parse-test [n]           Show what the parser reads from the ModSecurity log
   waf-reingest [--clear]       Re-read the audit log from the beginning
   quarantine status            Show where quarantine is and how big
-  quarantine sweep             Apply retention now: expire, reconcile and retire records\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  license status               Show license state
+  quarantine sweep             Apply retention now: expire, reconcile and retire records\n  quarantine prune [days]      Delete quarantined files older than N days\n  quarantine move <dir>        Relocate quarantine to another volume\n  quarantine restore <scope>   Put quarantined files back. DRY RUN unless --apply.\n                               Scope: --job=N --signature=NAME --account=USER\n                               --ext=tar,gz,zip --path=/abs/file --id=N[,N...]\n                               Also: --limit=N --batch=N --mode=0644 --clear-verdict\n  license status               Show license state
   license activate <key>       Store and verify a license key
   license refresh              Force a re-check against the server
   license identity             Show the domain/IP this server reports

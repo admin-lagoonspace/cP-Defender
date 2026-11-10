@@ -1674,6 +1674,22 @@ This file was removed and not kept. Restore it from your backups
                'hash' => @hash_file('sha256', $filePath) ?: '']
             : null;
 
+        /* Owner and mode, recorded BEFORE anything is touched.
+         *
+         * Nothing recorded these, so when 154,323 files were quarantined from
+         * one false-positive signature on 10 Nov there was no way to put them
+         * back as the customer's files rather than root's. The restore can
+         * infer the owner from the directory, which is right in a customer's
+         * home and a guess everywhere else; this makes it exact for anything
+         * quarantined from now on. */
+        $st = @stat($filePath);
+        if (is_array($st)) {
+            Database::query(
+                'UPDATE threats SET orig_uid=?, orig_gid=?, prev_mode=COALESCE(prev_mode,?) WHERE id=?',
+                [(int) $st['uid'], (int) $st['gid'], (int) $st['mode'] & 07777, $threatId]
+            );
+        }
+
         // Inert first, whatever happens next.
         $mode = self::disableFile($filePath);
 

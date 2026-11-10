@@ -622,6 +622,20 @@ class Database {
             $db->exec("ALTER TABLE threats ADD COLUMN quarantine_expires_at INTEGER");
         }
 
+        /* Who owned the file before we took it. These are files in customer
+         * homes, and a restore that writes them back as root:root breaks the
+         * site a different way -- which is what the 10 Nov false positive made
+         * unavoidable for 154,323 files, because nothing recorded the owner.
+         * QuarantineRestore falls back to the owner of the directory the file
+         * goes back into when these are null, and says in its report which of
+         * the two it used. */
+        if (!in_array('orig_uid', $thCols)) {
+            $db->exec("ALTER TABLE threats ADD COLUMN orig_uid INTEGER");
+        }
+        if (!in_array('orig_gid', $thCols)) {
+            $db->exec("ALTER TABLE threats ADD COLUMN orig_gid INTEGER");
+        }
+
         // One-time repair of mail_activity written before 4.11.1.
         //
         // collect() used to file every log line it read into the CURRENT hour,
