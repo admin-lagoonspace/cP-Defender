@@ -660,43 +660,104 @@ async function refreshDashboard() {
   const sbE = document.getElementById('sb-events');
   if (sbE) sbE.textContent = data.events?.filter(e => !e.resolved).length || 0;
 
-  // Scanner status card
+  /* ── SCANNER STATUS CARD ────────────────────────────────────────────────
+   *
+   * This card showed, at the same moment, on the same card:
+   *
+   *     ⚠️ 1 Active Threat
+   *     Last scan: 12s ago · [zero] new threats
+   *     1,339 Scanned   1,339 Clean   0 Quarantined   0 Deleted
+   *
+   * The count beside "Last scan" was a hardcoded zero in this file, while
+   * `lastJob.threats_found` was already being read at four other call sites.
+   * `1,339 Clean` was the file count minus two ALL-TIME threat counts, so a
+   * file that is open as a threat right now was counted as clean. `0 Deleted`
+   * was a literal too, and the coverage percentage was a constant — ninety
+   * eight point seven, chosen by `total > 0 ? <constant> : 0` — a figure no
+   * part of this product has ever measured.
+   *
+   * The two numbers above are deliberately spelled out rather than quoted:
+   * tests/test_dashboard_scan_card.php asserts that neither literal appears
+   * anywhere in this function, comments included, because a commented-out
+   * constant is one uncomment away from being on screen again.
+   *
+   * The two headline figures do measure different things, and that is not the
+   * fault: "Active Threats" is what is open NOW, across every scan;
+   * `threats_found` is what the LAST scan found. Both can be true together, so
+   * each now says which it is, and neither is a constant.
+   */
   const lastJob = sc?.last_scan;
-  const threats = sc?.active || 0;
   const scanIcon   = document.getElementById('dash-scan-icon');
   const scanStatus = document.getElementById('dash-scan-status');
   const scanMeta   = document.getElementById('dash-scan-meta');
   const scanBadge  = document.getElementById('dash-scan-badge');
 
-  if (threats > 0) {
+  // `sc?.active || 0` treated undefined, a failed fetch and a genuine zero as
+  // the same thing and painted all three green. A dashboard that could not
+  // read the threat count must not look like a clean bill of health.
+  const threats = Number.isFinite(sc?.active) ? sc.active : null;
+
+  if (threats === null) {
+    scanIcon.textContent = '❔';
+    scanStatus.textContent = 'Unknown';
+    scanStatus.style.color = 'var(--txt2)';
+    scanBadge.className = 'badge badge-gray';
+    scanBadge.textContent = 'No data';
+    scanStatus.title = 'The threat count could not be read from the server.';
+  } else if (threats > 0) {
     scanIcon.textContent = '⚠️';
-    scanStatus.textContent = `${threats} Active Threat${threats > 1 ? 's' : ''}`;
+    scanStatus.textContent = `${fmtNum(threats)} Active Threat${threats > 1 ? 's' : ''}`;
     scanStatus.style.color = 'var(--red)';
     scanBadge.className = 'badge badge-red';
     scanBadge.textContent = 'Threats Found';
+    scanStatus.title = 'Open threats across every scan, not just the last one.';
   } else {
     scanIcon.textContent = '✅';
     scanStatus.textContent = 'Protected';
     scanStatus.style.color = 'var(--green)';
     scanBadge.className = 'badge badge-green';
     scanBadge.textContent = 'Protected';
+    scanStatus.title = 'No open threats.';
   }
 
-  if (lastJob?.finished_at) {
-    scanMeta.textContent = `Last scan: ${reltime(lastJob.finished_at)} · 0 new threats`;
+  const ls = sc?.last_scan_stats || null;
+  if (!lastJob?.finished_at) {
+    scanMeta.textContent = 'Last scan: never';
+  } else {
+    const found = Number.isFinite(ls?.threats_found) ? ls.threats_found
+                : (Number.isFinite(lastJob.threats_found) ? lastJob.threats_found : null);
+    scanMeta.textContent = `Last scan: ${reltime(lastJob.finished_at)} · `
+      + (found === null ? '— found by that scan'
+                        : `${fmtNum(found)} found by that scan`);
   }
 
-  // Coverage bar
-  const total = sc?.files_scanned || 0;
-  const pct   = total > 0 ? 98.7 : 0;
-  document.getElementById('dash-coverage-bar').style.width = `${pct}%`;
-  document.getElementById('dash-coverage-pct').textContent = `${pct}%`;
+  /* Coverage is files examined against files that exist, and nothing in this
+   * product counts the second number — so there is no percentage to show. It
+   * is left blank rather than filled in, and the bar stays empty rather than
+   * drawing the reassuring constant it used to. */
+  const covBar = document.getElementById('dash-coverage-bar');
+  const covPct = document.getElementById('dash-coverage-pct');
+  if (covBar) { covBar.style.width = '0%'; }
+  if (covPct) {
+    covPct.textContent = '—';
+    covPct.title = 'Not measured: the product counts the files it examined, '
+                 + 'not how many exist to examine.';
+  }
 
-  // File stats
-  document.getElementById('fs-scanned').textContent = fmtNum(total);
-  document.getElementById('fs-clean').textContent   = fmtNum(total - (sc?.quarantined || 0) - (sc?.deleted || 0));
-  document.getElementById('fs-quar').textContent    = fmtNum(sc?.quarantined || 0);
-  document.getElementById('fs-del').textContent     = fmtNum(0);
+  /* All four figures are from the LAST SCAN now, which is what the words next
+   * to them say. "Clean" is files it examined with no finding; quarantined and
+   * deleted are that scan's own findings by their current state. Mixing one
+   * scan's file count with all-time threat counts is what produced
+   * "1,339 Clean" beside an open threat. */
+  const dash = (el, v) => {
+    const node = document.getElementById(el);
+    if (node) { node.textContent = Number.isFinite(v) ? fmtNum(v) : '—'; }
+  };
+  const total = ls ? ls.files_scanned : (Number.isFinite(sc?.files_scanned) ? sc.files_scanned : null);
+  dash('fs-scanned', total);
+  dash('fs-clean',   ls ? ls.clean : null);
+  dash('fs-quar',    ls ? ls.quarantined : null);
+  dash('fs-del',     ls ? ls.deleted : null);
 
   // Threat breakdown
   const byType = sc?.by_type || [];

@@ -415,6 +415,28 @@ class Scanner {
      * is strictly worse than one scan that finishes sooner.
      */
     /**
+     * Where cPanel's account list is.
+     *
+     * Overridable for the same reason as WAFInstaller::setConfDir(): without
+     * it, every assertion about account discovery could only be written
+     * against a machine with NO /var/cpanel, and inverted on a machine that
+     * had one. Seven assertions in tests/test_scan_types.php did exactly
+     * that -- they passed on a developer's laptop and failed on anything
+     * shaped like a cPanel server, which is the only shape that matters,
+     * leaving the bounding of a "quick" scan unverified where it counts. A
+     * quick scan that silently walks all 132 home directories is the fault
+     * those assertions exist to catch.
+     */
+    private static ?string $cpUsersDir = null;
+
+    public static function setCpanelUsersDir(?string $dir): void { self::$cpUsersDir = $dir; }
+
+    public static function cpanelUsersDir(): string
+    {
+        return self::$cpUsersDir ?? '/var/cpanel/users';
+    }
+
+    /**
      * The accounts on this server.
      *
      * cPanel keeps one file per account in /var/cpanel/users, which is the
@@ -427,7 +449,7 @@ class Scanner {
     {
         $out = [];
 
-        $cpUsers = '/var/cpanel/users';
+        $cpUsers = self::cpanelUsersDir();
         if (is_dir($cpUsers)) {
             foreach ((array) @scandir($cpUsers) as $f) {
                 if ($f === '.' || $f === '..' || $f === 'root') { continue; }
@@ -2692,13 +2714,56 @@ This file was removed and not kept. Restore it from your backups
             "SELECT threat_type, COUNT(*) as count FROM threats WHERE status='active' GROUP BY threat_type"
         );
 
+        /* ── WHAT THE LAST SCAN ITSELF FOUND ─────────────────────────────────
+         *
+         * `active`, `quarantined` and `deleted` above are the state of the
+         * threat table NOW, across every scan ever run. The dashboard card
+         * presents its four figures under "Scanned / Clean / Quarantined /
+         * Deleted" beside "Last scan: 5m ago", which reads as four facts about
+         * that scan — and it was mixing the two: all-time counts subtracted
+         * from one scan's file count, so the card said "1,339 Clean" with a
+         * threat open and listed in the panel below it.
+         *
+         * Two different questions, two sets of numbers, named for which is
+         * which. Three indexed counts against one job id, not a table scan. */
+        $lastStats = null;
+        if ($lastScan) {
+            $jid = (int) $lastScan['id'];
+            $c = static function (string $status) use ($jid): int {
+                $r = Database::fetchOne(
+                    "SELECT COUNT(*) AS c FROM threats WHERE scan_job_id = ? AND status = ?",
+                    [$jid, $status]
+                );
+                return (int) ($r['c'] ?? 0);
+            };
+            $files  = (int) ($lastScan['files_scanned'] ?? 0);
+            $found  = (int) ($lastScan['threats_found'] ?? 0);
+            $lastStats = [
+                'job_id'        => $jid,
+                'files_scanned' => $files,
+                'threats_found' => $found,
+                // Files examined that produced no finding in THAT scan. Not
+                // "clean files on the server": nothing here knows that.
+                'clean'         => max(0, $files - $found),
+                'quarantined'   => $c('quarantined'),
+                'deleted'       => $c('deleted'),
+                'still_active'  => $c('active'),
+            ];
+        }
+
         return [
             'total_threats'  => (int) $total,
             'active'         => (int) $active,
             'quarantined'    => (int) $quarant,
+            'deleted'        => (int) Database::fetchOne(
+                "SELECT COUNT(*) as c FROM threats WHERE status='deleted'")['c'],
             'last_scan'      => $lastScan,
             'by_type'        => $byType,
             'files_scanned'  => (int) ($lastScan['files_scanned'] ?? 0),
+            // null, not 0, when no scan has ever run: "no scan" and "a scan
+            // that found nothing" are different answers and the card has to be
+            // able to tell them apart.
+            'last_scan_stats' => $lastStats,
         ];
     }
 
