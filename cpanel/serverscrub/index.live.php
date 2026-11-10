@@ -467,6 +467,49 @@ ob_start();
 
   $lastCheck = (int) ($sr['last_check_at'] ?? 0);
 
+  /* ── HAS ANYTHING ACTUALLY ACTED ON THIS REQUEST? ─────────────────────────
+   *
+   * The age of the REQUEST is the one signal on this page that needs nothing
+   * else to be working. $lastCheck comes out of report.json, which is rebuilt
+   * hourly; the request file is in this account's own home and is deleted the
+   * moment the privileged side acts on it. So a request that is still here,
+   * minutes after it was made, with no scan running, has not been started --
+   * whatever any other number says.
+   *
+   * On 8 Nov this was the customer's entire experience: click Scan, "Queued",
+   * and nothing, for two and a half days, because the pickup was refusing a
+   * lock a child process had inherited. Their click genuinely did nothing and
+   * this page implied otherwise.
+   *
+   * Five minutes: the resident service picks up within seconds, the cron
+   * within a minute, and the scheduler floor within fifteen -- so five minutes
+   * is past both fast paths and well inside the floor, and the wording below
+   * is careful not to call the floor a fault. */
+  $reqAge     = $reqAt > 0 ? max(0, time() - $reqAt) : -1;
+  $notPicked  = $reqAge >= 300;
+
+  /* How long since anything looked for requests. Computed HERE, not inside one
+   * branch of the card, because a later branch reads it too -- and with the
+   * new "not started" wording above it, an $age defined in a branch that no
+   * longer runs would have been an undefined variable and a contradictory
+   * sentence on the same card.
+   *
+   * THERE ARE THREE PICKUPS, not one, and a single threshold cannot describe
+   * them: a service every ~5 seconds, a cron every minute, and the scheduler
+   * every 15 minutes as a floor under both. The first version of this warned
+   * at five minutes and said the scan "will not start on its own", which was
+   * untrue on a server running the 15-minute floor -- and it said it for ten
+   * minutes out of every fifteen. */
+  $age = $lastCheck > 0 ? (time() - $lastCheck) : -1;
+
+  // Why, if the privileged side knows. Up to an hour old (report.json), so it
+  // is worded as what was last recorded rather than as what is true now.
+  $pickup        = is_array($sr['scan_pickup'] ?? null) ? $sr['scan_pickup']
+                 : (is_array($sr['pickup'] ?? null) ? $sr['pickup'] : []);
+  $pickupRefused = !empty($pickup['refused']);
+  $pickupSince   = (int) ($pickup['since'] ?? 0);
+  $lastAttempt   = (int) ($sr['last_attempt_at'] ?? 0);
+
   // ── The live scan, read fresh ─────────────────────────────────────────────
   //
   // Reported as: press the button, the card says "Queued", and it goes on
@@ -535,6 +578,8 @@ ob_start();
 // ── The scan panel, shown on Home and on Virus scanner ──────────────────────
 $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
                                    $noteState, $note, $lastCheck,
+                                   $reqAge, $notPicked, $pickupRefused,
+                                   $pickupSince, $lastAttempt, $age,
                                    $srPer, $srHours, $srUsed, $srLeft,
                                    $live, $liveStatus, $isRunning, $isStopping,
                                    $justDone, $polling, $elapsed, $cancelling) {
@@ -627,7 +672,12 @@ $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
         </div>
 
       <?php elseif ($srQueued): ?>
-        <div class="tag green">Queued</div>
+        <?php /* Not green once it is clear nothing has acted on it: a green
+                 tag is a reassurance, and "Queued" for two and a half days
+                 was the reassurance that hid this fault from 132 accounts. */ ?>
+        <div class="tag <?= $notPicked ? 'amber' : 'green' ?>">
+          <?= $notPicked ? 'Not started' : 'Queued' ?>
+        </div>
         <form method="post" style="display:inline;margin:0 0 0 10px">
           <button class="btn btn-stop" type="submit" name="cancel_scan" value="1">Cancel scan</button>
         </form>
@@ -638,7 +688,25 @@ $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
             <strong>Your request has been received.</strong>
           <?php endif; ?>
 
-          <?php if ($noteState === 'blocked' && !empty($note['detail'])): ?>
+          <?php if ($notPicked && $pickupRefused): ?>
+            <br><strong class="red">Your scan has not started yet.</strong>
+            The part of ServerScrub that picks up scan requests is being
+            blocked on this server<?= $pickupSince > 0
+                ? ' (since ' . e(str_replace(' ago', '', ago($pickupSince))) . ' ago)' : '' ?>,
+            usually by a scan that is already running and has not finished.
+            Your request is saved and will start by itself as soon as that
+            clears. If it stays like this, please send your hosting provider
+            this page: it is their side, not yours.
+
+          <?php elseif ($notPicked): ?>
+            <br><strong class="red">Your scan has not started yet.</strong>
+            It was requested <?= e(ago($reqAt)) ?> and nothing has acted on it,
+            so it is not simply waiting its turn. Your request is saved. If it
+            is still like this in a few minutes, please send your hosting
+            provider this page — they can check it in a minute, and it is their
+            side rather than anything you have done.
+
+          <?php elseif ($noteState === 'blocked' && !empty($note['detail'])): ?>
             The server could not start it yet: <?= e(rtrim($note['detail'], '.')) ?>.
             It will start automatically once that clears — you do not need to ask again.
           <?php elseif ($noteState === 'at_limit'): ?>
@@ -646,28 +714,10 @@ $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
             last <?= (int) $srHours ?> hours, so this request is held until the next
             one is allowed.
           <?php else: ?>
-            <?php
-              /* How long since anything looked for requests.
-               *
-               * THERE ARE THREE PICKUPS, not one, and a single threshold
-               * cannot describe them:
-               *
-               *   - a service, every ~5 seconds, which is the normal path;
-               *   - a cron entry, every minute, for hosts without systemd;
-               *   - the scheduler, every 15 minutes, as a floor under both.
-               *
-               * The first version of this warned at five minutes and said the
-               * scan "will not start on its own" -- which was simply untrue on
-               * a server running the 15-minute floor, and it said it for ten
-               * minutes out of every fifteen. Telling a customer their scan is
-               * broken when it is merely queued is its own bug, and it sends
-               * them to their host for nothing.
-               *
-               * So: a minute is normal. Up to twenty is the floor doing its
-               * job, and says so honestly without alarm. Past twenty, two
-               * scheduler cycles have been missed and nothing is running. */
-              $age = $lastCheck > 0 ? (time() - $lastCheck) : -1;
-            ?>
+            <?php /* A minute is normal. Up to twenty is the 15-minute floor
+                     doing its job, and says so without alarm. Telling a
+                     customer their scan is broken when it is merely queued is
+                     its own bug, and sends them to their host for nothing. */ ?>
             <?php if ($age >= 0 && $age <= 90): ?>
               It starts within a few seconds.
             <?php elseif ($age >= 0 && $age <= 1200): ?>
@@ -676,7 +726,13 @@ $renderScanCard = function () use ($srOn, $srQueued, $srWait, $sr, $reqAt,
             <?php endif; ?>
           <?php endif; ?>
 
-          <?php if ($age < 0 || $age > 1200): ?>
+          <?php if ($notPicked): ?>
+            <?php /* Already explained above, from the age of the request
+                     itself -- which needs nothing else on this page to be
+                     working. Saying it twice, or following it with "your scan
+                     runs in the background", is how a card contradicts
+                     itself. */ ?>
+          <?php elseif ($age < 0 || $age > 1200): ?>
             <br><strong class="red">Your scan has not started, and will not
             start on its own.</strong>
             The part of ServerScrub that picks up scan requests has not run
