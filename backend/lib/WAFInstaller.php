@@ -874,8 +874,12 @@ CONF;
      *      exactly how this fails silently, and file_put_contents() answers a
      *      partial write with false and a suppressed warning, so the size of
      *      the truncation is lost. See writeAll().
-     *   2. A read-back comparison. The count says what the call believes it
-     *      wrote; reading it back says what the filesystem holds.
+     *   2. A read-back comparison, which is the check that does not depend on
+     *      being right about any API's return value. Measured on a 64 KB
+     *      tmpfs: a write that runs out of space LEAVES THE BYTES IT MANAGED
+     *      on disk, so a caller that sees a failure and stops has still
+     *      replaced a working config with half of one. The count says what the
+     *      call believes it wrote; this says what the filesystem holds.
      *   3. For a file that did not exist before: unlink()'s return AND a
      *      file_exists() afterwards, because "restored" means absent, and an
      *      empty SecRuleEngine config is not the same thing as no config.
@@ -1204,9 +1208,9 @@ CONF;
          * reading, which is usually ours, when the second definition is in a
          * different ruleset entirely. So this says which one, or says plainly
          * that it could not tell. */
-        if ($v['ran'] && stripos((string) $v['output'], 'same id') !== false) {
-            $why .= '.' . self::duplicateIdExplanation();
-        }
+        $explain = ($v['ran'] && stripos((string) $v['output'], 'same id') !== false)
+            ? self::duplicateIdExplanation()
+            : '';
 
         if (!$rb['ok']) {
             /* Deliberately does NOT contain the words "rolled back": nothing
@@ -1219,10 +1223,14 @@ CONF;
             Logger::error('WAF mode change failed AND the rollback failed: ' . $text);
             return ['success' => false, 'rolled_back' => false, 'restored_ok' => false,
                     'neutralised' => $neu['ok'], 'left_on_disk' => $neu['left'],
-                    'error' => $why . ': ' . $v['output'] . ' | ' . $text];
+                    'error' => $why . ': ' . $v['output'] . $explain . ' | ' . $text];
         }
 
-        $err = $why . ', so it was rolled back: ' . $v['output'];
+        /* The explanation goes AFTER Apache's output, not inside $why. Spliced
+         * into the clause it produced "…defines an id twice., so it was rolled
+         * back:" -- a stray ".," in the middle of the one sentence an operator
+         * reads at 3am. */
+        $err = $why . ', so it was rolled back: ' . $v['output'] . $explain;
 
         // Validate AGAIN. If what we put back is also broken, the operator has
         // to learn that now rather than at the next reboot -- the whole point

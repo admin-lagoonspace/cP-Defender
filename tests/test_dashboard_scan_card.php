@@ -148,3 +148,39 @@ t_contains($card, "dash('fs-del',     ls ? ls.deleted : null)",
 t_contains($card, 'Last scan: never',
      'a server that has never been scanned says so, rather than leaving the '
    . 'previous text in place');
+
+// ── The fourth state: a server that has never been scanned ─────────────────
+//
+// Shakaal found this one still green after the three above were fixed. On a
+// fresh install, before any scan:
+//
+//     dash-scan-icon    ✅
+//     dash-scan-status  Protected      green
+//     dash-scan-badge   Protected      badge badge-green
+//     dash-scan-meta    Last scan: never
+//
+// Zero open threats across zero scans is not a clean bill of health. The green
+// tick is what an operator reads, not the grey line beneath it, and this is
+// the first thing every new customer sees. "Never looked" and "looked and
+// found nothing" were painted identically -- the same defect as the three
+// above, in a state nobody had rendered.
+
+t_contains($card, "} else if (!lastJob?.finished_at) {",
+     'the zero-threats branch asks whether a scan has ever finished before it '
+   . 'claims anything');
+t_contains($card, "scanStatus.textContent = 'Not yet scanned'",
+     'A FACT INSTEAD OF A CLAIM: "Not yet scanned" is true of a fresh server; '
+   . '"Protected" is not');
+t_contains($card, "scanBadge.textContent = 'No scan yet'",
+     'and the badge says the same thing, since the badge is what carries the '
+   . 'colour');
+
+// The green state must be reachable only after a scan that actually ran.
+$greenPos  = strpos($card, "scanStatus.textContent = 'Protected'");
+$neverPos  = strpos($card, "scanStatus.textContent = 'Not yet scanned'");
+t_ok($neverPos !== false && $greenPos !== false && $neverPos < $greenPos,
+     'the never-scanned branch is tested BEFORE the green one, so green is '
+   . 'only reachable for a server that has been scanned and was clean');
+t_contains($card, "No open threats, as of the last scan.",
+     'and the green state says what it is relative to, rather than asserting a '
+   . 'standing condition');

@@ -370,3 +370,50 @@ t_ok(empty($r['ok']), 'a path that cannot be opened is a failed restore');
 t_contains($reasonOf($r), 'could not be opened',
      'with its own reason: three failure branches all end in ok => false, so '
    . 'the reason is the only way to know which of them did the work');
+
+// ── 8. The sentence an operator reads, end to end ──────────────────────────
+//
+// The duplicate-id explanation was spliced into the clause rather than added
+// after Apache's output, so the message read
+//
+//     ...Nothing in /etc/serverscrub/waf/coreruleset defines an id twice., so
+//     it was rolled back: AH00526...
+//
+// A stray ".," in the middle of the one sentence somebody reads at 3am, and
+// the explanation arriving before the error it explains.
+
+@mkdir($cdir, 0700, true);
+WAFInstaller::setRunner($okRunner);
+WAFInstaller::setMode('detectiononly');
+
+// A tree of ours that is internally consistent, so the explanation takes its
+// "I could not identify the other ruleset" form -- the one that was producing
+// the stray punctuation.
+$ourTree = $cdir . '/coreruleset';
+@mkdir($ourTree . '/rules', 0700, true);
+file_put_contents($ourTree . '/crs-setup.conf',
+    "SecAction \"id:900990,phase:1,pass,nolog\"\n");
+file_put_contents($ourTree . '/rules/REQUEST-913-SCANNER-DETECTION.conf',
+    "SecRule ARGS \"@rx a\" \"id:913100,phase:1,deny\"\n");
+WAFInstaller::setCrsPath($ourTree);
+
+WAFInstaller::setRunner(function (string $cmd) {
+    return ['out' => 'AH00526: Syntax error on line 818 of crs-setup.conf'
+                   . "\nModSecurity: Found another rule with the same id", 'code' => 1];
+});
+$dup = WAFInstaller::setMode('on');
+$msg = (string) ($dup['error'] ?? '');
+
+t_ok(strpos($msg, '.,') === false,
+     'no stray ".," where the explanation meets the rest of the sentence');
+t_contains($msg, 'so it was rolled back: AH00526',
+     'Apache\'s own words follow the clause that introduces them');
+$applyPos   = strpos($msg, 'so it was rolled back');
+$explainPos = strpos($msg, 'could not identify');
+t_ok($applyPos !== false && $explainPos !== false && $applyPos < $explainPos,
+     'and the explanation comes AFTER the error it explains, not spliced into '
+   . 'the middle of it');
+t_contains($msg, 'defines each of its own ids exactly once',
+     'and still says what was established about our own tree, which is the '
+   . 'part that stops the operator searching it');
+WAFInstaller::setCrsPath(null);

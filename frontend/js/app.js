@@ -711,13 +711,32 @@ async function refreshDashboard() {
     scanBadge.className = 'badge badge-red';
     scanBadge.textContent = 'Threats Found';
     scanStatus.title = 'Open threats across every scan, not just the last one.';
+  } else if (!lastJob?.finished_at) {
+    /* ZERO OPEN THREATS ACROSS ZERO SCANS IS NOT A CLEAN BILL OF HEALTH.
+     *
+     * This branch used to be the green tick, so a freshly installed server
+     * rendered "✅ Protected" directly above its own "Last scan: never" —
+     * "never looked" painted identically to "looked and found nothing", and
+     * the tick is what an operator reads, not the grey line under it. It is
+     * also the first thing every new customer sees.
+     *
+     * The comment on the threats === null branch above states the principle;
+     * this is the same case, one step earlier. */
+    scanIcon.textContent = '🔍';
+    scanStatus.textContent = 'Not yet scanned';
+    scanStatus.style.color = 'var(--txt2)';
+    scanBadge.className = 'badge badge-gray';
+    scanBadge.textContent = 'No scan yet';
+    scanStatus.title = 'Nothing has been scanned on this server yet, so there is '
+                     + 'nothing to report either way. Run a scan.';
   } else {
     scanIcon.textContent = '✅';
     scanStatus.textContent = 'Protected';
     scanStatus.style.color = 'var(--green)';
     scanBadge.className = 'badge badge-green';
     scanBadge.textContent = 'Protected';
-    scanStatus.title = 'No open threats.';
+    // Green is earned by a scan that ran and found nothing, and by nothing else.
+    scanStatus.title = 'No open threats, as of the last scan.';
   }
 
   const ls = sc?.last_scan_stats || null;
