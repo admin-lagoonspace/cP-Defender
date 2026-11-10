@@ -146,6 +146,19 @@ Note `file_put_contents` on a full filesystem returns a **short byte count, not
 successful restore even if the return value were merely tested for `=== false`.
 The check has to be a byte comparison.
 
+> **CORRECTION, 2026-11-10 — the paragraph above is WRONG.** Settled in the
+> container on a 64 KB tmpfs, on both PHP 7.4.33 and 8.2.35:
+> `file_put_contents()` returns **`false`** on ENOSPC, with a suppressed
+> warning *"Only 65536 of 200000 bytes written, possibly out of free disk
+> space"*. The short count is **`fwrite()`'s** return, not
+> `file_put_contents()`'s. Wasooli raised this and Wasooli is right.
+>
+> The conclusion survives for a different reason: 65,536 bytes *are* written, so
+> the call returns `false` **and leaves a truncated file behind**. A caller that
+> checks `=== false` and stops has still replaced a good config with half a
+> config. It is the byte-readback comparison that earns its place, not the
+> short-count branch argued for here. See `2026-11-10-retest-d07fa26.md`.
+
 Ways the restore fails on a real server, all inside the window `apachectl -t`
 takes on a 132-account box: `/etc` fills up; a config-management agent
 re-asserts ownership; `chattr +i`, which several hardening guides apply to
@@ -843,7 +856,9 @@ PHP 8.1 (`test_bruteforce_ladder.php:44`, `test_firewall_rules_paging.php:133`
 
 `restoreConfig()` is public, returns `['ok' => bool, 'failed' => [path, reason]]`
 and verifies every path three ways: the byte count against `strlen()` (a full
-filesystem returns a **short count**, not `false`), a read-back comparison, and
+filesystem returns a **short count**, not `false` -- WRONG, see the correction
+at finding 1: it returns `false` and leaves a truncated file), a read-back
+comparison, and
 `file_exists()` after the unlink for a file that did not exist before.
 `rolled_back` is read off that result; `'rolled_back' => true` as a literal
 appears nowhere in the product, and a test asserts that.

@@ -371,8 +371,95 @@ do_ladder() {
     } || note "      tmpfs mount unavailable in this container — ENOSPC rung SKIPPED"
 }
 
+# ── 6. The N4 collision sentence, from a REAL colliding configuration ────────
+#
+# foreignRuleIdCollisions() scans a FIXED list of locations. Wasooli tested it
+# and its three wordings against fixtures it wrote itself and never reproduced
+# a real distro-CRS-plus-ours server to read the sentence that comes out. Two
+# cases matter and they are different:
+#
+#   identified   the other ruleset IS on the list  -> name it
+#   off-list     the other ruleset is NOT          -> say plainly that it could
+#                                                     not be identified, and
+#                                                     must not blame our tree
+do_collide() {
+    banner "N4: the sentence a REAL collision produces"
+    sgroot
+    [[ -d "${WORK}/coreruleset" ]] || { echo "    run 'crs' first"; return 1; }
+
+    WAFCONF=/etc/serverscrub/waf
+    mkdir -p "$WAFCONF"
+    rm -rf "${WAFCONF}/coreruleset"
+    cp -a "${WORK}/coreruleset" "${WAFCONF}/coreruleset"
+    rm -f /etc/apache2/conf.d/modsec_vendor_configs/OWASP3/crs-setup.conf
+
+    # ── case 1: the genuine distro ruleset, restored to where it ships ──
+    note "── case 1: distro mod_security_crs 3.3.4, at its real path ──"
+    if [[ -d /etc/httpd/modsecurity.d.disabled ]]; then
+        rm -rf /etc/httpd/modsecurity.d
+        mv /etc/httpd/modsecurity.d.disabled /etc/httpd/modsecurity.d
+    fi
+    note "distro crs-setup: $(ls /etc/httpd/modsecurity.d/crs-setup.conf 2>/dev/null || echo MISSING)"
+    note "ids it shares with ours: $(grep -ohE 'id:[0-9]+' /etc/httpd/modsecurity.d/crs-setup.conf 2>/dev/null | head -3 | tr '\n' ' ')"
+    echo
+    php_product "
+        Database::get();
+        WAFInstaller::setConfDir('${WAFCONF}');
+        WAFInstaller::setIncludeDir('/etc/apache2/conf.d');
+        \$r = WAFInstaller::setMode('detectiononly');
+        echo '    success: ', var_export(!empty(\$r['success']), true), PHP_EOL, PHP_EOL;
+        echo '    ── THE OPERATOR-FACING SENTENCE ──', PHP_EOL;
+        /* Printed WHOLE, newlines folded. Splitting it on '|' is how the first
+         * version of this harness showed only Apache's raw tail and made a
+         * perfectly good explanation look like it had never been added. */
+        echo str_replace(\"\n\", ' ~ ', (string)(\$r['error'] ?? '(no error key)')), PHP_EOL;
+    "
+    echo
+    note "and the collision list the scanner built:"
+    php_product "
+        Database::get();
+        WAFInstaller::setConfDir('${WAFCONF}');
+        \$c = WAFInstaller::foreignRuleIdCollisions('${WAFCONF}/coreruleset');
+        echo '      ', count(\$c), ' colliding id(s)', PHP_EOL;
+        \$n = 0; foreach (\$c as \$id => \$w) { if (\$n++ < 3) echo '        ', \$id, ' <- ', implode(', ', \$w), PHP_EOL; }
+    "
+
+    # ── case 2: a ruleset in a place the fixed list does NOT know ──
+    echo
+    note "── case 2: a ruleset OFF the fixed list ──"
+    rm -rf /etc/httpd/modsecurity.d && mkdir -p /etc/httpd/modsecurity.d
+    mkdir -p /opt/somebodys-rules
+    # Same id our tree defines, somewhere nothing in FOREIGN_RULE_GLOBS looks.
+    grep -hE '^[^#]*SecAction .*id:900990' "${WAFCONF}/coreruleset/crs-setup.conf" \
+        > /opt/somebodys-rules/extra.conf 2>/dev/null \
+        || echo 'SecAction "id:900990,phase:1,nolog,pass,t:none"' > /opt/somebodys-rules/extra.conf
+    cat > /etc/httpd/conf.d/zz-foreign.conf <<'EOF'
+<IfModule security2_module>
+    IncludeOptional /opt/somebodys-rules/*.conf
+</IfModule>
+EOF
+    note "planted: /opt/somebodys-rules/extra.conf (not in FOREIGN_RULE_GLOBS)"
+    note "defines: $(grep -ohE 'id:[0-9]+' /opt/somebodys-rules/extra.conf | head -1)"
+    echo
+    php_product "
+        Database::get();
+        WAFInstaller::setConfDir('${WAFCONF}');
+        WAFInstaller::setIncludeDir('/etc/apache2/conf.d');
+        \$r = WAFInstaller::setMode('on');
+        echo '    success: ', var_export(!empty(\$r['success']), true), PHP_EOL, PHP_EOL;
+        echo '    ── THE OPERATOR-FACING SENTENCE ──', PHP_EOL;
+        /* Printed WHOLE, newlines folded. Splitting it on '|' is how the first
+         * version of this harness showed only Apache's raw tail and made a
+         * perfectly good explanation look like it had never been added. */
+        echo str_replace(\"\n\", ' ~ ', (string)(\$r['error'] ?? '(no error key)')), PHP_EOL;
+    "
+    rm -f /etc/httpd/conf.d/zz-foreign.conf
+    rm -rf /opt/somebodys-rules
+}
+
 prepare
 case "${1:-all}" in
+    collide) do_collide ;;
     crs)     do_crs ;;
     dupe)    do_dupe ;;
     syntax)  do_syntax ;;

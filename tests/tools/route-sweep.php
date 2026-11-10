@@ -119,12 +119,28 @@ foreach ($routes as $module => $actions) {
             preg_match('/((?:PHP )?(?:Fatal error|Parse error|Warning|Notice|Deprecated):[^\n]*)/i', $out, $em);
             $note = 'PHP DIAGNOSTIC: ' . trim(substr($em[1] ?? '', 0, 100));
         } else {
-            $code = (int) ($json['code'] ?? 200);
-            if ($code >= 500) { $ok = false; $note = 'HTTP ' . $code . ': ' . substr((string)($json['error'] ?? ''), 0, 70); }
-            elseif (($json['success'] ?? null) === false) {
+            /* THIS IS THE ENVELOPE'S `code`, NOT AN HTTP STATUS.
+             *
+             * Every route here runs in a CLI process, so there is no HTTP
+             * status to read at all. An earlier version of this line defaulted
+             * a missing `code` to 200, and on the strength of it I reported
+             * "an auth failure is returned as HTTP 200" (N6, 2026-11-09).
+             * That was wrong, and the defect was in this file, not in the
+             * product: Auth::deny() has always called
+             * http_response_code(401), and over real HTTP the panel does
+             * return 401 — confirmed with curl against the container. The
+             * envelope now carries `code` as well so body and status agree,
+             * but what is read below is still only the body. */
+            $code = (int) ($json['code'] ?? 0);
+            if ($code >= 500) {
+                $ok = false;
+                $note = 'envelope code ' . $code . ': ' . substr((string)($json['error'] ?? ''), 0, 70);
+            } elseif (($json['success'] ?? null) === false) {
                 // A refusal is a perfectly good answer: wrong method, needs a
-                // licence, needs an argument. It is still a JSON envelope.
-                $note = 'refused (' . $code . '): ' . substr((string) ($json['error'] ?? ''), 0, 60);
+                // licence, needs an argument, not authenticated. It is still a
+                // JSON envelope, which is all this sweep is entitled to judge.
+                $note = 'refused' . ($code ? ' (' . $code . ')' : '') . ': '
+                      . substr((string) ($json['error'] ?? ''), 0, 60);
             }
         }
 
