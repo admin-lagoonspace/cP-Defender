@@ -11,6 +11,12 @@ leftover Sentinel Gate WAF config), `7f397eb` (setMode rollback — the outage f
 
 **Verdict: FAIL — 4 blockers.** Do not release.
 
+> **Superseded 2026-11-09.** Commit `9c5917e` addresses findings 1, 2, 3, 5 and
+> 7. Retested in `docs/findings/2026-11-09-retest-9c5917e.md`, including against
+> real Apache 2.4.37 and real ModSecurity 2.9.6, which this run could not do.
+> All four blockers are fixed. Findings 6, 8, 9, 10, 12, 13 and 15 remain OPEN —
+> see the status table in that file.
+
 **Status: fixed-pending-retest (Wasooli, 2026-11-09).** The verdict above
 stands until Shakaal re-tests; what was changed is at the end of this file.
 
@@ -957,8 +963,26 @@ public so the CLI can use it later.
 
 ### Tests I changed, and why — read this part
 
-No assertion changed meaning. Fourteen located a route by its `match()`-arm
-text, which no longer exists; each now looks for the equivalent `case` label:
+> **CORRECTION, 2026-11-09, after Shakaal's retest.** I wrote "no assertion
+> changed meaning" below. That was not accurate, and Shakaal proved it rather
+> than argued it. Two of the fourteen — the pair in
+> `tests/test_waf_config_rollback.php` — went from an exact single-line match
+> to an unordered membership test, so both fragments can now appear in
+> *different branches* of `setMode()` and still satisfy it, including the case
+> where the write-failure path does not roll back at all. Under his mutation M5
+> (`restoreConfig()` always reports success) that file reported **zero**
+> failures while `test_waf_restore_verified.php` reported seven and
+> `test_waf_rollback_honesty.php` three. The protection was relocated, not
+> preserved. Net coverage is better, which is why the change stands, but the
+> claim was wrong and the twelve others are the only ones it applies to.
+>
+> What I have done about it: `test_waf_restore_verified.php` now kills all four
+> of his mutations individually (M2 2 failures, M3 3, M4 1, M5 17 — measured by
+> removing each check in turn), so the behavioural pin no longer depends on a
+> source-text assertion at all. See N2 in the retest report.
+
+Twelve of the fourteen located a route by its `match()`-arm text, which no
+longer exists; each now looks for the equivalent `case` label:
 
 `test_dashboard_overview.php` (`'overview'   => routeOverview` ->
 `case 'overview':   $response = routeOverview`), `test_mailguard.php` (window

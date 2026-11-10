@@ -56,6 +56,122 @@ heading or touch VERSION mid-week._
 
 ### Fixed
 
+- **The dashboard contradicted itself on one card.** At the same moment, in
+  the same panel, after a scan that had found a threat:
+
+  ```
+  ⚠️ 1 Active Threat
+  Last scan: 12s ago · 0 new threats
+  1,339 Scanned   1,339 Clean   0 Quarantined   0 Deleted
+  Coverage 98.7%
+  ```
+
+  with the threat listed immediately below. Four of those figures did not come
+  from the data: the count beside "Last scan" was a hardcoded zero while
+  `threats_found` was being read correctly at four other places in the same
+  file; "Clean" was the last scan's file count minus two *all-time* threat
+  counts, so a file that is open as a threat right now counted as clean;
+  "Deleted" was a literal zero; and the coverage percentage was a constant
+  chosen by `total > 0`.
+
+  The two headline numbers do measure different things — "Active Threats" is
+  what is open now across every scan, `threats_found` is what the last scan
+  found — so each now says which it is: *"Last scan: 12s ago · 1 found by that
+  scan"*. `Scanner::getStats()` returns the last scan's own figures (examined,
+  found, clean, quarantined, deleted, still open) and the all-time deleted
+  count that `app.js` read and the server never sent. Coverage shows nothing,
+  because the product counts the files it examined and not how many exist to
+  examine.
+
+  And `sc?.active || 0` painted undefined, a failed fetch and a genuine zero
+  the same green. A card that could not read the threat count now says
+  "Unknown" in grey: nothing must look like success.
+
+- **A database that could not be opened answered every API route with a PHP
+  stack trace.** The first query runs inside the authentication check, before
+  the handler that produces the JSON envelope, so the client — which expects
+  JSON — showed its generic "Server error, please try again", and the response
+  body disclosed absolute paths and the internal call graph. The database
+  directory is 0700 and root-owned by design, so a panel running as anything
+  but root hit exactly this on every request.
+
+  `Database::ready()` is now asked before anything touches the database, and a
+  failure is one sentence, HTTP 503, with the path and the reason in the log
+  rather than in the response. `auth/status` is deliberately exempt — it reads
+  only constants and it is what the panel polls to find out whether the API is
+  alive — and it reports `db_available: false`, because "online" on its own
+  would be half the truth. `serverscrub-scheduler --status`, which is the
+  command an operator runs when something is already wrong, said the same
+  uncaught exception; it now names the file and the likely cause.
+
+- **A second ModSecurity ruleset on the server is now named when it collides
+  with ours.** Apache answers a duplicate rule id with the file it was
+  *reading* — which is our tree, and ours is clean — so the operator was sent
+  to look in the wrong place. cPanel ships a vendor ruleset, so this is a
+  configuration to expect. The rejection message now names the other ruleset
+  and the id, or says plainly that it could not identify it and where it
+  looked. The rollback already made this safe; this is about making it
+  diagnosable.
+
+- **`waf exclude add` on a server where the WAF has never been armed said
+  "Invalid mode".** The CLI passed `currentMode()` — which is the literal
+  `unknown` before the first `waf mode` — straight back into `setMode()`, so
+  the operator was told their own command was invalid, advised to resolve
+  something that was not broken, and given a non-zero exit for an action that
+  had worked. The exclusion was saved all along and takes effect the first time
+  the mode is set, which is the opposite of what the message said. It now says
+  that, names the command that arms the WAF, and exits zero.
+
+- **A licence the server rejects cost a round trip on every single request.**
+  The back-off window was only recorded when the licence server could not be
+  reached. A server that answers "Invalid" is not a failure — but nothing is
+  cached for a key that is not active, so the check was repeated on every page
+  load: measured at 1,456 ms for the first call and ~500 ms for each one after.
+  A definitive negative answer is now backed off too. The refresh button, the
+  scheduler and `license activate` clear or bypass the window, so an operator
+  who has just fixed their licence still sees it immediately.
+
+- **`install.sh`'s self-test reported eight failures and exited 1 on a
+  successful `--mode standalone` install.** The WHM plugin checks were gated on
+  `/usr/local/cpanel` existing rather than on the mode the operator chose, so a
+  deliberate standalone install on a cPanel server was told to re-upload the
+  zip and re-run the installer — for a plugin it had been asked not to install.
+  The exit code is load-bearing: it killed the test container's panel before the
+  server started, and any provisioning script that trusts it reads a correct
+  install as a failed one. Gated on the mode, reported as "not applicable", and
+  a real failure still exits non-zero.
+
+- **An incremental log reader could decide a log had not grown when it had.**
+  PHP's stat cache is process-wide and an append does not invalidate it, so a
+  cached `filesize()` compared equal to the stored offset and the whole read was
+  skipped. Harmless from cron, where every run is a fresh process; wrong in the
+  daemon and in anything long-running. Fixed in the brute-force collector and
+  in the WAF audit-log ingester, which has the same shape.
+
+- The rollback's byte-count check was built on a claim that is not true:
+  `file_put_contents()` answers a partial write with `false` and a suppressed
+  warning, not with a short count — that is `fwrite()`'s behaviour. So the
+  restore writes through a small helper built on `fwrite()`, and a full
+  filesystem now produces *"only 500 of its 1,080 bytes were written"* instead
+  of "it could not be written": the first tells an operator the file on disk is
+  truncated and the filesystem is full.
+
+- Smaller, all of them found by testing something else:
+  - The OWASP CRS version was read as `unknown` from any tree the product did
+    not install itself — including cPanel's vendor tree — because the pattern
+    expected `OWASP_CRS` before `ver`, and the real file writes
+    `ver:'OWASP_CRS/4.7.0'`. The panel rendered that as `vunknown`.
+  - An authentication refusal set HTTP 401 but did not carry the code in the
+    JSON envelope, so anything reading the envelope rather than the response —
+    a cron caller, a shell script, a sweep — could not tell a refusal from a
+    success. The licence gate always included its 402.
+  - `WAFInstaller::setCrsPath()` and `Scanner::setCpanelUsersDir()` exist for
+    the same reason `setConfDir()` does: without them, the code that reads the
+    CRS rule files and the code that lists accounts could only be tested on a
+    machine that looks nothing like a cPanel server, and the bounding of a
+    "quick" scan — the thing standing between a customer and a scan that walks
+    all 132 home directories — was verified only where it does not matter.
+
 - **The rollback added above could fail and still be reported as a rollback.**
   Shakaal reproduced it: the config path was replaced with a directory during
   the `apachectl -t` window, `restoreConfig()` wrote nothing, the Apache
