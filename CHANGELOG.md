@@ -56,6 +56,37 @@ heading or touch VERSION mid-week._
 
 ### Fixed
 
+- **The topbar said "Protected" on every page, and nothing ever set it.** The
+  status pill was static markup — a green dot and the word Protected, from the
+  moment the page loaded until it was closed. Rendered in a browser, it said
+  Protected above the scanner card's own grey "Not yet scanned" on a server
+  that had never been scanned, and it said Protected, in green, directly above
+  the card's own "API unreachable" while the API was answering 500.
+
+  It is the same defect as `MODE = 'On'`, `action = 'block'` on 148,551 events,
+  `Coverage 98.7%` and "944 Java Attack / Disabled", and it outlived all four
+  because it lived in the HTML rather than in the JavaScript, where no amount
+  of reading the code would surface it. A badge that cannot be wrong because it
+  never changes is not a status.
+
+  It is driven from the same two figures as the scanner card — the open-threat
+  count, and whether any scan has ever finished — by the same code, so the two
+  cannot disagree. Five states: the API not answering, the count unreadable,
+  nothing scanned yet, threats open with the count, and "No open threats" —
+  which is the only green one, the only one that pulses, and reachable only
+  after a scan that actually ran. The markup now ships grey and says
+  "Checking…", which is also what stays on screen if the script never runs.
+
+- **A licence key dated in the future never expired.** The age of a cached key
+  is `(now − checkdate)`, which goes negative for a future date and stays under
+  the key lifetime for ever: the key read as freshly verified, never degraded,
+  and the product silently stopped re-verifying it. Not reachable by an
+  outsider — forging a key needs the salt, which is 32 random bytes in a 0700
+  root-owned database — and it fails open, so no customer loses protection; a
+  clock set ahead, or corrected backwards after a key was issued, gets there
+  without trying. The age is clamped at zero, so such a key counts as checked
+  now and expires on schedule once the clock is right.
+
 - **The dashboard contradicted itself on one card.** At the same moment, in
   the same panel, after a scan that had found a threat:
 
