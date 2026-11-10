@@ -138,6 +138,45 @@ $publicRoutes = [
 $routeKey = "$module/$action";
 $user     = null;
 
+/* ── THE DATABASE, BEFORE ANYTHING TOUCHES IT ────────────────────────────────
+ *
+ * Every route needs it, the authentication check is the first thing to use it,
+ * and that check runs before the try/catch below -- so a database that could
+ * not be opened produced an uncaught PDOException with a full stack trace as
+ * the HTTP body, on every route, instead of the JSON envelope. The database
+ * directory is 0700 root-owned by design, so a panel running as anything but
+ * root hits exactly this.
+ *
+ * auth/status is exempt and deliberately so: it reads nothing but constants,
+ * it is what the panel polls to find out whether the API is alive, and "the
+ * panel is running and its database is not" is the single most useful thing an
+ * operator can be told here. It carries db_available so the answer is not
+ * mistaken for a healthy server.
+ *
+ * One sentence, the right status code, and the detail in the log rather than
+ * in the response. */
+$__dbOptional = ['auth/status' => true];
+$__db = Database::ready();
+if (!$__db['ok'] && empty($__dbOptional[$routeKey])) {
+    http_response_code(503);
+    echo json_encode([
+        'success' => false,
+        'error'   => 'The ServerScrub database could not be opened, so nothing can be read '
+                   . 'or recorded. This is usually a permissions problem: the database '
+                   . 'directory is root-owned and 0700. See logs/php-error.log and the '
+                   . 'ServerScrub log for the path and the reason.',
+        'code'    => 503,
+    ]);
+    exit;
+}
+
+/* Authentication and the licence check run BEFORE the dispatcher's try/catch,
+ * so anything they throw used to leave the envelope behind entirely. Wrapped
+ * here, with the reason in `detail` and no stack trace: the caller is an
+ * authenticated WHM root session, but a trace in an HTTP body is still an
+ * absolute path list for anybody who reaches this URL unauthenticated. */
+try {
+
 if (!isset($publicRoutes[$routeKey])) {
     $user = Auth::requireAuth();
 
@@ -176,6 +215,18 @@ if ($user !== null && empty($licenseExempt[$module])) {
         ]);
         exit;
     }
+}
+
+} catch (Throwable $e) {
+    Logger::error('API bootstrap failed [' . $module . '/' . $action . ']: ' . $e->getMessage());
+    if (!headers_sent()) { http_response_code(500); }
+    echo json_encode([
+        'success' => false,
+        'error'   => 'The request could not be started: ' . $e->getMessage(),
+        'detail'  => basename($e->getFile()) . ':' . $e->getLine(),
+        'code'    => 500,
+    ]);
+    exit;
 }
 
 // ── Route dispatcher ──────────────────────────────────────────────────────────
@@ -328,6 +379,10 @@ function routeAuth(string $action, string $method, array $body, ?array $user): a
                 'status'  => 'online',
                 'mode'    => INSTALL_MODE,
                 'port'    => SG_PORT,
+                /* The one route that answers without a usable database, so it
+                 * is also the one that has to say whether there is one.
+                 * "online" with an unopenable database is half the truth. */
+                'db_available' => $GLOBALS['__db']['ok'] ?? null,
             ];
         case 'me': return ['success' => true, 'user' => $user];
         // POST auth/change-password (standalone only)

@@ -168,7 +168,14 @@ class Auth {
             throw new RuntimeException('DENIED ' . $code . ': ' . $msg);
         }
         http_response_code($code);
-        echo json_encode(['success' => false, 'error' => $msg]);
+        /* The code goes in the BODY as well as in the status line. The status
+         * was already 401 -- api.js keys its session-expiry logout off it --
+         * but the envelope did not say so, and anything reading the envelope
+         * rather than the response (the route sweep, a cron caller, a shell
+         * script using the CLI's --json) saw `success: false` with no code and
+         * defaulted to 200. The licence gate has always included its 402 for
+         * the same reason. */
+        echo json_encode(['success' => false, 'error' => $msg, 'code' => $code]);
         exit;
     }
 

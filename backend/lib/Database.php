@@ -14,6 +14,49 @@ if (!defined('SG_DB') && defined('SG_ROOT')) {
 class Database {
     private static ?PDO $pdo = null;
 
+    /**
+     * Can this process open the database at all?
+     *
+     * ── WHY THIS EXISTS ──────────────────────────────────────────────────────
+     *
+     * The database directory is 0700 and root-owned by design, so a panel
+     * running as anything but root fails on its very first query -- which was
+     * inside the licence check during bootstrap, BEFORE the handler that
+     * produces the JSON envelope. The caller got
+     *
+     *     PHP Fatal error: Uncaught PDOException: SQLSTATE[HY000]:
+     *     General error: 14 unable to open database file in
+     *     /opt/serverscrub-src/backend/lib/Database.php:851
+     *     Stack trace: #0 ... #3 .../License.php(591)
+     *
+     * as the HTTP body: the client expects JSON and shows its generic "Server
+     * error -- please try again", which is the entire class of failure the
+     * router's envelope exists to prevent, and the response discloses absolute
+     * paths and the internal call graph.
+     *
+     * Asked once, as a question, so the answer can be a sentence.
+     *
+     * @return array{ok:bool,error:?string}
+     */
+    public static function ready(): array
+    {
+        try {
+            self::get()->query('SELECT 1');
+            return ['ok' => true, 'error' => null];
+        } catch (Throwable $e) {
+            /* error_log(), not Logger: Logger::error() writes a row through
+             * Database::insert(), so logging a database that cannot be opened
+             * would throw from inside the handler for a database that cannot
+             * be opened. PHP's own log is configured by the API entry point.
+             *
+             * The path goes in the log and not in the return value: SG_DB is
+             * an absolute server path and this answer travels over HTTP. */
+            @error_log('ServerScrub: database could not be opened at ' . SG_DB
+                       . ': ' . $e->getMessage());
+            return ['ok' => false, 'error' => $e->getMessage()];
+        }
+    }
+
     public static function get(): PDO {
         if (self::$pdo === null) {
             $db_path = SG_DB;

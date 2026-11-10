@@ -868,6 +868,27 @@ if (!$status && !$dryRun && $force === null) {
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
+
+/* THE DATABASE, FIRST, AND AS A SENTENCE.
+ *
+ * Everything below reads or writes it, including --status, which exists to be
+ * run when something is already wrong. Without this, a database that cannot be
+ * opened came out of cron -- and out of the operator's own terminal -- as
+ *
+ *     PHP Fatal error: Uncaught PDOException: SQLSTATE[HY000]: General error:
+ *     14 unable to open database file in .../Database.php:851
+ *
+ * which says nothing about which file or why, from the one command whose whole
+ * purpose is to answer that question. */
+$dbState = Database::ready();
+if (!$dbState['ok']) {
+    fwrite(STDERR, 'serverscrub scheduler: the database at ' . SG_DB . ' could not be opened, '
+                 . 'so nothing could be read or scheduled: ' . $dbState['error'] . PHP_EOL
+                 . 'This is usually ownership or permissions on ' . dirname(SG_DB)
+                 . ' (root-owned, 0700), or SG_ROOT pointing somewhere unexpected.' . PHP_EOL);
+    exit(1);
+}
+
 $ran = 0;
 // ---- --status: what is scheduled, and when it last ran ---------------------
 //
