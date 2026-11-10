@@ -476,6 +476,34 @@ class WAFInstaller
     ];
 
     /**
+     * Where to look for a second ModSecurity ruleset, overridable.
+     *
+     * The same seam as setCrsPath() and Scanner::setCpanelUsersDir(), and for
+     * the same reason: four tests in a row have been written on a bare
+     * developer machine and then failed on the container that is deliberately
+     * shaped like a cPanel server, because the thing they assumed was absent
+     * is exactly what a real server has. A test that needs "no other ruleset
+     * on this host" can now say so -- setForeignRuleGlobs([]) -- instead of
+     * depending on the machine it runs on.
+     *
+     * An empty array means look nowhere, and duplicateIdExplanation() reports
+     * what it searched, so an operator still sees that nothing was searched
+     * rather than that nothing was found.
+     */
+    private static ?array $foreignGlobs = null;
+
+    public static function setForeignRuleGlobs(?array $globs): void
+    {
+        self::$foreignGlobs = $globs;
+    }
+
+    /** @return string[] */
+    public static function foreignRuleGlobs(): array
+    {
+        return self::$foreignGlobs ?? self::FOREIGN_RULE_GLOBS;
+    }
+
+    /**
      * Rule ids that OUR tree defines and some OTHER ruleset on this host
      * defines too.
      *
@@ -511,7 +539,7 @@ class WAFInstaller
         $confReal = realpath(self::confDir());
 
         $foreign = [];
-        foreach (self::FOREIGN_RULE_GLOBS as $glob) {
+        foreach (self::foreignRuleGlobs() as $glob) {
             foreach (glob($glob) ?: [] as $f) {
                 $real = realpath($f);
                 if ($real === false) { continue; }
@@ -573,7 +601,7 @@ class WAFInstaller
         return ' Apache reports a duplicate rule id, and the tree at ' . $dir
              . ' defines each of its own ids exactly once, so the second definition is in a '
              . 'ruleset this check could not identify. It looked in: '
-             . implode(', ', self::FOREIGN_RULE_GLOBS) . '. A second OWASP CRS loaded by '
+             . implode(', ', self::foreignRuleGlobs()) . '. A second OWASP CRS loaded by '
              . 'Apache is the usual cause (cPanel ships a vendor ruleset); `apachectl -t` '
              . 'names the file it was reading when it stopped.';
     }
