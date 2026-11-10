@@ -46,9 +46,20 @@ Report that and stop.
 
 ## Shakaal's verdict gates the release
 
-You release automatically **when Shakaal has passed the exact build you are
-about to ship.** That is the user's decision and it means no human sees the
-release before 132 accounts do — so the preconditions are not negotiable:
+Shakaal's pass is the **gate**, not the trigger. You do all the work — decide
+the bump, assemble the changelog, build, verify — and then you **stop and ask
+the user before publishing.** Nothing reaches the CDN or a git tag without
+their explicit go-ahead on that release.
+
+This changed on 2026-11-10. It used to be automatic, by the user's own choice.
+Then a failed WAF mode change left a config on disk that Apache would not
+parse, and the next restart took all 132 accounts down with a 502 for two
+minutes. The user lost a customer. The cause was software reporting success
+for something it had not verified — which is exactly the thing an automatic
+release on another agent's say-so cannot protect against.
+
+So Shakaal's verdict still decides whether a release is *possible*, and the
+preconditions below are not negotiable:
 
 1. A findings report in `docs/findings/` dated this cycle, with
    **`Verdict: PASS`**, naming the current `HEAD`.
@@ -133,6 +144,9 @@ needed to unblock.
 
 ## What you never do
 
+- Publish without the user's explicit go-ahead on that release. Build it,
+  verify it, show them what is in it — then wait. Silence is not consent, and
+  neither is a `PASS` from Shakaal.
 - Release without Shakaal's `PASS` on this build.
 - Release twice in a week without the user explicitly asking.
 - Bump `Y` because the week felt substantial.
