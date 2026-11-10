@@ -87,6 +87,19 @@ heading or touch VERSION mid-week._
   the same green. A card that could not read the threat count now says
   "Unknown" in grey: nothing must look like success.
 
+  The same applies one step earlier. A freshly installed server showed a green
+  "✅ Protected" directly above its own "Last scan: never", because the
+  zero-threats branch never asked whether a scan had happened — so "never
+  looked" and "looked and found nothing" rendered identically, and that is the
+  first thing a new customer sees. Zero open threats across zero scans is not a
+  clean bill of health: it reads "Not yet scanned" until a scan has actually
+  run, and green is only reachable after one.
+
+  Also in that area: the duplicate-rule-id explanation was spliced into the
+  middle of the rollback sentence, producing `…defines an id twice., so it was
+  rolled back:`. It follows Apache's own words now, which is also where it
+  belongs in the reading order.
+
 - **A database that could not be opened answered every API route with a PHP
   stack trace.** The first query runs inside the authentication check, before
   the handler that produces the JSON envelope, so the client — which expects
@@ -130,6 +143,14 @@ heading or touch VERSION mid-week._
   A definitive negative answer is now backed off too. The refresh button, the
   scheduler and `license activate` clear or bypass the window, so an operator
   who has just fixed their licence still sees it immediately.
+
+  The cached-key branches either side of that — a stale key inside the 10-day
+  grace window, and one past it — had been established by reading the code
+  rather than by running it, because every key the signer produces is dated
+  today and the date is bound into both of its hashes, so no test could age one
+  without forging a signature. The signer takes an optional date now (nothing
+  in production passes one), and the grace window, the degraded state and the
+  gate past grace are each exercised.
 
 - **`install.sh`'s self-test reported eight failures and exited 1 on a
   successful `--mode standalone` install.** The WHM plugin checks were gated on
