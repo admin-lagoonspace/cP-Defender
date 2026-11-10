@@ -925,6 +925,33 @@ if ($status) {
     echo 'Scans running now:        ' . count($live)
        . ($live ? ' (job ' . implode(', ', array_column($live, 'id')) . ')' : '')
        . PHP_EOL;
+
+    /* CUSTOMER SCAN PICKUPS, in the command an operator already runs to ask
+     * "is anything happening?".
+     *
+     * On 8 Nov every customer scan request on a 132-account server was
+     * refused for two and a half days and nothing said so anywhere: the
+     * pickup took a lock a child process had inherited, returned silently,
+     * and exited 0. The two timestamps are printed together because a FRESH
+     * attempt beside a STALE check is the signature of exactly that. */
+    $att = (int) Database::setting('user_scan_last_attempt', '0');
+    $chk = (int) Database::setting('user_scan_last_check', '0');
+    $fmt = static function (int $ts): string {
+        return $ts > 0 ? gmdate('Y-m-d H:i:s', $ts) . 'Z ('
+                         . max(0, time() - $ts) . 's ago)' : 'never';
+    };
+    echo 'Customer scan pickup:     last attempt ' . $fmt($att) . PHP_EOL;
+    echo '                          last run     ' . $fmt($chk) . PHP_EOL;
+
+    $pk = UserScanRequest::pickupState();
+    if ($pk['refused']) {
+        echo '  *** PICKUPS ARE BEING REFUSED since '
+           . gmdate('Y-m-d H:i:s', $pk['since']) . 'Z: '
+           . ($pk['reason'] !== '' ? $pk['reason'] : 'the pickup lock is held')
+           . PHP_EOL
+           . '      Customer scan requests are NOT starting. `serverscrub '
+           . 'scan-stop-all` releases a lock held by a running scan.' . PHP_EOL;
+    }
     exit(0);
 }
 

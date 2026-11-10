@@ -262,9 +262,30 @@ class UserScanRequest
         // the lock in the cron script those two held different locks, and the
         // same request could be started twice -- the second refused by
         // scan_max_concurrent and logged as a failure nobody could explain.
-        $lock = self::lock();
-        if ($lock === false) { return $out; }
+        /* RECORDED BEFORE THE LOCK, ALWAYS.
+         *
+         * This used to be: take the lock, return silently on refusal, and
+         * write user_scan_last_check only on success. So when the lock was
+         * stuck -- see lock() -- the pickup ran every five seconds, refused
+         * every time, logged nothing, exited 0, and left the one timestamp
+         * that would have shown it frozen. The bug suppressed the only
+         * evidence of itself, and finding it meant converting a Unix
+         * timestamp by hand on the server.
+         *
+         * Two timestamps now, because they answer different questions:
+         *   last_attempt  something tried to pick requests up (every tick)
+         *   last_check    a pickup actually ran (the lock was ours)
+         * A fresh attempt with a stale check IS the signature of this fault. */
+        Database::setSetting('user_scan_last_attempt', (string) time());
 
+        $lock = self::lock();
+        if ($lock === false) {
+            self::noteLockRefused();
+            $out['refused'] = true;
+            return $out;
+        }
+
+        self::clearLockRefused();
         Database::setSetting('user_scan_last_check', (string) time());
 
         // Cancels first, and for every account, before anything is started.
@@ -280,7 +301,7 @@ class UserScanRequest
             $req = self::read($user);
             if ($req !== null) { $pending[] = $req; }
         }
-        if ($pending === []) { return $out; }
+        if ($pending === []) { self::unlock($lock); return $out; }
 
         // Oldest first. There is no cap any more, but Scanner::startScan()
         // still refuses once scan_max_concurrent is reached, so on a busy
@@ -334,6 +355,10 @@ class UserScanRequest
             }
         }
 
+        // The pickup is over, so the lock is too. It used to be dropped only
+        // by the process exiting -- which is also why nobody noticed a child
+        // still holding it.
+        self::unlock($lock);
         return $out;
     }
 
@@ -364,9 +389,212 @@ class UserScanRequest
             @fclose($fh);
             return false;
         }
+        /* Who holds it, written INSIDE the lock. The file was empty, so a
+         * refused pickup could not say anything about the holder -- and when
+         * the holder is a process that inherited the descriptor and knows
+         * nothing about it (clamscan, on 8 Nov), the pid recorded here being
+         * dead is the whole diagnosis. */
+        @ftruncate($fh, 0);
+        @rewind($fh);
+        @fwrite($fh, (string) json_encode([
+            'pid'   => getmypid(),
+            'at'    => time(),
+            'host'  => gethostname(),
+            'where' => 'UserScanRequest::process',
+        ]) . "\n");
+        @fflush($fh);
+
         // Kept alive deliberately: closing the handle drops the lock.
         $GLOBALS['__sg_user_scan_lock'] = $fh;
         return $fh;
+    }
+
+    /**
+     * Drop the pickup lock.
+     *
+     * The lock used to be released only by the process exiting, which is fine
+     * when it exits -- and was the reason nobody noticed that a CHILD had
+     * inherited the descriptor and was holding the lock long after this
+     * process was gone. Releasing it where the pickup ends makes the lifetime
+     * the pickup's again, and makes the --watch service drop it between
+     * passes rather than at the end of its hour-long life.
+     */
+    private static function unlock($lock): void
+    {
+        if (!is_resource($lock)) { return; }
+        @flock($lock, LOCK_UN);
+        @fclose($lock);
+        unset($GLOBALS['__sg_user_scan_lock']);
+    }
+
+    /** What is on disk about the current holder, or null. */
+    public static function lockOwner(): ?array
+    {
+        $raw = (string) @file_get_contents(SG_TMP . '/user-scans.lock');
+        if (trim($raw) === '') { return null; }
+        $d = json_decode(trim($raw), true);
+        return is_array($d) && isset($d['pid']) ? $d : null;
+    }
+
+    /**
+     * One sentence an operator can act on, for a lock we could not take.
+     *
+     * The expensive part -- walking /proc to find which live processes hold
+     * the file -- runs only when this is called, which is rate-limited by
+     * noteLockRefused() to once every ten minutes. It is bounded: at most 400
+     * processes examined, and the first three holders named.
+     *
+     * The interesting case is the one that cost two and a half days of
+     * customer scans: the recorded owner is GONE, so what holds the lock is a
+     * descriptor it leaked to a child. That is no longer possible from
+     * startScan() (see Scanner::fdsAboveStderr()), but saying so plainly is
+     * what turns a silent refusal into a five-minute fix on any other path.
+     */
+    public static function lockDiagnosis(): string
+    {
+        $path  = SG_TMP . '/user-scans.lock';
+        $owner = self::lockOwner();
+        $pid   = $owner !== null ? (int) $owner['pid'] : 0;
+        $since = $owner !== null ? (int) ($owner['at'] ?? 0) : 0;
+
+        $msg = 'another pickup holds ' . $path;
+        if ($pid > 0) {
+            $alive = self::pidAlive($pid);
+            $age   = $since > 0 ? ' (taken ' . self::ago($since) . ')' : '';
+            $msg   = $alive
+                ? 'pickup PID ' . $pid . ' holds ' . $path . $age
+                : 'the pickup that took ' . $path . $age . ' was PID ' . $pid
+                  . ', WHICH NO LONGER EXISTS -- so the lock is held by a '
+                  . 'descriptor it leaked to a child process, and it will not '
+                  . 'be released until that child exits';
+        }
+
+        $holders = self::lockHolders($path);
+        if ($holders !== []) {
+            $msg .= '. Held by: ' . implode(', ', $holders);
+        }
+        return $msg;
+    }
+
+    /** @return string[] "3824536 (clamscan)" for live holders of $path */
+    private static function lockHolders(string $path, int $maxProcs = 400): array
+    {
+        if (!is_dir('/proc')) { return []; }
+        $real = realpath($path);
+        if ($real === false) { return []; }
+
+        $found = [];
+        $seen  = 0;
+        foreach ((array) @scandir('/proc') as $d) {
+            if (!ctype_digit((string) $d)) { continue; }
+            if (++$seen > $maxProcs || count($found) >= 3) { break; }
+            foreach ((array) @scandir('/proc/' . $d . '/fd') as $fd) {
+                if (!ctype_digit((string) $fd)) { continue; }
+                if (@readlink('/proc/' . $d . '/fd/' . $fd) !== $real) { continue; }
+                $cmd = trim((string) @file_get_contents('/proc/' . $d . '/comm'));
+                $found[] = $d . ($cmd !== '' ? ' (' . $cmd . ')' : '');
+                break;
+            }
+        }
+        return $found;
+    }
+
+    private static function pidAlive(int $pid): bool
+    {
+        if ($pid <= 0) { return false; }
+        if (is_dir('/proc')) { return is_dir('/proc/' . $pid); }
+        if (function_exists('posix_kill')) { return @posix_kill($pid, 0); }
+        return true;   // cannot tell: do not claim it is gone
+    }
+
+    /** "2 days 11 hours ago", for a log line a human reads. */
+    private static function ago(int $ts): string
+    {
+        $d = max(0, time() - $ts);
+        if ($d < 90)    { return $d . 's ago'; }
+        if ($d < 5400)  { return intdiv($d, 60) . 'm ago'; }
+        if ($d < 172800){ return intdiv($d, 3600) . 'h ago'; }
+        return intdiv($d, 86400) . 'd ' . intdiv($d % 86400, 3600) . 'h ago';
+    }
+
+    /**
+     * Record and report a refused pickup, without filling the log.
+     *
+     * The pickup runs every five seconds in --watch mode, so a line per
+     * refusal is 17,280 a day and the lines that matter drown in it. A line
+     * per ten minutes is 144, and the FIRST refusal is always logged, so the
+     * start of the problem is in the log at the time it started.
+     *
+     * The state is also in settings, where the scheduler's --status report and
+     * the customer's own page can read it: "pickups are being refused" has to
+     * be visible without reading the source, which was the whole cost of this
+     * fault.
+     */
+    private static function noteLockRefused(): void
+    {
+        $now   = time();
+        $since = (int) Database::setting('user_scan_pickup_refused_since', '0');
+        $first = $since === 0;
+        if ($first) {
+            Database::setSetting('user_scan_pickup_refused_since', (string) $now);
+            $since = $now;
+        }
+        Database::setSetting('user_scan_pickup_refused_at', (string) $now);
+
+        $lastLog = (int) Database::setting('user_scan_pickup_refused_logged', '0');
+        if (!$first && ($now - $lastLog) < 600) { return; }
+
+        $why = self::lockDiagnosis();
+        Database::setSetting('user_scan_pickup_refused_logged', (string) $now);
+        Database::setSetting('user_scan_pickup_refused_reason', mb_substr($why, 0, 400));
+
+        $pending = self::pendingCount();
+        Logger::warn('user scan: pickup REFUSED since ' . self::ago($since)
+                     . ' (' . $pending . ' request(s) waiting) - ' . $why);
+    }
+
+    /** Clear the refusal state once a pickup gets through. */
+    private static function clearLockRefused(): void
+    {
+        if ((int) Database::setting('user_scan_pickup_refused_since', '0') === 0) { return; }
+        Logger::info('user scan: pickups are running again');
+        foreach (['since', 'at', 'logged', 'reason'] as $k) {
+            Database::setSetting('user_scan_pickup_refused_' . $k, '');
+        }
+    }
+
+    /** How many accounts have a request waiting. Cheap: one stat per account. */
+    private static function pendingCount(): int
+    {
+        $n = 0;
+        try {
+            foreach (UserReport::listUsers() as $user) {
+                if (self::read($user) !== null) { $n++; }
+            }
+        } catch (Throwable $e) {
+            return -1;   // unknown, and said so, rather than reported as none
+        }
+        return $n;
+    }
+
+    /**
+     * Is the pickup currently being refused, and why?
+     *
+     * @return array{refused:bool,since:int,at:int,reason:string}
+     */
+    public static function pickupState(): array
+    {
+        $since = (int) Database::setting('user_scan_pickup_refused_since', '0');
+        $at    = (int) Database::setting('user_scan_pickup_refused_at', '0');
+        return [
+            // Stale state is not a current refusal: if nothing has tried for
+            // an hour, the honest answer is about the pickup not running, not
+            // about the lock.
+            'refused' => $since > 0 && (time() - $at) < 3600,
+            'since'   => $since,
+            'at'      => $at,
+            'reason'  => (string) Database::setting('user_scan_pickup_refused_reason', ''),
+        ];
     }
 
     /**
@@ -485,7 +713,12 @@ class UserScanRequest
             'per_window'    => self::perWindow(),
             'used'          => count($starts),
             'last_check_at' => (int) Database::setting('user_scan_last_check', '0'),
-            'note'          => self::noteFor($user),
+            // A fresh attempt with a stale check is the signature of a stuck
+            // lock, and the page says so rather than showing "Queued" for
+            // ever. See process().
+            'last_attempt_at' => (int) Database::setting('user_scan_last_attempt', '0'),
+            'pickup'          => self::pickupState(),
+            'note'            => self::noteFor($user),
         ];
     }
 }

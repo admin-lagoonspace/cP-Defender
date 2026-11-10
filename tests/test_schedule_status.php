@@ -25,7 +25,14 @@ $src   = t_code($sched);
 // -- The report is built from the real task table ----------------------------
 t_contains($src, "elseif (\$argv[\$i] === '--status')", 'the scheduler takes --status');
 
-$statusBlock = substr($src, strpos($src, 'if ($status) {'), 1600);
+/* Sliced to the END OF THE BLOCK, not to a fixed 1,600 characters. The
+ * window version broke the moment the report grew -- it stopped before
+ * `exit(0)` and failed an assertion about code that was still there and still
+ * correct. A `}` in the first column is the end of the `if ($status)` block;
+ * every brace inside it is indented. */
+$statusStart = (int) strpos($src, 'if ($status) {');
+$statusEnd   = (int) strpos($src, "\n}\n", $statusStart);
+$statusBlock = substr($src, $statusStart, max(0, $statusEnd - $statusStart));
 t_contains($statusBlock, 'foreach ($tasks as $name => $t)',
     'the report iterates the scheduler\'s own task table, so it cannot drift from it');
 t_contains($statusBlock, "lastRun(\$name)", 'reading each task\'s real last-run time');
