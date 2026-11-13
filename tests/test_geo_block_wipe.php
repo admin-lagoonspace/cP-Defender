@@ -110,6 +110,94 @@ t_ok(is_array($ev),
      'and the change is on the security timeline. A list that can be rewritten '
    . 'by one click needs a record of who rewrote it and when');
 
+// ── THE CSF BRANCH ITSELF, not just its source ─────────────────────────────
+//
+// This is the branch that writes CC_DENY and erased a production server's
+// country blocks, and it was previously assertable only by reading the code:
+// CSF_BIN and CSF_CONF are unguarded define()s, so a test could not redirect
+// them. Firewall::setCsfPaths() is the same answer Scanner::setCpanelUsersDir()
+// and WAFInstaller::setCrsPath() gave to the same problem.
+
+$csfDir  = $sandbox . '/csf';
+@mkdir($csfDir, 0700, true);
+$csfConf = $csfDir . '/csf.conf';
+$csfBin  = $csfDir . (DIRECTORY_SEPARATOR === '\\' ? '/csf.cmd' : '/csf');
+
+/* A stand-in for the csf binary that exits 0. Written for the platform the
+ * suite is on, because the point is the EXIT CODE the product reads, and a
+ * test that only ran on Linux would not be run by the person writing the fix.
+ * (tests/env.php exists for exactly this class of difference.) */
+file_put_contents($csfBin, DIRECTORY_SEPARATOR === '\\'
+    ? "@exit 0\r\n"
+    : "#!/bin/sh\nexit 0\n");
+@chmod($csfBin, 0700);
+
+file_put_contents($csfConf,
+    "TESTING = \"0\"\nCC_DENY = \"CN,RU,KP\"\nLF_ALERT_TO = \"\"\n");
+Firewall::setCsfPaths($csfConf, $csfBin);
+Database::setSetting('geo_block_countries', 'CN,RU,KP');
+
+$g = $fw->getGeoBlock();
+t_ok($g['csf_installed'] === true, 'with CSF present, the CSF branch is live');
+t_eq(['CN', 'RU', 'KP'], $g['csf_countries'],
+     'and CC_DENY IS PARSED OUT OF csf.conf and reported as its own fact. The '
+   . 'panel can now show what the firewall is enforcing rather than only what '
+   . 'the panel last saved');
+
+$r = $fw->setGeoBlock([]);
+t_ok(empty($r['success']),
+     'EMPTYING THE LIST IS STILL REFUSED WITH CSF INSTALLED, which is the '
+   . 'configuration that matters: this is the exact call the Firewall page '
+   . 'made on every click');
+t_contains(file_get_contents($csfConf), 'CC_DENY = "CN,RU,KP"',
+     'AND csf.conf IS UNTOUCHED. The refusal happens before the write, so the '
+   . 'countries are still blocked -- the old code had already rewritten this '
+   . 'line and reloaded CSF by now');
+
+$r = $fw->setGeoBlock(['RU', 'cn']);
+t_ok(!empty($r['success']) && $r['enforced'] === true,
+     'a real change goes through and reports that it is ENFORCED, which is a '
+   . 'separate claim from "saved" and was never checked before');
+t_contains(file_get_contents($csfConf), 'CC_DENY = "RU,CN"',
+     'with CC_DENY rewritten in place');
+t_contains(file_get_contents($csfConf), 'TESTING = "0"',
+     'and the rest of csf.conf left exactly as it was: this writes one '
+   . 'directive, not a config file');
+
+// The reload failing. A csf that will not reload means CC_DENY is in a file
+// and not in the firewall, and the operator must not be told it is applied.
+/* A csf that refuses: exits non-zero, which is what a real `csf -r` does when
+ * it will not reload. Asserted on the EXIT CODE rather than on a missing file,
+ * because what the product must read is the status, and "the binary is absent"
+ * is a different case that isCSFInstalled() already covers. */
+$csfFail = $csfDir . (DIRECTORY_SEPARATOR === '\\' ? '/csf-fail.cmd' : '/csf-fail');
+file_put_contents($csfFail, DIRECTORY_SEPARATOR === '\\'
+    ? "@exit 1\r\n"
+    : "#!/bin/sh\nexit 1\n");
+@chmod($csfFail, 0700);
+Firewall::setCsfPaths($csfConf, $csfFail);
+$r = $fw->setGeoBlock(['US']);
+t_ok(empty($r['success']),
+     'A CSF THAT WILL NOT RELOAD IS A FAILURE. The old version ran `csf -r '
+   . '2>/dev/null` and discarded the result, so a firewall that never picked '
+   . 'up the change still reported "Geo block saved"');
+t_contains((string) $r['error'], 'would not reload',
+     'and says so, naming the reload rather than the write');
+t_eq(false, $r['enforced'],
+     'and reports enforced=false explicitly, because the countries really are '
+   . 'not blocked at this moment');
+
+// A csf.conf with no CC_DENY line at all: preg_replace returns the string
+// unchanged, which used to read as a successful write.
+file_put_contents($csfConf, "TESTING = \"0\"\n");
+Firewall::setCsfPaths($csfConf, $csfBin);
+$r = $fw->setGeoBlock(['DE']);
+t_ok(empty($r['success']) && strpos((string) $r['error'], 'no CC_DENY') !== false,
+     'and a csf.conf with no CC_DENY directive is a failure rather than a '
+   . 'silent no-op');
+
+Firewall::setCsfPaths(null, null);
+
 // ── The verification the old version did not do ────────────────────────────
 
 $src  = t_code($repo . '/backend/lib/Firewall.php');

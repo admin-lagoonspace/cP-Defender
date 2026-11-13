@@ -17,8 +17,41 @@ require_once __DIR__ . '/GoodBots.php';
 
 class Firewall {
 
+    /* ── Where CSF is, with an override for tests ─────────────────────────
+     *
+     * CSF_BIN and CSF_CONF are unguarded define()s in config.php, so a test
+     * cannot redirect them the way bootstrap.php redirects SG_ROOT and
+     * QUARANTINE_DIR: defining them first makes config.php's define() emit a
+     * notice. That left the whole CSF branch of setGeoBlock() -- the branch
+     * that WRITES CC_DENY and that silently erased a production server's
+     * country blocks -- assertable only by reading the source.
+     *
+     * This is the same answer the scanner reached for the same problem:
+     * Scanner::setCpanelUsersDir() and WAFInstaller::setCrsPath() exist so the
+     * paths that matter can be pointed at a tree a test controls. Null means
+     * "the real one", so nothing about production behaviour changes. */
+    private static $csfConfOverride = null;
+    private static $csfBinOverride  = null;
+
+    /** Point the CSF paths somewhere else. Tests only; null restores. */
+    public static function setCsfPaths(?string $conf, ?string $bin = null): void
+    {
+        self::$csfConfOverride = $conf;
+        self::$csfBinOverride  = $bin;
+    }
+
+    public static function csfConf(): string
+    {
+        return self::$csfConfOverride !== null ? self::$csfConfOverride : CSF_CONF;
+    }
+
+    public static function csfBin(): string
+    {
+        return self::$csfBinOverride !== null ? self::$csfBinOverride : CSF_BIN;
+    }
+
     public function isCSFInstalled(): bool {
-        return file_exists(CSF_BIN);
+        return file_exists(self::csfBin());
     }
 
     // ── IP Management ─────────────────────────────────────────────────────────
@@ -560,11 +593,11 @@ class Firewall {
 
         if (!$out['csf_installed']) { return $out; }
 
-        $conf = @file_get_contents(CSF_CONF);
+        $conf = @file_get_contents(self::csfConf());
         if ($conf === false) {
             // Not "no countries blocked". We could not find out, and those are
             // different answers.
-            $out['csf_error'] = 'cannot read ' . CSF_CONF;
+            $out['csf_error'] = 'cannot read ' . self::csfConf();
             return $out;
         }
         if (preg_match('/^CC_DENY\s*=\s*"?([^"\r\n]*)"?/m', $conf, $m)) {
@@ -638,11 +671,11 @@ class Firewall {
                                . 'server, so no country is actually blocked'];
         }
 
-        $conf = @file_get_contents(CSF_CONF);
+        $conf = @file_get_contents(self::csfConf());
         if ($conf === false) {
             return ['success' => false, 'countries' => $codes, 'enforced' => false,
                     'error' => 'saved in the panel but NOT applied: cannot read '
-                             . CSF_CONF];
+                             . self::csfConf()];
         }
 
         $count = 0;
@@ -651,19 +684,19 @@ class Firewall {
         if ($new === null || $count < 1) {
             return ['success' => false, 'countries' => $codes, 'enforced' => false,
                     'error' => 'saved in the panel but NOT applied: no CC_DENY '
-                             . 'line found in ' . CSF_CONF];
+                             . 'line found in ' . self::csfConf()];
         }
 
-        $wrote = @file_put_contents(CSF_CONF, $new);
+        $wrote = @file_put_contents(self::csfConf(), $new);
         if ($wrote === false || $wrote !== strlen($new)) {
             return ['success' => false, 'countries' => $codes, 'enforced' => false,
                     'error' => 'saved in the panel but NOT applied: the write to '
-                             . CSF_CONF . ' failed or was short'];
+                             . self::csfConf() . ' failed or was short'];
         }
 
         $out = [];
         $rc  = 0;
-        exec(CSF_BIN . ' -r 2>&1', $out, $rc);
+        exec(escapeshellarg(self::csfBin()) . ' -r 2>&1', $out, $rc);
         if ($rc !== 0) {
             return ['success' => false, 'countries' => $codes, 'enforced' => false,
                     'error' => 'CC_DENY written but CSF would not reload (exit '

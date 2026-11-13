@@ -117,10 +117,37 @@ class WAFInstaller
         // config. Reported so the panel can qualify the mode instead of
         // claiming protection the server is not delivering.
         $inc = self::includePath();
+
+        /* WHAT IS ACTUALLY LOADED, not what is merely present.
+         *
+         * crs_installed was `crsPath() !== null`, which tests only that a
+         * DIRECTORY exists. An empty CRS tree -- the state f1844fb existed to
+         * clean up -- therefore read as installed, `ready` became true, and
+         * the panel asserted "ModSecurity is installed and logging matches"
+         * with nothing on the server to match against. That is the same shape
+         * as setMode() reporting success for a config Apache had rejected,
+         * which took 132 accounts down for two minutes on 7 Nov: a protection
+         * claim with nothing behind it.
+         *
+         * A rule engine with no rules is not a rule engine. The claim this
+         * card makes now follows from the rule FILES. */
+        $ruleFiles   = $crs !== null ? self::crsRuleFileCount($crs) : 0;
+        $rulesLoaded = $ruleFiles > 0;
+        $ready       = $modsec && $rulesLoaded;
+
         return [
             'modsecurity_installed' => $modsec,
             'modsecurity_version'   => $modsec ? self::modsecVersion() : null,
-            'crs_installed'         => $crs !== null,
+            'crs_installed'         => $crs !== null && $rulesLoaded,
+            'crs_tree_present'      => $crs !== null,
+            'crs_rule_files'        => $ruleFiles,
+            'rules_loaded'          => $rulesLoaded,
+            'ready'                 => $ready,
+            'claim'                 => self::engineClaim(
+                                           $modsec, $crs, $ruleFiles,
+                                           self::currentMode(),
+                                           is_file(self::confDir() . '/serverscrub-waf.conf'),
+                                           $inc !== null && is_file($inc)),
             'crs_path'              => $crs,
             'crs_version'           => $crs ? self::crsVersion($crs) : null,
             'mode'                  => self::currentMode(),
@@ -132,6 +159,87 @@ class WAFInstaller
             'include_present'       => $inc !== null && is_file($inc),
             'validator'             => self::validatorBinary(),
         ];
+    }
+
+    /**
+     * How many RULE files a CRS tree holds.
+     *
+     * crs-setup.conf is configuration, not rules: a tree holding only that
+     * file blocks and detects exactly nothing, and it was reading as a working
+     * ruleset. Two single-directory reads, no recursion -- a CRS release holds
+     * around thirty files in rules/, and this runs on every panel load.
+     */
+    public static function crsRuleFileCount(?string $dir): int
+    {
+        if ($dir === null || $dir === '' || !is_dir($dir)) { return 0; }
+        $n = 0;
+        foreach ([$dir . '/rules/*.conf', $dir . '/*.conf'] as $glob) {
+            $hits = glob($glob);
+            if (!is_array($hits)) { continue; }
+            foreach ($hits as $f) {
+                $base = basename($f);
+                // Setup and the operator's own exclusion stubs are not rules.
+                if (strcasecmp($base, 'crs-setup.conf') === 0) { continue; }
+                if (!is_file($f) || filesize($f) === 0) { continue; }
+                $n++;
+            }
+        }
+        return $n;
+    }
+
+    /**
+     * The sentence the panel shows, composed here rather than in the browser.
+     *
+     * It was assembled in app.js from `modsecurity_installed && crs_installed`
+     * and nothing else, so it could not take account of a tree with no rules
+     * in it, and it ignored include_present entirely -- a mode of "on" with
+     * our include gone is a blocking WAF filtering no requests, which is
+     * exactly what install()'s failure path leaves behind. In PHP it is one
+     * sentence, in one place, that a test can hold to the evidence.
+     */
+    public static function engineClaim(bool $modsec, ?string $crs, int $ruleFiles,
+                                       string $mode, bool $managedByUs,
+                                       bool $includePresent): string
+    {
+        if (!$modsec) {
+            return 'No web application firewall engine is active on this '
+                 . 'server. ServerScrub can install and configure ModSecurity '
+                 . 'with the OWASP Core Rule Set.';
+        }
+        if ($crs === null) {
+            return 'ModSecurity is installed but no OWASP Core Rule Set was '
+                 . 'found, so no rule can match and nothing is being '
+                 . 'inspected.';
+        }
+        if ($ruleFiles === 0) {
+            return 'ModSecurity is installed and a rule set directory exists ('
+                 . $crs . ') but it holds NO RULE FILES, so nothing is being '
+                 . 'inspected, nothing is being logged and nothing is being '
+                 . 'blocked. This is not protection.';
+        }
+        if ($managedByUs && !$includePresent) {
+            return 'ModSecurity is installed with ' . $ruleFiles . ' rule file(s), '
+                 . 'but our configuration is NOT included by Apache, so the mode '
+                 . 'shown is not in force and no request is being filtered. '
+                 . 'Re-apply the mode to write the include.';
+        }
+        if ($mode === 'on') {
+            return 'ModSecurity is enforcing the OWASP Core Rule Set ('
+                 . $ruleFiles . ' rule file(s)).';
+        }
+        if ($mode === 'detectiononly') {
+            return 'ModSecurity is logging matches against ' . $ruleFiles
+                 . ' rule file(s) and is not blocking them yet.';
+        }
+        if ($mode === 'off') {
+            return 'ModSecurity is installed with ' . $ruleFiles . ' rule '
+                 . 'file(s), and the rule engine is OFF: nothing is being '
+                 . 'inspected.';
+        }
+        // currentMode() could not read a mode. That is not "detection only".
+        return 'ModSecurity is installed with ' . $ruleFiles . ' rule file(s), '
+             . 'but the rule engine mode could not be read from its '
+             . 'configuration, so what it is doing with them is unknown.';
     }
 
     private static function modsecPresent(): bool
@@ -159,8 +267,26 @@ class WAFInstaller
                 }
             }
         }
-        $o = (string)@shell_exec('rpm -q --qf "%{VERSION}" ea-apache24-mod_security2 2>/dev/null');
-        return $o !== '' ? trim($o) : 'installed';
+        /* rpm's EXIT CODE, and a shape check on what it printed.
+         *
+         * `rpm -q` prints "package ea-apache24-mod_security2 is not installed"
+         * on STDOUT and exits 1. `2>/dev/null` redirects the wrong stream, the
+         * exit code was never looked at, and that sentence was returned as the
+         * version -- so the panel rendered "ModSecurity  installed package
+         * ea-apache24-mod_security2 is not installed" as a version field. Any
+         * command whose stdout is passed through as a value needs its exit
+         * code checked and its output shaped; this one needed both. */
+        $out = [];
+        $rc  = 0;
+        @exec('rpm -q --qf "%{VERSION}" ea-apache24-mod_security2 2>/dev/null',
+              $out, $rc);
+        $o = trim(implode('', $out));
+        if ($rc === 0 && $o !== '' && preg_match('/^[0-9][0-9A-Za-z._-]*$/', $o)) {
+            return $o;
+        }
+        // Present, version unknown. Saying "installed" is honest; saying rpm's
+        // error message is not.
+        return null;
     }
 
     /**

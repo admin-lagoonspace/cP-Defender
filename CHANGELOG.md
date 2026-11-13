@@ -132,6 +132,39 @@ heading or touch VERSION mid-week._
 
 ### Fixed
 
+- **The WAF card claimed "ModSecurity is installed and logging matches" with no
+  rule files loaded, and printed rpm's error message as the version.** On a
+  server whose OWASP CRS directory existed and was empty, the card rendered
+  `WAF ENGINE Installed`, "ModSecurity is installed and logging matches, but
+  not blocking them yet", `ModSecurity installed package
+  ea-apache24-mod_security2 is not installed`, `OWASP CRS vunknown`, and
+  "holds no rule files that could be read" — all at the same time.
+
+  `crs_installed` was `crsPath() !== null`, which tests only that a directory
+  exists, and `ready` was derived from it, so an empty rule set read as a
+  working one and the install button disappeared. A rule engine with no rules
+  inspects nothing, logs nothing and blocks nothing. The claim now follows from
+  the rule files: they are counted (`crs_rule_files`), `crs-setup.conf` and
+  zero-byte files do not count as rules, and the operator-facing sentence is
+  composed in PHP from that count, the mode, and whether Apache actually
+  includes our config — a mode of "on" with the include gone is a blocking WAF
+  filtering no requests, which `status()` has reported all along and the card
+  ignored. An unreadable mode says so instead of falling through to "logging
+  matches", and the badge has states for "No rules loaded" and "Not in force".
+
+  `modsecVersion()` ran `rpm -q --qf "%{VERSION}" … 2>/dev/null`. rpm prints
+  `package <name> is not installed` on **stdout** and exits 1, so the wrong
+  stream was redirected and the exit code was never read. It uses `exec()`,
+  checks the status, requires the output to look like a version, and returns
+  null otherwise — the panel shows "installed, version unknown", which is true.
+
+  This held the release because it is a protection claim the product had not
+  verified, which is the shape of the defect that took 132 accounts down for
+  two minutes on 7 November: `setMode()` reporting success for a config Apache
+  had rejected. That server has one line of defence and no second scanner, and
+  April's ransomware went unnoticed for six months partly because nothing
+  contradicted the impression that things were fine.
+
 - **One visit to the Firewall page and one click removed every country block on
   the server, and the toast was green.** This is not new in this batch: the
   code is in the v4.35.1 release commit and dates back to 3.1.2, so it has been

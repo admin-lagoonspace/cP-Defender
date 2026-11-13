@@ -6153,28 +6153,49 @@ async function loadWafEngine() {
     return;
   }
 
-  const ready = d.modsecurity_installed && d.crs_installed;
+  // ready, the badge and the sentence all come from the engine now.
+  //
+  // This card read `modsecurity_installed && crs_installed`, where
+  // crs_installed only meant a DIRECTORY existed -- so with an empty rule set
+  // tree it rendered, simultaneously, "WAF ENGINE Installed", "ModSecurity is
+  // installed and logging matches", and a CRS line reading "vunknown" with
+  // "holds no rule files that could be read" beneath it. A rule engine with no
+  // rules inspects nothing. Claiming it is logging matches is the same failure
+  // as setMode() reporting success for a config Apache had rejected, which
+  // took 132 accounts down for two minutes on 7 Nov.
+  const ready = !!d.ready;
   badge.className = ready
     ? (d.mode === 'on' ? 'badge badge-green' : 'badge badge-amber')
     : 'badge badge-red';
-  badge.textContent = !d.modsecurity_installed ? 'Not installed'
-                    : !d.crs_installed         ? 'No ruleset'
-                    : d.mode === 'on'          ? 'Blocking'
-                    : d.mode === 'detectiononly' ? 'Detection only'
-                    : 'Installed';
+  badge.textContent = !d.modsecurity_installed      ? 'Not installed'
+                    : !d.rules_loaded               ? 'No rules loaded'
+                    : (d.managed_by_us && !d.include_present) ? 'Not in force'
+                    : d.mode === 'on'               ? 'Blocking'
+                    : d.mode === 'detectiononly'    ? 'Detection only'
+                    : d.mode === 'off'              ? 'Engine off'
+                    : 'Mode unknown';
 
   const summary = document.getElementById('waf-engine-summary');
-  summary.textContent = ready
-    ? (d.mode === 'on'
-        ? 'ModSecurity is enforcing the OWASP Core Rule Set.'
-        : 'ModSecurity is installed and logging matches, but not blocking them yet.')
-    : 'No web application firewall engine is active on this server. '
-    + 'ServerScrub can install and configure ModSecurity with the OWASP Core Rule Set.';
+  summary.textContent = d.claim
+    || 'The state of the WAF engine could not be established.';
 
   document.getElementById('waf-engine-meta').classList.remove('hidden');
   const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-  set('waf-ms-val',  d.modsecurity_installed ? ('installed ' + (d.modsecurity_version || '')) : 'not installed');
-  set('waf-crs-val', d.crs_installed ? ('v' + (d.crs_version || '?')) : 'not installed');
+  // "installed, version unknown" rather than "installed " plus whatever rpm
+  // printed on stdout -- which is how the words "package
+  // ea-apache24-mod_security2 is not installed" came to be displayed as a
+  // version.
+  set('waf-ms-val',  d.modsecurity_installed
+                       ? (d.modsecurity_version
+                            ? 'installed ' + d.modsecurity_version
+                            : 'installed, version unknown')
+                       : 'not installed');
+  set('waf-crs-val', !d.crs_tree_present
+                       ? 'not installed'
+                       : (d.rules_loaded
+                            ? 'v' + (d.crs_version || '?')
+                              + ' — ' + d.crs_rule_files + ' rule file(s)'
+                            : 'directory present, NO rule files'));
   set('waf-mode-val', d.mode === 'unknown' ? '—' : wafModeLabel(d.mode));
 
   // Offer install only when it can actually succeed — a button that always
@@ -6256,9 +6277,14 @@ async function setWafEngineMode(mode) {
 function _demoWafEngine() {
   return { success: true, data: {
     modsecurity_installed: false, modsecurity_version: null,
-    crs_installed: false, crs_path: null, crs_version: null,
+    crs_installed: false, crs_tree_present: false, crs_rule_files: 0,
+    rules_loaded: false, ready: false,
+    claim: 'No web application firewall engine is active on this server. '
+         + 'ServerScrub can install and configure ModSecurity with the OWASP '
+         + 'Core Rule Set.',
+    crs_path: null, crs_version: null,
     mode: 'unknown', apache: 'ea4', package_manager: 'dnf',
-    can_install: true, managed_by_us: false } };
+    can_install: true, managed_by_us: false, include_present: false } };
 }
 
 function _demoWafInstall() {
