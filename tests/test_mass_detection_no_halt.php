@@ -152,6 +152,17 @@ t_contains((string) $ev['description'], 'THE SCAN IS STILL RUNNING',
 t_contains((string) $ev['description'], 'SAME FEW FILES REPEATED',
      'and names the evidence that makes this a compromise rather than a bad '
    . 'rule');
+t_ok(strpos((string) $ev['description'], 'suppress add ' . $RANSOM) === false,
+     'AND THE ALARM DOES NOT HAND OVER A COMMAND TO SWITCH THE SIGNATURE OFF. '
+   . 'This is a correct ransomware detection; a pre-composed `signatures '
+   . 'suppress add` beside it is an invitation to blind the scanner to a live '
+   . 'root-level compromise');
+t_contains((string) $ev['description'], 'do NOT suppress the signature',
+     'it says the opposite, in those words');
+t_contains((string) $ev['description'], 'scan mass-bound',
+     'and names the lever that actually moves a real clean-up forward, which '
+   . 'is the bound -- flag-and-wait with no visible way on is a dead end '
+   . 'during the incident it exists for');
 t_contains((string) $ev['description'], 'Of 2000 of 2000 sampled matches',
      'with the sample size stated — 2,000 rows is the bounded ceiling, and a '
    . 'verdict is only as good as the sample it names');
@@ -176,6 +187,12 @@ t_eq('varied-content', $f['verdict'],
    . 'changelogs full of git SHAs. Count could not tell these two cases apart; '
    . 'distinct contents can');
 t_ok($f['act'] === false, 'destructive action stops here too');
+$evFP = Database::fetchOne("SELECT description FROM security_events "
+    . "WHERE type='mass_detection' ORDER BY id DESC LIMIT 1");
+t_contains((string) $evFP['description'], 'suppress add ' . $HEXFP,
+     'and THIS is the one case where the alarm writes the suppression command '
+   . 'out in full: every matched file differs, which is what a noisy rule looks '
+   . 'like, so the operator is handed the thing they will need');
 t_contains($f['reason'], 'signatures suppress add',
      'and THIS is where the operator is pointed at suppression — the reviewed, '
    . 'operator-driven lever from 04aefc1, named only for the case it fits');
@@ -252,6 +269,12 @@ t_eq('undetermined', $b['verdict'],
    . 'will not call 600 matches a false positive and will not call them an '
    . 'infection. It records unknown, as it does for a WAF event it could not '
    . 'confirm was blocked');
+$evB = Database::fetchOne("SELECT description FROM security_events "
+    . "WHERE type='mass_detection' ORDER BY id DESC LIMIT 1");
+t_ok(strpos((string) $evB['description'], 'suppress add ' . $RANSOM) === false,
+     'and an undetermined verdict pre-composes nothing either: where the '
+   . 'product cannot tell, it must not pre-type the branch that switches '
+   . 'detection off');
 t_contains($b['reason'], 'No file content hash was available',
      'and says why it does not know, with the count of samples that failed');
 t_ok($b['act'] === false,

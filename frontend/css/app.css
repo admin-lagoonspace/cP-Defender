@@ -542,6 +542,7 @@ select.form-input { cursor: pointer; }
 .toast.success { border-left: 3px solid var(--green); }
 .toast.error   { border-left: 3px solid var(--red2); }
 .toast.info    { border-left: 3px solid var(--primary2); }
+.toast.warn    { border-left: 3px solid var(--amber); }
 @keyframes slideIn { from{transform:translateX(40px);opacity:0} to{transform:translateX(0);opacity:1} }
 
 /* ── Login Screen ────────────────────────────────────────────────────────────── */

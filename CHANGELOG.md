@@ -132,6 +132,95 @@ heading or touch VERSION mid-week._
 
 ### Fixed
 
+- **One visit to the Firewall page and one click removed every country block on
+  the server, and the toast was green.** This is not new in this batch: the
+  code is in the v4.35.1 release commit and dates back to 3.1.2, so it has been
+  live and destructive for as long as the page has existed.
+
+  `renderGeoGrid()` read the saved list with
+  `Database?.setting?.('geo_block_countries')` — a PHP class, called in the
+  browser. Optional chaining does not guard an *undeclared* identifier, so it
+  threw `ReferenceError: Database is not defined` on every load, the exception
+  escaped `loadFirewallStages()`, and the grid rendered with every country
+  unselected. Nothing in the product read that setting back; there was no
+  endpoint to read it from. "Nothing is selected" and "this server blocks no
+  countries" are the same picture, so **Save Geo Rules** posted `[]`,
+  `setGeoBlock([])` wrote `CC_DENY = ""`, ran `csf -r`, and returned success —
+  which it returned unconditionally, having checked neither the write to
+  `csf.conf` nor the exit status of the reload.
+
+  Both halves are fixed. There is a `GET firewall/geo-block` that reports the
+  saved list *and*, separately, what CSF's own `CC_DENY` actually holds — never
+  merged, because if they disagree then something outside this product changed
+  one of them. The grid gets its selection from that; when the read fails it
+  says so instead of drawing an empty grid, because an empty grid is a factual
+  claim and it was false. Save refuses to write a list the page never managed
+  to read, an intentional "block nothing" is confirmed by a human, and clearing
+  a non-empty list is refused unless the caller says so explicitly — the
+  refusal names how many countries it would have removed. The write, the
+  absence of a `CC_DENY` line, a short write and a `csf -r` that will not
+  reload are each reported as failures: "saved in the panel but NOT applied" is
+  something an operator must be told, and `enforced: false` is now distinct
+  from `success: true`.
+
+- **`quarantine restore --signature='*' --apply` restored a webshell to a live
+  docroot and exited 0.** `selector()` refused a restore with *no* scope but
+  never checked that the scope was narrow, so `--signature='*'` became
+  `threat_name LIKE '%'` — every quarantined row, every job, every account,
+  every signature — and `--ext=md` alone was the same hole by another route: on
+  job 12457 that is 154,252 files, which are the 30 April ransom notes.
+
+  A signature wildcard now needs at least eight characters before the `*`, the
+  same floor `04aefc1` applies to a suppression prefix — and that one only
+  switches detection off, while this one writes attacker code back onto a
+  customer's disk. An extension may *narrow* a restore and can no longer
+  *define* one: `--job=N --ext=tar,gz,zip`, the documented way to hand back the
+  72 archives from that job, is unaffected. The floor is in `selector()`, which
+  is where every caller gets its WHERE clause, so the CLI and the API are held
+  to it equally. An operator reaching for restore is by definition mid-incident
+  and must not be one wildcard away from handing the attacker's files back.
+
+- **The bound on destructive action at scale had no operator-visible lever, and
+  the alarm handed over the one command that must not be run.**
+  `scan_mass_signature_max` existed only as a settings row — no command, no
+  field, no help text. Past the bound a real mass event leaves its findings
+  flagged and in place by design, and the ways on from there are suppressing
+  the signature (wrong: it hides a live compromise), a per-file verdict on
+  153,800 files, or raising the bound. A conservative default with no visible
+  lever is a dead end in the incident it exists for.
+
+  `serverscrub scan mass-bound [N]` shows and sets it, is listed in `--help`,
+  records the change as a high-severity event, and prints the last trip with
+  its evidence and the next step for that verdict —`lastTrip()` was being
+  written and read by nothing outside the test suite.
+
+  And the alarm no longer pre-composes `signatures suppress add <signature>`
+  for a detection the product has just said it cannot judge. That text was
+  shown for the `undetermined` and mass-identical cases as well as the noisy
+  one: a ready-to-paste instruction for switching off detection of a live
+  root-level ransomware run, at 03:00, to somebody who has been woken up. It is
+  written out for `varied-content` only, where every matched file differs; a
+  mass-identical verdict says *do not* suppress and names the bound instead,
+  and an undetermined one asks for a file to be read before either command.
+
+- **The panel's "already excluded automatically" list omitted the four prunes
+  that matter.** `node_modules`, any directory named `cache` or `.cache`, and
+  the bind-mounted trees (`virtfs`, `.snapshot`, `.zfs`, `.cagefs`) are pruned
+  by name at every depth, in both walkers, for every scan type — and none of
+  them were disclosed, so the panel showed a server as covered while four
+  categories of directory were never opened. A scan that skipped directories
+  must not report clean coverage.
+
+  `.cache` is the one that cost something: the hidden PHP droppers on this
+  server lived in `/home/officialwebspace/.cache/`, re-executed every minute
+  from a user crontab, and were invisible to a *full* scan for that reason.
+  (`.cpanel/caches/` was reachable only because `caches` is not `cache`.)
+  Removing the prune needs per-account depth and file-count bounds that do not
+  exist yet — an unpruned walk of npm and composer caches across 132 accounts,
+  with `/home/virtfs` multiplying it by 118, is the scan that ran for 59 hours
+  — so for now the blind spot is at least stated, in the panel, where the
+  operator decides what to scan.
+
 - **The product quarantined 154,323 customer files from one signature and
   nothing stopped it.** Scan job 12457 ran for 59 hours doing it, across at
   least twelve unrelated accounts, and raised no alarm. Whatever the signature

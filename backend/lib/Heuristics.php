@@ -641,11 +641,36 @@ class Heuristics
     /** The built-in list, so the panel can show what is already covered. */
     public static function builtinExclusions(): array
     {
+        /* THE PRUNES THIS LIST USED TO LEAVE OUT.
+         *
+         * Scanner::SCAN_SKIP_DIRS prunes these by NAME AT EVERY DEPTH, in both
+         * walkers, for every scan type -- and none of them appeared here, so
+         * the panel showed a server as covered while four whole categories of
+         * directory were never opened. The spec rule is that a scan which
+         * skipped directories must not report clean coverage.
+         *
+         * `.cache` is the one that cost something. The hidden PHP droppers on
+         * this server lived in /home/officialwebspace/.cache/, re-executed
+         * every minute from a user crontab, and were invisible to a FULL scan
+         * for that reason. (`.cpanel/caches/` was reachable only because
+         * `caches` is not `cache`, which is how arbitrary the prune is.)
+         * Removing the prune needs the per-account depth and file-count bounds
+         * that do not exist yet -- an unpruned walk of npm/composer caches
+         * across 132 accounts, with /home/virtfs multiplying it by 118, is the
+         * scan that ran for 59 hours. Until then the hole is at least
+         * DISCLOSED, in the panel, where the operator chooses what to scan. */
         return [
             'Our own quarantine and backup trees',
             'Imunify360, ai-bolit and CloudLinux (/opt/alt, /usr/share/imunify360)',
             'Other scanners: maldet, cPGuard, ClamAV and rkhunter databases',
             "cPanel's own bundled third-party code (/usr/local/cpanel/3rdparty)",
+            'node_modules and vendor dependency trees, at any depth',
+            'Any directory named cache or .cache, at any depth -- INCLUDING '
+          . 'inside an account home. Malware has been found in .cache on this '
+          . 'kind of server, so this is a known blind spot, not a safe '
+          . 'assumption',
+            '/home/virtfs and other bind-mounted copies (.snapshot, .zfs, '
+          . '.cagefs), which would otherwise be walked once per account',
         ];
     }
 

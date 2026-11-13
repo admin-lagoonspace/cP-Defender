@@ -790,8 +790,14 @@ function routeFirewall(string $action, string $method, array $body, array $q, ?s
                 ? $fw->deleteRule((int)$id)
                 : ['success' => false, 'code' => 405];
         case 'geo-block':
+            /* GET exists because the panel had no way to read the current list
+             * back: it called Database::setting() in the browser, threw, and
+             * rendered every country unselected -- after which Save posted the
+             * empty selection and erased CC_DENY. */
+            if ($method === 'GET') { return $fw->getGeoBlock(); }
             return $method === 'POST'
-                ? $fw->setGeoBlock($body['countries'] ?? [])
+                ? $fw->setGeoBlock($body['countries'] ?? [],
+                                   !empty($body['clear_all']))
                 : ['success' => false, 'code' => 405];
         case 'reload':
             return $method === 'POST'

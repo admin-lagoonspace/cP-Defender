@@ -410,12 +410,7 @@ class MassDetection
              . ' Nothing further will be quarantined for this signature. These '
              . 'files are FLAGGED and still in place, and THE SCAN IS STILL '
              . 'RUNNING -- it will find and record everything else this '
-             . 'signature matches. Read one of the flagged files, then either '
-             . '`serverscrub signatures suppress add ' . $signature . '` if the '
-             . 'signature is wrong, or treat it as a real mass event and decide '
-             . 'the scope of the clean-up. Files already taken come back with '
-             . '`serverscrub quarantine restore --job=' . $jobId
-             . ' --signature=' . $signature . '`.';
+             . 'signature matches. ' . self::nextStep($verdict, $signature, $jobId);
 
         Logger::error($msg);
         Logger::event('mass_detection', 'critical', '', $signature, $msg);
@@ -453,6 +448,52 @@ class MassDetection
             return self::V_VARIED;
         }
         return self::V_UNKNOWN;
+    }
+
+    /**
+     * What to do next, per verdict, in the alarm an operator is paged with.
+     *
+     * THE SUPPRESSION COMMAND IS COMPOSED FOR ONE VERDICT ONLY.
+     *
+     * The first version of this alarm handed over a ready-to-paste
+     * `serverscrub signatures suppress add <signature>` in every case,
+     * including the case where the product had just said it could not judge
+     * the detection. On the 30 Apr ransomware event that is a copy-pasteable
+     * instruction for switching off detection of a live root-level compromise,
+     * shown at 03:00 to somebody who has been woken up. The same objection as
+     * the halt, wearing a different hat: the product steering toward the
+     * dangerous branch of a question it has not answered.
+     *
+     * So: for 'varied-content' -- all matches are different files, which is
+     * what a noisy rule looks like -- the command is written out, because that
+     * is the case it fits. For a real mass event the alarm says NOT to
+     * suppress. For 'undetermined' suppression is named as the lever for one
+     * of the two readings, and is not typed out. Read a file first. Never hand
+     * over a path you have not read.
+     */
+    private static function nextStep(string $verdict, string $signature, int $jobId): string
+    {
+        $restore = ' Files already taken come back with `serverscrub quarantine '
+                 . 'restore --job=' . $jobId . ' --signature=' . $signature . '`.';
+
+        if ($verdict === self::V_IDENTICAL) {
+            return 'Read one of the flagged files. If it is malware, decide the '
+                 . 'SCOPE of the clean-up and raise the bound deliberately with '
+                 . '`serverscrub scan mass-bound <N>` -- do NOT suppress the '
+                 . 'signature, which would hide a live compromise.' . $restore;
+        }
+        if ($verdict === self::V_VARIED) {
+            return 'Read one of the flagged files; if the signature is wrong, '
+                 . '`serverscrub signatures suppress add ' . $signature . '`.'
+                 . $restore;
+        }
+        return 'READ ONE OF THE FLAGGED FILES BEFORE ANYTHING ELSE -- the '
+             . 'product has not judged this and neither command below is safe '
+             . 'to run blind. If it is malware, decide the scope of the '
+             . 'clean-up and raise the bound with `serverscrub scan mass-bound '
+             . '<N>`. If it is not, suppressing this signature is the lever '
+             . '(`serverscrub signatures suppress add`, with the name you have '
+             . 'just read).' . $restore;
     }
 
     /** One line naming the case, for the top of the alarm. */

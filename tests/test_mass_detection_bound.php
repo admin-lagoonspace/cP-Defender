@@ -145,7 +145,16 @@ t_contains((string) $ev['description'], 'quarantine restore --job=',
    . 'taken, because the operator reading it at 3am should not have to go '
    . 'looking for it');
 t_contains((string) $ev['description'], 'signatures suppress add',
-     'and the command that stops it happening again');
+     'and names suppression, which is the lever if the signature is wrong');
+t_ok(strpos((string) $ev['description'], 'suppress add ' . $SIG) === false,
+     'BUT DOES NOT PRE-COMPOSE IT FOR A VERDICT IT COULD NOT REACH. These three '
+   . 'samples produced "undetermined"; handing over a ready-to-paste '
+   . '`signatures suppress add {HEX}linux.ransom...qtox.toxid` at 03:00 is one '
+   . 'keystroke from switching off detection of a live ransomware run, which '
+   . 'is the halt bug wearing a different hat');
+t_contains((string) $ev['description'], 'READ ONE OF THE FLAGGED FILES',
+     'what it asks for instead is that somebody read a file, because that is '
+   . 'what settles it and nothing else does');
 t_contains((string) $ev['description'], 'still in place',
      'and says the flagged files have NOT been touched, which is the thing '
    . 'they need to know first');

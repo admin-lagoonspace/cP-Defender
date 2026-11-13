@@ -274,7 +274,10 @@ const API = (() => {
     fwToggleRule: (id, enabled)=> req('POST', 'firewall/toggle-rule', { id, enabled }),
     fwDeleteRule: (id)         => req('DELETE',`firewall/delete-rule/${id}`),
     fwReload:     ()           => req('POST', 'firewall/reload', {}),
-    fwGeoBlock:   (countries)  => req('POST', 'firewall/geo-block', { countries }),
+    fwGeoGet:     ()           => req('GET',  'firewall/geo-block'),
+    fwGeoBlock:   (countries, clearAll) =>
+                    req('POST', 'firewall/geo-block',
+                        { countries, clear_all: !!clearAll }),
 
     // WAF
     wafStatus:    ()           => req('GET',  'waf/status'),

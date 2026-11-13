@@ -98,6 +98,24 @@ class QuarantineRestore
         $args  = [];
         $desc  = [];
 
+        /* NARROW SCOPES, counted separately from broad ones.
+         *
+         * Refusing an EMPTY scope is not enough, and that is what this did.
+         * `--signature='*'` became `threat_name LIKE '%'` -- every quarantined
+         * row, in every job, for every account, under every signature -- and
+         * `--ext=md` alone is the same thing by another route: on job 12457
+         * that is 154,252 files, which are the 30 Apr qTox ransom notes. One
+         * command, no dry run needed, put a webshell back under a live
+         * docroot and exited 0.
+         *
+         * So a wildcard or an extension may NARROW a restore and may not
+         * define one. An operator reaching for restore during a live
+         * ransomware event must not be one wildcard away from handing the
+         * attacker's files back. 04aefc1 applies the same floor to a
+         * suppression prefix, which only switches detection off; this path
+         * writes attacker code onto a customer's disk. */
+        $narrow = 0;
+
         if (!empty($scope['id'])) {
             // A list, because the narrowest possible scope -- "these exact
             // findings and nothing else" -- is the one a frightened operator
@@ -112,6 +130,7 @@ class QuarantineRestore
             }
             $where[] = 'id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
             $args    = array_merge($args, $ids);
+            $narrow++;
             $desc[]  = count($ids) === 1
                 ? 'finding #' . $ids[0]
                 : count($ids) . ' named findings';
@@ -120,6 +139,7 @@ class QuarantineRestore
             $where[] = 'scan_job_id = ?';
             $args[]  = (int) $scope['job'];
             $desc[]  = 'scan job ' . (int) $scope['job'];
+            $narrow++;
         }
         if (!empty($scope['signature'])) {
             $sig = (string) $scope['signature'];
@@ -128,13 +148,34 @@ class QuarantineRestore
              * LIKE pattern through would make `%` in a name mean something
              * nobody intended. */
             if (substr($sig, -1) === '*') {
+                $bare = rtrim($sig, '*');
+                /* The same eight-character floor as a suppression prefix.
+                 * `--signature='*'` is a bare `LIKE '%'`: it matched every
+                 * quarantined file on the server and restored a webshell to a
+                 * live docroot. Six characters of "{HEX}" would reach a whole
+                 * class of signatures. */
+                if (mb_strlen($bare) < 8) {
+                    return ['error' => 'A signature wildcard needs at least 8 '
+                                     . 'characters before the *, or it matches '
+                                     . 'every quarantined file on the server '
+                                     . '-- including the real detections. Name '
+                                     . 'the signature, or narrow the restore '
+                                     . 'with --job=, --account= or --id=.'];
+                }
                 $where[] = 'threat_name LIKE ?';
-                $args[]  = str_replace(['%', '_'], ['\%', '\_'], rtrim($sig, '*')) . '%';
-                $desc[]  = 'signature starting "' . rtrim($sig, '*') . '"';
+                $args[]  = str_replace(['%', '_'], ['\%', '\_'], $bare) . '%';
+                $desc[]  = 'signature starting "' . $bare . '"';
+                /* Eight characters in, this names a signature FAMILY --
+                 * undoing one bad feed's work across a server is what the
+                 * wildcard is for -- so it counts as a scope. Shorter than
+                 * that it was refused above. An extension never counts,
+                 * because ".md" says nothing about what the file is. */
+                $narrow++;
             } else {
                 $where[] = 'threat_name = ?';
                 $args[]  = $sig;
                 $desc[]  = 'signature "' . $sig . '"';
+                $narrow++;
             }
         }
         if (!empty($scope['account'])) {
@@ -148,6 +189,7 @@ class QuarantineRestore
             $args[]  = $user;
             $args[]  = '/home/' . $user . '/%';
             $desc[]  = 'account ' . $user;
+            $narrow++;
         }
         if (!empty($scope['ext'])) {
             /* THE 72 THAT MATTER. Of job 12457's 154,323 files, 154,252 are
@@ -183,6 +225,7 @@ class QuarantineRestore
             $where[] = 'file_path = ?';
             $args[]  = $p;
             $desc[]  = $p;
+            $narrow++;
         }
 
         if ($desc === []) {
@@ -191,6 +234,17 @@ class QuarantineRestore
                              . '(--account=), a path (--path=) or a finding '
                              . '(--id=). "Everything" would put real detections '
                              . 'back as well as false ones.'];
+        }
+
+        /* A broad matcher on its own is "everything" wearing a scope. It
+         * passed the check above because it produced a description. */
+        if ($narrow === 0) {
+            return ['error' => 'Refusing to restore on ' . implode(' + ', $desc)
+                             . ' alone: that matches every quarantined file on '
+                             . 'the server, in every job, for every account. A '
+                             . 'wildcard signature or an extension narrows a '
+                             . 'restore; it cannot define one. Add --job=, '
+                             . '--account=, --path= or --id=.'];
         }
 
         return ['sql' => implode(' AND ', $where), 'args' => $args,

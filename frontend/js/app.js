@@ -100,7 +100,7 @@ const Auth = {
 function toast(msg, type = 'info') {
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  const icons = { success: '✓', error: '✕', info: 'ℹ' };
+  const icons = { success: '✓', error: '✕', info: 'ℹ', warn: '⚠' };
   el.innerHTML = `<span style="font-size:1rem">${icons[type]||'ℹ'}</span><span>${msg}</span>`;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => el.remove(), 3500);
@@ -1864,8 +1864,9 @@ async function loadFirewallStages() {
     recentEl.innerHTML = '<div class="dim" style="font-size:.78rem">No recently blocked IPs</div>';
   }
 
-  // Geo block grid
-  renderGeoGrid();
+  // Geo block grid. Awaited: it reads the saved list over the API now, and an
+  // un-awaited failure here is what used to escape this function.
+  await renderGeoGrid();
 }
 
 function actionBadge(action) {
@@ -1949,12 +1950,54 @@ const GEO_COUNTRIES = [
   ['VN','Vietnam'],['IN','India'],['BR','Brazil'],['MX','Mexico'],
 ];
 
-function renderGeoGrid() {
+// The country grid, and the state it is allowed to be in.
+//
+// 'unknown' is the important one. renderGeoGrid() used to read the saved list
+// with Database?.setting?.(...) -- a PHP class, in the browser. `?.` does not
+// guard an UNDECLARED identifier, so it threw ReferenceError on every load of
+// the Firewall page, the exception escaped loadFirewallStages(), and the grid
+// rendered with nothing selected. That is indistinguishable, on screen, from
+// "this server blocks no countries" -- and one click on Save Geo Rules then
+// posted the empty selection, wiped CC_DENY and reported success in green.
+//
+// So the grid now has three states, and the one it must never do again is
+// show an authoritative-looking empty selection it did not load.
+let GeoLoaded = 'unknown';
+
+async function renderGeoGrid() {
   const grid = document.getElementById('geo-block-grid');
   if (!grid) return;
-  const saved = (Database?.setting?.('geo_block_countries') || '').split(',').filter(Boolean);
+
+  let saved = [];
+  if (Demo.active) {
+    GeoLoaded = 'loaded';
+  } else {
+    const res = await API.fwGeoGet().catch(() => null);
+    if (res?.success && Array.isArray(res.countries)) {
+      saved = res.countries;
+      GeoLoaded = 'loaded';
+      State.geoSelected = new Set(saved);
+      // CSF holding something different from the panel is worth saying out
+      // loud: one of the two was changed by something that is not us.
+      if (Array.isArray(res.csf_countries)
+          && res.csf_countries.slice().sort().join(',') !== saved.slice().sort().join(',')) {
+        toast('CSF’s CC_DENY does not match the saved list — saving here will overwrite it', 'warn');
+      } else if (res.csf_error) {
+        toast('Could not read CSF’s own list: ' + res.csf_error, 'warn');
+      }
+    } else {
+      GeoLoaded = 'failed';
+      grid.innerHTML = '<div class="dim" style="grid-column:1/-1;font-size:.78rem">'
+        + 'Could not load the current country block list'
+        + (res?.error ? ' (' + esc(String(res.error)) + ')' : '')
+        + '. The grid is not shown, because an empty grid would look like '
+        + '&ldquo;no countries are blocked&rdquo; and saving it would erase them.</div>';
+      return;
+    }
+  }
+
   grid.innerHTML = GEO_COUNTRIES.map(([cc, name]) => {
-    const sel = saved.includes(cc) || State.geoSelected.has(cc);
+    const sel = State.geoSelected.has(cc);
     return `
       <div onclick="toggleGeo('${cc}', this)"
            style="padding:8px 10px;border-radius:8px;cursor:pointer;font-size:.72rem;
@@ -1979,10 +2022,36 @@ function toggleGeo(cc, el) {
 }
 
 async function saveGeoBlock() {
+  // Never write a list the page did not manage to read. The payload for "the
+  // operator deselected everything" and the payload for "the grid failed" are
+  // the same empty array, and the second one erased a production server's
+  // country blocks.
+  if (GeoLoaded !== 'loaded') {
+    toast('Not saving: the current country list never loaded, so saving would '
+        + 'erase it. Reload the page.', 'error');
+    return;
+  }
+
   const countries = [...State.geoSelected];
-  const res = Demo.active ? { success: true } : await API.fwGeoBlock(countries);
-  if (res?.success) toast(`Geo block saved (${countries.length} countries)`, 'success');
-  else toast('Failed to save', 'error');
+  let clearAll = false;
+  if (!countries.length) {
+    clearAll = confirm('This removes every country block on the server. Continue?');
+    if (!clearAll) return;
+  }
+
+  const res = Demo.active ? { success: true }
+                          : await API.fwGeoBlock(countries, clearAll);
+  if (res?.success) {
+    // "saved" and "in force" are different claims. CSF not being installed
+    // means nothing is actually blocked, and the toast says which it is.
+    toast(res.enforced === false
+            ? `Geo block list saved (${countries.length}) — ${res.warning || 'not enforced'}`
+            : `Geo block saved (${countries.length} countries)`,
+          res.enforced === false ? 'warn' : 'success');
+    renderGeoGrid();
+  } else {
+    toast(res?.error || 'Failed to save', 'error');
+  }
 }
 
 // ── WAF ───────────────────────────────────────────────────────────────────────

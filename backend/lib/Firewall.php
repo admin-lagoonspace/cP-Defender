@@ -533,19 +533,148 @@ class Firewall {
 
     // ── Geo Blocking ──────────────────────────────────────────────────────────
 
-    public function setGeoBlock(array $countryCodes): array {
-        Database::setSetting('geo_block_countries', implode(',', $countryCodes));
+    /**
+     * What is blocked by country right now, and what CSF actually holds.
+     *
+     * NOTHING READ THIS BACK, and that is how the page below it came to wipe a
+     * server's country blocks on a single click. renderGeoGrid() in the panel
+     * tried to read the setting by calling `Database::setting()` IN THE
+     * BROWSER -- a PHP class that does not exist there -- so the grid threw on
+     * every load, every country rendered unselected, and Save Geo Rules then
+     * posted that empty selection as the operator's intent.
+     *
+     * The setting and CC_DENY are reported SEPARATELY and never merged. If
+     * they disagree, something outside this product changed one of them, and
+     * the operator needs to see which rather than be shown one reconciled list
+     * that is true of neither.
+     */
+    public function getGeoBlock(): array {
+        $saved = array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) (Database::setting('geo_block_countries', '') ?? ''))
+        ), 'strlen'));
 
-        if ($this->isCSFInstalled()) {
-            // Write to CSF config CC_DENY
-            $conf = file_get_contents(CSF_CONF);
-            $cc   = implode(',', $countryCodes);
-            $conf = preg_replace('/^CC_DENY\s*=.*/m', "CC_DENY = \"$cc\"", $conf);
-            file_put_contents(CSF_CONF, $conf);
-            exec(CSF_BIN . ' -r 2>/dev/null');
+        $out = ['success' => true, 'countries' => $saved,
+                'csf_installed' => $this->isCSFInstalled(),
+                'csf_countries' => null, 'csf_error' => ''];
+
+        if (!$out['csf_installed']) { return $out; }
+
+        $conf = @file_get_contents(CSF_CONF);
+        if ($conf === false) {
+            // Not "no countries blocked". We could not find out, and those are
+            // different answers.
+            $out['csf_error'] = 'cannot read ' . CSF_CONF;
+            return $out;
+        }
+        if (preg_match('/^CC_DENY\s*=\s*"?([^"\r\n]*)"?/m', $conf, $m)) {
+            $out['csf_countries'] = array_values(array_filter(
+                array_map('trim', explode(',', $m[1])), 'strlen'));
+        } else {
+            $out['csf_countries'] = [];
+        }
+        return $out;
+    }
+
+    /**
+     * Replace the country block list.
+     *
+     * TWO THINGS THIS DID WRONG, which together cost a production server its
+     * geographic blocks under a green success toast:
+     *
+     *  1. An EMPTY list was taken as "block nothing", which is identical on
+     *     the wire to "the page failed to load the current list". The page was
+     *     failing to load it on every visit (see getGeoBlock()), so one click
+     *     rewrote CC_DENY = "" and reloaded CSF. Emptying a non-empty list is
+     *     now refused unless the caller says so explicitly, and the refusal
+     *     names how many countries it would have removed.
+     *  2. It returned success unconditionally. It checked neither the write to
+     *     csf.conf nor the exit status of `csf -r`, so a read-only config, a
+     *     full disk or a CSF that refused to reload all reported "saved". A
+     *     destructive write that cannot be confirmed is reported as a FAILURE:
+     *     the operator's next move depends on believing this.
+     *
+     * @param bool $clearAll Required to empty a list that is not already empty.
+     */
+    public function setGeoBlock(array $countryCodes, bool $clearAll = false): array {
+        // Normalised before anything is compared or written: two letters,
+        // upper case, no duplicates, no empties.
+        $codes = [];
+        foreach ($countryCodes as $c) {
+            $c = strtoupper(trim((string) $c));
+            if ($c === '') { continue; }
+            if (!preg_match('/^[A-Z]{2}$/', $c)) {
+                return ['success' => false,
+                        'error' => 'not a two-letter country code: '
+                                 . substr($c, 0, 8)];
+            }
+            $codes[$c] = true;
+        }
+        $codes = array_keys($codes);
+
+        $current = $this->getGeoBlock();
+        $had     = count($current['countries']);
+
+        if ($codes === [] && $had > 0 && !$clearAll) {
+            return ['success' => false,
+                    'error' => 'refusing to remove all ' . $had . ' blocked '
+                             . 'country/countries from an empty selection. If '
+                             . 'that is what you want, confirm it; if the list '
+                             . 'looked empty on screen then it failed to load, '
+                             . 'and this would have erased it.',
+                    'countries'     => $current['countries'],
+                    'needs_confirm' => true];
         }
 
-        return ['success' => true, 'countries' => $countryCodes];
+        $cc = implode(',', $codes);
+        Database::setSetting('geo_block_countries', $cc);
+
+        if (!$this->isCSFInstalled()) {
+            $this->logEvent('geo_block_changed',
+                'Geo block list set to ' . ($cc === '' ? '(none)' : $cc)
+                . '; CSF is not installed, so nothing is enforced');
+            return ['success' => true, 'countries' => $codes, 'enforced' => false,
+                    'warning' => 'saved, but CSF is not installed on this '
+                               . 'server, so no country is actually blocked'];
+        }
+
+        $conf = @file_get_contents(CSF_CONF);
+        if ($conf === false) {
+            return ['success' => false, 'countries' => $codes, 'enforced' => false,
+                    'error' => 'saved in the panel but NOT applied: cannot read '
+                             . CSF_CONF];
+        }
+
+        $count = 0;
+        $new   = preg_replace('/^CC_DENY\s*=.*/m', 'CC_DENY = "' . $cc . '"',
+                              $conf, 1, $count);
+        if ($new === null || $count < 1) {
+            return ['success' => false, 'countries' => $codes, 'enforced' => false,
+                    'error' => 'saved in the panel but NOT applied: no CC_DENY '
+                             . 'line found in ' . CSF_CONF];
+        }
+
+        $wrote = @file_put_contents(CSF_CONF, $new);
+        if ($wrote === false || $wrote !== strlen($new)) {
+            return ['success' => false, 'countries' => $codes, 'enforced' => false,
+                    'error' => 'saved in the panel but NOT applied: the write to '
+                             . CSF_CONF . ' failed or was short'];
+        }
+
+        $out = [];
+        $rc  = 0;
+        exec(CSF_BIN . ' -r 2>&1', $out, $rc);
+        if ($rc !== 0) {
+            return ['success' => false, 'countries' => $codes, 'enforced' => false,
+                    'error' => 'CC_DENY written but CSF would not reload (exit '
+                             . $rc . '): ' . substr(implode(' ', $out), 0, 200)];
+        }
+
+        $this->logEvent('geo_block_changed',
+            'Geo block list set to ' . ($cc === '' ? '(none)' : $cc)
+            . ' (' . $had . ' before)');
+
+        return ['success' => true, 'countries' => $codes, 'enforced' => true];
     }
 
     /**

@@ -43,6 +43,7 @@ require_once $BASE . '/lib/Signatures.php';
 // somebody uses it, which for a recovery tool is the worst possible moment.
 require_once $BASE . '/lib/QuarantineRestore.php';
 require_once $BASE . '/lib/SignatureSuppressions.php';
+require_once $BASE . '/lib/MassDetection.php';
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 $argv0 = 'serverscrub';
@@ -74,6 +75,40 @@ function render($data, int $indent): void {
         }
     }
 }
+/**
+ * What to do about a tripped bound, per verdict.
+ *
+ * The suppression command is COMPOSED ONLY for 'varied-content'. For the
+ * identical and undetermined cases it is named in prose and not typed out: a
+ * ready-to-paste `signatures suppress add` for a signature the product has
+ * just said it cannot judge is one keystroke from switching off detection of a
+ * live ransomware run, which is what 2e160dc's message did.
+ */
+function self_mass_next(string $verdict, string $signature, int $job): string
+{
+    if ($verdict === MassDetection::V_IDENTICAL) {
+        return 'the matched files are the same few files repeated, which is what '
+             . 'ransomware and mass defacement look like. Read one of the '
+             . 'flagged files. If it is malware, decide the scope of the '
+             . 'clean-up and raise the bound deliberately with `serverscrub scan '
+             . 'mass-bound <N>`; do NOT suppress the signature.';
+    }
+    if ($verdict === MassDetection::V_VARIED) {
+        return 'the matched files all differ, which is what a noisy signature '
+             . 'looks like. Read one of the flagged files; if the signature is '
+             . 'wrong: serverscrub signatures suppress add ' . $signature
+             . ' -- and put back what it already took: serverscrub quarantine '
+             . 'restore --job=' . $job . ' --signature=' . $signature;
+    }
+    return 'the product could not tell whether these are one file repeated or '
+         . 'many different files, and has not guessed. Read one of the flagged '
+         . 'files before anything else. If it is malware, decide the scope of '
+         . 'the clean-up; if it is not, suppressing the signature is the lever '
+         . '(see `serverscrub signatures suppress add --help`) and the already '
+         . 'quarantined files come back with `serverscrub quarantine restore '
+         . '--job=' . $job . '`.';
+}
+
 function fail(string $msg, int $code = 1): void { fwrite(STDERR, "serverscrub: $msg\n"); exit($code); }
 function need_root(): void {
     if (function_exists('posix_geteuid') ? posix_geteuid() !== 0 : trim(shell_exec('id -u')) !== '0') {
@@ -113,6 +148,105 @@ try {
     }
 
     case 'scan': {
+        /* THE BOUND ON DESTRUCTIVE ACTION AT SCALE, where an operator can
+         * actually see it.
+         *
+         * scan_mass_signature_max existed only as a settings row: no command,
+         * no field, no help text. Past the bound a real mass event leaves its
+         * findings flagged and in place by design -- that is the right default
+         * -- but the only ways on from there are suppressing the signature
+         * (wrong: it hides a real infection), a per-file verdict on 153,800
+         * files (not possible), or raising this. A conservative default with
+         * no visible lever is a dead end during the incident it exists for. */
+        if (($rest[0] ?? '') === 'mass-bound') {
+            $arg = $rest[1] ?? '';
+
+            if ($arg === '--clear-trip') {
+                need_root();
+                License::requireValid('Scan settings');
+                MassDetection::clearLastTrip();
+                out(['cleared' => true,
+                     'note' => 'the recorded mass detection is cleared; the '
+                             . 'findings themselves are untouched']);
+                break;
+            }
+
+            if ($arg !== '') {
+                need_root();
+                License::requireValid('Scan settings');
+                if (!preg_match('/^[0-9]+$/', $arg)) {
+                    fail('usage: serverscrub scan mass-bound [N|--clear-trip]  '
+                       . '(N files from one signature in one scan; 0 disables '
+                       . 'the bound)');
+                }
+                $n = (int) $arg;
+                if ($n > 10000000) {
+                    fail('that is not a bound: ' . $n);
+                }
+                $was = MassDetection::limit();
+                Database::setSetting(MassDetection::SETTING_MAX, (string) $n);
+                /* Recorded, because raising this during an incident is a
+                 * decision somebody should be able to find afterwards. */
+                Logger::event('scan_mass_bound_changed', 'high', '',
+                    MassDetection::SETTING_MAX,
+                    'Mass-detection bound changed from ' . $was . ' to ' . $n
+                    . ' by the CLI'
+                    . ($n === 0 ? ' -- DISABLED: one signature may now quarantine '
+                                . 'without limit, which is how 154,323 customer '
+                                . 'files were taken on 10 Nov' : ''));
+                out(['mass_signature_max' => $n, 'was' => $was,
+                     'means' => $n === 0
+                        ? 'DISABLED. One signature may quarantine without limit.'
+                        : 'past ' . $n . ' files from one signature in one scan, '
+                        . 'findings are flagged and left in place instead of '
+                        . 'being quarantined. The scan still runs to the end '
+                        . 'and still records everything it finds.']);
+                break;
+            }
+
+            $limit = MassDetection::limit();
+            $info  = [
+                'mass_signature_max' => $limit,
+                'default'            => MassDetection::DEFAULT_MAX,
+                'means' => $limit === 0
+                    ? 'DISABLED. One signature may quarantine without limit.'
+                    : 'past ' . $limit . ' files from one signature in one '
+                    . 'scan, findings are flagged and left in place instead of '
+                    . 'being quarantined. The scan is NOT stopped.',
+                'raise_it' => 'serverscrub scan mass-bound <N>   (0 disables)',
+            ];
+            $trip = MassDetection::lastTrip();
+            if ($trip === null) {
+                $info['last_trip'] = 'none recorded';
+            } else {
+                /* The evidence, not just the count. "154,323 matches, one
+                 * distinct file" and "154,323 matches, 154,323 distinct files"
+                 * are the ransomware case and the bad-signature case, and the
+                 * operator's next step is opposite in each. */
+                $info['last_trip'] = [
+                    'at'        => date('Y-m-d H:i:s', (int) ($trip['at'] ?? 0)),
+                    'job'       => (int) ($trip['job'] ?? 0),
+                    'signature' => (string) ($trip['signature'] ?? ''),
+                    'matched'   => (int) ($trip['count'] ?? 0),
+                    'accounts'  => (int) ($trip['accounts'] ?? 0),
+                    'extensions' => (string) ($trip['extensions'] ?? ''),
+                    'verdict'   => (string) ($trip['verdict'] ?? ''),
+                    'evidence'  => 'of ' . (int) ($trip['samples_conclusive'] ?? 0)
+                                 . ' of ' . (int) ($trip['samples_taken'] ?? 0)
+                                 . ' sampled matches with a content hash, '
+                                 . (int) ($trip['distinct'] ?? 0)
+                                 . ' distinct file(s), largest identical group '
+                                 . (int) ($trip['identical_top'] ?? 0),
+                    'next'      => self_mass_next((string) ($trip['verdict'] ?? ''),
+                                                  (string) ($trip['signature'] ?? ''),
+                                                  (int) ($trip['job'] ?? 0)),
+                    'clear'     => 'serverscrub scan mass-bound --clear-trip',
+                ];
+            }
+            out($info);
+            break;
+        }
+
         need_root();
         License::requireValid('Scanning');
         $path = '/home';
@@ -1101,6 +1235,11 @@ Usage: serverscrub <command> [args] [--json]
   version                      Show version and install mode
   status                       Scanner, firewall, CSF and service status
   scan [path] [--full|--quick] Start a scan (default: /home quick)
+  scan mass-bound [N]          Show or set how many files ONE signature may
+                               have quarantined in one scan before the product
+                               flags instead (0 disables). Shows the last trip,
+                               its evidence and what to do about it.
+                               --clear-trip forgets a recorded trip.
   firewall list                List blocked IPs and custom rules
   firewall block   <ip> [why]  Block an IP (persistent)
   firewall unblock <ip>        Remove a block

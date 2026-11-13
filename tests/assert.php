@@ -121,6 +121,60 @@ function t_shell(string $path): string
     return implode("\n", $out);
 }
 
+/**
+ * A JavaScript file's CODE, with comments removed.
+ *
+ * The same reason t_code() exists, for the other language. An assertion that
+ * `Database?.setting` no longer appears in app.js matches the COMMENT
+ * explaining why it was removed, so the test fails against the fixed code --
+ * which has already happened three times in PHP and is why t_code() exists.
+ *
+ * Quotes and template literals are walked so that a `//` inside a string, of
+ * which the panel has many (URLs, CSS, '://'), is not mistaken for a comment.
+ * Regex literals are NOT parsed: this is for grepping product source, not for
+ * parsing JavaScript. tests/test_dashboard_wiring.php had a private copy of
+ * this; it keeps it, because changing a passing test is not this change.
+ */
+function t_js(string $path): string
+{
+    $src = file_get_contents($path);
+    $n   = strlen($src);
+    $out = '';
+    for ($i = 0; $i < $n; $i++) {
+        $c = $src[$i];
+
+        // Strings and template literals pass through untouched.
+        if ($c === '"' || $c === "'" || $c === '`') {
+            $q = $c;
+            $out .= $c;
+            for ($i++; $i < $n; $i++) {
+                $out .= $src[$i];
+                if ($src[$i] === '\\') {
+                    $i++;
+                    if ($i < $n) { $out .= $src[$i]; }
+                    continue;
+                }
+                if ($src[$i] === $q) { break; }
+            }
+            continue;
+        }
+
+        if ($c === '/' && $i + 1 < $n && $src[$i + 1] === '/') {
+            while ($i < $n && $src[$i] !== "\n") { $i++; }
+            $out .= "\n";
+            continue;
+        }
+        if ($c === '/' && $i + 1 < $n && $src[$i + 1] === '*') {
+            $end = strpos($src, '*/', $i + 2);
+            $i   = $end === false ? $n : $end + 1;
+            $out .= ' ';
+            continue;
+        }
+        $out .= $c;
+    }
+    return $out;
+}
+
 // Slice exactly one function body, from its declaration to the next top-level
 // one. A fixed-size substr() runs past the end and picks up the NEXT
 // function's calls -- which is what made the first version of these checks
