@@ -1669,8 +1669,13 @@ This file was removed and not kept. Restore it from your backups
          * Before anything is moved, disabled or deleted. On 10 Nov one
          * third-party signature quarantined 154,323 customer files across
          * twelve accounts over 59 hours, and nothing stopped it or said so.
-         * Past the bound the finding is FLAGGED and left in place, the scan
-         * halts, and an operator is told -- see MassDetection. */
+         * Past the bound the finding is FLAGGED and left in place, and an
+         * operator is told at critical severity -- see MassDetection.
+         *
+         * THE SCAN IS NOT STOPPED. It was, in the first version of this, and
+         * that would have halted the 30 Apr ransomware scan at its 500th
+         * ransom note and left ~153,800 real ransomware files on disk. The
+         * scan must go on finding; only the destroying stops. */
         if ($jobId <= 0 && $threatId > 0) {
             $jr = Database::fetchOne('SELECT scan_job_id FROM threats WHERE id=?', [$threatId]);
             $jobId = (int) ($jr['scan_job_id'] ?? 0);
@@ -1679,7 +1684,9 @@ This file was removed and not kept. Restore it from your backups
         if (!$bound['act']) {
             Database::query(
                 "UPDATE threats SET action_taken=? WHERE id=?",
-                ['flagged: mass detection bound (' . $bound['limit'] . ' from one signature)',
+                ['flagged: mass detection bound (' . $bound['limit']
+                 . ' from one signature'
+                 . ($bound['verdict'] !== '' ? ', ' . $bound['verdict'] : '') . ')',
                  $threatId]
             );
             return ['action' => 'flagged', 'reason' => $bound['reason']];

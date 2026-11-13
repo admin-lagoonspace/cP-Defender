@@ -14,12 +14,20 @@
  * recorded 32,003 — the first account's share — so the one number an operator
  * would have looked at understated it five-fold.
  *
- * The verdict gate exists so the product cannot CLAIM what it has not
- * verified. This is the same rule applied to what it DOES: one signature
- * accounting for an implausible share of a run is evidence about the
- * signature, not about the customer's files. Above the bound, the product
- * flags instead of quarantining, halts the scan, and tells somebody — the same
- * standing rule as "flag WordPress databases and we will decide".
+ * So above the bound the product FLAGS instead of quarantining and tells
+ * somebody at critical severity — the same standing rule as "flag WordPress
+ * databases and we will decide". Customer files are not moved in bulk,
+ * unattended, on the strength of one third-party rule.
+ *
+ * WHAT THIS FILE ASSERTED AND NO LONGER DOES. As first written (2e160dc) the
+ * bound also HALTED the scan, and the assertions here said so, on the theory
+ * that a signature matching this many files must be wrong about them. That
+ * theory is false and this server disproved it: the 154,323-file detection on
+ * 10 Nov was CORRECT — genuine qTox ransom notes from a root-level run on
+ * 30 Apr that nobody noticed for six and a half months. A 500-file halt would
+ * have ended that scan at the 500th note and left ~153,800 real ransomware
+ * files on 132 live accounts. The halt assertions are inverted here, and
+ * tests/test_mass_detection_no_halt.php replays the real event.
  *
  * Fixtures here are inert: see t_inert_payload() in tests/assert.php. The
  * bound counts findings, and a finding is a row.
@@ -47,7 +55,9 @@ $finding = function (string $path, string $sig, string $user) use ($job): int {
     return (int) Database::insert('threats', [
         'scan_job_id' => $job, 'file_path' => $path, 'threat_name' => $sig,
         'threat_type' => 'malware', 'severity' => 'high', 'status' => 'active',
-        'hash' => hash('sha256', $path), 'size' => 1400,
+        // Distinct per path: these stand in for the 10 Nov shape, 154,252
+        // different .md files matched by one hex-hunting rule.
+        'hash' => hash('sha256', 'content-of-' . $path), 'size' => 1400,
         'detected_at' => time(), 'cpanel_user' => $user,
     ]);
 };
@@ -85,21 +95,34 @@ t_ok($r['act'] === false,
      'AT THE BOUND THE PRODUCT STOPS ACTING: the third file is flagged, not '
    . 'quarantined. Customer files are not moved on the strength of a signature '
    . 'that is matching everything');
-t_contains($r['reason'], 'evidence about the signature',
-     'and the reason says what the evidence is about, because that is the '
-   . 'judgement an operator has to make');
-t_contains($r['reason'], 'An operator has to decide',
-     'which is theirs to make, not the product\'s');
+t_contains($r['reason'], 'The scan continues',
+     'and the reason says the scan is still running, so an operator does not '
+   . 'read a bound trip as "the run is over"');
+t_eq('undetermined', $r['verdict'],
+     'AND ON THREE FILES IT SAYS IT DOES NOT KNOW. Three sampled hashes is not '
+   . 'a basis for calling a mass detection either a bad signature or a real '
+   . 'infection, and the product says which of the two it cannot tell apart '
+   . 'rather than picking the one that reads as reassuring');
+t_contains($r['reason'], 'NOT ENOUGH TO TELL',
+     'in those words, to the operator, with the next step named for both '
+   . 'readings — suppression if the signature is wrong, scope of the clean-up '
+   . 'if it is right');
+t_contains($r['reason'], 'Of 3 of 3 sampled matches',
+     'and the basis is stated with its sample size, because "varied content" '
+   . 'from three files and from two thousand are not the same claim');
 
 $jobRow = Database::fetchOne('SELECT status, stop_reason FROM scan_jobs WHERE id=?', [$job]);
-t_eq('halted', $jobRow['status'],
-     'THE SCAN HALTS. It ran for 59 hours past this point on the real server. '
-   . 'If one signature is wrong about this many files, every other conclusion '
-   . 'in the run is suspect too — and stopping is what gets a human to look');
-t_contains((string) $jobRow['stop_reason'], 'mass-detection bound',
-     'with a reason that is not "cancelled": nobody cancelled it, and an '
-   . 'operator must be able to tell a scan they stopped from a scan that '
-   . 'stopped itself');
+t_eq('running', (string) $jobRow['status'],
+     'AND THE SCAN KEEPS GOING. The bound bounds what is DESTROYED, not what is '
+   . 'found. The first version halted here, which on the 30 Apr ransomware '
+   . 'event would have ended the scan at the 500th of 154,323 real ransom '
+   . 'notes and left the other ~153,800 on 132 live accounts');
+t_eq('', (string) ($jobRow['stop_reason'] ?? ''),
+     'and nothing writes a stop reason, because nothing stopped');
+t_ok(strpos(t_code($repo . '/backend/lib/MassDetection.php'), 'halt') === false,
+     'THE WORD halt IS GONE FROM THE CLASS CODE, by name, so a future reader '
+   . 'who finds the old reasoning persuasive has to delete this assertion to '
+   . 'reinstate the bug');
 
 $trip = MassDetection::lastTrip();
 t_ok(is_array($trip), 'the trip is recorded where the CLI and the panel can read it');
@@ -126,6 +149,12 @@ t_contains((string) $ev['description'], 'signatures suppress add',
 t_contains((string) $ev['description'], 'still in place',
      'and says the flagged files have NOT been touched, which is the thing '
    . 'they need to know first');
+t_contains((string) $ev['description'], 'THE SCAN IS STILL RUNNING',
+     'and says the scan has not stopped, because the previous wording told the '
+   . 'operator it had been halted — on an event where that would have meant '
+   . '~153,800 ransomware files left in place');
+t_ok(strpos((string) $ev['description'], 'has been halted') === false,
+     'and nowhere claims a halt that no longer happens');
 
 // ── A different signature in the same scan is unaffected ───────────────────
 
@@ -172,8 +201,9 @@ t_contains($cron, 'SELECT COUNT(*) AS c FROM threats WHERE scan_job_id=?',
      'and the final figure a finished job records is counted from the rows, '
    . 'not from whatever this worker happened to hold in memory');
 t_contains($cron, "'cancelling', 'cancelled', 'halted'",
-     'a halted job keeps its status: writing "done" over it would erase the '
-   . 'record that the scan refused to continue');
+     'a job that ALREADY carries "halted" keeps it: nothing sets that status '
+   . 'any more, but rows from the earlier build exist, and writing "done" over '
+   . 'one would report a scan that stopped itself as one that finished');
 
 // ── Where it sits in the policy chain ──────────────────────────────────────
 

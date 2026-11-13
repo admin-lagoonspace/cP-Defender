@@ -22,9 +22,30 @@ heading or touch VERSION mid-week._
 - **`serverscrub quarantine restore` — there was no supported way to put a
   quarantined file back.** On 10 Nov one third-party ClamAV signature
   quarantined 154,323 customer files in a single scan, across at least twelve
-  unrelated accounts; 154,252 of them were `README.md` and `CHANGELOG.md`
-  inside `node_modules` and `vendor` trees, matched by a rule that hunts long
-  hex strings — which is what a changelog full of git SHAs looks like. The CLI
+  unrelated accounts, 154,252 of them named `README.md`.
+
+  That was first read here as a false positive, on the grounds that the
+  signature matches long hex strings and a changelog full of git SHAs looks
+  like one. **It was not a false positive.** Every one of those files was a
+  ransom note, and the long hex string was the attacker's qTox TOX ID —
+  `3D7889AE…` — which is exactly what the signature
+  `linux.ransom.sessionscribe.qtox.toxid` is written to find. The detection was
+  correct, and the scan was the only reason anyone found out: a root-level
+  ransomware run on 2026-04-30 had dropped a note into nearly every directory
+  of nearly every account on the server and gone unnoticed for six months,
+  because it encrypted only `.sql`, `.db` and `.sqlite` files, never touched
+  `/var/lib/mysql`, and left every site serving normally.
+
+  **A long hex string is not evidence of a false positive.** Ransomware
+  contact IDs, wallet addresses and campaign identifiers are long hex strings,
+  and a signature that matches them matching many files is what a mass event
+  looks like from the inside. Restore exists for the case where a detection is
+  genuinely wrong, which does happen — not as the remedy for a scan finding a
+  lot of malware. The scoping and the dry-run default below matter more under
+  that reading, not less: an operator reaching for this during an incident is
+  one unscoped `--apply` away from putting 154,252 attacker files back.
+
+  The CLI
   had status, sweep, prune and move; the one restore function took a single id,
   was reachable only from an API route, guessed the quarantine directory from a
   date instead of reading the path it had recorded, verified nothing, restored
@@ -112,18 +133,50 @@ heading or touch VERSION mid-week._
 ### Fixed
 
 - **The product quarantined 154,323 customer files from one signature and
-  nothing stopped it.** The scan ran for 59 hours doing it. The verdict gate
-  exists so the product cannot *claim* what it has not verified; this is the
-  same rule applied to what it *does*. One signature accounting for an
-  implausible number of a run's findings is evidence about the signature, not
-  about the customer's files.
+  nothing stopped it.** Scan job 12457 ran for 59 hours doing it, across at
+  least twelve unrelated accounts, and raised no alarm. Whatever the signature
+  was right or wrong about, moving that many files out of customers' accounts
+  unattended is not a thing a scanner may decide by itself.
 
-  Past a bound — 500 files from one signature in one scan, as a setting — a
-  finding is **flagged and left in place**, the scan **halts** with a status of
-  `halted` and a reason that is not "cancelled", and a critical event carries
-  the facts that make the case readable: how many accounts, which extensions,
-  and the two commands that undo it and stop it recurring. Findings are still
-  recorded, so the operator can judge the signature on the evidence.
+  So past a bound — 500 files from one signature in one scan, as a setting —
+  a finding is **flagged and left in place**: nothing further is quarantined,
+  disabled or deleted for that signature. The finding is still recorded and
+  still shown, with the reason written on the row, and a **critical** security
+  event carries the facts that make the case readable at a glance: how many
+  accounts, which extensions, how many distinct files, and the commands that
+  undo what has already been taken and stop it recurring.
+
+  **The scan is not stopped, and that is a correction to this patch rather
+  than a description of it.** The bound as first written also halted the run,
+  on the assumption that a signature matching implausibly many files must be
+  wrong about them. That assumption is false, and this server is the
+  counter-example. The 154,323-file detection on 10 November was **correct** —
+  genuine qTox ransom notes, verified by reading the files and matching the
+  attacker's TOX ID — left by a root-level ransomware run on 30 April that
+  wrote a note into nearly every directory of nearly every account and renamed
+  every database-shaped file to `*.sorry`. It never touched `/var/lib/mysql`
+  and never touched site content, so all 118 sites kept serving and nobody
+  noticed for six and a half months. A 500-file halt would have ended that
+  scan at its 500th ransom note and left roughly 153,800 real ransomware files
+  on 132 live accounts, while showing the operator a message that read like a
+  false-positive warning. A bound that stops detection fails safe in the wrong
+  direction: it fails toward leaving malware in place. Nothing in the bound
+  stops, halts or shortens a scan now, and both the test suite and the class
+  assert the absence by name.
+
+  Count alone cannot tell the two cases apart, and neither can extensions or
+  account spread: both events were ~154,000 matches of one signature, almost
+  all `.md`, server-wide — `README.md` is the name of a changelog in
+  `node_modules` and the name the attacker gave the note. What separates them
+  is how many **distinct files** those matches are. A rule hunting hex strings
+  through changelogs full of git SHAs matches files that all differ; ransom
+  notes are the same few files repeated across thousands of paths. The product
+  now weighs that, from the content hash recorded at detection — one bounded
+  query of at most 2,000 rows per signature per job, no file re-read — and
+  says which of the three answers it has: a mass event, a noisy signature, or
+  that it cannot tell. Where it cannot tell it says so, and it names the next
+  step for both readings rather than steering toward one. The verdict changes
+  what the operator is told; it does not restart destructive action.
 
   An absolute count rather than a share: share-of-files-scanned is unknowable
   at the moment it matters, since the walk may be 1% done; share-of-detections
@@ -131,7 +184,9 @@ heading or touch VERSION mid-week._
   per-account spread, which is strong evidence, is also what a reseller's mass
   defacement looks like — so it is reported in the alarm and not used to
   decide. The bound is per signature, so the one finding in that run which
-  might have been real is still acted on.
+  might have been real is still acted on. A long hex string, for the record, is
+  not evidence of a false positive: ransomware contact IDs, wallet addresses
+  and campaign identifiers are all long hex strings.
 
 - **A scan's own threat count was wrong by five-fold.** Job 12457 recorded
   `threats_found = 32,003` while the threats table held 154,323 rows for it:

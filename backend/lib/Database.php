@@ -392,7 +392,10 @@ class Database {
                 -- signature may account for in one scan before the product
                 -- stops quarantining and asks a human. 0 disables it, which is
                 -- how 154,323 customer files were quarantined from one
-                -- third-party signature on 10 Nov. See MassDetection.
+                -- third-party signature on 10 Nov. It bounds what is
+                -- DESTROYED, never what is found: the scan runs on and records
+                -- every match, because the 30 Apr ransomware event was 154,323
+                -- real matches of one signature. See MassDetection.
                 ('scan_mass_signature_max', '500'),
                 -- Hold a malware scan while a backup is running. OFF since
                 -- 4.31.2, on an operator's instruction: on a server whose

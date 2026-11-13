@@ -208,11 +208,14 @@ try {
     // operator would believe the tree had been examined when most of it had
     // not.
     $final = Database::fetchOne('SELECT status FROM scan_jobs WHERE id=?', [$jobId]);
-    /* 'halted' is in this list because the mass-detection bound sets it, and
-     * writing 'done' over it would erase the one record that a scan stopped
-     * itself rather than finished -- which is the difference between "your
-     * server was scanned" and "the scan refused to continue because one
-     * signature matched 500 files". */
+    /* 'halted' stays in this list for the jobs that already carry it.
+     *
+     * Nothing in the product sets it any more: the mass-detection bound used
+     * to halt the scan, and that is the behaviour removed today -- it would
+     * have stopped the 30 Apr ransomware scan at its 500th ransom note. But
+     * rows written by the earlier build exist, and writing 'done' over one
+     * would report a scan that stopped itself as a scan that finished. A
+     * status the product no longer produces still has to render truthfully. */
     $wasCancelled = in_array($final['status'] ?? '', ['cancelling', 'cancelled', 'halted'], true);
     $endStatus    = ($final['status'] ?? '') === 'halted' ? 'halted'
                   : ($wasCancelled ? 'cancelled' : 'done');
