@@ -57,3 +57,33 @@ No horizontal page scroll; tables must not overflow the viewport. Check both
 `colorScheme` values — the CSS defines tokens on `:root` and redefines them
 under `prefers-color-scheme: dark`, so a hardcoded colour shows up as
 unreadable text in one of the two.
+
+## Added 2026-11-13 (run against 386bca0 + the mass-detection rework)
+
+Every panel below was loaded, read with `get_page_text`, had its controls
+clicked, and then had `read_console_messages` and `read_network_requests`
+checked. **A clean-looking page with an error in either log is a finding** —
+the firewall case below looked perfect and was throwing on every load.
+
+### Must be absent
+
+| Panel | Must NOT appear |
+|---|---|
+| Firewall | `ReferenceError: Database is not defined` in the console. `renderGeoGrid()` calls `Database?.setting?.(...)`; `Database` is a PHP class and does not exist in the browser, and `?.` does not guard an **undeclared** identifier. The page renders fine and the country grid is silently empty. |
+| Firewall — geo | An empty country grid with an enabled **Save Geo Rules** button. `State.geoSelected` is empty on every load, so saving posts `[]`, and `Firewall::setGeoBlock([])` rewrites `CC_DENY = ""` — the toast says "Geo block saved (0 countries)" while every existing country block is removed. |
+| Firewall | `ACTIVE RULES` counting database rows while the header reads `iptables: 0 rule(s)`. Those are two different facts and only one of them is protection. |
+| WAF — engine | A version field containing the words "is not installed". `WAFInstaller::modsecVersion()` runs `rpm -q --qf ... 2>/dev/null`; rpm prints `package <name> is not installed` on **stdout** and exits 1, the exit code is never checked, so the message is returned as the version. |
+| WAF — engine | "ModSecurity is installed and logging matches" while OWASP CRS reads `vunknown` and the categories panel says the CRS directory holds no readable rule files. `crs_installed` is `crsPath() !== null`, which only tests that the directory exists. |
+| Scanner | A mass-detection trip that appears nowhere. `MassDetection::lastTrip()` and `clearLastTrip()` are read by no API route, CLI command or frontend file — the only operator-visible trace is the `mass_detection` security event. |
+| Dashboard | `Protected` + green badge + ✅ while `Last scan: —`. This is the *static markup* in `frontend/index.html:458,464`; the topbar pill was given a truthful initial state and the card it was copied from was not. `app.js` overwrites it on both the data and the API-failure paths, so it is only visible in the gap after login. |
+
+### Must be present
+
+| Panel | Expect |
+|---|---|
+| Scanner | `No signatures are suppressed. Every signature is reported.` as a *distinct* string from an unreadable list — both states exist and both were checked. |
+| Scanner | `No scans have run yet`, `No threats found. Run a scan to check your server.`, `Nothing marked yet.` — three honest empty states, none of them green. |
+| Scanner | `Updated <time>` next to the threats table after clicking Refresh. The scanner-log Refresh also responds within a second. |
+| Dashboard | On a fresh install: `No scan yet` / `Not yet scanned` / `Last scan: never`, and `⛔ Real-time monitoring is not running` in ALERTS. |
+| WAF | MODE tile reading `Unknown`, not `On`, before any mode is applied. |
+| Any panel | Only `/config.js` and `/serverscrub.cgi?r=auth/status` may 404 — both have working fallbacks in standalone mode. Any other non-200 is a finding. |

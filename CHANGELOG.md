@@ -17,120 +17,49 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
-### Added
-
-- **`serverscrub quarantine restore` — there was no supported way to put a
-  quarantined file back.** On 10 Nov one third-party ClamAV signature
-  quarantined 154,323 customer files in a single scan, across at least twelve
-  unrelated accounts, 154,252 of them named `README.md`.
-
-  That was first read here as a false positive, on the grounds that the
-  signature matches long hex strings and a changelog full of git SHAs looks
-  like one. **It was not a false positive.** Every one of those files was a
-  ransom note, and the long hex string was the attacker's qTox TOX ID —
-  `3D7889AE…` — which is exactly what the signature
-  `linux.ransom.sessionscribe.qtox.toxid` is written to find. The detection was
-  correct, and the scan was the only reason anyone found out: a root-level
-  ransomware run on 2026-04-30 had dropped a note into nearly every directory
-  of nearly every account on the server and gone unnoticed for six months,
-  because it encrypted only `.sql`, `.db` and `.sqlite` files, never touched
-  `/var/lib/mysql`, and left every site serving normally.
-
-  **A long hex string is not evidence of a false positive.** Ransomware
-  contact IDs, wallet addresses and campaign identifiers are long hex strings,
-  and a signature that matches them matching many files is what a mass event
-  looks like from the inside. Restore exists for the case where a detection is
-  genuinely wrong, which does happen — not as the remedy for a scan finding a
-  lot of malware. The scoping and the dry-run default below matter more under
-  that reading, not less: an operator reaching for this during an incident is
-  one unscoped `--apply` away from putting 154,252 attacker files back.
-
-  The CLI
-  had status, sweep, prune and move; the one restore function took a single id,
-  was reachable only from an API route, guessed the quarantine directory from a
-  date instead of reading the path it had recorded, verified nothing, restored
-  no ownership, and returned a bare boolean.
-
-  Restore is scoped — by job, signature (exact or one trailing `*`), account,
-  extension, absolute path, or a list of finding ids — and an unscoped restore
-  is refused, because "everything" would put real detections back alongside the
-  false ones. It is a **dry run by default**: `--apply` is the only thing that
-  moves a file, and the dry run prints the signatures, accounts and extensions
-  the scope covers so it can be checked before anything happens.
-
-  Everything else follows from the file being a customer's: the quarantined
-  copy is hashed against the hash recorded when it was taken and a mismatch is
-  a failure rather than a skip; a file that exists at the original path again
-  is never overwritten and is reported separately, because the customer may
-  have replaced it; ownership and mode come from the record where there is one
-  and from the directory the file is going back into where there is not, with
-  the report saying which, since root writing a customer's file back as
-  root:root breaks the site a different way; the work is paged by id in batches
-  so 154,323 files is not one transaction and an interrupted run re-runs
-  without doing anything twice; and the report is restored, skipped-with-reason
-  and failed-with-reason with examples, never a bare count. The legacy
-  quarantine directories are searched too — `quarantine status` reports
-  `/home/.sentinel-gate/quarantine`, and a file quarantined before the rename
-  is not under the current path — and the CLI prints where it looked when it
-  says a copy is missing.
-
-  Owner, group and mode are now recorded **at quarantine time**, so a future
-  restore is exact rather than inferred.
-
-- **A way to switch off one signature by name**, instead of switching off
-  ClamAV. `serverscrub signatures suppress add|list|rm`, and a card on the
-  Scanner page. A suppression names a signature exactly, or a family with one
-  trailing `*` (a prefix under eight characters is refused — `{HEX}*` would
-  disable a whole class of rules from six characters).
-
-  It lives in the product's own database, not in a signature file: freshclam
-  replaces the whole database and a third-party feed rewrites its own
-  directory, so a suppression written there would expire at the next update,
-  silently. The check sits where detections are recorded, which every source
-  passes through.
-
-  And it is never invisible. Every match is counted and the last one
-  timestamped, the panel lists each suppression with how many files it has
-  hidden since and who added it and why, and both suppressing and restoring a
-  signature are security events. A hole in the defence that nobody can see is
-  indistinguishable from a scanner that has stopped working.
-
-- **WAF rule exclusions**, so the engine can be armed without breaking a
-  customer's site. Triage could already say a rule looked like it was
-  matching a site's own application rather than an attack, and there was
-  nothing to do about it. The choice was to leave all 132 accounts in
-  DetectionOnly, or arm the engine and find out which sites broke.
-
-  Rule 420047 is the live example: "Bad user-agent (Mozilla/5.0)", 617 hits
-  across 150 sites, firing on `/livewire/update`, `/` and `/wp-login.php` — a
-  Laravel Livewire endpoint and two ordinary pages, not probes. Arming the
-  engine with that rule active would have broken real application traffic on
-  150 accounts.
-
-  An exclusion names one rule and may be narrowed to one domain and one URI
-  prefix, so switching off a rule for one shop no longer leaves the other 131
-  accounts unprotected against what it catches.
-
-  ```
-  serverscrub waf exclude add 420047 --domain=shop.example --uri=/shop/checkout \
-      --reason="real checkout traffic"
-  serverscrub waf exclude list
-  serverscrub waf exclude show      # the directives, before they are written
-  serverscrub waf exclude rm 3
-  ```
-
-  Exclusions are held in the database and re-rendered into the Apache config
-  every time it is written. Kept in the config file they would have been erased
-  by the next `waf mode on`, silently, at the moment they mattered most. A
-  render failure now aborts the mode change rather than writing a config
-  missing an exclusion.
-
-- `waf triage` prints the exact `waf exclude add` command for each rule it
-  judges a false-positive risk, with the domain and path it actually fired on.
-  Retyping a rule id by hand is how the wrong rule gets disabled, or the right
-  rule gets disabled everywhere.
+## [4.36.0] - 2026-11-13
 
 ### Fixed
+
+- **One visit to the Firewall page and one click removed every country block on
+  the server, and the toast was green.** This is not new in this batch: the
+  code is in the v4.35.1 release commit and dates back to 3.1.2, so it has been
+  live and destructive for as long as the page has existed.
+
+  `renderGeoGrid()` read the saved list with
+  `Database?.setting?.('geo_block_countries')` — a PHP class, called in the
+  browser. Optional chaining does not guard an *undeclared* identifier, so it
+  threw `ReferenceError: Database is not defined` on every load, the exception
+  escaped `loadFirewallStages()`, and the grid rendered with every country
+  unselected. Nothing in the product read that setting back; there was no
+  endpoint to read it from. "Nothing is selected" and "this server blocks no
+  countries" are the same picture, so **Save Geo Rules** posted `[]`,
+  `setGeoBlock([])` wrote `CC_DENY = ""`, ran `csf -r`, and returned success —
+  which it returned unconditionally, having checked neither the write to
+  `csf.conf` nor the exit status of the reload.
+
+  Both halves are fixed. There is a `GET firewall/geo-block` that reports the
+  saved list *and*, separately, what CSF's own `CC_DENY` actually holds — never
+  merged, because if they disagree then something outside this product changed
+  one of them. The grid gets its selection from that; when the read fails it
+  says so instead of drawing an empty grid, because an empty grid is a factual
+  claim and it was false. Save refuses to write a list the page never managed
+  to read, an intentional "block nothing" is confirmed by a human, and clearing
+  a non-empty list is refused unless the caller says so explicitly — the
+  refusal names how many countries it would have removed. The write, the
+  absence of a `CC_DENY` line, a short write and a `csf -r` that will not
+  reload are each reported as failures: "saved in the panel but NOT applied" is
+  something an operator must be told, and `enforced: false` is now distinct
+  from `success: true`.
+
+  **If you are upgrading, check this by hand.** The wipe has been live since
+  3.1.2, so the list may already be gone on a server that never looked:
+
+      grep -n '^CC_DENY' /etc/csf/csf.conf
+
+  An empty `CC_DENY = ""` on a server where countries were once blocked is
+  this bug, not a setting. Restore the list, then save it again from the
+  Firewall page and confirm the panel and `csf.conf` now agree.
 
 - **The WAF card claimed "ModSecurity is installed and logging matches" with no
   rule files loaded, and printed rpm's error message as the version.** On a
@@ -164,37 +93,6 @@ heading or touch VERSION mid-week._
   had rejected. That server has one line of defence and no second scanner, and
   April's ransomware went unnoticed for six months partly because nothing
   contradicted the impression that things were fine.
-
-- **One visit to the Firewall page and one click removed every country block on
-  the server, and the toast was green.** This is not new in this batch: the
-  code is in the v4.35.1 release commit and dates back to 3.1.2, so it has been
-  live and destructive for as long as the page has existed.
-
-  `renderGeoGrid()` read the saved list with
-  `Database?.setting?.('geo_block_countries')` — a PHP class, called in the
-  browser. Optional chaining does not guard an *undeclared* identifier, so it
-  threw `ReferenceError: Database is not defined` on every load, the exception
-  escaped `loadFirewallStages()`, and the grid rendered with every country
-  unselected. Nothing in the product read that setting back; there was no
-  endpoint to read it from. "Nothing is selected" and "this server blocks no
-  countries" are the same picture, so **Save Geo Rules** posted `[]`,
-  `setGeoBlock([])` wrote `CC_DENY = ""`, ran `csf -r`, and returned success —
-  which it returned unconditionally, having checked neither the write to
-  `csf.conf` nor the exit status of the reload.
-
-  Both halves are fixed. There is a `GET firewall/geo-block` that reports the
-  saved list *and*, separately, what CSF's own `CC_DENY` actually holds — never
-  merged, because if they disagree then something outside this product changed
-  one of them. The grid gets its selection from that; when the read fails it
-  says so instead of drawing an empty grid, because an empty grid is a factual
-  claim and it was false. Save refuses to write a list the page never managed
-  to read, an intentional "block nothing" is confirmed by a human, and clearing
-  a non-empty list is refused unless the caller says so explicitly — the
-  refusal names how many countries it would have removed. The write, the
-  absence of a `CC_DENY` line, a short write and a `csf -r` that will not
-  reload are each reported as failures: "saved in the panel but NOT applied" is
-  something an operator must be told, and `enforced: false` is now distinct
-  from `success: true`.
 
 - **`quarantine restore --signature='*' --apply` restored a webshell to a live
   docroot and exited 0.** `selector()` refused a restore with *no* scope but
@@ -747,6 +645,144 @@ heading or touch VERSION mid-week._
   with it. The old vendor directory under `modsec_vendor_configs/` is
   deliberately left alone for the same reason: cPanel loads it with `Include`,
   not `IncludeOptional`, so removing it stops Apache starting.
+
+### Added
+
+- **`serverscrub quarantine restore` — there was no supported way to put a
+  quarantined file back.** On 10 Nov one third-party ClamAV signature
+  quarantined 154,323 customer files in a single scan, across at least twelve
+  unrelated accounts, 154,252 of them named `README.md`.
+
+  That was first read here as a false positive, on the grounds that the
+  signature matches long hex strings and a changelog full of git SHAs looks
+  like one. **It was not a false positive.** Every one of those files was a
+  ransom note, and the long hex string was the attacker's qTox TOX ID —
+  `3D7889AE…` — which is exactly what the signature
+  `linux.ransom.sessionscribe.qtox.toxid` is written to find. The detection was
+  correct, and the scan was the only reason anyone found out: a root-level
+  ransomware run on 2026-04-30 had dropped a note into nearly every directory
+  of nearly every account on the server and gone unnoticed for six months,
+  because it encrypted only `.sql`, `.db` and `.sqlite` files, never touched
+  `/var/lib/mysql`, and left every site serving normally.
+
+  **A long hex string is not evidence of a false positive.** Ransomware
+  contact IDs, wallet addresses and campaign identifiers are long hex strings,
+  and a signature that matches them matching many files is what a mass event
+  looks like from the inside. Restore exists for the case where a detection is
+  genuinely wrong, which does happen — not as the remedy for a scan finding a
+  lot of malware. The scoping and the dry-run default below matter more under
+  that reading, not less: an operator reaching for this during an incident is
+  one unscoped `--apply` away from putting 154,252 attacker files back.
+
+  The CLI
+  had status, sweep, prune and move; the one restore function took a single id,
+  was reachable only from an API route, guessed the quarantine directory from a
+  date instead of reading the path it had recorded, verified nothing, restored
+  no ownership, and returned a bare boolean.
+
+  Restore is scoped — by job, signature (exact or one trailing `*`), account,
+  extension, absolute path, or a list of finding ids — and an unscoped restore
+  is refused, because "everything" would put real detections back alongside the
+  false ones. It is a **dry run by default**: `--apply` is the only thing that
+  moves a file, and the dry run prints the signatures, accounts and extensions
+  the scope covers so it can be checked before anything happens.
+
+  Everything else follows from the file being a customer's: the quarantined
+  copy is hashed against the hash recorded when it was taken and a mismatch is
+  a failure rather than a skip; a file that exists at the original path again
+  is never overwritten and is reported separately, because the customer may
+  have replaced it; ownership and mode come from the record where there is one
+  and from the directory the file is going back into where there is not, with
+  the report saying which, since root writing a customer's file back as
+  root:root breaks the site a different way; the work is paged by id in batches
+  so 154,323 files is not one transaction and an interrupted run re-runs
+  without doing anything twice; and the report is restored, skipped-with-reason
+  and failed-with-reason with examples, never a bare count. The legacy
+  quarantine directories are searched too — `quarantine status` reports
+  `/home/.sentinel-gate/quarantine`, and a file quarantined before the rename
+  is not under the current path — and the CLI prints where it looked when it
+  says a copy is missing.
+
+  Owner, group and mode are now recorded **at quarantine time**, so a future
+  restore is exact rather than inferred.
+
+- **A way to switch off one signature by name**, instead of switching off
+  ClamAV. `serverscrub signatures suppress add|list|rm`, and a card on the
+  Scanner page. A suppression names a signature exactly, or a family with one
+  trailing `*` (a prefix under eight characters is refused — `{HEX}*` would
+  disable a whole class of rules from six characters).
+
+  It lives in the product's own database, not in a signature file: freshclam
+  replaces the whole database and a third-party feed rewrites its own
+  directory, so a suppression written there would expire at the next update,
+  silently. The check sits where detections are recorded, which every source
+  passes through.
+
+  And it is never invisible. Every match is counted and the last one
+  timestamped, the panel lists each suppression with how many files it has
+  hidden since and who added it and why, and both suppressing and restoring a
+  signature are security events. A hole in the defence that nobody can see is
+  indistinguishable from a scanner that has stopped working.
+
+- **WAF rule exclusions**, so the engine can be armed without breaking a
+  customer's site. Triage could already say a rule looked like it was
+  matching a site's own application rather than an attack, and there was
+  nothing to do about it. The choice was to leave all 132 accounts in
+  DetectionOnly, or arm the engine and find out which sites broke.
+
+  Rule 420047 is the live example: "Bad user-agent (Mozilla/5.0)", 617 hits
+  across 150 sites, firing on `/livewire/update`, `/` and `/wp-login.php` — a
+  Laravel Livewire endpoint and two ordinary pages, not probes. Arming the
+  engine with that rule active would have broken real application traffic on
+  150 accounts.
+
+  An exclusion names one rule and may be narrowed to one domain and one URI
+  prefix, so switching off a rule for one shop no longer leaves the other 131
+  accounts unprotected against what it catches.
+
+  ```
+  serverscrub waf exclude add 420047 --domain=shop.example --uri=/shop/checkout \
+      --reason="real checkout traffic"
+  serverscrub waf exclude list
+  serverscrub waf exclude show      # the directives, before they are written
+  serverscrub waf exclude rm 3
+  ```
+
+  Exclusions are held in the database and re-rendered into the Apache config
+  every time it is written. Kept in the config file they would have been erased
+  by the next `waf mode on`, silently, at the moment they mattered most. A
+  render failure now aborts the mode change rather than writing a config
+  missing an exclusion.
+
+- `waf triage` prints the exact `waf exclude add` command for each rule it
+  judges a false-positive risk, with the domain and path it actually fired on.
+  Retyping a rule id by hand is how the wrong rule gets disabled, or the right
+  rule gets disabled everywhere.
+
+### Known limitations in this release
+
+Shakaal passed this build with caveats. They are recorded here because they
+describe what the product does **not** do, and an operator deciding what to
+rely on needs them.
+
+- **`cache` and `.cache` are still invisible to every scan type, at every
+  depth, including a full scan.** Now disclosed in the panel's exclusions
+  list, not closed. Malware ran from `.cache` on a production server. See the
+  entry above for why removing the prune needs bounds that do not exist yet.
+- **The mass-detection work has no WHM card yet.** The CLI lever
+  (`serverscrub scan mass-bound`) and the recorded trip evidence stand in for
+  it.
+- **The geo-block fix was verified against a stub `csf`, not a real CSF
+  install.** The failed-write branch of the save could not be executed in test
+  at all; that one assertion is structural and labelled as such in the test
+  suite.
+- **Untested in this cycle:** cpsrvd/AppConfig/LiveAPI, real ModSecurity, real
+  Exim, real ClamAV, scale (8 accounts, not 132), and a real 204 MB
+  quarantine.
+- **Two known minor defects ship.** The restore refusal message says a
+  wildcard "cannot define" a scope when an 8-or-more character one does, and
+  `MailQueue.php:463` renders an exim failure as "0 messages queued". Both are
+  queued for next cycle.
 
 ## [4.35.1] - 2026-11-06
 
