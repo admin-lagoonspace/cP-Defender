@@ -48,6 +48,31 @@ class UpdateChecker {
      */
     private const USER_AGENT = 'ServerScrub-UpdateChecker/1.0';
 
+    /**
+     * Test seam. Null in production, and nothing but tests/ may set it.
+     *
+     * Channel selection is the logic that decided, wrongly, that every server
+     * in the field was up to date on 2026-11-13, and it is pure decision-
+     * making over what the channels answered. Without a seam it can only be
+     * exercised against the live CDN, which is to say not at all in CI, and
+     * untested selection logic is exactly what shipped. The callable receives
+     * the FINAL url -- cache-buster and all -- plus the request headers, so a
+     * test can assert the fetch itself and not merely the choice made from it.
+     *
+     * @var callable|null (string $url, array $headers): ?string
+     */
+    private static $fetcher = null;
+
+    /** @param callable|null $f (string $url, array $headers): ?string */
+    public static function setFetcherForTests(?callable $f): void
+    {
+        if (!defined('SG_TEST')) {
+            throw new RuntimeException(
+                'UpdateChecker::setFetcherForTests is for tests/ only');
+        }
+        self::$fetcher = $f;
+    }
+
     private static function channels(): array
     {
         $cdn  = getenv('SG_CDN_BASE') ?: 'https://serverscrub.com/releases';
@@ -176,35 +201,144 @@ class UpdateChecker {
     }
 
     /**
-     * Fetch latest.json from the first channel that answers.
+     * Fetch latest.json from EVERY channel and return the newest manifest.
+     *
+     * This used to return the first channel that answered, which is the same
+     * defect update.sh carried: a channel that replies with STALE data is
+     * believed, and nothing downstream can tell that answer from a correct
+     * one. It is not hypothetical. On 2026-11-13, with v4.36.0 published and
+     * synced, serverscrub.com/releases/latest.json served 4.35.1 out of
+     * cPanel's nginx reverse-proxy cache -- reproduced with this class's own
+     * User-Agent and Accept headers -- so no operator's panel would ever have
+     * raised the update notification.
+     *
+     * A channel that 404s is safe, because the loop moves on. A channel that
+     * is confidently wrong is not, so correctness cannot depend on reply
+     * order.
      *
      * @return array<string,mixed>|null
      */
     private static function fetchManifest(): ?array
     {
+        $best    = null;
+        $bestVer = '';
+
         foreach (self::channels() as $base) {
-            $url  = rtrim($base, '/') . '/latest.json';
-            $body = self::httpGet($url);
-            if ($body === null) {
-                Logger::debug("UpdateChecker: $url did not answer");
+            $m = self::channelManifest(rtrim($base, '/'));
+            if ($m === null) {
                 continue;
             }
-            $j = json_decode($body, true);
-            if (is_array($j) && isset($j['version'])) {
-                return $j;
+            $v = ltrim((string)($m['version'] ?? ''), 'v');
+            if (!preg_match('/^\d+\.\d+\.\d+/', $v)) {
+                Logger::warn("UpdateChecker: $base answered but carried no usable version");
+                continue;
             }
-            Logger::warn("UpdateChecker: $url answered but was not a manifest");
+            if ($best === null || version_compare($v, $bestVer, '>')) {
+                $best    = $m;
+                $bestVer = $v;
+            }
         }
-        return null;
+
+        return $best;
     }
 
-    /** GET a URL, or null. Never throws; callers must handle null. */
+    /**
+     * The best manifest ONE channel can offer, cross-checked against the
+     * extracted tree it serves.
+     *
+     * latest/VERSION is read out of the build itself and cannot claim a
+     * version the tree beside it does not contain. latest.json is a small,
+     * long-lived, constantly-requested url -- precisely the shape a proxy
+     * cache pins, and the one cPanel's nginx cache did pin for six days. When
+     * the tree is NEWER than the manifest, the tree wins.
+     *
+     * @return array<string,mixed>|null
+     */
+    private static function channelManifest(string $base): ?array
+    {
+        $manifest = null;
+        $body     = self::httpGet($base . '/latest.json');
+        if ($body !== null) {
+            $j = json_decode($body, true);
+            if (is_array($j) && isset($j['version'])) {
+                $manifest = $j;
+            } else {
+                Logger::warn("UpdateChecker: $base/latest.json answered but was not a manifest");
+            }
+        } else {
+            Logger::debug("UpdateChecker: $base/latest.json did not answer");
+        }
+
+        $live = self::httpGet($base . '/latest/VERSION');
+        $live = $live === null ? '' : ltrim(trim($live), 'v');
+        // A channel serving only dist/ has no latest/ tree. Normal, not an error.
+        if ($live === '' || !preg_match('/^\d+\.\d+\.\d+/', $live)) {
+            return $manifest;
+        }
+
+        $mVer = $manifest === null ? '' : ltrim((string)($manifest['version'] ?? ''), 'v');
+        if ($mVer !== '' && version_compare($live, $mVer, '<=')) {
+            return $manifest;   // manifest is current, or ahead mid-sync
+        }
+
+        Logger::warn("UpdateChecker: $base serves manifest v"
+                   . ($mVer === '' ? '(none)' : $mVer)
+                   . " but latest/VERSION reads v$live — trusting the deployed tree");
+
+        // cdn-sync.sh writes a per-version copy of the manifest beside each
+        // build. That url is requested about once ever, so no cache holds it,
+        // and it carries the url + sha256 for THIS build.
+        $pinned = self::httpGet($base . '/v' . $live . '/latest.json');
+        if ($pinned !== null) {
+            $j = json_decode($pinned, true);
+            if (is_array($j) && ltrim((string)($j['version'] ?? ''), 'v') === $live) {
+                return $j;
+            }
+        }
+
+        // No per-version manifest. Report the version anyway -- the whole
+        // point is that the operator finds out -- but carry no url or
+        // checksum, so nothing downstream can present an unverified download
+        // as a verified one. update.sh resolves the real artifact itself.
+        return [
+            'version' => $live,
+            'notes'   => $manifest === null ? '' : (string)($manifest['notes'] ?? ''),
+        ];
+    }
+
+    /**
+     * GET a URL, or null. Never throws; callers must handle null.
+     *
+     * Every url this class fetches is version-bearing, and all of them sit
+     * behind cPanel's nginx reverse-proxy cache, which ignores client
+     * revalidation. Measured on the live host:
+     *
+     *   plain GET                                  -> 4.35.1 (six days stale)
+     *   GET with no-cache + no-store + Pragma      -> 4.35.1
+     *   GET with a ?cb= the proxy has not seen     -> 4.36.0
+     *
+     * Only a different cache key misses it, so a single-use query parameter
+     * goes on every request. The headers are sent too: they are free, and
+     * they do work on the caches between a server and us that DO honour them.
+     */
     private static function httpGet(string $url): ?string
     {
+        $url .= (strpos($url, '?') === false ? '?' : '&')
+              . 'cb=' . time() . mt_rand(100, 999);
+
+        $headers = ['User-Agent: ' . self::USER_AGENT,
+                    'Accept: application/json',
+                    'Cache-Control: no-cache, no-store, max-age=0',
+                    'Pragma: no-cache'];
+
+        if (self::$fetcher !== null) {
+            $r = (self::$fetcher)($url, $headers);
+            return is_string($r) ? $r : null;
+        }
+
         $ctx = stream_context_create(['http' => [
             'method'        => 'GET',
-            'header'        => ['User-Agent: ' . self::USER_AGENT,
-                                'Accept: application/json'],
+            'header'        => $headers,
             'timeout'       => 10,
             'ignore_errors' => true,
         ], 'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]);

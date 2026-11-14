@@ -263,6 +263,37 @@ echo -e "║    ServerScrub — Safe Updater       ║"
 echo -e "╚═══════════════════════════════════════╝${NC}"
 echo ""
 
+# ── Helper: a URL an intermediate cache cannot answer from ──────────────────
+#
+# The CDN sits behind cPanel's nginx reverse-proxy cache, and that cache does
+# NOT honour client revalidation. Measured against the live host on 2026-11-13,
+# the day v4.36.0 was published:
+#
+#   GET /releases/latest.json                                 -> 4.35.1
+#   GET /releases/latest.json  -H 'Cache-Control: no-cache'
+#                              -H 'Pragma: no-cache'          -> 4.35.1
+#   GET /releases/latest.json?cb=<timestamp>                   -> 4.36.0
+#
+# Last-Modified on the stale answers was the 4.35.1 publish time, six days
+# earlier, while the file on the origin disk read 4.36.0. Asking politely does
+# nothing; only a cache key the proxy has never seen misses it. Every fetch of
+# a VERSION-BEARING url therefore carries a unique query string. (The zip
+# downloads do not need it -- their names already contain the version, so a
+# cached copy of serverscrub-4.36.0.zip is by definition the right bytes.)
+#
+# The headers are kept as well. They cost nothing, and they do work on the
+# other caches between a customer's server and us.
+#
+# The same nginx layer is what served stale WAF-event JSON at 4.35.1. It is a
+# known hazard of this deployment, not a surprise.
+CACHE_BUST="$(date +%s 2>/dev/null || echo 0)$$"
+NOCACHE_HDRS=(-H 'Cache-Control: no-cache, no-store, max-age=0' -H 'Pragma: no-cache')
+_nocache() { # _nocache <url> -> same url with a single-use cache-buster
+    local u="$1" sep='?'
+    case "$u" in *\?*) sep='&' ;; esac
+    printf '%s%scb=%s' "$u" "$sep" "$CACHE_BUST"
+}
+
 # ── Helper: download a URL to a file (curl first, wget fallback) ──────────────
 _download() {
     local url="$1" dest="$2" label="${3:-file}"
@@ -331,6 +362,11 @@ else
     MANIFEST_JSON=""
     ACTIVE_BASE=""
     BEST_VER=""
+    # Highest latest/VERSION seen on ANY channel, and where it was seen.
+    # Tracked separately from the manifest because the whole point is that the
+    # two can disagree, and the tree is the one that cannot lie about itself.
+    BEST_LIVE=""
+    BEST_LIVE_BASE=""
     CHANNEL_REPORT=()
 
     # Highest-version test, needed here as well as below. `_is_newer` is
@@ -351,12 +387,27 @@ else
         # latest/VERSION is the extracted build the channel is actually serving.
         # Six bytes, and it cannot disagree with what is on disk there, so it is
         # used to cross-check the manifest below.
-        # Informational only: a nicer message and a cross-check against the
-        # manifest below. A missing latest/VERSION is normal on a channel that
-        # serves only dist/, and must never stop the update. THIS LINE, without
-        # its `|| true`, is what silently killed the updater on a live server.
-        THIS_LIVE="$(curl -fsSL --max-time 10 "${BASE}/latest/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
+        # NO LONGER INFORMATIONAL. This used to be a nicer message plus a
+        # cross-check that printed a warning and changed nothing; on
+        # 2026-11-13 it read 4.36.0 next to a cached 4.35.1 manifest and the
+        # updater went ahead with the manifest, reporting "Already up to
+        # date" on every server in the field. It now OVERRIDES a lower
+        # manifest version (see the override block after the loop).
+        #
+        # A missing latest/VERSION is still normal on a channel that serves
+        # only dist/, and must never stop the update. THIS LINE, without its
+        # `|| true`, is what silently killed the updater on a live server.
+        THIS_LIVE="$(curl -fsSL --max-time 10 "${NOCACHE_HDRS[@]}" "$(_nocache "${BASE}/latest/VERSION")" 2>/dev/null | tr -d '[:space:]' || true)"
         [[ -n "$THIS_LIVE" ]] && info "  ${BASE}/latest/ reports v${THIS_LIVE}"
+        # Kept even when this channel's manifest loses the comparison below. A
+        # channel can serve a stale manifest and a current tree at the same
+        # time -- that is exactly the 4.36.0 failure -- and discarding the tree
+        # reading because the manifest beside it was older threw away the only
+        # correct answer on the wire.
+        if [[ -n "$THIS_LIVE" ]] && { [[ -z "$BEST_LIVE" ]] || _ver_gt "$THIS_LIVE" "$BEST_LIVE"; }; then
+            BEST_LIVE="$THIS_LIVE"
+            BEST_LIVE_BASE="$BASE"
+        fi
 
         info "  Trying: ${BASE}/latest.json"
         THIS_JSON=""
@@ -364,8 +415,8 @@ else
             [[ $attempt -gt 1 ]] && { warn "  Retrying in ${API_WAIT}s (${attempt}/${API_RETRIES})…"; sleep $API_WAIT; }
             CURL_ERR_FILE="${TMP_DIR}/curl_err.txt"
             if THIS_JSON="$(curl -fsSL --max-time 15 \
-                    -H 'Cache-Control: no-cache' \
-                    "${BASE}/latest.json" 2>"$CURL_ERR_FILE")"; then
+                    "${NOCACHE_HDRS[@]}" \
+                    "$(_nocache "${BASE}/latest.json")" 2>"$CURL_ERR_FILE")"; then
                 break
             else
                 CURL_EXIT=$?
@@ -451,8 +502,64 @@ else
     fi
     [[ -z "$LATEST_VERSION" ]] && die "Could not parse version from manifest."
 
-    # A manifest disagreeing with the deployed tree means the channel is mid-sync
-    if [[ -n "${LIVE_VER:-}" && "$LIVE_VER" != "$LATEST_VERSION" ]]; then
+    # --- latest/VERSION OVERRIDES a lower manifest version -------------------
+    #
+    # This cross-check used to be informational: it printed "channel mid-sync"
+    # and then went ahead with the manifest anyway. On 2026-11-13 that threw
+    # away the right answer while holding it. serverscrub.com/releases served
+    # a cached latest.json reading 4.35.1 while latest/VERSION on the same host
+    # read 4.36.0, so `update.sh --yes` compared 4.35.1 against the installed
+    # 4.35.1 and reported "Already up to date" on every server in the field.
+    #
+    # The two sources are not equal in authority:
+    #
+    #   * latest.json is a small, long-lived, constantly-requested url. It is
+    #     the ideal shape for a proxy cache to pin, and cPanel's nginx cache
+    #     pinned it for six days.
+    #   * latest/VERSION is read out of the extracted build itself. It cannot
+    #     claim a version the tree beside it does not contain.
+    #
+    # So when the tree is NEWER than the manifest, the tree wins. The reverse
+    # is still only a warning: a manifest ahead of the tree is a sync that has
+    # not finished extracting yet, and there is nothing to download there.
+    if [[ -n "$BEST_LIVE" ]] && _ver_gt "$BEST_LIVE" "$LATEST_VERSION"; then
+        warn "Manifest says v${LATEST_VERSION} but ${BEST_LIVE_BASE}/latest/ holds v${BEST_LIVE}."
+        warn "  Trusting the deployed tree: a manifest can be a cached copy of an"
+        warn "  older one, while latest/VERSION is read out of the build itself."
+
+        # cdn-sync.sh writes a per-version copy of the manifest next to each
+        # build (v<ver>/latest.json). That url is requested roughly once ever,
+        # so no cache has it, and it carries the url + sha256 for THIS build --
+        # which the stale top-level manifest does not. Preferred over guessing
+        # the dist path precisely so the download stays checksum-verified.
+        PINNED_URL="${BEST_LIVE_BASE}/v${BEST_LIVE}/latest.json"
+        info "  Fetching the per-version manifest: ${PINNED_URL}"
+        PINNED_JSON="$(curl -fsSL --max-time 15 "${NOCACHE_HDRS[@]}" "$(_nocache "$PINNED_URL")" 2>/dev/null || true)"
+        PINNED_VER="$(printf '%s' "$PINNED_JSON" | grep -oP '"version"\s*:\s*"\K[^"]+' | head -1 || true)"
+
+        if [[ -n "$PINNED_JSON" && "$PINNED_VER" == "$BEST_LIVE" ]]; then
+            MANIFEST_JSON="$PINNED_JSON"
+            ACTIVE_BASE="$BEST_LIVE_BASE"
+            DIST_BASE="${BEST_LIVE_BASE}/dist"
+            LATEST_VERSION="$BEST_LIVE"
+            DOWNLOAD_URL="$(printf '%s' "$PINNED_JSON"    | grep -oP '"url"\s*:\s*"\K[^"]+' | head -1 || true)"
+            MIRROR_URL="$(printf '%s' "$PINNED_JSON"      | grep -oP '"mirror"\s*:\s*"\K[^"]+' | head -1 || true)"
+            EXPECTED_SHA256="$(printf '%s' "$PINNED_JSON" | grep -oP '"sha256"\s*:\s*"\K[0-9a-fA-F]+' | head -1 || true)"
+            RELEASE_URL="$(printf '%s' "$PINNED_JSON"     | grep -oP '"notes"\s*:\s*"\K[^"]+' | head -1 || true)"
+            ok "  Took v${LATEST_VERSION} from the per-version manifest (checksum included)"
+        else
+            # No per-version manifest. Still better to install the version the
+            # tree says is current than to tell the operator they are up to
+            # date when they are not -- but say plainly what was lost.
+            LATEST_VERSION="$BEST_LIVE"
+            ACTIVE_BASE="$BEST_LIVE_BASE"
+            DIST_BASE="${BEST_LIVE_BASE}/dist"
+            DOWNLOAD_URL="${DIST_BASE}/serverscrub-${LATEST_VERSION}.zip"
+            EXPECTED_SHA256=""
+            warn "  No per-version manifest for v${LATEST_VERSION} at ${PINNED_URL}."
+            warn "  Falling back to ${DOWNLOAD_URL} — integrity will NOT be verified."
+        fi
+    elif [[ -n "${LIVE_VER:-}" && "$LIVE_VER" != "$LATEST_VERSION" ]]; then
         warn "Manifest says v${LATEST_VERSION} but latest/ holds v${LIVE_VER} — channel mid-sync."
     fi
     [[ -z "$DOWNLOAD_URL"   ]] && DOWNLOAD_URL="${DIST_BASE}/serverscrub-${LATEST_VERSION}.zip"

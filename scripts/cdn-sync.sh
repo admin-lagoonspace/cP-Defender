@@ -373,9 +373,203 @@ else
     log "WARNING: unzip not available — latest/ not refreshed"
 fi
 
+# --- The manifest must not be cacheable --------------------------------------
+#
+# THIS IS THE DEFECT THAT MADE EVERY RELEASE INVISIBLE FOR A WHILE.
+#
+# Replacing ${DOCROOT}/latest.json changes the file on disk. It does not change
+# what the public url serves, because this docroot sits behind cPanel's nginx
+# reverse-proxy cache, and that cache keys on the url. Measured on 2026-11-13,
+# after this script had successfully published v4.36.0:
+#
+#   GET https://serverscrub.com/releases/latest.json            -> 4.35.1
+#     Server: nginx
+#     Last-Modified: Sat, 07 Nov 2026 02:40:12 GMT   (the 4.35.1 publish)
+#   GET .../latest.json -H 'Cache-Control: no-cache' -H 'Pragma: no-cache'
+#                                                               -> 4.35.1
+#   GET .../latest.json?cb=<timestamp>                          -> 4.36.0
+#
+# The origin files were correct the whole time. Client revalidation is ignored;
+# only a url the proxy has never seen misses the cache.
+#
+# This was never specific to 4.36.0. EVERY release has had a window in which
+# the canonical manifest advertised the previous version, with nothing in any
+# log to say so. That is the likely source of the long-standing impression that
+# installs "silently fell back to the GitHub mirror": they were not falling
+# back, they were being told the old version was the current one. The same
+# nginx layer is what served stale WAF-event JSON at 4.35.1.
+#
+# Three things are done about it, in order of durability:
+#
+#   1. An .htaccess in this docroot marks the version-bearing files
+#      uncacheable, so a proxy that honours origin cache-control stops
+#      holding them at all. The zips stay cacheable -- their names contain
+#      the version, so a cached serverscrub-4.36.0.zip is by definition the
+#      right bytes, and they are the only part of this that is big.
+#   2. A best-effort purge after the manifest is in place, for the proxies
+#      that ignore (1).
+#   3. A read-back of the PUBLIC url, so that when (1) and (2) both fail the
+#      publish says so in the log instead of reporting success. update.sh and
+#      UpdateChecker.php no longer depend on this cache behaving -- both now
+#      cross-check latest/VERSION and cache-bust every fetch -- but the sync
+#      should still not claim a release is live when the canonical url says
+#      otherwise.
+#
+# The .htaccess is written as a MARKED BLOCK appended to whatever is already
+# there, never as a wholesale overwrite: this docroot is shared with the
+# website and may carry rules this script knows nothing about.
+_write_docroot_htaccess() {
+    local ht="${DOCROOT}/.htaccess"
+    local begin='# BEGIN ServerScrub cdn-sync (managed block — edits here are lost)'
+    local end='# END ServerScrub cdn-sync'
+    local block
+    block="$(cat <<HTACCESS
+${begin}
+# The release manifest and the version stamp are read to decide whether an
+# update exists. A cached copy of either tells every installed server that an
+# old release is the current one, which is indistinguishable from there being
+# no new release at all. They are a few hundred bytes; never cache them.
+<FilesMatch "^(latest\.json|VERSION|get\.sh)$">
+    <IfModule mod_headers.c>
+        Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+        Header always set Pragma "no-cache"
+        Header always set Expires "0"
+        # Surfaces which layer answered when this goes wrong again.
+        Header always set X-SG-Manifest "origin"
+    </IfModule>
+</FilesMatch>
+# The zips are immutable: the version is in the filename. Cache them hard.
+<FilesMatch "\.zip$">
+    <IfModule mod_headers.c>
+        Header always set Cache-Control "public, max-age=31536000, immutable"
+    </IfModule>
+</FilesMatch>
+${end}
+HTACCESS
+)"
+
+    if [ -f "$ht" ]; then
+        if grep -qF "$begin" "$ht" 2>/dev/null; then
+            # A BEGIN with no END means a truncated or hand-edited file. The
+            # awk below would treat everything after BEGIN as part of our
+            # block and drop it, so refuse: this docroot is shared with the
+            # website, and silently deleting its rules is far worse than a
+            # cacheable manifest.
+            if ! grep -qF "$end" "$ht" 2>/dev/null; then
+                log "WARNING: ${ht} has our BEGIN marker but no END marker."
+                log "         Refusing to rewrite it — fix the markers by hand."
+                return 1
+            fi
+            # Replace only our own block, leaving everything else untouched.
+            awk -v b="$begin" -v e="$end" -v blk="$block" '
+                index($0, b) { skip = 1; print blk; next }
+                index($0, e) { skip = 0; next }
+                !skip        { print }
+            ' "$ht" > "${ht}.tmp" 2>/dev/null \
+              && mv -f "${ht}.tmp" "$ht" \
+              && { chmod 644 "$ht" 2>/dev/null || true; log "refreshed cache-control block in ${ht}"; return 0; }
+            rm -f "${ht}.tmp" 2>/dev/null
+            log "WARNING: could not update the managed block in ${ht}"
+            return 1
+        fi
+        # Someone else's .htaccess: append, do not replace.
+        if { printf '\n%s\n' "$block" >> "$ht"; } 2>/dev/null; then
+            log "appended cache-control block to existing ${ht}"
+            return 0
+        fi
+        log "WARNING: cannot append to ${ht} — manifest stays cacheable"
+        return 1
+    fi
+
+    if printf '%s\n' "$block" > "${ht}.tmp" 2>/dev/null && mv -f "${ht}.tmp" "$ht"; then
+        chmod 644 "$ht" 2>/dev/null || true
+        log "wrote ${ht} (manifest marked uncacheable)"
+        return 0
+    fi
+    rm -f "${ht}.tmp" 2>/dev/null
+    log "WARNING: cannot write ${ht} — manifest stays cacheable"
+    return 1
+}
+_write_docroot_htaccess || true
+
 printf '%s\n' "$REMOTE_JSON" > "${TMP}/latest.json"
 place "${TMP}/latest.json"   "${DOCROOT}/v${NEW_VER}/latest.json"
 place "${TMP}/latest.json"   "${DOCROOT}/latest.json"             || die "publish failed: latest.json"
+
+# --- Purge the proxy cache in front of the manifest --------------------------
+#
+# Best effort by design. This runs as an unprivileged cPanel user, and every
+# mechanism below needs either root or a purge endpoint that may not exist, so
+# a failure here is logged and never fatal -- the publish itself succeeded, and
+# the read-back below reports the consequence.
+_purge_manifest_cache() {
+    local purged=0
+
+    # cPanel's own ea-nginx helper, if this account may run it.
+    for _s in /usr/local/cpanel/scripts/clear_nginx_cache /scripts/clear_nginx_cache; do
+        if [ -x "$_s" ]; then
+            if "$_s" --user="$(id -un 2>/dev/null || echo serversc)" >/dev/null 2>&1 \
+            || "$_s" >/dev/null 2>&1; then
+                log "purged nginx cache via ${_s}"
+                purged=1
+                break
+            fi
+            log "note: ${_s} exists but this account cannot run it (needs root)"
+        fi
+    done
+
+    # An explicit purge url, if the deployment has one configured.
+    if [ "$purged" -eq 0 ] && [ -n "${SG_PURGE_URL:-}" ]; then
+        if curl -fsS --max-time 15 -X PURGE "${SG_PURGE_URL}" >/dev/null 2>&1; then
+            log "purged ${SG_PURGE_URL}"
+            purged=1
+        else
+            log "note: PURGE ${SG_PURGE_URL} did not succeed"
+        fi
+    fi
+
+    [ "$purged" -eq 1 ] && return 0
+
+    log "note: no cache purge available to this account; relying on the"
+    log "      .htaccess cache-control block and on clients cache-busting"
+    return 1
+}
+_purge_manifest_cache || true
+
+# --- Read back the PUBLIC url, not the file on disk --------------------------
+#
+# The whole failure was that these two can disagree, so a publish that only
+# checks its own disk writes proves nothing about what customers are served.
+PUBLIC_BASE="${SG_PUBLIC_BASE:-https://serverscrub.com/releases}"
+_verify_public_manifest() {
+    local plain busted
+    # Deliberately NO cache-buster on the first fetch: this is the url every
+    # installed server actually requests.
+    plain="$(curl -fsSL --max-time 20 "${PUBLIC_BASE}/latest.json" 2>/dev/null || true)"
+    plain="$(json_get "${plain:-}" version || true)"
+    busted="$(curl -fsSL --max-time 20 "${PUBLIC_BASE}/latest.json?cb=$(date +%s 2>/dev/null || echo 0)$$" 2>/dev/null || true)"
+    busted="$(json_get "${busted:-}" version || true)"
+
+    if [ -z "$plain" ] && [ -z "$busted" ]; then
+        log "WARNING: could not read ${PUBLIC_BASE}/latest.json back at all"
+        return 1
+    fi
+    if [ "$plain" = "$NEW_VER" ]; then
+        log "verified ${PUBLIC_BASE}/latest.json serves v${NEW_VER}"
+        return 0
+    fi
+    log "WARNING: ${PUBLIC_BASE}/latest.json serves v${plain:-unparseable}, not v${NEW_VER}."
+    if [ "$busted" = "$NEW_VER" ]; then
+        log "         A cache-busted request DOES return v${NEW_VER}, so the origin is"
+        log "         correct and a proxy cache in front of it is holding the old object."
+        log "         Purge it as root:  /usr/local/cpanel/scripts/clear_nginx_cache"
+    else
+        log "         A cache-busted request returns v${busted:-unparseable} too, so this"
+        log "         is not a cache — check what was published to ${DOCROOT}."
+    fi
+    return 1
+}
+_verify_public_manifest || true
 
 log "published v${NEW_VER}"
 
