@@ -6,6 +6,15 @@ echo "[STUB] php $*" >> "$LOG"
 # PHP inline -r execution
 if [[ "$1" == "-r" ]]; then
     CODE="$2"
+    # SAPI probe. install.sh asks every php candidate what SAPI it is and
+    # takes the first that answers "cli" (efd23ee, 23 Sep 2026). A stub that
+    # does not answer is rejected, which silently killed this whole suite at
+    # step 1.2 for seven weeks -- every later assertion failed on the missing
+    # install dir, not on anything real.
+    if [[ "$CODE" == *"PHP_SAPI"* ]]; then
+        echo "cli"
+        exit 0
+    fi
     # PHP version check
     if [[ "$CODE" == *"PHP_MAJOR_VERSION"* ]]; then
         echo "8"
