@@ -33,13 +33,42 @@ for ($i = 0; $i < $zip->numFiles; $i++) {
 $zip->close();
 
 // ── Nothing developmental ships ──────────────────────────────────────────────
-$leaked = array_values(array_filter($names, function ($n) {
+//
+// scripts/ is no longer banned outright. Three files out of it ship from
+// 4.36.2 -- the CDN trio, which runs ON a host that serves releases and until
+// then arrived only by a human copying a raw GitHub URL. That is the reason
+// 4.36.1 could not clear the stale latest.json it was released to fix: the fix
+// was inside cdn-sync.sh and nothing delivered cdn-sync.sh.
+//
+// So the test is no longer "scripts/ is absent" but "scripts/ is EXACTLY the
+// trio". Anything else appearing under it -- publish.sh, preflight.py,
+// webhook.php, a new release gate -- is still a leak, and a trio member going
+// missing is now a failure too, which the old blanket ban could not express.
+$OPS = ['cdn-setup.sh', 'cdn-sync.sh', 'cdn-trigger-watch.sh'];
+
+$leaked = array_values(array_filter($names, function ($n) use ($OPS) {
+    if (strpos($n, '/scripts/') !== false) {
+        if (substr($n, -1) === '/') { return false; }
+        return !in_array(basename($n), $OPS, true);
+    }
     return strpos($n, '/tests/') !== false
-        || strpos($n, '/scripts/') !== false
         || preg_match('#/(phpunit|\.github|\.git)/#', $n);
 }));
-t_eq(0, count($leaked), 'no tests/ or scripts/ in the package'
+t_eq(0, count($leaked), 'nothing developmental in the package — tests/, the '
+    . 'release machinery and site infrastructure all stay out'
     . ($leaked ? ' — leaked: ' . implode(', ', array_slice($leaked, 0, 5)) : ''));
+
+$shippedOps = [];
+foreach ($names as $n) {
+    if (strpos($n, '/scripts/') !== false && substr($n, -1) !== '/') {
+        $shippedOps[] = basename($n);
+    }
+}
+sort($shippedOps);
+t_eq($OPS, $shippedOps,
+     'the package carries exactly the CDN trio under scripts/ — a missing one '
+   . 'is a server that keeps running the copy it was first installed with, '
+   . 'which is the failure mode this packaging change exists to end');
 
 // Build leftovers from the maintainer's machine are not the product either.
 // v3.27.3 shipped backend/daemon/__pycache__/monitor.cpython-{310,312}.pyc --

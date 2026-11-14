@@ -17,6 +17,38 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+## [4.36.2] - 2026-11-14
+
+### Releases now carry the CDN scripts, so a fix to them can deploy itself
+
+`scripts/` was never packaged. That is the reason 4.36.1 could not clear the
+stale `latest.json` it was released to fix: the fix lived in
+`scripts/cdn-sync.sh`, no release shipped `scripts/cdn-sync.sh`, and the only
+route onto the server was a human copying a raw GitHub URL. A fix that cannot
+reach the machine it fixes is not shipped.
+
+The directory is still not packaged wholesale, and must not be — it holds
+`publish.sh`, `make-release.sh`, `preflight.py`, `build.py`, the `check-*`
+gates and `webhook.php`, which are release machinery and site infrastructure
+with no business on a server. Three names ship: `cdn-sync.sh`, `cdn-setup.sh`
+and `cdn-trigger-watch.sh`.
+
+That list lives in three files which have to agree — `make-release.sh` puts
+them in the zip, `install.sh` copies them on a fresh install, `update.sh`
+refreshes them on every update — so `tests/test_release_payload.php` derives
+the list from each and compares them, rather than grepping for a string it was
+handed. A name added to one file and not the others gives a script that ships
+but never updates, or updates but was never installed; both read as "it is
+there" to anyone checking by eye. The same test pins the exclusions, so release
+tooling cannot drift into the payload, and a named ops script missing from the
+tree now fails the build instead of producing a zip quietly without it.
+
+**One manual step remains on the host that serves the releases.** Its cron
+invokes a hand-placed path, and a cron line pointing outside the install
+directory keeps running the old file however many updates land. Repoint it at
+`/usr/local/serverscrub/scripts/cdn-sync.sh` once and it maintains itself from
+then on.
+
 ### The installer and updater had not been tested since 23 September
 
 `tests/run-tests.sh` is the only thing that exercises `install.sh` and

@@ -848,7 +848,17 @@ section "Applying update"
 #
 # Three independent lists described this product: build.py's ITEMS,
 # make-release.sh's allowlist, and this. All three disagreed.
-UPDATE_DIRS=( backend frontend whm cpanel )
+# scripts/ joined this list in 4.36.2 so the CDN trio (cdn-sync.sh,
+# cdn-setup.sh, cdn-trigger-watch.sh) is refreshed by an update like any other
+# code. Before that they reached a server only by hand-copying a raw GitHub
+# URL, which is why a cache fix that lived in cdn-sync.sh could not deploy
+# itself.
+#
+# NOTE for the host that serves the releases: cron must invoke the INSTALLED
+# copy (${INSTALL_DIR}/scripts/cdn-sync.sh) for this to mean anything. A cron
+# line still pointing at a hand-placed path keeps running the old file no
+# matter how many updates land.
+UPDATE_DIRS=( backend frontend whm cpanel scripts )
 UPDATE_FILES=( VERSION install.sh uninstall.sh update.sh upgrade.sh test.sh )
 
 # ── Snapshot the current code so a failure can be undone ─────────────────────

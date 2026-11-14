@@ -73,7 +73,7 @@ t_contains($mk, 'cpanel',
    . 'at a file the zip does not carry');
 
 $up = (string) file_get_contents($repo . '/update.sh');
-t_contains($up, 'UPDATE_DIRS=( backend frontend whm cpanel )',
+t_contains($up, 'UPDATE_DIRS=( backend frontend whm cpanel scripts )',
      'and updates overlay it, so a fix to the page reaches existing servers');
 t_contains($up, '--register-only',
      'and re-run registration, so a fix to the CONF reaches them too');

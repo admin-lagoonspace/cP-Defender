@@ -34,13 +34,31 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # replaced a correct release with one missing the customer-facing page, while
 # latest.json went on advertising the old SHA-256.
 # tests/test_packaging.php asserts the two lists agree.
-ITEMS = ["backend", "frontend", "whm", "cpanel", "install.sh", "uninstall.sh",
-         "update.sh", "upgrade.sh", "test.sh", "VERSION"]
+ITEMS = ["backend", "frontend", "whm", "cpanel", "scripts", "install.sh",
+         "uninstall.sh", "update.sh", "upgrade.sh", "test.sh", "VERSION"]
+
+# scripts/ is packaged, but only these three files out of it. They run ON a
+# host that serves releases, and until 4.36.2 they reached one only by a human
+# copying a raw GitHub URL -- which is why 4.36.1 could not clear the stale
+# latest.json it was released to fix: the fix was inside cdn-sync.sh, and
+# nothing delivered cdn-sync.sh.
+#
+# An allowlist, so the default for anything else in scripts/ is "does not
+# ship". Everything else in there is release machinery (publish.sh,
+# make-release.sh, preflight.py, this file, the check-* gates) or site
+# infrastructure (webhook.php), and none of it belongs on a server.
+OPS_SCRIPTS = {"cdn-sync.sh", "cdn-setup.sh", "cdn-trigger-watch.sh"}
+
 # Development tooling must never reach a customer server. ITEMS already omits
 # these, but naming them makes the intent explicit and survives someone adding a
 # directory to ITEMS later.
-SKIP_DIRS = {".git", "__pycache__", "node_modules", "tests", "scripts", "php", ".github"}
-NEVER_PACKAGE = ("/tests/", "/scripts/", "/php/", "/.github/", "/.git/")
+#
+# scripts/ is no longer in either set: it IS packaged now, filtered to
+# OPS_SCRIPTS at the walk and checked again against the built zip below, which
+# is the stronger guarantee of the two -- a blanket ban on the path could not
+# tell cdn-sync.sh from publish.sh.
+SKIP_DIRS = {".git", "__pycache__", "node_modules", "tests", "php", ".github"}
+NEVER_PACKAGE = ("/tests/", "/php/", "/.github/", "/.git/")
 SKIP_FILES = {".DS_Store", "Thumbs.db"}
 CDN = "https://serverscrub.com/serverscrub/code"
 MIRROR = "https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main"
@@ -117,6 +135,8 @@ def main():
                 for f in files:
                     if f in SKIP_FILES:
                         continue
+                    if item == "scripts" and f not in OPS_SCRIPTS:
+                        continue
                     full = os.path.join(root, f)
                     rel = os.path.relpath(full, REPO).replace("\\", "/")
                     z.write(full, "serverscrub/" + rel)
@@ -130,6 +150,21 @@ def main():
             print("\nDevelopment files leaked into the package: %s" % leaked[:8])
             discard(zip_path)
             return 1
+        # scripts/ in the payload must be exactly OPS_SCRIPTS. Checked against
+        # the BUILT ZIP rather than the walk, because the walk is the thing
+        # that could be wrong.
+        shipped_ops = set()
+        for n in names:
+            if "/scripts/" in n and not n.endswith("/"):
+                shipped_ops.add(n.rsplit("/", 1)[1])
+        if shipped_ops != OPS_SCRIPTS:
+            print("")
+            print("Packaged scripts/ is not the ops allowlist.")
+            print("  expected: %s" % sorted(OPS_SCRIPTS))
+            print("  got:      %s" % sorted(shipped_ops))
+            discard(zip_path)
+            return 1
+
         empties = [n for n in names if n.endswith(".php") and z.getinfo(n).file_size == 0]
         if empties:
             print("\nPackaged payload contains empty PHP files: %s" % empties)

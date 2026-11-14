@@ -570,6 +570,18 @@ section "Installing files"
 if [[ "$(readlink -f "${SCRIPT_DIR}" 2>/dev/null)" != "$(readlink -f "${INSTALL_DIR}" 2>/dev/null)" ]]; then
   cp -r "${SCRIPT_DIR}/backend"  "$INSTALL_DIR/"
   cp -r "${SCRIPT_DIR}/frontend" "$INSTALL_DIR/"
+  # The ops scripts a release carries (the CDN trio).
+  #
+  # Copied BY NAME, never as a directory. install.sh also runs from a git
+  # checkout, where scripts/ holds publish.sh, make-release.sh, preflight.py
+  # and the rest of the release machinery -- `cp -r scripts` would install all
+  # of it onto the server. The list matches OPS_SCRIPTS in
+  # scripts/make-release.sh, and tests/test_release_payload.php pins the two
+  # together.
+  mkdir -p "$INSTALL_DIR/scripts"
+  for _ops in cdn-sync.sh cdn-setup.sh cdn-trigger-watch.sh; do
+    [[ -f "${SCRIPT_DIR}/scripts/${_ops}" ]] &&       cp "${SCRIPT_DIR}/scripts/${_ops}" "$INSTALL_DIR/scripts/"
+  done
   cp    "${SCRIPT_DIR}/VERSION"  "$INSTALL_DIR/"
   [[ -f "${SCRIPT_DIR}/install.sh"   ]] && cp "${SCRIPT_DIR}/install.sh"   "$INSTALL_DIR/"
   [[ -f "${SCRIPT_DIR}/update.sh"    ]] && cp "${SCRIPT_DIR}/update.sh"    "$INSTALL_DIR/"

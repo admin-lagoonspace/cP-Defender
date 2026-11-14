@@ -66,8 +66,46 @@ STAGE="$(mktemp -d /tmp/sg-rel.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
 PKG="${STAGE}/serverscrub"
 mkdir -p "$PKG"
-for item in backend frontend whm cpanel install.sh uninstall.sh update.sh upgrade.sh test.sh VERSION; do
+# scripts/ is in this list, but only three files inside it survive -- see the
+# prune immediately below. It is listed here so that this allowlist,
+# build.py's ITEMS and update.sh's UPDATE_DIRS stay literally identical, which
+# tests/test_packaging.php enforces: those three lists are what the product
+# consists of, and they have disagreed before, each time delivering a release
+# that was correct in the zip and wrong on the server.
+for item in backend frontend whm cpanel scripts install.sh uninstall.sh update.sh upgrade.sh test.sh VERSION; do
   [[ -e "${REPO_DIR}/${item}" ]] && cp -r "${REPO_DIR}/${item}" "${PKG}/"
+done
+
+# ── Prune scripts/ to the ops allowlist ───────────────────────────────────────
+#
+# scripts/ holds the release machinery -- publish.sh, make-release.sh (this
+# file), preflight.py, build.py, the check-* gates -- plus webhook.php, which
+# belongs with the site deployment. None of that goes on a server.
+#
+# What ships is the CDN trio. These run ON a host that serves releases, and
+# until 4.36.2 they reached one only by a human copying a raw GitHub URL. That
+# is why 4.36.1 could not clear the stale latest.json it was released to fix:
+# the fix was inside cdn-sync.sh, and nothing delivered cdn-sync.sh.
+#
+# A PRUNE, not a copy list, so the default for anything new in scripts/ is
+# "does not ship". A new release gate added next month is excluded by having
+# been forgotten, which is the right way round for this decision.
+OPS_SCRIPTS=( cdn-sync.sh cdn-setup.sh cdn-trigger-watch.sh )
+if [[ -d "${PKG}/scripts" ]]; then
+  for _f in "${PKG}/scripts"/*; do
+    [[ -e "$_f" ]] || continue
+    _keep=0
+    for _ops in "${OPS_SCRIPTS[@]}"; do
+      [[ "$(basename "$_f")" == "$_ops" ]] && _keep=1
+    done
+    [[ "$_keep" == "1" ]] || rm -rf "$_f"
+  done
+fi
+for _ops in "${OPS_SCRIPTS[@]}"; do
+  if [[ ! -f "${PKG}/scripts/${_ops}" ]]; then
+    echo "  [x] ops script missing from the payload: scripts/${_ops}" >&2
+    exit 1
+  fi
 done
 
 # Build leftovers must not ship. v3.27.3 went out carrying
