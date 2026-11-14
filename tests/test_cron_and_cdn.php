@@ -203,3 +203,70 @@ t_contains($pub, 'if [[ -n "$_st" && "${_st:1:1}" != " " ]]; then',
 // A guard that silently does nothing is the theme of this whole file.
 t_contains($pub, 'warn "unzip not available — cannot verify the commit covers what shipped."',
      'and when the check cannot run it says so, instead of passing quietly');
+
+// ── The tag is a step of its own ───────────────────────────────────────────
+//
+// Tagging was never a step. It existed only as a side effect of
+// `gh release create` / the releases API call, and that whole branch is
+// skipped when neither gh nor GH_TOKEN is present -- the permanent state of
+// the release machine. Every release therefore took the `else` branch, warned
+// about the Release PAGE, and created no tag at all. v4.25.1 .. v4.35.1, 38
+// releases, have no tag locally or on origin. v4.36.0 exists only because it
+// was made by hand on 2026-11-13.
+//
+// The missing tag was invisible because the warning named the other thing.
+t_contains($pub, 'git tag -a "$TAG" -m "ServerScrub ${TAG}" "$TAG_COMMIT"',
+     'THE TAG IS ANNOTATED AND UNCONDITIONAL: it is created in its own step, '
+   . 'not as a side effect of a GitHub Release that is routinely skipped');
+t_contains($pub, 'git push origin "refs/tags/${TAG}"',
+     'and pushed by refspec, before the Release step, so no release can end '
+   . 'with a tag that exists only on the release machine');
+
+// The two must never read as one item again.
+t_contains($pub, 'warn "No gh and no GH_TOKEN — the GitHub RELEASE PAGE was not created."',
+     'THE WARNING NAMES THE MISSING THING: the old wording was "pushed code, '
+   . 'but DID NOT create the Release", which read as one missing item and hid '
+   . 'that no tag existed either');
+t_contains($pub, 'warn "  Tag ${TAG}:        PUSHED to origin (step 4b) — nothing to do."',
+     'and it states that the TAG is already done, so the only outstanding '
+   . 'item is the Release page');
+
+// A step that can silently not happen needs an assertion after it.
+t_contains($pub, 'NEWEST_TAG="$(git tag --sort=v:refname | tail -1 || true)"',
+     'THE SORT MATTERS: plain `git tag | tail -1` is lexicographic and returns '
+   . 'v4.9.0 in this repo, because "9" > "3" one character at a time. A check '
+   . 'written that way passes while testing nothing');
+t_contains($pub, 'err "RELEASE FAILED ITS TAG CHECK — ${TAG} is not correctly tagged:"',
+     'and the release FAILS when it did not leave the tag it claims to have '
+   . 'published, rather than reporting success as 38 releases did');
+
+// Refusing after the push is still a half-finished release.
+t_contains($pub, 'ok "Working tree clean at ${TAG_COMMIT:0:7}"',
+     'THE DIRTY-TREE GATE IS AHEAD OF THE PUSH: refusing to tag after '
+   . 'origin/main already has the release commit produces exactly the pushed '
+   . 'commit with no tag that this file exists to prevent');
+
+// err() was pinned above but never defined, so the one branch that has to
+// explain itself died with "err: command not found".
+t_contains($pub, 'err()  { echo -e "${RED}[x]${NC} $*" >&2; }',
+     'and err() is actually defined, so the zip-coverage failure path prints '
+   . 'its file list instead of aborting on an unknown command');
+
+// ── The version gate has to test its own baseline ──────────────────────────
+//
+// check-version-bump.sh compares HEAD against the newest tag. With the tags
+// missing, the v4.36.0 release compared 4.25.0 -> 4.36.0, classified 85
+// commits spanning eleven releases, found `feat` subjects in pre-4.35.1
+// history and printed "consistent". A gate that passes without looking at the
+// batch is worse than no gate, because it is cited as evidence.
+$bump = (string) file_get_contents($repo . '/scripts/check-version-bump.sh');
+t_contains($bump, 'err "BASELINE IS NOT TRUSTWORTHY — this check cannot tell you anything."',
+     'THE GATE REFUSES RATHER THAN GUESSES: an untagged release after the '
+   . 'baseline tag means the comparison range is wrong, and the verdict is '
+   . 'meaningless rather than merely imprecise');
+t_contains($bump, 'git rev-parse -q --verify "refs/tags/${_t}" >/dev/null 2>&1 && continue',
+     'and it detects that by asking whether each Release commit after the '
+   . 'baseline actually has a tag, which is the exact symptom');
+t_contains($bump, 'if (( _bx == _ax )) && (( _by > _ay + 1 )); then MINOR_GAP=$(( _by - _ay )); fi',
+     'plus a baseline more than one minor behind VERSION, which catches the '
+   . 'same breakage when the release commits were worded differently');

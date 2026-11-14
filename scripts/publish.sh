@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
 # ServerScrub — one-command release publisher
-# Builds the release, commits the artifacts, pushes main, and cuts the GitHub
-# Release/tag that the in-app updater watches. Run from the repo root.
+# Builds the release, commits the artifacts, pushes main, pushes the annotated
+# tag, and cuts the GitHub Release the in-app updater watches. Run from the
+# repo root.
+#
+# The tag (step 4b) and the GitHub Release (step 6) are SEPARATE steps. The
+# tag always happens and the release fails without it; the Release page needs
+# gh or GH_TOKEN and is skipped with a loud notice when neither is present.
 #
 #   bash scripts/publish.sh            # publish the version in ./VERSION
 #   bash scripts/publish.sh 3.7.1      # publish a specific version
@@ -31,6 +36,12 @@ info() { echo -e "${CYAN}[*]${NC} $*"; }
 ok()   { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 die()  { echo -e "${RED}[x]${NC} $*" >&2; exit 1; }
+# err() was called in the zip-coverage failure path below but never defined, so
+# the one branch that has to explain itself clearly died with
+# "publish.sh: line NNN: err: command not found" and never printed the file
+# list. tests/test_cron_and_cdn.php pins that call site, which is right -- the
+# missing piece was the function, not the call.
+err()  { echo -e "${RED}[x]${NC} $*" >&2; }
 
 # ── Locate repo root ───────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,6 +49,7 @@ cd "$REPO_ROOT"
 [[ -d .git ]] || die "Not a git repo: $REPO_ROOT"
 
 TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+TAG_PUSHED=no
 
 # ── Resolve owner/repo from origin ─────────────────────────────────────────────
 ORIGIN_URL="$(git config --get remote.origin.url)"
@@ -64,8 +76,12 @@ fi
 # Fails the release when the bump does not match the commits. The convention was
 # documented in CHANGELOG.md and still drifted three times, so it is enforced
 # here rather than trusted to memory. SG_SKIP_VERSION_CHECK=1 overrides.
+VERSION_CHECK=skipped
 if [[ "${SG_SKIP_VERSION_CHECK:-0}" != "1" ]]; then
     bash "${REPO_ROOT}/scripts/check-version-bump.sh" --strict || exit 1
+    VERSION_CHECK=passed
+else
+    warn "Version bump check SKIPPED via SG_SKIP_VERSION_CHECK=1"
 fi
 
 # ── 1. Build the package + manifest ────────────────────────────────────────────
@@ -191,6 +207,26 @@ else
     ok "Committed ${TAG}"
 fi
 
+# ── 3b. The tree must be clean before anything leaves this machine ─────────────
+#
+# This gate used to live further down, next to the tag. That meant a dirty tree
+# failed the release AFTER the commit had already been pushed to origin/main --
+# a pushed release commit with no tag, which is the exact half-finished state
+# this script is being fixed to stop producing. Check it here, while refusing
+# still costs nothing.
+TAG_COMMIT="$(git rev-parse HEAD)"
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo ""
+    err "Working tree is dirty — refusing to publish ${TAG}."
+    git status --porcelain | grep -v '^??' | sed 's/^/      /' >&2
+    echo "" >&2
+    echo "  HEAD is ${TAG_COMMIT:0:7}; these tracked files on disk differ from it," >&2
+    echo "  and the zip was built from the disk. Nothing has been pushed." >&2
+    echo "  Commit or discard these and run again." >&2
+    exit 1
+fi
+ok "Working tree clean at ${TAG_COMMIT:0:7}"
+
 # ── 4. Push main ───────────────────────────────────────────────────────────────
 info "Pushing to origin/main…"
 if [[ -n "$TOKEN" ]]; then
@@ -200,6 +236,74 @@ else
     git push origin HEAD:main
 fi
 ok "Pushed to origin/main"
+
+# ── 4b. Create and push the annotated tag ──────────────────────────────────────
+#
+# THE TAG IS ITS OWN STEP. It used to exist only as a side effect of creating
+# the GitHub Release, and that step is skipped whenever gh and GH_TOKEN are
+# both absent -- which is the normal state of the release machine. So every
+# release took the `else` branch, printed a warning about the Release PAGE,
+# and silently created no tag at all. v4.25.1 through v4.35.1 -- 38 releases
+# -- pushed a release commit and no tag, locally or on origin. Nobody noticed
+# because the warning only ever mentioned the Release page.
+#
+# Tagging now happens here, before the Release step, unconditionally, and
+# fails the release if it cannot be done. The GitHub Release is a page on a
+# website; the tag is the thing the repository is built on and the thing
+# check-version-bump.sh uses as its baseline. It does not get to be optional.
+info "Tagging ${BOLD}${TAG}${NC}…"
+
+# Gate 1: the version bump check must have passed. Reaching this line already
+# implies it (step 0 exits otherwise), but it is stated rather than inferred so
+# that reordering the script cannot quietly drop the gate.
+if [[ "$VERSION_CHECK" == "failed" ]]; then
+    die "Version bump check failed — refusing to tag."
+fi
+
+# Gate 2: the working tree must still be clean for every TRACKED file. Step 3b
+# already established this before the push; re-checking costs one git call and
+# means the tag can never point at a tree that drifted in between. Untracked
+# files outside the source trees are not a reason to refuse -- SRC_TREES
+# staging already swept those -- but a tracked modification is.
+if [[ "$(git rev-parse HEAD)" != "$TAG_COMMIT" ]]; then
+    die "HEAD moved during the release ($TAG_COMMIT -> $(git rev-parse --short HEAD)) — refusing to tag."
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo ""
+    err "Working tree went dirty mid-release — refusing to tag ${TAG}."
+    git status --porcelain | grep -v '^??' | sed 's/^/      /' >&2
+    echo "" >&2
+    echo "  The tag would point at ${TAG_COMMIT:0:7}, which no longer matches the" >&2
+    echo "  tree on disk. Commit or discard these and run again." >&2
+    exit 1
+fi
+
+# An existing local tag is fine only if it already points where we are about to
+# point it. A tag of this name on a different commit is a real conflict and the
+# release stops; the remote was already checked near the top of this script.
+if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+    EXISTING="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+    if [[ "$EXISTING" != "$TAG_COMMIT" ]]; then
+        die "Tag ${TAG} already exists locally on ${EXISTING:0:7}, but HEAD is ${TAG_COMMIT:0:7}. Delete it or bump VERSION."
+    fi
+    info "Tag ${TAG} already exists locally on ${TAG_COMMIT:0:7} — reusing it"
+else
+    # Annotated, deliberately: annotated tags carry a tagger, a date and a
+    # message, and `git describe` and --sort=v:refname both behave properly
+    # with them. The release notes go in the message so the tag stands on its
+    # own even if the GitHub Release page is never made.
+    git tag -a "$TAG" -m "ServerScrub ${TAG}" "$TAG_COMMIT"
+    ok "Created annotated tag ${TAG} on ${TAG_COMMIT:0:7}"
+fi
+
+info "Pushing tag ${TAG} to origin…"
+if [[ -n "$TOKEN" ]]; then
+    git -c http.extraheader="Authorization: Bearer ${TOKEN}" push origin "refs/tags/${TAG}"
+else
+    git push origin "refs/tags/${TAG}"
+fi
+ok "Pushed tag ${TAG} to origin"
+TAG_PUSHED=yes
 
 # ── 5. Extract release notes for this version from CHANGELOG ────────────────────
 NOTES="$(awk -v hdr="## [${VER}]" '
@@ -242,9 +346,89 @@ elif [[ -n "$TOKEN" ]]; then
         --data-binary @"$ZIP" \
         "${UPLOAD_URL}?name=serverscrub-${VER}.zip" >/dev/null && ok "Asset uploaded" || warn "Asset upload failed (release + tag still valid; updater uses dist/)"
 else
-    warn "No gh and no GH_TOKEN — pushed code, but DID NOT create the Release."
-    warn "Create it manually: repo → Releases → new release, tag ${TAG} on main, attach ${ZIP}."
+    # Say precisely which of the two things is missing. The old wording was
+    # "pushed code, but DID NOT create the Release", which read as one missing
+    # item and hid the fact that no tag existed either. The tag is pushed by
+    # step 4b above, before this point, so the ONLY thing missing here is the
+    # Release page on github.com.
+    warn "No gh and no GH_TOKEN — the GitHub RELEASE PAGE was not created."
+    warn ""
+    warn "  Tag ${TAG}:        PUSHED to origin (step 4b) — nothing to do."
+    warn "  Release commit:    PUSHED to origin/main — nothing to do."
+    warn "  Release page:      MISSING — this is the only outstanding item."
+    warn ""
+    warn "  The tag is what the repository and the version-bump check rely on,"
+    warn "  and it is already in place. The Release page is the download page"
+    warn "  the in-app updater reads; make it by hand:"
+    warn "    repo → Releases → Draft a new release → choose the EXISTING tag"
+    warn "    ${TAG} (do not create a new one) → attach ${ZIP} → publish."
 fi
+
+# ── 6b. Verify the release actually left a tag ─────────────────────────────────
+#
+# The whole point of this check: a release is not a release without a tag, and
+# for 38 consecutive releases this script reported success while leaving none.
+# A step that can silently not happen needs an assertion after it, not a
+# warning inside it.
+#
+# NOTE ON SORTING: plain `git tag | tail -1` is NOT the newest tag. git tag
+# sorts lexicographically, so in this repo today it returns v4.9.0 -- "v4.9.0"
+# sorts after "v4.36.0" because "9" > "3" one character at a time. Every check
+# here uses --sort=v:refname, which sorts by version number. Getting this wrong
+# is how a check like this passes while testing nothing.
+info "Verifying the tag…"
+VERIFY_FAIL=""
+
+if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+    VERIFY_FAIL="${VERIFY_FAIL}    Tag ${TAG} does not exist locally.
+"
+else
+    _tagged="$(git rev-parse "refs/tags/${TAG}^{commit}" || true)"
+    if [[ "$_tagged" != "$TAG_COMMIT" ]]; then
+        VERIFY_FAIL="${VERIFY_FAIL}    Tag ${TAG} points at ${_tagged:0:7}, not the released commit ${TAG_COMMIT:0:7}.
+"
+    fi
+    if [[ "$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || true)" != "tag" ]]; then
+        VERIFY_FAIL="${VERIFY_FAIL}    Tag ${TAG} is lightweight, not annotated.
+"
+    fi
+fi
+
+# The newest tag by version must be the one just released. If it is not, either
+# the tag did not get made or a higher version is already tagged -- both mean
+# the baseline check-version-bump.sh reads is not this release.
+NEWEST_TAG="$(git tag --sort=v:refname | tail -1 || true)"
+if [[ "$NEWEST_TAG" != "$TAG" ]]; then
+    VERIFY_FAIL="${VERIFY_FAIL}    Newest tag is ${NEWEST_TAG:-<none>}, expected ${TAG}.
+"
+fi
+
+# And it has to be on origin, since that is what everyone else and the CDN see.
+# A network failure here is reported but is not treated as a release failure:
+# the local tag is correct and `git push origin ${TAG}` is all that is left.
+_remote_tag="$(timeout 30 git ls-remote --tags origin "refs/tags/${TAG}" 2>/dev/null | head -1 || true)"
+if [[ -z "$_remote_tag" ]]; then
+    if [[ "$TAG_PUSHED" == "yes" ]]; then
+        warn "Could not confirm ${TAG} on origin (network?). Verify with: git ls-remote --tags origin ${TAG}"
+    else
+        VERIFY_FAIL="${VERIFY_FAIL}    Tag ${TAG} is not on origin.
+"
+    fi
+fi
+
+if [[ -n "$VERIFY_FAIL" ]]; then
+    echo ""
+    err "RELEASE FAILED ITS TAG CHECK — ${TAG} is not correctly tagged:"
+    printf '%s' "$VERIFY_FAIL" >&2
+    echo "" >&2
+    echo "  The commit and any GitHub Release above may already be pushed." >&2
+    echo "  Fix the tag before announcing this release:" >&2
+    echo "    git tag -a ${TAG} -m \"ServerScrub ${TAG}\" ${TAG_COMMIT:0:7}" >&2
+    echo "    git push origin refs/tags/${TAG}" >&2
+    echo "" >&2
+    exit 1
+fi
+ok "Tag ${TAG} verified: annotated, on ${TAG_COMMIT:0:7}, newest by version, on origin"
 
 # ── 7. CDN mirror ──────────────────────────────────────────────────────────────
 # The CDN no longer needs an FTP push from here. The server runs

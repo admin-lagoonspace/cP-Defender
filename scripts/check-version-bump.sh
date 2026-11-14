@@ -33,6 +33,8 @@ err()  { echo -e "  ${RED}✖${NC}  $*"; }
 info() { echo -e "  ${CYAN}→${NC}  $*"; }
 
 NEW="$(tr -d '[:space:]' < VERSION)"
+# --sort=-v:refname, not plain `git tag`: plain git tag sorts lexicographically
+# and would call v4.9.0 newer than v4.36.0.
 LAST_TAG="$(git tag --sort=-v:refname | head -1)"
 OLD="${LAST_TAG#v}"
 
@@ -43,6 +45,72 @@ fi
 if [[ "$NEW" == "$OLD" ]]; then
     info "VERSION unchanged since ${LAST_TAG} — nothing to check"
     exit 0
+fi
+
+# ── Is the baseline even trustworthy? ─────────────────────────────────────────
+#
+# Everything below compares HEAD against the newest tag. That is only a
+# meaningful baseline if the previous release actually got tagged -- and for
+# 38 releases (v4.25.1 .. v4.35.1) publish.sh created no tag at all, because
+# tagging was a side effect of the GitHub Release step and that step is skipped
+# when gh/GH_TOKEN are absent.
+#
+# The consequence was not a missing check, which would have been obvious. It
+# was a PASSING check that tested nothing: during the v4.36.0 release this
+# script took v4.25.0 as its baseline, classified 85 commits spanning eleven
+# releases, found `feat` subjects somewhere in that pile, and printed
+# "consistent". The batch under release had never been looked at.
+#
+# So test the baseline before trusting it. Untagged `Release vX.Y.Z` commits
+# after LAST_TAG are the exact, unambiguous symptom.
+UNTAGGED_RELEASES=""
+while IFS= read -r _subj; do
+    _t="${_subj#Release }"
+    [[ "$_t" =~ ^v[0-9]+(\.[0-9]+)*$ ]] || continue
+    git rev-parse -q --verify "refs/tags/${_t}" >/dev/null 2>&1 && continue
+    UNTAGGED_RELEASES="${UNTAGGED_RELEASES}${_t}
+"
+done < <(git log --format=%s "${LAST_TAG}..HEAD" --grep='^Release v' 2>/dev/null || true)
+N_UNTAGGED=0
+[[ -n "$UNTAGGED_RELEASES" ]] && N_UNTAGGED="$(grep -c . <<< "$UNTAGGED_RELEASES" || true)"
+
+# Independent of the above: a baseline more than one minor behind VERSION means
+# whole releases are missing from the tag history even if their commit subjects
+# were worded differently.
+MINOR_GAP=0
+IFS=. read -r _bx _by _bz <<< "$NEW"
+IFS=. read -r _ax _ay _az <<< "$OLD"
+if (( _bx == _ax )) && (( _by > _ay + 1 )); then MINOR_GAP=$(( _by - _ay )); fi
+
+if [[ "$N_UNTAGGED" -gt 0 ]] || (( MINOR_GAP > 1 )); then
+    echo ""
+    echo -e "${BOLD}Version bump check${NC}"
+    err "BASELINE IS NOT TRUSTWORTHY — this check cannot tell you anything."
+    err ""
+    err "  Newest tag:  ${LAST_TAG}"
+    err "  VERSION:     ${NEW}"
+    if [[ "$N_UNTAGGED" -gt 0 ]]; then
+        err "  ${N_UNTAGGED} release commit(s) after ${LAST_TAG} have no tag:"
+        sed 's/^/        /' <<< "${UNTAGGED_RELEASES%$'
+'}"
+    fi
+    if (( MINOR_GAP > 1 )); then
+        err "  Baseline is ${MINOR_GAP} minor versions behind VERSION."
+    fi
+    err ""
+    err "  Comparing ${OLD} → ${NEW} would classify the commits of every"
+    err "  release in between, which is how this check printed 'consistent'"
+    err "  for v4.36.0 without ever examining that release's commits."
+    err ""
+    err "  Fix the tag history first (backfill the missing tags, or tag the"
+    err "  immediately preceding release), then re-run. If you have decided"
+    err "  not to backfill and want to publish anyway:"
+    err "    SG_SKIP_VERSION_CHECK=1 bash scripts/publish.sh"
+    echo ""
+    if $STRICT; then
+        exit 1
+    fi
+    warn "Continuing (not strict mode) — treat the verdict below as meaningless"
 fi
 
 IFS=. read -r nx ny nz <<< "$NEW"
