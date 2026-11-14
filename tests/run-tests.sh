@@ -48,6 +48,22 @@ assert_contains() {
     fi
 }
 
+# The opposite assertion, which this suite had no way to express. 1.7 and 4.7
+# used to assert that update-check.php appeared in the cron file and passed --
+# on the COMMENT explaining why it is deliberately not scheduled. A grep for a
+# filename cannot tell a cron entry from the prose about it, so "is not
+# scheduled" needs an assertion of its own rather than the absence of one.
+assert_absent() {
+    local file="$1" pat="$2" what="${3:-$2}"
+    if grep -qE "$pat" "$file" 2>/dev/null; then
+        log_fail "Present but should not be: ${what} in $(basename "$file")"
+        FAIL=$((FAIL+1))
+    else
+        log_ok "Absent (correctly):  ${what} in $(basename "$file")"
+        PASS=$((PASS+1))
+    fi
+}
+
 skip_test() { log_warn "SKIP: $*"; SKIP=$((SKIP+1)); }
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -235,12 +251,31 @@ run_install_suite() {
 
     # ── 1.7 Cron ────────────────────────────────────────────────────────────
     header "1.7  Cron jobs"
+    # What this file contains changed, and these assertions did not follow it.
+    # There are no longer four fixed jobs. scan.php quick/full and update-sigs
+    # were separate crontab lines with hardcoded times; they are now decided by
+    # backend/cron/scheduler.php from the user's Settings, so asserting their
+    # old crontab lines asserts a design the product abandoned.
+    #
+    # Two entries are installed, and install.sh checks for exactly these two
+    # itself after writing (a live server was found with the user-scans line
+    # missing while the installer printed "Cron jobs installed"):
     assert_file     "$CRON_FILE"
-    assert_contains "$CRON_FILE" "scan.php quick"
-    assert_contains "$CRON_FILE" "scan.php full"
-    assert_contains "$CRON_FILE" "update-sigs"
-    assert_contains "$CRON_FILE" "update-check.php"
-    assert_contains "$CRON_FILE" "0 8 \* \* \*"
+    assert_contains "$CRON_FILE" "cron/scheduler.php"
+    assert_contains "$CRON_FILE" "cron/user-scans.php"
+
+    # and at the intervals that make them work. The scheduler exits silently
+    # when nothing is due, so a wrong interval here is invisible in operation
+    # until a schedule quietly runs late.
+    assert_contains "$CRON_FILE" "^\*/15 \* \* \* \* root .*cron/scheduler.php"
+    assert_contains "$CRON_FILE" "^\* \* \* \* \* root .*cron/user-scans.php"
+
+    # There is deliberately NO update-check entry. One used to run at 08:00 and
+    # only cached a notice while the scheduler's 'autoupdate' task both checked
+    # and installed, so the two disagreed about who owned updating. Re-adding a
+    # line here would bring that split back, which is why its absence is
+    # asserted rather than merely not mentioned.
+    assert_absent   "$CRON_FILE" "^[^#]*update-check\.php" "an active update-check cron entry"
 
     # ── 1.8 Systemd service ──────────────────────────────────────────────────
     header "1.8  Systemd service unit"
@@ -319,18 +354,32 @@ EOF
     header "2.4  Patching update.sh"
     local MOCK_UPDATE="${TEST_ROOT}/update.sh"
 
-    # Build mock GitHub API response pointing to our local zip
-    local MOCK_API="${TEST_ROOT}/github-api.json"
+    # Build the mock releases manifest.
+    #
+    # This used to be a GitHub Releases API response (tag_name/assets/
+    # browser_download_url). update.sh stopped asking api.github.com and now
+    # reads a latest.json manifest from whichever channel answers first, so the
+    # old mock described an endpoint nothing requests: every channel came back
+    # empty, update.sh correctly reported "Cannot reach ANY releases channel",
+    # and 2.5/2.6/2.8 failed on a mock that had gone stale, not on update.sh.
+    #
+    # The sha256 is computed from the zip we actually built, so the download
+    # verification in update.sh runs for real here rather than being skipped
+    # for want of a digest -- that check is the only thing standing between a
+    # truncated download and an unpacked half-install.
+    local MOCK_API="${TEST_ROOT}/latest.json"
+    local MOCK_SHA
+    MOCK_SHA="$(sha256sum "$MOCK_ZIP" | cut -d" " -f1)"
     cat > "$MOCK_API" << EOF
 {
-  "tag_name": "v${CURRENT_VER}",
-  "html_url": "https://github.com/test/releases/tag/v${CURRENT_VER}",
-  "body": "Mock release notes for v${CURRENT_VER}",
-  "assets": [
-    { "browser_download_url": "file://${MOCK_ZIP}" }
-  ]
+  "version": "${CURRENT_VER}",
+  "url": "file://${MOCK_ZIP}",
+  "mirror": "file://${MOCK_ZIP}",
+  "sha256": "${MOCK_SHA}",
+  "notes": "file://${TEST_ROOT}/notes.md"
 }
 EOF
+    log_ok "Mock manifest: v${CURRENT_VER}, sha256 ${MOCK_SHA:0:12}…"
 
     sed \
         -e "s|INSTALL_DIR=\"\${SG_ROOT:-/usr/local/serverscrub}\"|INSTALL_DIR=\"${INSTALL_DIR}\"|g" \
@@ -355,17 +404,19 @@ EOF
     header "2.5  Running update script (--yes)"
     local UPDATE_LOG="${TEST_ROOT}/update.log"
 
-    # The curl stub reads SG_MOCK_API for GitHub API responses
-    # and SG_MOCK_ZIP for zip downloads
+    # The curl stub serves SG_MOCK_API for any latest.json request,
+    # SG_MOCK_VERSION for the latest/VERSION cross-check, and SG_MOCK_ZIP for
+    # zip downloads.
     export SG_MOCK_API="$MOCK_API"
     export SG_MOCK_ZIP="$MOCK_ZIP"
+    export SG_MOCK_VERSION="$CURRENT_VER"
 
     set +e
     SG_ROOT="$INSTALL_DIR" bash "$MOCK_UPDATE" --yes > "$UPDATE_LOG" 2>&1
     local UEXIT=$?
     set -e
 
-    unset SG_MOCK_API SG_MOCK_ZIP
+    unset SG_MOCK_API SG_MOCK_ZIP SG_MOCK_VERSION
 
     if [[ $UEXIT -eq 0 ]]; then
         log_ok "Update script exited cleanly (exit 0)"
@@ -417,13 +468,31 @@ EOF
             log_fail "database/ missing from backup"
             FAIL=$((FAIL+1))
         fi
+        # quarantine/ is deliberately NOT in the backup, and this assertion is
+        # inverted from what it used to be.
+        #
+        # The update rsyncs backend/, frontend/ and whm/ with --delete and
+        # touches nothing else, so quarantine was never at risk -- while
+        # copying it meant every update duplicated the whole quarantine onto
+        # the root partition. On a server whose quarantine had grown enough to
+        # fill /, that made updating impossible at precisely the moment the fix
+        # for it was waiting to be installed.
+        #
+        # So the property worth pinning is that it is NOT copied. 2.7 already
+        # checks the thing that actually matters to an operator -- that the
+        # quarantined file is still in place after the update.
         if [[ -d "${BACKUP_FOUND}/quarantine" ]]; then
-            log_ok "quarantine/ backed up"
-            PASS=$((PASS+1))
-        else
-            log_fail "quarantine/ missing from backup"
+            log_fail "quarantine/ WAS copied into the backup — this is the disk-filling regression"
             FAIL=$((FAIL+1))
+        else
+            log_ok "quarantine/ correctly not copied into the backup"
+            PASS=$((PASS+1))
         fi
+
+        # The backup exists to undo an update, so it must carry everything the
+        # update can destroy -- not just the database.
+        assert_file "${BACKUP_FOUND}/mode.php"
+        assert_file "${BACKUP_FOUND}/custom.sig"
     else
         log_fail "No backup directory found in $BACKUP_ROOT"
         FAIL=$((FAIL+1))
@@ -534,25 +603,39 @@ EOF
     header "3.4  Cron expression format"
     [[ -f "$CRON_FILE" ]] || { skip_test "cron file not found — run install suite first"; return; }
 
-    local CRON_COUNT
-    CRON_COUNT="$(grep -c "update-check.php" "$CRON_FILE" 2>/dev/null || echo 0)"
-    if [[ "$CRON_COUNT" -ge 1 ]]; then
-        log_ok "update-check.php in cron ($CRON_COUNT entries)"
-        PASS=$((PASS+1))
-    else
-        log_fail "update-check.php not found in cron"
-        FAIL=$((FAIL+1))
-    fi
+    # This block used to look for update-check.php and demand the line start
+    # with "0 8 * * *". It found the COMMENT explaining why update-check is not
+    # scheduled, and failed with "Cron time wrong: # backend/cron/update-check
+    # .php is kept for manual use..." -- an assertion tripping over prose,
+    # which says nothing about the product either way.
+    #
+    # What is worth checking is that every non-comment line here is a
+    # well-formed entry. Cron does not reject a malformed line loudly: it skips
+    # it, and the job it was meant to run simply never happens.
+    local CRON_ACTIVE
+    CRON_ACTIVE="$(grep -vE '^[[:space:]]*(#|$)' "$CRON_FILE" | grep -v '^MAILTO=' || true)"
 
-    local CRON_EXPR
-    CRON_EXPR="$(grep "update-check.php" "$CRON_FILE" | head -1)"
-    # Should start with "0 8 * * *"
-    if echo "$CRON_EXPR" | grep -qE '^0 8 \* \* \*'; then
-        log_ok "Cron time correct: 0 8 * * * (8am daily)"
-        PASS=$((PASS+1))
-    else
-        log_fail "Cron time wrong: $CRON_EXPR"
+    if [[ -z "$CRON_ACTIVE" ]]; then
+        log_fail "No active cron entries at all in $CRON_FILE"
         FAIL=$((FAIL+1))
+    else
+        local _bad=0 _n=0 _line
+        while IFS= read -r _line; do
+            [[ -z "$_line" ]] && continue
+            _n=$((_n+1))
+            # five time fields, then the user, then a command
+            if ! echo "$_line" | grep -qE '^[^[:space:]]+([[:space:]]+[^[:space:]]+){4}[[:space:]]+root[[:space:]]+'; then
+                log_fail "Malformed cron entry: $_line"
+                _bad=$((_bad+1))
+            fi
+        done <<< "$CRON_ACTIVE"
+
+        if [[ "$_bad" -eq 0 ]]; then
+            log_ok "All ${_n} active cron entries well-formed (5 time fields + root + command)"
+            PASS=$((PASS+1))
+        else
+            FAIL=$((FAIL+_bad))
+        fi
     fi
 }
 
@@ -594,13 +677,25 @@ run_integrity_suite() {
         FAIL=$((FAIL+1))
     fi
 
-    # Check PNG magic bytes using xxd-style approach with od
-    if od -A x -t x1z -v "$LOGO" 2>/dev/null | head -1 | grep -q "89 50 4e 47"; then
+    # Check the PNG magic bytes.
+    #
+    # This used to dump the whole file through `od | head -1`. head closes the
+    # pipe after one line, od dies of SIGPIPE, and under `set -o pipefail` the
+    # condition is false no matter what the bytes were -- so this reported
+    # "od unavailable or format differs" on every run since it was written,
+    # and the skip made it look like an environment quirk rather than a test
+    # that could not pass anywhere.
+    #
+    # Reading the 4 bytes we actually want has no pipe to break, and a failure
+    # now means the logo is really not a PNG.
+    local MAGIC
+    MAGIC="$(head -c 4 "$LOGO" 2>/dev/null | od -An -t x1 | tr -s " " | sed "s/^ //;s/ $//")"
+    if [[ "$MAGIC" == "89 50 4e 47" ]]; then
         log_ok "logo.png has valid PNG magic bytes"
         PASS=$((PASS+1))
     else
-        log_warn "Could not verify PNG magic bytes (od unavailable or format differs)"
-        SKIP=$((SKIP+1))
+        log_fail "logo.png is not a PNG — first 4 bytes are [${MAGIC}], expected [89 50 4e 47]"
+        FAIL=$((FAIL+1))
     fi
 
     # ── 4.4 index.html new features ──────────────────────────────────────────
@@ -630,11 +725,12 @@ run_integrity_suite() {
     assert_contains "${INSTALL_DIR}/update.sh" "version_compare\|python3\|vparse"
 
     # ── 4.7 Cron completeness ────────────────────────────────────────────────
-    header "4.7  All 4 cron jobs present"
-    assert_contains "$CRON_FILE" "scan.php quick"
-    assert_contains "$CRON_FILE" "scan.php full"
-    assert_contains "$CRON_FILE" "update-sigs"
-    assert_contains "$CRON_FILE" "update-check.php"
+    header "4.7  Both cron entries present"
+    # Was "All 4 cron jobs present". There are two, and the four it named were
+    # retired when scheduling moved into the UI -- see 1.7.
+    assert_contains "$CRON_FILE" "cron/scheduler.php"
+    assert_contains "$CRON_FILE" "cron/user-scans.php"
+    assert_absent   "$CRON_FILE" "^[^#]*update-check\.php" "an active update-check cron entry"
 
     # ── 4.8 monitor.py CPU throttle ──────────────────────────────────────────
     header "4.8  monitor.py CPU throttle features"

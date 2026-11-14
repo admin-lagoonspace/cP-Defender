@@ -9,6 +9,9 @@ echo "[STUB] curl $*" >> "$LOG"
 # Extract -o output file and URL from args
 OUTPUT_FILE=""
 URL=""
+SG_MOCK_API="${SG_MOCK_API:-}"
+SG_MOCK_ZIP="${SG_MOCK_ZIP:-}"
+SG_MOCK_VERSION="${SG_MOCK_VERSION:-}"
 NEXT_O=false
 
 for arg in "$@"; do
@@ -22,7 +25,42 @@ for arg in "$@"; do
     fi
 done
 
-# GitHub API call — return mock JSON
+# Releases manifest — <channel>/latest.json, <channel>/v<ver>/latest.json, and
+# both with the ?cb=<timestamp> cache-buster update.sh appends. update.sh asks
+# every channel in turn and keeps the highest version it is told about, so the
+# same manifest is served for all of them; a test that needs them to DISAGREE
+# sets SG_MOCK_MANIFEST_<n> and is not written yet.
+#
+# Matched before the .zip branch below on purpose: a manifest url can carry a
+# query string, and "*.zip*" would claim anything with .zip anywhere in it.
+if [[ "$URL" == *"latest.json"* ]]; then
+    if [[ -n "$SG_MOCK_API" && -f "$SG_MOCK_API" ]]; then
+        cat "$SG_MOCK_API"
+        echo "[stub-curl] MANIFEST: served $SG_MOCK_API for $URL" >> "$LOG"
+        exit 0
+    fi
+    # No mock manifest configured is a channel that does not answer, which is
+    # a real state update.sh has to handle -- not a stub failure.
+    echo "[stub-curl] MANIFEST: no SG_MOCK_API, reporting unreachable" >> "$LOG"
+    exit 22
+fi
+
+# <channel>/latest/VERSION — the informational cross-check. update.sh compares
+# it against the manifest because a cached latest.json can be older than the
+# build on disk; that is the whole 4.36.0 cache incident. Serving it keeps the
+# agreeing path exercised.
+if [[ "$URL" == *"/latest/VERSION"* ]]; then
+    if [[ -n "$SG_MOCK_VERSION" ]]; then
+        echo "$SG_MOCK_VERSION"
+        echo "[stub-curl] VERSION: ${SG_MOCK_VERSION} for $URL" >> "$LOG"
+        exit 0
+    fi
+    echo "[stub-curl] VERSION: no SG_MOCK_VERSION set" >> "$LOG"
+    exit 22
+fi
+
+# GitHub API call — return mock JSON. update.sh no longer asks api.github.com
+# (it reads latest.json above); kept because the checker suite still does.
 if [[ "$URL" == *"api.github.com"* ]]; then
     if [[ -n "$SG_MOCK_API" && -f "$SG_MOCK_API" ]]; then
         cat "$SG_MOCK_API"

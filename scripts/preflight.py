@@ -15,6 +15,14 @@ Checks, in the order they catch real failures we have shipped:
   3. config.php defines the constants the runtime guards test for. Without them
      every request dies with "Direct access denied" and nothing says why.
   4. config.php's SG_VERSION matches ./VERSION, so the UI and the updater agree.
+  5. Both test suites run, and a suite that cannot be run FAILS rather than
+     being skipped quietly. tests/run.php (unit + regression) and
+     tests/run-tests.sh (installer and updater against a mock server).
+
+This list has been short of what the file does for a while -- the static
+analysis passes, the API smoke test and the regression suite all grew in
+without being written down here, which is how a reader concluded the suites
+were not gated when they were.
 
 Usage:  python scripts/preflight.py [--php <path>]
 Exit 0 = safe to package.
@@ -36,6 +44,10 @@ def fail(msg):
 
 def ok(msg):
     print("  %s[+]%s %s" % (GREEN, NC, msg))
+
+
+def warn(msg):
+    print("  %s[!]%s %s" % (YELLOW, NC, msg))
 
 
 def find_php(explicit=None):
@@ -110,6 +122,53 @@ def private_call_scan():
                 hits.append("%s:%d calls %s::%s(), which is not public"
                             % (os.path.relpath(f, REPO), line, cls, meth))
     return sorted(set(hits))
+
+
+def find_bash():
+    """Locate bash. Releases are cut on Windows as often as on Linux."""
+    for cand in ("bash",
+                 "C:/Program Files/Git/bin/bash.exe",
+                 "C:/Program Files (x86)/Git/bin/bash.exe",
+                 "/bin/bash", "/usr/bin/bash"):
+        try:
+            r = subprocess.run([cand, "-c", "exit 0"], capture_output=True)
+            if r.returncode == 0:
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+def run_suite(label, cmd, tail=14):
+    """Run a test suite and report it. Returns the number of problems.
+
+    A suite that cannot be run counts as a FAILURE, not a skip.
+
+    That rule is the whole point of adding this. tests/run-tests.sh spent seven
+    weeks failing 26 of 27 assertions because a stub had not kept up with
+    install.sh, and nothing that gated a release looked at it -- so every
+    release since 23 Sep went out over a suite that had not tested anything.
+    A gate that can be absent without anyone noticing is not a gate.
+    """
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO, timeout=1800)
+    except FileNotFoundError:
+        fail("%s: cannot run %s" % (label, cmd[0]))
+        return 1
+    except subprocess.TimeoutExpired:
+        fail("%s: timed out after 30 minutes" % label)
+        return 1
+
+    out = (r.stdout or "") + (r.stderr or "")
+    if r.returncode == 0:
+        summary = [l for l in out.splitlines() if "assertions passed" in l or "All tests passed" in l]
+        ok("%s passed%s" % (label, (" -- " + summary[-1].strip()) if summary else ""))
+        return 0
+
+    fail("%s FAILED (exit %d)" % (label, r.returncode))
+    for line in out.strip().splitlines()[-tail:]:
+        print("        " + line.rstrip()[:200])
+    return 1
 
 
 def main():
@@ -365,6 +424,14 @@ def main():
             ok("all API routes execute and return JSON")
 
     # 2e. the regression suite
+    #
+    # `if php:` with no else meant a machine without an interpreter skipped the
+    # entire suite and still printed PREFLIGHT PASSED. The parse gate above
+    # fails loudly in that case, so it never went unnoticed in practice -- but
+    # a check that quietly does not run is the thing this file exists to stop.
+    if not php:
+        fail("regression tests: no PHP interpreter -- suite did not run")
+        problems += 1
     if php:
         r = subprocess.run([php, os.path.join(REPO, "tests", "run.php")],
                            capture_output=True, text=True)
@@ -400,6 +467,29 @@ def main():
             problems += 1
         else:
             ok("version consistent: %s" % want)
+
+    # 5. the mock-env suite.
+    #
+    # The PHP suite under tests/ is already gated above (2e), so the unit and
+    # regression tests -- the WAF rollback tests that pin the 7 Nov 502 outage
+    # among them -- have been release-blocking all along.
+    #
+    # tests/run-tests.sh was not, and it is the only thing that exercises
+    # install.sh and update.sh end to end against a mock server: the paths by
+    # which the product arrives on a machine at all. It had been failing 26 of
+    # 27 assertions since 23 Sep without blocking anything, because nothing
+    # ran it.
+    if os.environ.get("SG_SKIP_TESTS") == "1":
+        warn("mock-env suite SKIPPED via SG_SKIP_TESTS=1 -- the installer and")
+        warn("updater are not exercised in this release")
+    else:
+        bash = find_bash()
+        if bash:
+            problems += run_suite("mock-env suite (tests/run-tests.sh)",
+                                  [bash, os.path.join(REPO, "tests", "run-tests.sh")])
+        else:
+            fail("mock-env suite: no bash found -- install Git Bash or pass SG_SKIP_TESTS=1 knowingly")
+            problems += 1
 
     print("")
     if problems:
