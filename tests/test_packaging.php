@@ -19,11 +19,35 @@ $repo = $ctx['repo'];
 $version = trim(file_get_contents($repo . '/VERSION'));
 $zipPath = $repo . '/dist/serverscrub-' . $version . '.zip';
 
-if (!is_file($zipPath)) {
-    echo "SKIP no zip for {$version} yet — run scripts/build.py first\n";
-    return;
+// SG_PACKAGE_ZIP lets preflight.py point this file at a package it has just
+// built in a scratch directory. It does that because preflight runs BEFORE
+// publish.sh builds, so between a version bump and the build there is no
+// dist/serverscrub-<VERSION>.zip -- and this file used to print
+// "SKIP ... run scripts/build.py first" and return, taking all 57 assertions
+// below with it, the four-list packaging agreement checks among them. In the
+// one window that matters -- version bumped, release about to be cut -- the
+// checks that decide what lands on a customer's server did not run, and a
+// skipped assertion reads in the summary exactly like a passing one.
+//
+// It must never silently redirect: a path that is set but unusable is a
+// failure, not a reason to fall back to dist/.
+$override = getenv('SG_PACKAGE_ZIP');
+if ($override !== false && $override !== '') {
+    if (!is_file($override)) {
+        t_ok(false, 'SG_PACKAGE_ZIP points at a package that exists');
+        return;
+    }
+    $zipPath = $override;
 }
 
+// No package at all is a FAILURE, not a skip. Reaching here means neither the
+// release build nor preflight's scratch build happened.
+if (!is_file($zipPath)) {
+    t_ok(false, 'package exists for ' . $version . ' at dist/serverscrub-'
+              . $version . '.zip -- without it the packaging rules are not checked;'
+              . ' build it first: bash scripts/make-release.sh');
+    return;
+}
 $zip = new ZipArchive();
 $zip->open($zipPath);
 $names = [];

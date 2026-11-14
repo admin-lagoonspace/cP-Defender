@@ -100,3 +100,27 @@ foreach ($pkg as $name) {
 t_contains($mk, 'ops script missing from the payload',
      'a named ops script that is absent fails the build instead of producing '
    . 'a release that silently lacks it');
+
+// ── The packaging rules cannot go back to skipping ──────────────────────────
+//
+// test_packaging.php asserts against the finished zip, and for seven weeks it
+// could not find one: preflight runs before publish.sh builds, so between a
+// version bump and the build it printed SKIP and returned, and its 57
+// assertions -- the four-list agreement checks above among them -- did not run
+// in the only check that gates a release. The suite still reported green,
+// because a skipped assertion is indistinguishable from a passing one in a
+// count. Pin both halves of the fix: the test fails without a package, and
+// preflight builds one so it never has to.
+$tp = file_get_contents($repo . '/tests/test_packaging.php');
+t_eq(false, strpos($tp, 'echo "SKIP') !== false,
+     'test_packaging.php does not SKIP its way out of a missing package');
+t_contains($tp, 'SG_PACKAGE_ZIP',
+     'test_packaging.php accepts a package built elsewhere rather than only '
+   . 'looking in dist/');
+
+$pf = file_get_contents($repo . '/scripts/preflight.py');
+t_contains($pf, 'SG_PACKAGE_ZIP',
+     'preflight.py tells the suite where the package it built is');
+t_contains($pf, '"--out", pkg_stage',
+     'preflight.py builds that package into a scratch directory, never over '
+   . 'dist/<zip>, whose sha256 the live manifest and the CDN advertise');

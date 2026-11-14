@@ -18,6 +18,9 @@ Checks, in the order they catch real failures we have shipped:
   5. Both test suites run, and a suite that cannot be run FAILS rather than
      being skipped quietly. tests/run.php (unit + regression) and
      tests/run-tests.sh (installer and updater against a mock server).
+  6. A package exists for the current VERSION, built into a scratch directory
+     if it does not, so test_packaging.php always has a real zip to assert
+     against instead of skipping its 57 checks, which it did for seven weeks.
 
 This list has been short of what the file does for a while -- the static
 analysis passes, the API smoke test and the regression suite all grew in
@@ -30,6 +33,8 @@ Exit 0 = safe to package.
 import os
 import re
 import subprocess
+import shutil
+import tempfile
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -423,6 +428,62 @@ def main():
         else:
             ok("all API routes execute and return JSON")
 
+    # 2d-bis. make sure there IS a package to assert against.
+    #
+    # tests/test_packaging.php asserts against the FINISHED zip -- deliberately,
+    # because the build and its intentions have diverged before. But it looked
+    # for dist/serverscrub-<VERSION>.zip and, not finding one, printed SKIP and
+    # returned. Preflight runs BEFORE publish.sh builds, so between a version
+    # bump and the build that zip does not exist: all 57 of its assertions,
+    # the four-list packaging agreement checks among them, silently did not run
+    # in the one check that gates a release. They ran afterwards against the
+    # previous version -- the one version nobody is about to ship.
+    #
+    # So build one here when it is missing, and tell the suite where it is.
+    # make-release.sh is deterministic, touches no network and no git, and is
+    # exactly what publish.sh runs a moment later.
+    #
+    # The build goes to a scratch directory, NOT to dist/. dist/<zip> is a
+    # committed artifact whose sha256 the live manifest and the CDN advertise,
+    # and a rebuild is byte-different from the released file (zip records
+    # mtimes) even when its contents are identical. A check must not rewrite
+    # the thing it is checking.
+    want_ver = open(os.path.join(REPO, "VERSION"), encoding="utf-8").read().strip()
+    want_zip = os.path.join(REPO, "dist", "serverscrub-%s.zip" % want_ver)
+    suite_env = dict(os.environ)
+    pkg_stage = None
+    if os.path.isfile(want_zip):
+        ok("package present for %s (%d bytes)" % (want_ver, os.path.getsize(want_zip)))
+    else:
+        bash = find_bash()
+        if not bash:
+            fail("no package for %s and no bash to build one -- the packaging"
+                 " rules cannot be checked" % want_ver)
+            problems += 1
+        else:
+            pkg_stage = tempfile.mkdtemp(prefix="sg-preflight-pkg-")
+            print("    no dist/serverscrub-%s.zip yet -- building one so the"
+                  " packaging assertions have an artifact..." % want_ver)
+            try:
+                r = subprocess.run([bash, os.path.join(REPO, "scripts", "make-release.sh"),
+                                    "--out", pkg_stage],
+                                   capture_output=True, text=True, errors="replace",
+                                   cwd=REPO, timeout=1800)
+                rc, blob = r.returncode, (r.stdout or "") + (r.stderr or "")
+            except Exception as exc:
+                rc, blob = 1, str(exc)
+            built = os.path.join(pkg_stage, "serverscrub-%s.zip" % want_ver)
+            if rc != 0 or not os.path.isfile(built):
+                fail("make-release.sh could not build serverscrub-%s.zip (exit %s)"
+                     % (want_ver, rc))
+                for line in blob.strip().splitlines()[-12:]:
+                    print("        " + line.rstrip()[:200])
+                problems += 1
+            else:
+                suite_env["SG_PACKAGE_ZIP"] = built
+                ok("built a package for %s to check (%d bytes, scratch copy)"
+                   % (want_ver, os.path.getsize(built)))
+
     # 2e. the regression suite
     #
     # `if php:` with no else meant a machine without an interpreter skipped the
@@ -434,7 +495,7 @@ def main():
         problems += 1
     if php:
         r = subprocess.run([php, os.path.join(REPO, "tests", "run.php")],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, env=suite_env)
         if r.returncode != 0:
             fail("regression tests failed:")
             for line in (r.stdout or "").strip().splitlines():
@@ -444,6 +505,9 @@ def main():
         else:
             last = [l for l in (r.stdout or "").strip().splitlines() if "assertions" in l]
             ok("regression tests: " + (last[-1].strip() if last else "passed"))
+
+    if pkg_stage:
+        shutil.rmtree(pkg_stage, ignore_errors=True)
 
     # 3 + 4. config.php sanity
     cfg = os.path.join(REPO, "backend", "config", "config.php")
