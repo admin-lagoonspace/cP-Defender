@@ -17,6 +17,8 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+## [4.36.3] - 2026-11-15
+
 ### Fixed
 - Quarantining a threat from the UI now makes the file inert before it moves it,
   and records who owned it. Both steps existed, but only on the automatic path
