@@ -1738,7 +1738,13 @@ This file was removed and not kept. Restore it from your backups
          * back as the customer's files rather than root's. The restore can
          * infer the owner from the directory, which is right in a customer's
          * home and a guess everywhere else; this makes it exact for anything
-         * quarantined from now on. */
+         * quarantined from now on.
+         *
+         * quarantine() now records the same three columns itself, so that the
+         * Quarantine button gets them too. This is deliberately kept: the
+         * delete branch below never reaches quarantine(), and for a delete this
+         * record is the only trace of what the file was. Both writes COALESCE,
+         * and this one runs while the file still has its real mode. */
         $st = @stat($filePath);
         if (is_array($st)) {
             Database::query(
@@ -1936,6 +1942,51 @@ This file was removed and not kept. Restore it from your backups
             }
         }
 
+        // Record who owned it, then make it inert -- both BEFORE the move.
+        //
+        // These two used to live in handleByPolicy() instead, which meant the
+        // automatic path had them and the Quarantine button did not. Doing them
+        // here covers every caller, because the file being moved does not care
+        // which of them asked.
+        //
+        // Why identity first: orig_uid/orig_gid/prev_mode are what let a
+        // restore put the file back as the customer's file rather than root's.
+        // Without them QuarantineRestore infers the owner from the destination
+        // directory and falls back to mode 0644 -- which is the state the
+        // 154,323 files from job 12457 came back in, and the reason these
+        // columns exist. A file quarantined by hand deserves the same record as
+        // one quarantined by policy.
+        //
+        // COALESCE, so a caller that already recorded them (handleByPolicy
+        // still does, before it disables the file) keeps the mode it captured
+        // while the file still had one. And a mode of 0000 is never written as
+        // prev_mode: 0000 is this scanner's own doing, and restoring a file to
+        // it would hand the customer back something unreadable.
+        $st = @stat($filePath);
+        if (is_array($st)) {
+            $recMode = ((int) $st['mode']) & 07777;
+            Database::query(
+                'UPDATE threats SET orig_uid=COALESCE(orig_uid,?), orig_gid=COALESCE(orig_gid,?),
+                        prev_mode=COALESCE(prev_mode,?) WHERE id=?',
+                [(int) $st['uid'], (int) $st['gid'],
+                 ($recMode !== 0 ? $recMode : null), $threatId]
+            );
+        }
+
+        // Why inert second: between detection and the move the file is still
+        // executable by the web server, and a webshell's best moment is the one
+        // where it knows it is being removed. rename() closes that window in
+        // microseconds, but rename() is not what runs here when quarantine sits
+        // on another filesystem -- and the installer deliberately moves
+        // quarantine to /home for exactly that reason, so the copy path below
+        // is the NORMAL path on a hosting server. Without this the window is as
+        // long as it takes to copy the file.
+        //
+        // Root can still rename, copy and hash a 0000 file; see deleteInfected.
+        // If anything below fails, the mode goes back -- an unreadable file that
+        // is still infected is the worst of both outcomes.
+        $prevMode = self::disableFile($filePath);
+
         $moved = @rename($filePath, $dest);
 
         if (!$moved) {
@@ -1944,6 +1995,7 @@ This file was removed and not kept. Restore it from your backups
             // losing a customer file while trying to protect it is a far worse
             // outcome than leaving the malware in place.
             if (!@copy($filePath, $dest)) {
+                self::restoreMode($filePath, $prevMode);
                 return ['success' => false,
                         'error' => 'Could not copy the file into quarantine ('
                                  . self::lastError() . '). '
@@ -1951,12 +2003,14 @@ This file was removed and not kept. Restore it from your backups
             }
             if ((int) filesize($dest) !== $bytes) {
                 @unlink($dest);
+                self::restoreMode($filePath, $prevMode);
                 return ['success' => false,
                         'error' => 'The quarantine copy was incomplete; the original '
                                  . 'was left untouched.'];
             }
             if (!@unlink($filePath)) {
                 @unlink($dest);
+                self::restoreMode($filePath, $prevMode);
                 return ['success' => false,
                         'error' => 'Copied into quarantine but could not remove the '
                                  . 'original (' . self::lastError() . '), so the copy '
@@ -1966,7 +2020,24 @@ This file was removed and not kept. Restore it from your backups
             $moved = true;
         }
 
+        // 0600, and VERIFIED rather than trusted.
+        //
+        // disableInfected() already re-stats after its chmod, because a
+        // filesystem mounted without permission support reports success and
+        // leaves the file as it was -- "the one outcome this must never claim".
+        // The same reasoning applies here and was not applied. Containment does
+        // not depend on it (the dated directory is 0700 and root-owned), so a
+        // failure here is logged rather than unwound: the file IS quarantined,
+        // and putting it back to get its bits right would be the worse trade.
         @chmod($dest, 0600);
+        clearstatcache(true, $dest);
+        $destMode = @fileperms($dest);
+        if ($destMode !== false && ($destMode & 0777) !== 0600) {
+            Logger::warn('Quarantined ' . $dest . ' but its mode is '
+                       . decoct($destMode & 0777) . ', not 600 (filesystem may not '
+                       . 'support permissions). It is contained by the 0700 '
+                       . 'quarantine directory, not by its own bits.');
+        }
 
         // A placeholder so whoever owns the site knows where the file went.
         @file_put_contents($filePath . '.serverscrub_removed',

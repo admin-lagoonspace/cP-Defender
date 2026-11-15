@@ -17,6 +17,25 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+### Fixed
+- Quarantining a threat from the UI now makes the file inert before it moves it,
+  and records who owned it. Both steps existed, but only on the automatic path
+  (`handleByPolicy`), so a scheduled scan did the right thing and the Quarantine
+  button did not. Two consequences, and the second is the one that bites on a
+  hosting server: the file stayed executable by the web server until the move
+  completed — microseconds for a `rename()`, but `rename()` is not what runs
+  when quarantine lives on another filesystem, and `install.sh` deliberately
+  relocates quarantine to `/home` for exactly that reason, so the copy path is
+  the normal path and the window was as long as the copy took. And nothing wrote
+  `orig_uid`/`orig_gid`/`prev_mode`, so a restore had to infer the owner from the
+  destination directory and fall back to mode `0644` — the state the 154,323
+  files from job 12457 came back in, and the reason those columns exist. Both
+  now happen inside `Scanner::quarantine()`, so every caller gets them; a failed
+  move puts the original mode back rather than leaving an unreadable file that
+  is still infected; `prev_mode` is never recorded as `0000`; and the `0600` on
+  the quarantined copy is read back instead of trusted, the way
+  `disableInfected()` already did.
+
 ### Changed
 - The packaging rules are now actually checked when a release is cut.
   `tests/test_packaging.php` asserts against the finished zip, but it looked
