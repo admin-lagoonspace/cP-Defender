@@ -36,8 +36,25 @@ REPO_RAW="https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/main/w
 [[ -d "$HOME_DIR" ]] || die "no such account: ${HOME_DIR} (is the cPanel account created?)"
 
 # ── Where the site files come from ────────────────────────────────────────────
-PAGES=(index.html features.html pricing.html install.html)
-ASSETS=(assets/css/site.css assets/img/hero.svg assets/img/logo.png \n        assets/img/icon-180.png assets/img/favicon.png assets/img/mark-64.png)
+# status.html is the release dashboard. It is listed here because this array
+# IS the deploy manifest -- a page absent from it is simply never uploaded,
+# and a status page that is not live is worse than none at all.
+PAGES=(index.html features.html pricing.html install.html status.html)
+# One per line, and that formatting is load-bearing. This used to be a
+# single line with an escaped newline sequence in the middle, which bash
+# does NOT treat as a line break inside an array literal: it became a
+# seventh element, the bare letter n. The fetch loop then asked GitHub
+# for <repo>/website/n, got a 404 and die()d, so the default
+# fetch-from-GitHub path aborted every time it ran. The local-source
+# path failed the same way, on "missing from source: n".
+ASSETS=(
+  assets/css/site.css
+  assets/img/hero.svg
+  assets/img/logo.png
+  assets/img/icon-180.png
+  assets/img/favicon.png
+  assets/img/mark-64.png
+)
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
