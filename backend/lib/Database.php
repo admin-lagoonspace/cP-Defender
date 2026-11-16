@@ -461,6 +461,20 @@ class Database {
                 -- Performance
                 ('cpu_limit_percent',       '50'),
                 ('rt_poll_interval',        '300'),
+                -- A CEILING, not a priority. nice only decides who yields when
+                -- processes compete; on a box with an idle core a nice-19
+                -- clamscan takes that core to ~100% and is behaving correctly
+                -- (observed: NI 19, 97% CPU, 44.8% of the machine idle, with
+                -- scan_max_concurrent already 1). Enforcing a cgroup CPU quota
+                -- is the only thing that makes cpu_limit_percent an actual
+                -- limit. On by default: the setting already claimed to be a
+                -- limit, and honouring it is less surprising than not.
+                ('scan_cpu_hard_cap',       '1'),
+                -- What is ACTUALLY enforcing, written after the probe:
+                -- quota | cpulimit | nice | off. The panel shows this rather
+                -- than implying a ceiling the kernel never agreed to.
+                ('scan_cpu_cap_mode',       'nice'),
+                ('scan_cpu_cap_probe',      ''),
                 -- Update checker
                 ('update_available',        '0'),
                 ('update_latest_ver',       ''),

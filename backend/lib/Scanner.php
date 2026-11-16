@@ -71,6 +71,136 @@ class Scanner {
     }
 
     /**
+     * A command prefix that actually CAPS CPU, rather than deprioritising it.
+     *
+     * WHY nice WAS NOT ENOUGH
+     * -----------------------
+     * `nice` sets scheduling priority. It decides who yields when processes
+     * COMPETE; it does not cap anything. On a box with an idle core, a
+     * nice-19 clamscan takes that core to ~100% and is behaving correctly.
+     * Observed on the production server:
+     *
+     *   PID 781423 root 39 19 1136888 983912 R 97.0 1.6 0:13.26 clamscan
+     *
+     * nice 19 -- the floor -- and 97% CPU, with 44.8% of the machine idle.
+     * scan_max_concurrent was already 1, so there was no second scan to
+     * reduce. Both of the levers the product had were already at their stops,
+     * and the honest conclusion is that neither of them is a ceiling.
+     *
+     * A ceiling needs the kernel to enforce it, which means a cgroup CPU
+     * quota. systemd-run puts the command in a transient scope with one:
+     * CPUQuota=50% is half of ONE core, enforced whether the machine is busy
+     * or idle.
+     *
+     * WHY THIS IS BEST-EFFORT AND NOT A HARD DEPENDENCY
+     * -------------------------------------------------
+     * A prefix that fails takes the whole scan with it, and the failure modes
+     * are environmental: no systemd (containers), not root, a cgroup hierarchy
+     * that refuses the property. So the prefix is PROVEN by running
+     * /bin/true under it once, and the result is cached in settings. A box
+     * where that probe fails keeps the previous behaviour -- slower scans are
+     * a tradeoff, no scans is a regression.
+     *
+     * Returns '' when nothing is available, in which case nice is all there is
+     * and the panel says so rather than claiming a ceiling that is not there.
+     */
+    private static ?string $cpuCapPrefix = null;
+
+    public static function cpuCapPrefix(): string
+    {
+        if (self::$cpuCapPrefix !== null) { return self::$cpuCapPrefix; }
+
+        if (Database::setting('scan_cpu_hard_cap', '1') !== '1') {
+            self::$cpuCapPrefix = '';
+            Database::setSetting('scan_cpu_cap_mode', 'off');
+            return '';
+        }
+
+        $pct = max(10, min(100, (int) (Database::setting('cpu_limit_percent') ?? 50)));
+
+        // A quota of 100% is a full core, which is what an unrestricted scan
+        // already takes. Writing a scope for it would be cost with no effect.
+        if ($pct >= 100) {
+            self::$cpuCapPrefix = '';
+            Database::setSetting('scan_cpu_cap_mode', 'nice');
+            return '';
+        }
+
+        $mode  = 'nice';
+        $found = '';
+
+        // Cached probe result, so a scan does not pay for this per batch.
+        $cached = (string) Database::setting('scan_cpu_cap_probe', '');
+        if ($cached === 'systemd-run' || $cached === 'cpulimit' || $cached === 'none') {
+            $probe = $cached;
+        } else {
+            $probe = self::probeCpuCap();
+            Database::setSetting('scan_cpu_cap_probe', $probe);
+        }
+
+        if ($probe === 'systemd-run') {
+            // CPUWeight/IOWeight also drop this below everything else when the
+            // machine IS contended -- the job nice was doing -- so the quota
+            // adds a ceiling without giving up the yielding.
+            $found = sprintf(
+                'systemd-run --scope --quiet --collect'
+                . ' -p CPUQuota=%d%% -p CPUWeight=10 -p IOWeight=10 --',
+                $pct
+            );
+            $mode = 'quota';
+        } elseif ($probe === 'cpulimit') {
+            $bin = self::which('cpulimit');
+            if ($bin !== null) {
+                $found = sprintf('%s -l %d -f --', escapeshellarg($bin), $pct);
+                $mode  = 'cpulimit';
+            }
+        }
+
+        Database::setSetting('scan_cpu_cap_mode', $mode);
+        self::$cpuCapPrefix = $found;
+        return $found;
+    }
+
+    /**
+     * Which capping mechanism this box will actually accept.
+     *
+     * Proven by running it, not inferred from the binary existing. systemd-run
+     * is present on every systemd host and still fails without root or with a
+     * cgroup hierarchy that will not take CPUQuota, and a prefix that fails is
+     * a scan that does not run.
+     */
+    private static function probeCpuCap(): string
+    {
+        if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+            // A quota scope needs privileges this process does not have.
+            return 'none';
+        }
+
+        $sr = self::which('systemd-run');
+        if ($sr !== null) {
+            $rc = 1;
+            $out = [];
+            @exec(escapeshellarg($sr) . ' --scope --quiet --collect'
+                . ' -p CPUQuota=50% -p CPUWeight=10 -- /bin/true 2>/dev/null',
+                  $out, $rc);
+            if ($rc === 0) { return 'systemd-run'; }
+        }
+
+        if (self::which('cpulimit') !== null) { return 'cpulimit'; }
+
+        return 'none';
+    }
+
+    /** First executable match for a bare command name, or null. */
+    private static function which(string $name): ?string
+    {
+        foreach (['/usr/bin/', '/bin/', '/usr/local/bin/', '/usr/sbin/', '/sbin/'] as $dir) {
+            if (is_executable($dir . $name)) { return $dir . $name; }
+        }
+        return null;
+    }
+
+    /**
      * Build the nice/ionice prefix for external commands.
      * Uses idle I/O class (-c3) so scans never starve interactive I/O.
      */
@@ -1043,8 +1173,16 @@ class Scanner {
         $timeout = max(60, min(3600,
             (int) (Database::setting('scan_batch_timeout', '600') ?? 600)));
 
+        // The quota goes OUTSIDE timeout, so timeout and clamscan are both
+        // inside the capped scope and the 124 handling below still works.
+        // nice and ionice stay: the quota is the ceiling, nice is what makes
+        // this yield when the machine is genuinely contended, and the two
+        // answer different questions.
+        $cap = self::cpuCapPrefix();
+
         $cmd  = sprintf(
-            'timeout %d nice -n%d ionice -c3 %s --infected --no-summary --max-filesize=50M --max-scansize=200M --file-list=%s 2>&1',
+            '%stimeout %d nice -n%d ionice -c3 %s --infected --no-summary --max-filesize=50M --max-scansize=200M --file-list=%s 2>&1',
+            $cap === '' ? '' : $cap . ' ',
             $timeout,
             $nice,
             escapeshellarg($bin),

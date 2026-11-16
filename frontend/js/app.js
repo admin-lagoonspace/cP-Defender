@@ -4743,9 +4743,315 @@ async function loadMonitor() {
     ).join('') || '<div style="color:var(--txt3);font-size:.8rem">No paths configured</div>';
   }
 
+  renderMonResources(d);
+
   // Also refresh service panel
   loadServiceStatus();
   loadServiceLogs();
+}
+
+
+/* ══ Resource usage, on the monitor page ═════════════════════════════════ */
+
+/** The limits a named profile stands for. Mirrors PROFILES in monitor.py. */
+const MON_RES_PRESETS = {
+  light:    { fps: 5,   mb: 4,  nice: 19, watches: 5000,   poll: 900, debounce: 10 },
+  balanced: { fps: 25,  mb: 16, nice: 10, watches: 20000,  poll: 300, debounce: 5  },
+  thorough: { fps: 100, mb: 50, nice: 5,  watches: 100000, poll: 120, debounce: 2  },
+};
+
+/**
+ * Show what the DAEMON says is in force, not what the settings say.
+ *
+ * These differ for up to a minute after a save, because the daemon re-reads
+ * its limits on a cycle, and they differ permanently when a value was out of
+ * range and got clamped. Rendering the stored setting here would be the more
+ * reassuring number and a false one -- the same mistake as a green "Running"
+ * badge over a daemon that is scanning nothing.
+ */
+function renderMonResources(d) {
+  if (!d || !document.getElementById('mon-res-card')) return;
+
+  const eff   = d.effective_profile || d.profile || 'balanced';
+  const asked = d.profile || 'balanced';
+  const preset = MON_RES_PRESETS[eff] || MON_RES_PRESETS.balanced;
+
+  setText('mon-res-eff-profile', eff.charAt(0).toUpperCase() + eff.slice(1));
+  // Prefer what the daemon published over what the profile name implies. For
+  // 'custom' the name implies nothing, and those are exactly the limits an
+  // operator typed and most wants confirmed. The preset is only a fallback for
+  // a daemon that has not reported yet (old build, or never started).
+  const pick = (v, fallback) => (v > 0 ? String(v) : (fallback == null ? '—' : String(fallback)));
+  const fb   = (eff === 'custom') ? null : preset;
+
+  setText('mon-res-eff-rate', pick(d.effective_rate, fb && fb.fps));
+  setText('mon-res-eff-poll', d.effective_poll > 0 ? fmtDuration(d.effective_poll)
+                                                   : (fb ? fmtDuration(fb.poll) : '—'));
+  setText('mon-res-eff-nice', (d.effective_nice != null && d.effective_nice >= 0)
+                                ? String(d.effective_nice)
+                                : (fb ? String(fb.nice) : '—'));
+
+  // The watch count is the one number here that is measured rather than
+  // configured, and a capped count means coverage is PARTIAL. Say so.
+  const wEl = document.getElementById('mon-res-eff-watches');
+  if (wEl) {
+    const n   = d.watch_count || 0;
+    const cap = d.effective_watch_max > 0 ? d.effective_watch_max
+                                          : (fb ? fb.watches : 0);
+    // In use OF the ceiling: the count alone cannot say whether it is close to
+    // refusing more, which is the only thing this number is useful for.
+    wEl.textContent = cap > 0 ? (fmtNum(n) + ' / ' + fmtNum(cap)) : fmtNum(n);
+    wEl.style.color = d.watch_capped ? 'var(--red)' : '';
+  }
+
+  const badge = document.getElementById('mon-res-badge');
+  if (badge) {
+    if (d.watch_capped) {
+      badge.className = 'badge badge-red';
+      badge.textContent = 'Watch limit reached';
+    } else if (!d.running) {
+      badge.className = 'badge';
+      badge.textContent = 'Monitor stopped';
+    } else {
+      badge.className = 'badge badge-green';
+      badge.textContent = eff === asked ? 'Limits applied' : 'Applying\u2026';
+    }
+  }
+
+  const note = document.getElementById('mon-res-note');
+  if (note) {
+    const bits = [];
+    if (d.watch_capped) {
+      bits.push('The kernel refused more inotify watches, so some directories '
+              + 'are NOT being watched. Raise the ceiling here and '
+              + 'fs.inotify.max_user_watches on the host, or narrow the watch '
+              + 'paths \u2014 coverage is partial until one of those changes.');
+    }
+    if (eff !== asked) {
+      bits.push('Settings ask for "' + asked + '" and the daemon reports "' + eff
+              + '". It re-reads its limits about once a minute; if this does not '
+              + 'converge, a value was out of range and was clamped.');
+    }
+    if ((d.engine || '') === 'polling') {
+      bits.push('This host is in polling mode, not inotify. Polling walks and '
+              + 'stats every file under every watched path on each interval, '
+              + 'which is the expensive one \u2014 the polling interval is the '
+              + 'setting with the most effect here.');
+    }
+    note.textContent = bits.join(' ');
+    note.style.color = d.watch_capped ? 'var(--red)' : 'var(--txt3)';
+  }
+
+  renderCpuCapMode(d);
+  loadMonResourceValues();
+}
+
+/**
+ * Say which mechanism is holding the CPU ceiling, in plain words.
+ *
+ * 'nice' is not a ceiling. Rendering "50%" beside it without saying so is the
+ * same class of dishonesty as a green badge over a daemon that is scanning
+ * nothing: the number is real, the thing it implies is not.
+ */
+function renderCpuCapMode(d) {
+  const el = document.getElementById('mon-res-cap-mode');
+  if (!el) return;
+
+  const pct  = d.cpu_limit_percent || 50;
+  const mode = d.cpu_cap_mode || 'nice';
+  const box  = document.getElementById('mon-res-hardcap');
+  if (box) box.checked = !!d.cpu_cap_enabled;
+
+  if (mode === 'quota') {
+    el.textContent = 'In force: cgroup CPU quota at ' + pct + '% of one core. '
+                   + 'Enforced by the kernel whether the server is busy or idle.';
+    el.style.color = 'var(--green)';
+  } else if (mode === 'cpulimit') {
+    el.textContent = 'In force: cpulimit at ' + pct + '%. A ceiling, but applied '
+                   + 'from userspace by suspending the process, so it is less '
+                   + 'precise than a cgroup quota.';
+    el.style.color = 'var(--green)';
+  } else if (mode === 'off') {
+    el.textContent = 'Not enforced \u2014 the quota is switched off above, so ' + pct
+                   + '% is a scheduling priority only. A scan can still use a '
+                   + 'whole idle core.';
+    el.style.color = 'var(--txt3)';
+  } else {
+    el.textContent = 'NOT a ceiling on this host \u2014 only nice is in force, so '
+                   + pct + '% sets priority and caps nothing. A scan will take a '
+                   + 'core that nothing else wants. systemd-run would not accept '
+                   + 'a CPU quota here (no systemd, not root, or the cgroup '
+                   + 'hierarchy refused it); installing cpulimit is the '
+                   + 'alternative.';
+    el.style.color = 'var(--amber)';
+  }
+}
+
+/** Seconds as something readable, for the row above the controls. */
+function fmtDuration(secs) {
+  const n = parseInt(secs, 10);
+  if (!isFinite(n) || n <= 0) return '\u2014';
+  if (n % 3600 === 0) return (n / 3600) + ' h';
+  if (n % 60 === 0)   return (n / 60) + ' min';
+  return n + ' s';
+}
+
+let _monResLoaded = false;
+
+/**
+ * Fill the controls from stored settings, once per page visit.
+ *
+ * loadMonitor() runs on a timer, and re-filling on every tick would overwrite
+ * a number the operator is part-way through typing.
+ */
+async function loadMonResourceValues() {
+  if (_monResLoaded) return;
+  _monResLoaded = true;
+
+  const res = Demo.active ? null : await API.getSettings();
+  if (!res?.success) return;
+  const d = res.data || {};
+  const put = (id, v) => { const e = document.getElementById(id); if (e && v != null) e.value = v; };
+
+  put('mon-res-fps',      d.rt_max_files_per_sec);
+  put('mon-res-maxmb',    d.rt_max_file_size_mb);
+  put('mon-res-nice',     d.rt_nice);
+  put('mon-res-watches',  d.rt_max_watches);
+  put('mon-res-poll',     d.rt_poll_interval);
+  put('mon-res-debounce', d.rt_debounce_seconds);
+  put('mon-res-excludes', d.rt_exclude_dirs);
+  put('mon-res-cpu',      d.cpu_limit_percent);
+  setText('mon-res-cpu-val', d.cpu_limit_percent || '50');
+
+  selectMonResProfile(d.rt_profile || 'balanced', true);
+}
+
+/** Highlight a profile and show the numbers it stands for. */
+function selectMonResProfile(name, quiet) {
+  const hidden = document.getElementById('mon-res-profile');
+  if (hidden) hidden.value = name;
+
+  document.querySelectorAll('.mon-res-opt').forEach(el => {
+    const on = el.getAttribute('data-profile') === name;
+    el.style.borderColor = on ? 'var(--primary)' : 'var(--border)';
+    el.style.background  = on ? 'rgba(124,92,255,.08)' : 'transparent';
+  });
+
+  const preset = MON_RES_PRESETS[name];
+  if (preset) {
+    // The individual limits always show what the chosen profile actually
+    // does, so the two halves of this card cannot disagree about what is
+    // about to be saved.
+    const put = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
+    put('mon-res-fps', preset.fps);
+    put('mon-res-maxmb', preset.mb);
+    put('mon-res-nice', preset.nice);
+    put('mon-res-watches', preset.watches);
+    put('mon-res-poll', preset.poll);
+    put('mon-res-debounce', preset.debounce);
+  } else if (!quiet) {
+    const det = document.getElementById('mon-res-details');
+    if (det) det.open = true;
+  }
+}
+
+/** Editing any individual limit means the operator wants Custom. */
+function monResEdited() {
+  const hidden = document.getElementById('mon-res-profile');
+  if (hidden && hidden.value !== 'custom') {
+    selectMonResProfile('custom', true);
+    if (typeof toast === 'function') {
+      toast('Switched to Custom \u2014 your values will be saved', 'info');
+    }
+  }
+}
+
+/**
+ * The CPU cap is not one of the monitor's profile limits.
+ *
+ * Wiring this to monResEdited() would flip the profile to Custom for a control
+ * that has nothing to do with the profile -- quietly discarding the preset the
+ * operator had chosen as a side effect of ticking an unrelated box.
+ */
+function monResCapToggled() {
+  const box = document.getElementById('mon-res-hardcap');
+  const el  = document.getElementById('mon-res-cap-mode');
+  if (!box || !el) return;
+  if (!box.checked) {
+    el.textContent = 'Will not be enforced once applied — the percentage '
+                   + 'becomes a scheduling priority only.';
+    el.style.color = 'var(--txt3)';
+  } else {
+    el.textContent = 'Will be enforced once applied, if this host accepts a '
+                   + 'CPU quota. The line here reports which mechanism won '
+                   + 'after the next scan batch.';
+    el.style.color = 'var(--txt3)';
+  }
+}
+
+/** Live label for the CPU ceiling slider. */
+function monResCpuInput() {
+  const el = document.getElementById('mon-res-cpu');
+  if (el) setText('mon-res-cpu-val', el.value);
+}
+
+/**
+ * Write the limits, then read back what was stored.
+ *
+ * The POST is not the confirmation: the daemon clamps anything out of range,
+ * so echoing the typed number would claim a limit that is not in force.
+ */
+async function saveMonitorResources() {
+  const btn    = document.getElementById('mon-res-save-btn');
+  const status = document.getElementById('mon-res-save-status');
+  const g      = (id) => document.getElementById(id);
+
+  const payload = {
+    rt_profile:           g('mon-res-profile')?.value  || 'balanced',
+    rt_max_files_per_sec: g('mon-res-fps')?.value       || '25',
+    rt_max_file_size_mb:  g('mon-res-maxmb')?.value     || '16',
+    rt_nice:              g('mon-res-nice')?.value      || '10',
+    rt_max_watches:       g('mon-res-watches')?.value   || '20000',
+    rt_poll_interval:     g('mon-res-poll')?.value      || '300',
+    rt_debounce_seconds:  g('mon-res-debounce')?.value  || '5',
+    rt_exclude_dirs:      g('mon-res-excludes')?.value  || '',
+    cpu_limit_percent:    g('mon-res-cpu')?.value       || '50',
+    // Whether that percentage is a ceiling or just a priority.
+    scan_cpu_hard_cap:    g('mon-res-hardcap')?.checked ? '1' : '0',
+    // The probe result is cleared so the next scan re-tests the mechanism:
+    // turning the cap on must not be answered from a 'none' cached on a host
+    // that has since been given systemd or cpulimit.
+    scan_cpu_cap_probe:   '',
+  };
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Applying\u2026'; }
+  if (status) { status.textContent = ''; status.style.color = 'var(--txt3)'; }
+
+  const res = Demo.active ? { success: true } : await API.saveSettings(payload);
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Apply Limits'; }
+
+  if (!res?.success) {
+    const why = (res && (res.detail || res.error)) || 'the server did not say why';
+    if (status) { status.textContent = 'Not applied \u2014 ' + why; status.style.color = 'var(--red)'; }
+    toast('Limits not applied: ' + why, 'error', 7000);
+    return;
+  }
+
+  // Read back the stored values, which may have been clamped.
+  _monResLoaded = false;
+  await loadMonResourceValues();
+
+  if (status) {
+    status.textContent = 'Applied. The monitor picks these up within a minute '
+                       + '\u2014 no restart needed.';
+    status.style.color = 'var(--green)';
+  }
+  toast('Resource limits applied', 'success');
+
+  // The row above reports what the daemon is doing, so refresh it rather than
+  // leaving it showing the previous profile as though nothing had changed.
+  loadMonitor();
 }
 
 let _monitorBusy = false;

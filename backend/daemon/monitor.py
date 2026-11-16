@@ -1454,6 +1454,14 @@ def main():
         db_set(conn,'rt_effective_profile', limits['profile'])
         db_set(conn,'rt_effective_files_per_sec', str(limits['files_per_sec']))
         db_set(conn,'rt_effective_poll_interval', str(limits['poll_interval']))
+        # nice and the watch ceiling were not published, so the panel could only
+        # infer them from the profile NAME -- which works for a preset and shows
+        # nothing at all for 'custom', the one case where the operator typed the
+        # numbers and most wants them confirmed.
+        db_set(conn,'rt_effective_nice', str(limits['nice']))
+        db_set(conn,'rt_effective_max_watches', str(limits['max_watches']))
+        db_set(conn,'rt_effective_max_file_mb', str(limits['max_file_size'] // (1024*1024)))
+        db_set(conn,'rt_effective_debounce', str(limits['debounce']))
 
         paths = watch_paths(conn)
         if not paths:

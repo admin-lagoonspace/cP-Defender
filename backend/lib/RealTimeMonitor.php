@@ -198,6 +198,23 @@ class RealTimeMonitor {
             'profile'           => Database::setting('rt_profile', 'balanced'),
             'effective_profile' => Database::setting('rt_effective_profile'),
             'effective_rate'    => (int) (Database::setting('rt_effective_files_per_sec', '0') ?? 0),
+            // Published by the daemon from the limits it is actually enforcing.
+            // Derived from the profile NAME before, which told the operator
+            // nothing in the one case -- 'custom' -- where they typed the
+            // numbers themselves and most need them confirmed.
+            'effective_poll'     => (int) (Database::setting('rt_effective_poll_interval', '0') ?? 0),
+            'effective_nice'     => (int) (Database::setting('rt_effective_nice', '-1') ?? -1),
+            'effective_watch_max'=> (int) (Database::setting('rt_effective_max_watches', '0') ?? 0),
+            'effective_max_mb'   => (int) (Database::setting('rt_effective_max_file_mb', '0') ?? 0),
+            'effective_debounce' => (int) (Database::setting('rt_effective_debounce', '-1') ?? -1),
+            // What is enforcing the CPU ceiling for scanning: a cgroup quota,
+            // cpulimit, or nothing but nice. The card shows this verbatim --
+            // 'nice' is NOT a ceiling, and a panel that renders a percentage
+            // next to it without saying so is making a promise the kernel
+            // never agreed to.
+            'cpu_limit_percent' => (int) (Database::setting('cpu_limit_percent', '50') ?? 50),
+            'cpu_cap_mode'      => (string) (Database::setting('scan_cpu_cap_mode', 'nice') ?? 'nice'),
+            'cpu_cap_enabled'   => Database::setting('scan_cpu_hard_cap', '1') === '1',
             'watch_count'       => (int) (Database::setting('rt_watch_count', '0') ?? 0),
             'watch_capped'      => Database::setting('rt_watch_capped', '0') === '1',
             // A crash loop is the state that looked like success. Report it.
