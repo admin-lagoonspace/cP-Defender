@@ -907,10 +907,17 @@ class WAFInstaller
     SecRequestBodyAccess On
     SecResponseBodyAccess Off
 
-    # 13 MB: large enough for ordinary uploads, bounded so a request body
-    # cannot be used to exhaust memory.
-    SecRequestBodyLimit 13107200
-    SecRequestBodyNoFilesLimit 131072
+    # Body limits. Memory is bounded by SecRequestBodyInMemoryLimit -- bodies
+    # past 128 KB spool to SecTmpDir -- not by these two, so they are sized
+    # for real sites, not as a memory guard.
+    #  - 128 MB total: ea-nginx's own default, so the WAF is never the
+    #    tighter of the two layers in front of an upload.
+    #  - 10 MB without files: page builders (Elementor, Gutenberg) save a
+    #    whole page as one JSON/form body. At the old 128 KB every save of a
+    #    mid-sized page was rejected with a 413 (usefulblogs.com, 4.37.0).
+    SecRequestBodyLimit 134217728
+    SecRequestBodyNoFilesLimit 10485760
+    SecRequestBodyInMemoryLimit 131072
     SecRequestBodyLimitAction Reject
 
     SecAuditEngine RelevantOnly
