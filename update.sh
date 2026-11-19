@@ -976,20 +976,6 @@ require_once '${INSTALL_DIR}/backend/config/config.php';
 require_once '${INSTALL_DIR}/backend/lib/Database.php';
 Database::get();
 echo 'Database migrations applied.' . PHP_EOL;
-
-// The WAF config is generated, not shipped, so a release that changes what
-// writeConfig() writes reaches nobody until the mode is changed by hand.
-// Re-render it in the mode it is already in. reapplyConfig() goes through
-// setMode(), which validates with apachectl and restores the old file if
-// Apache rejects the new one; on a server whose WAF was never set up it
-// does nothing.
-require_once '${INSTALL_DIR}/backend/lib/WAFInstaller.php';
-\$_r = WAFInstaller::reapplyConfig();
-if (\$_r['configured']) {
-    echo \$_r['applied']
-        ? 'WAF config regenerated (mode: ' . \$_r['mode'] . ').' . PHP_EOL
-        : 'WAF config left as it was: ' . \$_r['message'] . PHP_EOL;
-}
 MIGEOF
 
 # And a real CLI interpreter, for the same reason: on cPanel the `php` on PATH

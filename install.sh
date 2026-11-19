@@ -502,6 +502,38 @@ fi
 # scanning nightly that is unbounded growth on the root partition too.
 find "${LOG_DIR:-${INSTALL_DIR}/logs}" -name 'scan_*.log' -mtime +7 -delete 2>/dev/null || true
 
+# ── Re-render the WAF config from the code just installed ─────────────────────
+# The WAF config is generated, not shipped, so a release that changes what
+# WAFInstaller writes reached no server until someone changed the WAF mode by
+# hand. It cannot live in update.sh: an update runs the INSTALLED (old)
+# update.sh -- it re-execs a private copy of itself, never the new one -- so a
+# step added there only runs one release later. This file is the new one:
+# update.sh calls the freshly installed install.sh --register-only.
+# reapplyConfig() keeps the current mode, validates with apachectl and restores
+# the previous file if Apache rejects the new one; with no WAF set up it does
+# nothing. Non-fatal either way.
+if $REGISTER_ONLY && [[ -f /etc/serverscrub/waf/serverscrub-waf.conf ]]; then
+  _SG_WAF_SCRIPT="$(mktemp /tmp/sg-waf-reapply.XXXXXX)"
+  cat > "$_SG_WAF_SCRIPT" <<'WAFEOF'
+<?php
+define('SG_API', true);
+$root = getenv('SG_WAF_ROOT');
+require_once $root . '/backend/config/config.php';
+require_once $root . '/backend/lib/WAFInstaller.php';
+$r = WAFInstaller::reapplyConfig();
+if (!$r['configured']) { exit(0); }
+echo $r['applied'] ? 'WAF config regenerated (mode: ' . $r['mode'] . ')' : 'WAF config left as it was: ' . $r['message'];
+echo PHP_EOL;
+exit($r['applied'] ? 0 : 1);
+WAFEOF
+  if _SG_WAF_OUT="$(SG_WAF_ROOT="$INSTALL_DIR" "$SG_PHP" "$_SG_WAF_SCRIPT" 2>&1)"; then
+    if [[ -n "$_SG_WAF_OUT" ]]; then ok "$_SG_WAF_OUT"; fi
+  else
+    warn "${_SG_WAF_OUT:-WAF config regeneration failed}"
+  fi
+  rm -f "$_SG_WAF_SCRIPT"
+fi
+
 # ═══ INSTALL-ONLY SECTIONS (skipped in --register-only mode) ═══════════════════
 if ! $REGISTER_ONLY; then
 

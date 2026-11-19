@@ -48,16 +48,27 @@ t_ok($mem !== null && $mem <= 1024 * 1024,
      'memory stays bounded: bodies past the in-memory limit spool to disk');
 
 /* The config is generated, not shipped, so a limit change in a release
- * reaches no server unless the update re-renders it. */
-$upd = t_shell($repo . '/update.sh');
-t_contains($upd, 'WAFInstaller::reapplyConfig()',
-           'update.sh re-renders the WAF config, so new limits reach servers that '
-         . 'already have the WAF set up');
-t_ok(strpos($upd, 'setMode(WAFInstaller::currentMode())') === false,
+ * reaches no server unless the update re-renders it. And it must be the NEW
+ * code that does so: an update runs the installed (old) update.sh, which only
+ * re-execs a copy of itself, but calls the freshly installed
+ * install.sh --register-only. 4.37.1 put the step in update.sh, where it
+ * would only have run one release later. */
+$inst = t_shell($repo . '/install.sh');
+$upd  = t_shell($repo . '/update.sh');
+t_contains($inst, 'WAFInstaller::reapplyConfig()',
+           'install.sh re-renders the WAF config, so new limits reach servers that '
+         . 'already have the WAF set up on the update that ships them');
+t_ok((bool) preg_match('/if \$REGISTER_ONLY && \[\[ -f \/etc\/serverscrub\/waf\/serverscrub-waf\.conf \]\]/', $inst),
+     'only on --register-only (the update path) and only where a WAF config exists -- '
+   . 'a fresh install has no database or WAF yet');
+t_ok(strpos($inst, "<<'WAFEOF'") !== false,
+     'the PHP is in a QUOTED heredoc, so bash cannot expand its $variables to nothing');
+t_ok(strpos($upd, 'reapplyConfig') === false,
+     'and update.sh does not do it as well -- that would reload Apache twice per update');
+t_ok(strpos($inst . $upd, 'setMode(WAFInstaller::currentMode())') === false,
      'through reapplyConfig(), not currentMode() fed back into setMode()');
-t_ok(strpos($upd, "\\\$_r = WAFInstaller::reapplyConfig()") !== false,
-     'with the PHP variables escaped -- the heredoc is unquoted, and an unescaped '
-   . '$_r would be expanded by bash to nothing');
+t_ok(strpos($upd, 'install.sh" --register-only') !== false,
+     'update.sh still calls install.sh --register-only, which is what makes this run');
 
 /* Large WordPress editor saves skip body inspection -- the CRS rules that
  * scan them are quadratic in field length. The exact four-link chain below
