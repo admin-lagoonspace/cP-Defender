@@ -58,3 +58,24 @@ t_ok(strpos($upd, 'setMode(WAFInstaller::currentMode())') === false,
 t_ok(strpos($upd, "\\\$_r = WAFInstaller::reapplyConfig()") !== false,
      'with the PHP variables escaped -- the heredoc is unquoted, and an unescaped '
    . '$_r would be expanded by bash to nothing');
+
+/* Large WordPress editor saves skip body inspection -- the CRS rules that
+ * scan them are quadratic in field length. The exact four-link chain below
+ * was run against ModSecurity 2 + CRS 4.7.0: large+logged-in on an editor
+ * endpoint uninspected; small, cookieless and non-editor requests inspected. */
+$expected = <<<'RULE'
+    SecRule REQUEST_FILENAME "@rx /(?:wp-admin/(?:admin-ajax|post)\.php|wp-json/wp/v2/)" \
+        "id:30100,phase:1,pass,nolog,chain"
+        SecRule REQUEST_HEADERS:Content-Length "@gt 65536" "chain"
+        SecRule REQUEST_HEADERS:Content-Type "!@rx ^multipart/" "chain"
+        SecRule REQUEST_COOKIES_NAMES "@rx ^wordpress_logged_in_" "ctl:requestBodyAccess=Off"
+RULE;
+t_contains(str_replace("\r\n", "\n", $conf), $expected,
+           'the editor-save rule is rendered exactly as it was validated against ModSecurity');
+$starter = preg_match('/"id:30100,[^"]*"/', $conf, $m) ? $m[0] : '';
+t_ok($starter !== '' && strpos($starter, 'ctl:') === false,
+     'ctl is not on the chain starter -- there it fires on the first link alone and '
+   . 'switched body inspection off for every admin-ajax.php request');
+t_ok(30100 > WAFExclusions::CUSTOM_ID_MAX && 30100 > WAFExclusions::ID_CEIL,
+     'id 30100 is outside both the generated-exclusion and the custom-rule bands, so '
+   . 'neither can collide with it');

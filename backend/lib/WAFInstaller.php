@@ -937,6 +937,22 @@ class WAFInstaller
         SecRuleEngine Off
     </LocationMatch>
 
+    # WordPress editor saves (Elementor, Gutenberg, classic) post the whole
+    # page as one form/JSON field. Several CRS 4.7 rules (941160, 941330,
+    # 933110, 944140, ...) are quadratic in field length, and on EA4's
+    # ModSecurity -- no PCRE JIT -- a 200 KB save took 26 s and 500 KB hit
+    # the 60 s proxy timeout. So a large non-file body to an editor endpoint
+    # from a logged-in session is not body-inspected. Everything else is,
+    # including every editor request under 64 KB. ctl sits on the LAST link:
+    # on the chain starter ModSecurity runs it as soon as that link matches,
+    # which disabled body inspection for every admin-ajax.php request
+    # (reproduced against ModSecurity 2 + CRS 4.7.0).
+    SecRule REQUEST_FILENAME "@rx /(?:wp-admin/(?:admin-ajax|post)\.php|wp-json/wp/v2/)" \\
+        "id:30100,phase:1,pass,nolog,chain"
+        SecRule REQUEST_HEADERS:Content-Length "@gt 65536" "chain"
+        SecRule REQUEST_HEADERS:Content-Type "!@rx ^multipart/" "chain"
+        SecRule REQUEST_COOKIES_NAMES "@rx ^wordpress_logged_in_" "ctl:requestBodyAccess=Off"
+
 {$rules}{$excl}
 </IfModule>
 CONF;
