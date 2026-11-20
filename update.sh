@@ -1070,8 +1070,79 @@ fi
 
 # ── Fix permissions ───────────────────────────────────────────────────────────
 section "Fixing permissions"
+
+# Every walk in this section is BOUNDED and NARRATED, because the unbounded,
+# silent version hung an installer on a live server.
+#
+# It used to be four bare `chmod -R`/`chown -R` calls, one of them over a path
+# read out of the database, with nothing printed between "Fixing permissions"
+# and "Permissions applied". Two defects, and both bit:
+#
+#   1. UNBOUNDED. A quarantine_dir of /home -- which moveQuarantine() used to
+#      accept, having checked only that the path was absolute and writable --
+#      turned the last step into `chmod -R 700 /home`. On a cPanel server
+#      /home/virtfs holds a bind-mounted copy of the filesystem for EVERY
+#      account, so that walk is multiplied by the account count and re-enters
+#      /usr, /lib and /etc through the mounts. It does not finish; and what it
+#      does get through has set 700 on customer public_html directories on the
+#      way. The rest of this product prunes virtfs in four places -- Scanner,
+#      Heuristics, the path walker, the CDN setup -- because we already knew
+#      this. The installer was the one place that did not.
+#
+#   2. SILENT. With no output, an operator watching a stalled installer cannot
+#      tell WHICH path is being walked, so the single fact needed to diagnose
+#      it is the one fact not on the screen. "Installer stuck on fixing
+#      permissions" was all the evidence there was.
+#
+# So, for every tree: `find -xdev` instead of `chmod -R`, which stops at
+# filesystem boundaries and therefore cannot follow a bind mount into another
+# volume; a timeout, so a slow or wedged filesystem fails this step rather
+# than wedging the update; and a line naming each path before it is walked.
+
+# chmod a whole tree, without leaving this filesystem, within a time bound.
+#   $1 mode   $2 directory   $3 label for the log
+_sg_chmod_tree() {
+    local mode="$1" dir="$2" label="$3" rc=0
+    [[ -d "$dir" ]] || return 0
+    info "${label}: chmod ${mode} ${dir}"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 300 find "$dir" -xdev -exec chmod "$mode" {} + 2>/dev/null
+        rc=$?
+    else
+        find "$dir" -xdev -exec chmod "$mode" {} + 2>/dev/null
+        rc=$?
+    fi
+    if [[ $rc -eq 124 ]]; then
+        warn "Timed out after 300s tightening ${dir}"
+        warn "  The update itself is fine — only this hardening step was cut short."
+        warn "  Finish it by hand:  find ${dir} -xdev -exec chmod ${mode} {} +"
+        return 0
+    fi
+    [[ $rc -eq 0 ]] || warn "Could not fully tighten ${dir} -- check it by hand"
+    return 0
+}
+
+# Is this path plausibly a quarantine directory at all?
+#
+# Checked before we walk it, because the path arrives from the database and a
+# wrong answer here is a recursive chmod over somebody else's filesystem. A
+# quarantine directory is always a NAMED SUBDIRECTORY -- /home/.serverscrub/
+# quarantine, /var/serverscrub/quarantine. It is never the top of a volume, so
+# a single-component path is refused outright: that is how /home got here.
+_sg_quarantine_path_ok() {
+    local d="${1%/}"
+    [[ -n "$d" && "$d" == /* ]] || return 1
+    [[ "$d" == */*/* ]] || return 1          # depth 1 (/home, /usr, /var) is not one
+    case "$d" in
+        /home/virtfs|/home/virtfs/*) return 1 ;;   # bind mounts of every account
+        /proc/*|/sys/*|/dev/*)       return 1 ;;   # not real storage
+    esac
+    return 0
+}
+
+
 chown -R root:nobody "$INSTALL_DIR" 2>/dev/null || chown -R root:root "$INSTALL_DIR"
-chmod -R 750 "$INSTALL_DIR"
+_sg_chmod_tree 750 "$INSTALL_DIR" "Install directory"
 
 # Each of these is chmod'ed ONLY IF PRESENT.
 #
@@ -1087,18 +1158,36 @@ chmod -R 750 "$INSTALL_DIR"
 # A missing directory here is not an error worth reverting an update over. If
 # it is absent there is nothing to tighten.
 for _SG_D in database quarantine logs; do
-    [[ -d "${INSTALL_DIR}/${_SG_D}" ]] || continue
-    chmod -R 700 "${INSTALL_DIR}/${_SG_D}" \
-        || warn "Could not tighten permissions on ${_SG_D}/ -- check it by hand"
+    _sg_chmod_tree 700 "${INSTALL_DIR}/${_SG_D}" "${_SG_D}/"
 done
 
 # The configured quarantine, wherever it actually is. Read from the database
-# rather than assumed, and only touched when it is a real directory we own.
-_SG_QDIR="$(php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; echo Database::setting('quarantine_dir', '');" 2>/dev/null || true)"
-if [[ -n "$_SG_QDIR" && -d "$_SG_QDIR" && "$_SG_QDIR" != "/" ]]; then
-    chmod -R 700 "$_SG_QDIR" 2>/dev/null \
-        && ok "Quarantine permissions applied: ${_SG_QDIR}" \
-        || warn "Could not tighten ${_SG_QDIR} -- check it by hand"
+# rather than assumed -- and the read itself is time-bounded, because
+# Database::get() runs migrations on connect and six processes share that
+# SQLite file. A locked or mid-migration database used to stall here with the
+# section header as the last thing on screen.
+info "Reading configured quarantine location"
+if command -v timeout >/dev/null 2>&1; then
+    _SG_QDIR="$(timeout 60 php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; echo Database::setting('quarantine_dir', '');" 2>/dev/null || true)"
+else
+    _SG_QDIR="$(php -r "define('SG_API', true); require_once '${INSTALL_DIR}/backend/config/mode.php'; require_once '${INSTALL_DIR}/backend/lib/Database.php'; echo Database::setting('quarantine_dir', '');" 2>/dev/null || true)"
+fi
+
+if [[ -z "$_SG_QDIR" ]]; then
+    info "Quarantine not relocated — nothing further to tighten"
+elif ! _sg_quarantine_path_ok "$_SG_QDIR"; then
+    # Refusing is the whole point. This is the state that hung the installer,
+    # and walking it would do more damage than leaving it alone.
+    warn "REFUSING to tighten permissions on quarantine_dir='${_SG_QDIR}'"
+    warn "  That is not a quarantine directory — it is a whole volume or a"
+    warn "  bind-mount tree, and a recursive chmod over it would reset"
+    warn "  permissions on files that are not ours. Nothing was changed."
+    warn "  Point it somewhere specific:  serverscrub move-quarantine /var/serverscrub/quarantine"
+elif [[ ! -d "$_SG_QDIR" ]]; then
+    warn "quarantine_dir='${_SG_QDIR}' is configured but does not exist — skipping"
+else
+    _sg_chmod_tree 700 "$_SG_QDIR" "Quarantine"
+    ok "Quarantine permissions applied: ${_SG_QDIR}"
 fi
 ok "Permissions applied"
 

@@ -646,11 +646,38 @@ fi
 ok "Files installed to $INSTALL_DIR"
 
 # ── Set permissions ────────────────────────────────────────────────────────────
+# `find -xdev` rather than `chmod -R`, and a line per tree.
+#
+# ${INSTALL_DIR}/quarantine is routinely a MOUNT POINT to the big volume -- the
+# block above exists because quarantine on / filled the root partition -- and a
+# recursive chmod walks straight through a mount into whatever is on the other
+# side. -xdev stops at the boundary, which is also the correct scope: the files
+# on the far side belong to the volume's own permissions, not to ours. The
+# timeout is so a slow or wedged filesystem cannot leave an installer sitting on
+# this line with nothing on screen, which is exactly how this was reported.
+_sg_chmod_tree() {
+    local mode="$1" dir="$2" rc=0
+    [[ -d "$dir" ]] || return 0
+    info "  chmod ${mode} ${dir}"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 300 find "$dir" -xdev -exec chmod "$mode" {} + 2>/dev/null
+        rc=$?
+    else
+        find "$dir" -xdev -exec chmod "$mode" {} + 2>/dev/null
+        rc=$?
+    fi
+    if [[ $rc -eq 124 ]]; then
+        warn "  Timed out tightening ${dir} — finish by hand:"
+        warn "    find ${dir} -xdev -exec chmod ${mode} {} +"
+    fi
+    return 0
+}
+
 chown -R root:nobody "$INSTALL_DIR" 2>/dev/null || chown -R root:root "$INSTALL_DIR"
-chmod -R 750 "$INSTALL_DIR"
-chmod -R 700 "$INSTALL_DIR/database"
-chmod -R 700 "$INSTALL_DIR/quarantine"
-chmod -R 700 "$INSTALL_DIR/logs"
+_sg_chmod_tree 750 "$INSTALL_DIR"
+_sg_chmod_tree 700 "$INSTALL_DIR/database"
+_sg_chmod_tree 700 "$INSTALL_DIR/quarantine"
+_sg_chmod_tree 700 "$INSTALL_DIR/logs"
 chmod +x "$INSTALL_DIR/backend/cron/scan.php"
 chmod +x "$INSTALL_DIR/backend/cron/scheduler.php" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/backend/cron/user-scans.php" 2>/dev/null || true

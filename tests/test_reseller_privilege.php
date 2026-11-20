@@ -97,7 +97,7 @@ t_contains($doc, 'AUTHENTICATION ONLY',
 // and because the guarantee is permissions rather than anything in PHP --
 // encoding the source would not have changed any of it.
 $install = (string) file_get_contents($repo . '/install.sh');
-t_contains($install, 'chmod -R 700 "$INSTALL_DIR/database"',
+t_contains($install, '_sg_chmod_tree 700 "$INSTALL_DIR/database"',
      'the database is 0700, so a cPanel user cannot read or write settings '
    . 'however they try to reach them');
 t_contains($install, 'chown -R root:nobody "$INSTALL_DIR"',

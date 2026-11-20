@@ -2659,6 +2659,39 @@ This file was removed and not kept. Restore it from your backups
             return ['success' => false, 'error' => 'Give an absolute path.'];
         }
 
+        // A quarantine directory is a NAMED SUBDIRECTORY, never the top of a
+        // volume. /home passed every check below it -- absolute, exists,
+        // writable -- and so became a legal value for quarantine_dir, after
+        // which update.sh's hardening step ran `chmod -R 700 /home`. On a
+        // cPanel box /home/virtfs bind-mounts the filesystem for every account,
+        // so that walk is multiplied by the account count and re-enters /usr
+        // and /etc through the mounts: it does not finish, and on the way it
+        // sets 700 on customer public_html directories. An installer that
+        // appears to hang is the mild symptom.
+        //
+        // Refused here, at the only place that writes the setting, so the
+        // value cannot exist to be walked later. update.sh refuses to walk one
+        // as well -- a server that already holds a bad value got it from the
+        // version before this one.
+        $depth = count(array_filter(explode('/', str_replace('\\', '/', $dest)), 'strlen'));
+        if ($depth < 2) {
+            return ['success' => false,
+                    'error' => $dest . ' is a whole volume, not a quarantine '
+                             . 'directory. Give it a subdirectory, e.g. '
+                             . rtrim($dest, '/') . '/.serverscrub/quarantine'];
+        }
+        if (preg_match('#^/home/virtfs(/|$)#', $dest)) {
+            return ['success' => false,
+                    'error' => '/home/virtfs is cPanel\'s per-account bind-mount '
+                             . 'tree, not storage. Quarantine cannot live there.'];
+        }
+        foreach (['/proc', '/sys', '/dev'] as $_virt) {
+            if ($dest === $_virt || strpos($dest, $_virt . '/') === 0) {
+                return ['success' => false,
+                        'error' => $dest . ' is not real storage.'];
+            }
+        }
+
         $from = Database::storagePath('quarantine');
         if ($dest === rtrim($from, '/')) {
             return ['success' => false, 'error' => 'Quarantine is already at ' . $dest];
