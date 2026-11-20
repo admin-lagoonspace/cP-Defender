@@ -457,11 +457,76 @@ fi
 # Runs on --register-only too, because the installs that need moving are the
 # ones being updated. Files are MOVED, never deleted: they are evidence, and
 # some of them may be a customer's only copy of something.
+#
+# A DELIBERATE RELOCATION IS RESPECTED. This block used to compute the first
+# writable big volume and write that into quarantine_dir unconditionally, on
+# every --register-only run -- which is every update. So an admin who moved
+# quarantine to a larger volume through the panel, because the one it was on
+# filled up, had the setting silently moved back on the next update, and new
+# quarantined files started landing on the full volume again. Filling a volume
+# with quarantined files is the exact production incident this block exists to
+# prevent, and it was reintroducing it once a release.
+#
+# Already-quarantined files were not lost: every threats row stores its own
+# absolute quarantine_path, so restores still resolve. But the recovery path
+# that reconstructs a location from the setting looks in the wrong directory
+# after a clobber, and every NEW detection goes to the wrong volume.
+#
+# So the setting is now only written when there is nothing deliberate to
+# respect: when it is unset, when it still points inside the install directory
+# (on the root partition, which is the case this whole block exists to fix),
+# or when it holds a value that is not a quarantine directory at all.
+
+# Is this path plausibly a quarantine directory? Mirrors the check in
+# update.sh and Scanner::moveQuarantine(). A quarantine directory is a NAMED
+# SUBDIRECTORY -- never the top of a volume, never the per-account bind-mount
+# tree, never a virtual filesystem.
+_sg_quarantine_path_ok() {
+    local d="${1%/}"
+    [[ -n "$d" && "$d" == /* ]] || return 1
+    [[ "$d" == */*/* ]] || return 1          # depth 1 (/home, /usr, /var) is not one
+    case "$d" in
+        /home/virtfs|/home/virtfs/*) return 1 ;;   # bind mounts of every account
+        /proc/*|/sys/*|/dev/*)       return 1 ;;   # not real storage
+    esac
+    return 0
+}
+
 _SG_QUAR_OLD="${INSTALL_DIR}/quarantine"
-_SG_QUAR_NEW=""
+
+# Where quarantine goes when nobody has chosen: the first writable big volume.
+_SG_QUAR_AUTO=""
 for _v in /home /var; do
-  if [[ -d "$_v" && -w "$_v" ]]; then _SG_QUAR_NEW="${_v}/.serverscrub/quarantine"; break; fi
+  if [[ -d "$_v" && -w "$_v" ]]; then _SG_QUAR_AUTO="${_v}/.serverscrub/quarantine"; break; fi
 done
+
+# What is configured right now, if anything.
+_SG_QUAR_SET=""
+_SG_QUAR_DB="${INSTALL_DIR}/database/serverscrub.db"
+if [[ -f "$_SG_QUAR_DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
+  _SG_QUAR_SET="$(sqlite3 "$_SG_QUAR_DB" \
+    "SELECT value FROM settings WHERE key='quarantine_dir';" 2>/dev/null || true)"
+fi
+
+_SG_QUAR_NEW="$_SG_QUAR_AUTO"
+_SG_QUAR_RECORD=true
+if [[ -z "$_SG_QUAR_SET" ]]; then
+  : # Nothing configured -- take the automatic location and record it.
+elif ! _sg_quarantine_path_ok "$_SG_QUAR_SET"; then
+  # A volume, a bind-mount tree, or something that is not storage. Versions
+  # before 4.37.5 accepted these, and update.sh then tried to chmod -R them.
+  warn "Configured quarantine_dir='${_SG_QUAR_SET}' is not a quarantine directory"
+  warn "  — it is a whole volume, a bind-mount tree, or not real storage."
+  warn "  Replacing it with ${_SG_QUAR_AUTO:-the default location}."
+elif [[ "$_SG_QUAR_SET" == "${INSTALL_DIR}" || "$_SG_QUAR_SET" == "${INSTALL_DIR}/"* ]]; then
+  info "Quarantine is still on the root partition — moving it off"
+else
+  # Somewhere specific, off the root partition: somebody chose this. Use it as
+  # the destination, and do not touch the setting.
+  _SG_QUAR_NEW="$_SG_QUAR_SET"
+  _SG_QUAR_RECORD=false
+  info "Quarantine stays where it was configured: ${_SG_QUAR_SET}"
+fi
 
 if [[ -n "$_SG_QUAR_NEW" ]]; then
   mkdir -p "$_SG_QUAR_NEW" 2>/dev/null || true
@@ -490,9 +555,11 @@ if [[ -n "$_SG_QUAR_NEW" ]]; then
     fi
   fi
 
-  # Record the location so the app writes there from now on.
-  if [[ -f "${INSTALL_DIR}/database/serverscrub.db" ]] && command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "${INSTALL_DIR}/database/serverscrub.db" \
+  # Record the location so the app writes there from now on -- but only when
+  # the value is not one somebody chose on purpose. See the note above.
+  if $_SG_QUAR_RECORD \
+     && [[ -f "$_SG_QUAR_DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$_SG_QUAR_DB" \
       "INSERT INTO settings(key,value,updated_at) VALUES('quarantine_dir','${_SG_QUAR_NEW}',strftime('%s','now')) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at;" \
       2>/dev/null && ok "  Quarantine directory set to ${_SG_QUAR_NEW}"
   fi
