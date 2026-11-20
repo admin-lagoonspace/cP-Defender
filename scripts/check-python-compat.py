@@ -69,7 +69,20 @@ def dotted(node):
 
 
 files = []
-for sub in ('backend/daemon', 'backend/cron'):
+# tests/ is in scope, and was not.
+#
+# A test that crashes on the oldest supported Python is a test that does not
+# run where it matters. tests/test_update_stale_channel.py and
+# tests/test_cdn_manifest_cache.py both used subprocess.run(capture_output=),
+# which does not exist on 3.6; on the developer's Windows Python they passed,
+# and inside the docker cPanel container -- the only place they run on the
+# Python the product actually ships against -- they CRASHED, silently, for
+# three releases. The checker could not see them because it only walked the
+# daemon and the cron scripts.
+#
+# The guarantee is the same either way: if it is Python and it belongs to this
+# product, it has to run on the Python a cPanel host has.
+for sub in ('backend/daemon', 'backend/cron', 'tests'):
     d = os.path.join(REPO, sub)
     if not os.path.isdir(d):
         continue
@@ -139,5 +152,5 @@ if problems:
     print('\n'.join(problems))
     print('\n%d incompatibility/ies.' % len(problems))
     sys.exit(1)
-print('All daemon and cron scripts are compatible.')
+print('All daemon, cron and test scripts are compatible.')
 sys.exit(0)

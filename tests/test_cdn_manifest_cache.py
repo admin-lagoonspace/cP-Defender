@@ -122,7 +122,8 @@ else:
         path = os.path.join(d, 'h.sh')
         with open(path, 'w', encoding='utf-8', newline='\n') as fh:
             fh.write(script)
-        r = subprocess.run([BASH, path], capture_output=True, text=True, cwd=d)
+        r = subprocess.run([BASH, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       universal_newlines=True, cwd=d)
         content = ''
         if os.path.exists(ht):
             with open(ht, encoding='utf-8') as fh:

@@ -883,6 +883,102 @@ try {
         exit(($r['action'] ?? '') === 'failed' ? 1 : 0);
     }
 
+    /* Apply the policy to findings that are ALREADY sitting at status='active'.
+     *
+     * The containment fix changed what happens to the NEXT detection. It did
+     * nothing for the ones already on the server, and those are the ones an
+     * operator is looking at: "if any malware is detected in realtime we are
+     * not quarantining that malware we are leaving it as is ACtive on the
+     * server." A fix that leaves the infection in front of them running has
+     * not answered the complaint.
+     *
+     * Every row goes through Scanner::applyThreatPolicy -- the same call a
+     * scan and the real-time monitor make -- so the mass-detection bound,
+     * report-only feeds, the auto-quarantine switch and the severity mapping
+     * all apply exactly as they would to a fresh finding. Nothing here decides
+     * anything on its own.
+     *
+     * Ordered critical first: if a bound or a failure stops the run part way,
+     * the most dangerous files have already been dealt with.
+     */
+    case 'contain-active': {
+        $dry   = in_array('--dry-run', $rest, true);
+        $limit = 500;
+        foreach ($rest as $i => $a) {
+            if ($a === '--limit' && isset($rest[$i + 1])) { $limit = max(1, (int) $rest[$i + 1]); }
+        }
+
+        $rows = Database::fetchAll(
+            "SELECT id, file_path, severity, threat_name, scan_job_id
+               FROM threats
+              WHERE status = 'active'
+              ORDER BY CASE LOWER(severity)
+                         WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                         WHEN 'medium'   THEN 2 ELSE 3 END,
+                       detected_at ASC
+              LIMIT ?",
+            [$limit]
+        );
+
+        if (!$rows) {
+            echo "No active threats to contain." . PHP_EOL;
+            echo json_encode(['scanned' => 0, 'acted' => 0, 'actions' => new stdClass()]) . PHP_EOL;
+            exit(0);
+        }
+
+        $sc      = new Scanner();
+        $counts  = [];
+        $acted   = 0;
+        $missing = 0;
+
+        foreach ($rows as $t) {
+            $id   = (int) $t['id'];
+            $path = (string) $t['file_path'];
+
+            /* A row whose file is gone is NOT contained by doing nothing to it,
+             * but neither is it a file we can act on. Reported and left for a
+             * human: silently flipping it to "deleted" would claim this run
+             * removed something it never touched. */
+            if ($path === '' || !file_exists($path)) {
+                $missing++;
+                printf("  id=%-6d %-8s %-28s FILE GONE  %s%s", $id,
+                       (string) $t['severity'], (string) $t['threat_name'], $path, PHP_EOL);
+                continue;
+            }
+
+            if ($dry) {
+                printf("  id=%-6d %-8s %-28s would apply policy  %s%s", $id,
+                       (string) $t['severity'], (string) $t['threat_name'], $path, PHP_EOL);
+                continue;
+            }
+
+            $r      = $sc->applyThreatPolicy($path, $id, (string) ($t['severity'] ?? 'medium'),
+                                             (string) ($t['threat_name'] ?? ''),
+                                             (int) ($t['scan_job_id'] ?? 0));
+            $action = (string) ($r['action'] ?? 'none');
+            $reason = (string) ($r['reason'] ?? ($r['error'] ?? ''));
+
+            $counts[$action] = ($counts[$action] ?? 0) + 1;
+            if (!in_array($action, ['none', 'flagged', 'failed'], true)) { $acted++; }
+
+            printf("  id=%-6d %-8s %-28s %-12s %s%s", $id,
+                   (string) $t['severity'], (string) $t['threat_name'],
+                   $action, $reason !== '' ? '(' . $reason . ')' : $path, PHP_EOL);
+        }
+
+        echo PHP_EOL;
+        echo ($dry ? 'Would have considered ' : 'Considered ') . count($rows)
+           . ' active finding(s); ' . $acted . ' contained'
+           . ($missing ? ", {$missing} whose file was already gone" : '') . '.' . PHP_EOL;
+
+        /* A machine-readable last line, so install.sh and the API can report a
+         * number without parsing the human output above. */
+        echo json_encode(['scanned' => count($rows), 'acted' => $acted,
+                          'missing' => $missing, 'dry_run' => $dry,
+                          'actions' => $counts ?: new stdClass()]) . PHP_EOL;
+        exit(0);
+    }
+
     case 'quarantine': {
         $sub = $rest[0] ?? 'status';
         switch ($sub) {

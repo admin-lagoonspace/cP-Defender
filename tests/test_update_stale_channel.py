@@ -103,7 +103,8 @@ def run_bash(script, env=None):
     e['SG_FIXDIR'] = d.replace('\\', '/')
     if env:
         e.update(env)
-    r = subprocess.run([BASH, path], capture_output=True, text=True, env=e, cwd=d)
+    r = subprocess.run([BASH, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       universal_newlines=True, env=e, cwd=d)
     return r, d
 
 
@@ -236,7 +237,8 @@ def scenario(fixtures, channels, extra='', body=LOOP):
         fh.write(script)
     e = dict(os.environ)
     e['SG_FIXDIR'] = d.replace('\\', '/')
-    r = subprocess.run([BASH, path], capture_output=True, text=True, env=e, cwd=d)
+    r = subprocess.run([BASH, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       universal_newlines=True, env=e, cwd=d)
     out = {}
     for line in r.stdout.splitlines():
         if line.startswith('RESULT '):

@@ -819,11 +819,57 @@ EXTRACTED_ROOT="$(find "${TMP_DIR}/extracted" -maxdepth 1 -mindepth 1 -type d | 
 ok "Extracted to: $EXTRACTED_ROOT"
 
 # ── Stop the monitor daemon ───────────────────────────────────────────────────
+#
+# THE DAEMON MUST COME BACK, WHATEVER ELSE HAPPENS.
+#
+# It used to be stopped here and started again ~400 lines later, with the whole
+# rest of the update in between. On 20 Nov a server hung in "Fixing
+# permissions" -- which sits between the two -- and the monitor was simply left
+# STOPPED. The update had already installed the new code, so the panel reported
+# the new version while real-time protection was not running at all, and the
+# containment fix that release existed to deliver never executed once. The
+# symptom reached the operator as "malware detected in realtime is left Active
+# on the server", which looks like a containment bug and is not one.
+#
+# Two changes. The restart now happens as soon as the files are in place and
+# the migrations have run -- that is all the daemon was ever waiting for -- and
+# an EXIT trap guarantees it, so an update that dies, hangs and is killed, or
+# rolls back still leaves the monitor running. A security daemon that is down
+# is the one outcome an updater must never produce.
+#
+# The comment that used to be here said install.sh --register-only restarts it
+# afterwards. It does not: that block is inside `if ! $REGISTER_ONLY`, so on an
+# upgrade install.sh never touches the service at all.
+SG_MONITOR_WAS_UP=0
+
+sg_monitor_restore() {
+    # `restart`, never `start`: start is a NO-OP on a unit that is already
+    # active, which would leave the old process -- holding the OLD code in
+    # memory -- running after an update whose whole point was to replace it.
+    command -v systemctl >/dev/null 2>&1 || return 0
+    [[ -f /etc/systemd/system/serverscrub-monitor.service ]] || return 0
+    systemctl restart serverscrub-monitor 2>/dev/null \
+        && ok "Monitor daemon restarted" \
+        || warn "Monitor restart failed — check: journalctl -u serverscrub-monitor"
+    systemctl restart serverscrub-scans 2>/dev/null || true
+}
+
+# Runs however this script ends: success, failure, rollback, or a kill.
+sg_on_exit_restore_monitor() {
+    if [[ "${SG_MONITOR_RESTARTED:-0}" != "1" && "$SG_MONITOR_WAS_UP" == "1" ]]; then
+        warn "Update ended before the monitor was restarted — starting it now"
+        sg_monitor_restore
+    fi
+    rm -rf "${TMP_DIR:-}" 2>/dev/null || true
+}
+trap sg_on_exit_restore_monitor EXIT
+
 section "Stopping services"
 if systemctl is-active --quiet serverscrub-monitor 2>/dev/null; then
+    SG_MONITOR_WAS_UP=1
     systemctl stop serverscrub-monitor 2>/dev/null && ok "Monitor daemon stopped" || true
     # Holds the code it was started with, and the database this update is about
-    # to migrate. install.sh --register-only restarts it afterwards.
+    # to migrate.
     systemctl stop serverscrub-scans 2>/dev/null && ok "Scan pickup stopped" || true
 fi
 
@@ -1022,6 +1068,33 @@ else
     warn "install.sh not found in install dir — skipping re-registration"
 fi
 
+# ── Bring real-time protection back, NOW ──────────────────────────────────────
+#
+# The daemon was stopped so the files underneath it could be replaced and the
+# schema migrated. Both are done. Everything after this point -- permissions,
+# cron repair, the unit-file rewrite, update-state bookkeeping -- is tidying
+# that the monitor does not need to wait for, and waiting is what hurt:
+# stopped at the top of the script and started ~400 lines later, a server that
+# hung in "Fixing permissions" was left with no real-time protection at all
+# while the panel reported the new version. It is restarted here, and the EXIT
+# trap is the backstop if this line is somehow not reached.
+section "Restarting real-time protection"
+if [[ "$SG_MONITOR_WAS_UP" == "1" ]]; then
+    sg_monitor_restore
+    SG_MONITOR_RESTARTED=1
+    # Prove it is actually up, rather than reporting the restart command's exit
+    # status. A unit that starts and immediately dies -- a syntax error in the
+    # daemon, a missing Python module -- exits 0 from `systemctl restart`.
+    if systemctl is-active --quiet serverscrub-monitor 2>/dev/null; then
+        ok "Real-time monitor is running the new code"
+    else
+        warn "Monitor is NOT running after restart — real-time protection is OFF"
+        warn "  Check: journalctl -u serverscrub-monitor -n 50"
+    fi
+else
+    info "Monitor was not running before the update — leaving it as it was"
+fi
+
 # ── Did the cron entries actually land? ───────────────────────────────────────
 #
 # A live server was found running a current version with NO user-scans line in
@@ -1217,9 +1290,12 @@ TimeoutStopSec=10
 WantedBy=multi-user.target
 SVCEOF
     systemctl daemon-reload
-    systemctl start serverscrub-monitor 2>/dev/null \
-        && ok "Monitor daemon restarted" \
-        || warn "Monitor restart failed — check: journalctl -u serverscrub-monitor"
+    # The unit file may have changed (paths), so restart again to pick it up.
+    # By now the daemon is already running the new code -- it was restarted as
+    # soon as the migrations finished -- so this is a refinement, not the thing
+    # protection depends on. `restart`, not `start`: see sg_monitor_restore.
+    sg_monitor_restore
+    SG_MONITOR_RESTARTED=1
 else
     info "Systemd service not installed — skipping"
 fi

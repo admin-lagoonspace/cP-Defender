@@ -239,14 +239,26 @@ t_eq(0, (int) ($st['active'] ?? -1),
 $appJs2 = (string) file_get_contents(dirname(__DIR__) . '/frontend/js/app.js');
 $api2   = (string) file_get_contents(dirname(__DIR__) . '/backend/api/index.php');
 
-t_contains($api2, "'meta' => ['active' => \$active]",
+/* The literal array was pinned here, which broke the moment paging added
+ * `total`, `limit`, `offset` and `capped` beside it. What this test is about
+ * is that the OUTSTANDING count comes from the server rather than from
+ * `threats.length` in the browser -- the shape of the rest of `meta` is the
+ * paging test's business. Asserting the key, not the layout. */
+t_contains($api2, "'active' => \$active,",
      'the threats route reports the outstanding count to the client');
 t_ok(strpos($appJs2, "getElementById('threat-count-badge').textContent = threats.length") === false,
      'the red badge is no longer the number of rows on screen');
 t_contains($appJs2, "res?.meta?.active",
      'it uses the count the server computed');
 
-$lt = substr($appJs2, (int) strpos($appJs2, 'async function loadThreats'), 2600);
+/* Was a fixed 2,600-character window from the start of the function, which
+ * is a tripwire on the function's LENGTH rather than on its behaviour: adding
+ * the paging footer pushed the sidebar update past the cutoff and failed a
+ * test about something else entirely. Taken to the end of the function
+ * instead, so it keeps asserting what it means. */
+preg_match('/async function loadThreats\(\).*?\n\}/s', $appJs2, $ltm);
+$lt = $ltm[0] ?? '';
+t_ok($lt !== '', 'loadThreats() is still a findable function');
 t_contains($lt, "g('sb-threats')",
      'and loadThreats() refreshes the sidebar badge, which previously went '
    . 'stale after every threat action, not just this one');

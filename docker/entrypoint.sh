@@ -115,6 +115,28 @@ do_test() {
     [[ -f /var/cpanel/users/addons ]] || do_seed
     banner "regression suite, inside the container"
     cd "$SRC"
+
+    # The packaging assertions need an artifact to assert against.
+    #
+    # scripts/preflight.py builds one into a temp directory on the host and
+    # hands it to the suite in SG_PACKAGE_ZIP. That temp directory does not
+    # exist in here, and the mounted dist/ only carries RELEASED zips -- so
+    # the packaging test failed inside the container for the current version
+    # every time, on a check that is perfectly satisfiable. Build our own,
+    # exactly as the host does. Written to /tmp, never to the read-only mount.
+    local pkg_stage; pkg_stage="$(mktemp -d)"
+    local want_ver;  want_ver="$(cat "$SRC/VERSION" 2>/dev/null | tr -d '[:space:]')"
+    if [[ -n "$want_ver" && ! -f "$SRC/dist/serverscrub-${want_ver}.zip" ]]; then
+        echo "building serverscrub-${want_ver}.zip for the packaging checks…"
+        if bash "$SRC/scripts/make-release.sh" --out "$pkg_stage" >/dev/null 2>&1 \
+           && [[ -f "${pkg_stage}/serverscrub-${want_ver}.zip" ]]; then
+            export SG_PACKAGE_ZIP="${pkg_stage}/serverscrub-${want_ver}.zip"
+            echo "  built $(stat -c %s "$SG_PACKAGE_ZIP") bytes"
+        else
+            echo "  WARNING: could not build a package; the packaging checks will fail"
+        fi
+    fi
+
     php tests/run.php
 
     # run.php already globs tests/test_*.py and runs them. Running them again

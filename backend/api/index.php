@@ -690,8 +690,29 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
                     $sqlWhere = 'WHERE scan_job_id = ?';
                     $params   = [(int) $q['job_id']];
                 }
+                /* PAGING. The query was a bare `LIMIT 200` with no offset and
+                 * no total, so a server with months of findings showed its
+                 * newest 200 and offered no way to reach the rest -- nor any
+                 * sign that a rest existed. Reported as "Malware scanner logs
+                 * do not paginate"; the scan-log table had the same defect and
+                 * was fixed first, which left this one, the table an operator
+                 * actually works in, still capped.
+                 *
+                 * Same contract as scanner/jobs and the WAF events table:
+                 * limit <= 0 means "All", bounded by one hard ceiling, with a
+                 * `capped` flag so the UI can say when All was not all. */
+                $HARD_MAX = 5000;
+                $raw      = (int) ($q['limit'] ?? 50);
+                $limit    = $raw <= 0 ? $HARD_MAX : max(1, min($HARD_MAX, $raw));
+                $offset   = max(0, (int) ($q['offset'] ?? 0));
+
+                $total = (int) (Database::fetchOne(
+                    "SELECT COUNT(*) AS c FROM threats $sqlWhere", $params
+                )['c'] ?? 0);
+
                 $threats  = Database::fetchAll(
-                    "SELECT * FROM threats $sqlWhere ORDER BY detected_at DESC LIMIT 200",
+                    "SELECT * FROM threats $sqlWhere ORDER BY detected_at DESC "
+                  . "LIMIT {$limit} OFFSET {$offset}",
                     $params
                 );
                 // How many findings are still OUTSTANDING, independent of the
@@ -710,7 +731,11 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
                     "SELECT COUNT(*) AS c FROM threats WHERE status = 'active'"
                 )['c'] ?? 0);
                 return ['success' => true, 'data' => $threats,
-                        'meta' => ['active' => $active]];
+                        'meta' => ['active' => $active,
+                                   'total'  => $total,
+                                   'limit'  => $limit,
+                                   'offset' => $offset,
+                                   'capped' => ($raw <= 0 && $total > $HARD_MAX)]];
             })();
         case 'quarantine':
             return $method === 'POST' && $id

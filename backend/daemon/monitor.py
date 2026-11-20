@@ -1628,7 +1628,19 @@ def run_polling(conn, paths, limits):
 def main():
     global _SCAN_SLEEP
     write_pid()
-    log.info('ServerScrub RT Monitor starting PID=%d SG_ROOT=%s', os.getpid(), SG_ROOT)
+    # The VERSION is logged because "which code is this process running?" had
+    # no answer. On 20 Nov an update installed a containment fix and left the
+    # daemon stopped; what came back was the old process, and the only way to
+    # tell was that a log line the new code writes never appeared. A version on
+    # every start makes that a one-line grep instead of an inference.
+    _ver = 'unknown'
+    try:
+        with open(os.path.join(SG_ROOT, 'VERSION')) as _vf:
+            _ver = _vf.read().strip() or 'unknown'
+    except Exception:
+        pass
+    log.info('ServerScrub RT Monitor starting v%s PID=%d SG_ROOT=%s',
+             _ver, os.getpid(), SG_ROOT)
     conn = None
     try:
         conn = db_connect()

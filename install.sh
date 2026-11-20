@@ -565,6 +565,43 @@ if [[ -n "$_SG_QUAR_NEW" ]]; then
   fi
 fi
 
+# ── Contain findings left sitting at status='active' ──────────────────────────
+#
+# Real-time detection used to record a threat and then, behind a bare
+# auto_quarantine flag, either move the file with no notion of severity or do
+# nothing whatsoever. Every finding it declined is still on the server, still
+# executable, still listed as "Active" in the panel. Fixing the code path only
+# changed what happens to the NEXT detection; the ones already there are the
+# ones an operator is looking at.
+#
+# So the policy is applied to them, once, on upgrade. Not a second
+# implementation of anything: `contain-active` walks the rows and calls
+# Scanner::applyThreatPolicy on each, so the mass-detection bound, report-only
+# feeds, the auto_quarantine switch and the severity mapping all apply exactly
+# as they would to a fresh finding. With auto-quarantine off it is a no-op that
+# prints why.
+#
+# This lives in install.sh, not update.sh, deliberately: an update runs the
+# INSTALLED (old) update.sh, so a step added there would first run one release
+# after it was written. install.sh --register-only is the new copy.
+if [[ -x "$(command -v php 2>/dev/null)" && -f "${INSTALL_DIR}/backend/cli/serverscrub.php" ]]; then
+  _SG_ACTIVE=$(sqlite3 "${INSTALL_DIR}/database/serverscrub.db" \
+      "SELECT COUNT(*) FROM threats WHERE status='active';" 2>/dev/null || echo 0)
+  if [[ "${_SG_ACTIVE:-0}" -gt 0 ]]; then
+    info "Applying containment policy to ${_SG_ACTIVE} finding(s) left Active…"
+    # Bounded, and never fatal: a server mid-incident can hold a lot of these,
+    # and an update must not fail because containment had more to do than one
+    # run allows. What is left is picked up by the next run or the button.
+    if timeout 900 php "${INSTALL_DIR}/backend/cli/serverscrub.php" \
+         contain-active --limit 500 2>&1 | tail -n 3 | sed 's/^/    /'; then
+      ok "  Containment policy applied to findings that were left Active"
+    else
+      warn "  Containment sweep did not finish — run by hand:"
+      warn "    serverscrub contain-active"
+    fi
+  fi
+fi
+
 # Per-scan logs accumulate one file per scan and were never pruned. On a server
 # scanning nightly that is unbounded growth on the root partition too.
 find "${LOG_DIR:-${INSTALL_DIR}/logs}" -name 'scan_*.log' -mtime +7 -delete 2>/dev/null || true

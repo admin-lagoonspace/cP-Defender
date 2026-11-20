@@ -251,7 +251,16 @@ const API = (() => {
     sigSuppressions:  ()            => req('GET',    'scanner/suppressions'),
     sigSuppress:      (name, reason) => req('POST',  'scanner/suppress', { name, reason }),
     sigUnsuppress:    (id)          => req('POST',   'scanner/unsuppress', { id }),
-    threats:          (status)      => req('GET',    `scanner/threats${status ? '?status='+status : ''}`),
+    threats:          (status, limit, offset) => {
+                        const p = new URLSearchParams();
+                        if (status) p.set('status', status);
+                        // 0 is a REAL value here -- it means "All" -- so the
+                        // test is against undefined, never falsiness.
+                        if (limit  !== undefined) p.set('limit',  String(limit));
+                        if (offset !== undefined) p.set('offset', String(offset));
+                        const qs = p.toString();
+                        return req('GET', `scanner/threats${qs ? '?' + qs : ''}`);
+                      },
     quarantineThreat: (id)          => req('POST',   `scanner/quarantine/${id}`, {}),
     restoreThreat:    (id)          => req('POST',   `scanner/restore/${id}`, {}),
     deleteThreat:     (id)          => req('DELETE', `scanner/delete/${id}`),

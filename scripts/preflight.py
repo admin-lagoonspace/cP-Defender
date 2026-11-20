@@ -555,6 +555,45 @@ def main():
             fail("mock-env suite: no bash found -- install Git Bash or pass SG_SKIP_TESTS=1 knowingly")
             problems += 1
 
+    # 6. the docker cPanel environment.
+    #
+    # EVERY CHECK ABOVE THIS LINE READS SOURCE TEXT OR RUNS ON WINDOWS.
+    #
+    # None of them can tell whether the daemon actually quarantines a file,
+    # whether a page renders, or whether an upgrade restarts the monitor.
+    # v4.37.4, .5 and .6 each shipped on a green preflight -- 5,199 assertions
+    # at the end -- and the containment fix they existed to deliver never ran
+    # once on the server it was written for, because the updater left the
+    # daemon stopped. A suite that cannot distinguish "the string is in the
+    # file" from "the product works" was reporting the first and being read as
+    # the second.
+    #
+    # docker/compose.yml builds a cPanel-shaped machine and runs the real
+    # install.sh in it. That is the cheapest thing that executes this product
+    # on Linux, and it is in the repo. Not running it was the gap.
+    #
+    # SG_SKIP_DOCKER=1 is deliberately noisy rather than silent: skipping it
+    # is a choice about a release, not a default.
+    if os.environ.get("SG_SKIP_DOCKER") == "1":
+        warn("docker environment SKIPPED via SG_SKIP_DOCKER=1 -- nothing in")
+        warn("  this release has been executed on Linux")
+    elif shutil.which("docker") is None:
+        warn("docker not found -- the product has NOT been executed on Linux")
+        warn("  in this run. Every check above reads source text.")
+    else:
+        r = subprocess.run(["docker", "compose", "-f",
+                            os.path.join(REPO, "docker", "compose.yml"),
+                            "run", "--rm", "test"],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        out = (r.stdout or b"").decode("utf-8", "replace")
+        if r.returncode == 0:
+            ok("docker cPanel environment: install + suite passed on Linux")
+        else:
+            fail("docker cPanel environment FAILED (exit %d)" % r.returncode)
+            for line in out.strip().splitlines()[-25:]:
+                print("      " + line)
+            problems += 1
+
     print("")
     if problems:
         print("%sPREFLIGHT FAILED%s — %d problem(s). Not safe to package."

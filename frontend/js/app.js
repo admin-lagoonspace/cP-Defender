@@ -1701,12 +1701,57 @@ async function loadScanJobs() {
   }).join('');
 }
 
+// Paging for the Detected Threats table.
+//
+// Deliberately the same sizes, the same control order and the same wording as
+// the scan log and the WAF events table. Three tables that page differently
+// are three things to learn.
+const THREATS_PAGE_SIZES = [50, 100, 200, 500, 0];   // 0 = All
+const THREATS_PAGE_KEY   = 'sg_threats_page_size';
+const ThreatsPage = { offset: 0, total: 0 };
+
+function threatsPageSize() {
+  // 0 is a valid choice, so `parseInt(...) || 50` is wrong: it would turn a
+  // saved "All" back into 50 on every load, which reads as the setting not
+  // saving.
+  let n = NaN;
+  try { n = parseInt(sessionStorage.getItem(THREATS_PAGE_KEY) || '', 10); }
+  catch (e) { n = NaN; }
+  return THREATS_PAGE_SIZES.includes(n) ? n : 50;
+}
+
+function threatsSetPageSize(v) {
+  const n = parseInt(v, 10);
+  if (!THREATS_PAGE_SIZES.includes(n)) { return; }
+  try { sessionStorage.setItem(THREATS_PAGE_KEY, String(n)); } catch (e) {}
+  // Page 3 of 50 is not page 3 of 500, and the old offset would land past the
+  // end of the list.
+  ThreatsPage.offset = 0;
+  loadThreats();
+}
+
+function threatsPage(dir) {
+  const size = threatsPageSize();
+  if (!size) { return; }            // "All" is one page; there is nowhere to go
+  const next = ThreatsPage.offset + (dir * size);
+  if (next < 0 || next >= ThreatsPage.total) { return; }
+  ThreatsPage.offset = next;
+  loadThreats();
+}
+
+// Changing the status filter is a new list, so it starts at the first page.
+function threatsFilterChanged() {
+  ThreatsPage.offset = 0;
+  loadThreats();
+}
+
 async function loadThreats() {
   loadScannerQuarantineState();
   const filter = document.getElementById('threat-filter')?.value || '';
+  const size   = threatsPageSize();
   const res = Demo.active
     ? Demo.mockThreats()
-    : await API.threats(filter);
+    : await API.threats(filter, size, ThreatsPage.offset);
 
   const tbody = document.getElementById('threats-body');
   if (!tbody) return;
@@ -1725,6 +1770,39 @@ async function loadThreats() {
   // happen to have would be a SECOND definition of "outstanding", and it would
   // be wrong whenever a filter is applied or there are more than 200 findings.
   const outstanding = Number(res?.meta?.active ?? threats.length) || 0;
+
+  // ── Paging footer ───────────────────────────────────────────────────────
+  //
+  // `total` is how many rows match the CURRENT FILTER, which is not the same
+  // number as `active` (outstanding findings, filter-independent). Conflating
+  // them is how "last 50" came to read as a total on the scan log.
+  ThreatsPage.total = Number(res?.meta?.total ?? threats.length) || 0;
+  (function renderThreatsPager() {
+    const size  = threatsPageSize();
+    const total = ThreatsPage.total;
+    const note  = g('threats-page-note');
+    const prev  = g('threats-prev');
+    const next  = g('threats-next');
+    const sel   = document.querySelector('.threats-page-size');
+    if (sel && String(sel.value) !== String(size)) { sel.value = String(size); }
+    if (note) {
+      if (!total) {
+        note.textContent = '';
+      } else if (!size) {
+        note.textContent = res?.meta?.capped
+          // Showing a prefix and calling it everything is the one thing "All"
+          // must never do.
+          ? `Showing the newest ${threats.length} of ${total} — too many to show at once`
+          : `Showing all ${total}`;
+      } else {
+        const from = total ? ThreatsPage.offset + 1 : 0;
+        const to   = Math.min(ThreatsPage.offset + size, total);
+        note.textContent = `${from}–${to} of ${total}`;
+      }
+    }
+    if (prev) { prev.disabled = !size || ThreatsPage.offset <= 0; }
+    if (next) { next.disabled = !size || (ThreatsPage.offset + size) >= total; }
+  })();
 
   const cb = g('threat-count-badge');
   if (cb) {

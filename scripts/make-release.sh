@@ -43,22 +43,6 @@ warn() { echo -e "  ${YELLOW}⚠${NC}  $*"; }
 VERSION="$(tr -d '[:space:]' < "${REPO_DIR}/VERSION")"
 [[ -n "$VERSION" ]] || { echo "VERSION file empty"; exit 1; }
 
-# Stamp the cache-busting query on frontend assets. Without this a browser keeps
-# serving the previous app.css/app.js after an update — which during development
-# rendered an unstyled 1536px logo over the whole page, and on a customer server
-# would silently mix new markup with old styles.
-if [[ -f "${REPO_DIR}/frontend/index.html" ]]; then
-  # Every local css/js reference, not a hand-kept list of three. charts.js was
-  # missing from that list, so a browser kept the pre-4.1.0 copy after an
-  # update: Charts was defined but had no donut() or bars(), the new dashboard
-  # skipped those panels rather than throwing, and three sections were blank
-  # with nothing in the console to say why.
-  sed -i -E "s#(src|href)=\"(css/[A-Za-z0-9_.-]+\.css|js/[A-Za-z0-9_.-]+\.js|images/[A-Za-z0-9_.-]+\.(png|jpg|svg|webp|ico))(\?v=[^\"]*)?\"#\1=\"\2?v=${VERSION}\"#g" \
-      "${REPO_DIR}/frontend/index.html"
-  # The same version for images built in JavaScript.
-  sed -i -E "s#window\.SG_ASSET_V = \"[^\"]*\";#window.SG_ASSET_V = \"${VERSION}\";#" \
-      "${REPO_DIR}/frontend/index.html"
-fi
 info "Building ServerScrub v${VERSION}"
 
 # ── Stage the payload (code only — mirrors what install.sh consumes) ───────────
@@ -75,6 +59,40 @@ mkdir -p "$PKG"
 for item in backend frontend whm cpanel scripts install.sh uninstall.sh update.sh upgrade.sh test.sh VERSION; do
   [[ -e "${REPO_DIR}/${item}" ]] && cp -r "${REPO_DIR}/${item}" "${PKG}/"
 done
+
+# ── Stamp the cache-busting query on frontend assets ──────────────────────────
+#
+# Without this a browser keeps serving the previous app.css/app.js after an
+# update -- which during development rendered an unstyled 1536px logo over the
+# whole page, and on a customer server would silently mix new markup with old
+# styles.
+#
+# STAMPED ON THE STAGED COPY, NOT THE SOURCE TREE. This used to run `sed -i`
+# against ${REPO_DIR}/frontend/index.html before staging, so building a release
+# EDITED THE WORKING TREE as a side effect. Two consequences: a build could
+# leave uncommitted changes behind on the developer's machine, and inside the
+# docker test container -- where the repo is mounted read-only precisely so a
+# test run cannot modify the working tree -- it failed with
+#
+#   sed: couldn't open temporary file /opt/serverscrub-src/frontend/sedXXXX:
+#   Read-only file system
+#
+# and then exited 0 anyway, so no package was built and the packaging
+# assertions had nothing to assert against. A build script has no business
+# writing to its own source.
+#
+# Every local css/js reference, not a hand-kept list of three. charts.js was
+# missing from that list, so a browser kept the pre-4.1.0 copy after an update:
+# Charts was defined but had no donut() or bars(), the new dashboard skipped
+# those panels rather than throwing, and three sections were blank with nothing
+# in the console to say why.
+if [[ -f "${PKG}/frontend/index.html" ]]; then
+  sed -i -E "s#(src|href)=\"(css/[A-Za-z0-9_.-]+\.css|js/[A-Za-z0-9_.-]+\.js|images/[A-Za-z0-9_.-]+\.(png|jpg|svg|webp|ico))(\?v=[^\"]*)?\"#\1=\"\2?v=${VERSION}\"#g" \
+      "${PKG}/frontend/index.html"
+  # The same version for images built in JavaScript.
+  sed -i -E "s#window\.SG_ASSET_V = \"[^\"]*\";#window.SG_ASSET_V = \"${VERSION}\";#" \
+      "${PKG}/frontend/index.html"
+fi
 
 # ── Prune scripts/ to the ops allowlist ───────────────────────────────────────
 #
