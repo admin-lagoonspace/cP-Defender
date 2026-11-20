@@ -217,6 +217,12 @@ class RealTimeMonitor {
             'cpu_cap_enabled'   => Database::setting('scan_cpu_hard_cap', '1') === '1',
             'watch_count'       => (int) (Database::setting('rt_watch_count', '0') ?? 0),
             'watch_capped'      => Database::setting('rt_watch_capped', '0') === '1',
+            // WHY it capped, because the remedy differs and the panel must
+            // not send an operator to the wrong knob:
+            //   'ceiling' -- our rt_max_watches setting; raising it here works
+            //   'kernel'  -- the host's fs.inotify.max_user_watches; raising
+            //                ours changes nothing at all
+            'watch_cap_reason'  => (string) (Database::setting('rt_watch_cap_reason', '') ?? ''),
             // A crash loop is the state that looked like success. Report it.
             'restarts'          => $detail['restarts'],
             'crash_looping'     => $detail['sub'] === 'auto-restart',

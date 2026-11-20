@@ -57,8 +57,30 @@ t_eq(4, substr_count($scanner, '$this->applyThreatPolicy('),
   . 'engine was added in 4.6.0');
 
 $daemon = file_get_contents($repo . '/backend/daemon/monitor.py');
-t_contains($daemon, "db_get(conn,'auto_quarantine') == '1'",
-    'the real-time monitor uses the same test');
+
+/* The real-time monitor used to carry its own copy of this gate, and a plain
+ * move behind it -- the fourth detection path, and the one that never reached
+ * applyThreatPolicy(). That is exactly the "three identical copies" problem
+ * described above, with a fourth copy in another language, and it meant a
+ * CRITICAL finding the scanner would have deleted was merely moved, or when
+ * the gate read anything but '1', left executable on the server.
+ *
+ * It now shells out to the policy like everything else, so the decision is
+ * made in ONE place for all four paths plus real time. */
+t_contains($daemon, 'apply_policy(conn, path, tid, sev)',
+    'THE FOURTH PATH JOINS THE OTHERS: real-time detection routes through '
+  . 'the shared policy instead of deciding containment itself');
+t_contains($daemon, "'apply-policy', str(tid)",
+    'by calling the CLI that invokes applyThreatPolicy()');
+
+/* The gate survives in exactly one place in the daemon: the fallback taken
+ * when the policy cannot be reached at all. Quarantining against an explicit
+ * "off" would be acting without consent, so the operator's switch is still
+ * honoured there -- but it is no longer how the normal path decides. */
+t_eq(1, substr_count($daemon, "
+    if db_get(conn, 'auto_quarantine') == '1':"),
+    'and the setting is read in ONE place in the daemon code, the fallback, '
+  . 'not as the ordinary containment decision');
 
 // ── The UI must not claim otherwise ──────────────────────────────────────────
 $html = file_get_contents($repo . '/frontend/index.html');

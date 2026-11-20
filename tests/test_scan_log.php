@@ -118,7 +118,17 @@ t_contains($api, "case 'jobs':\n            return (function () use (\$q) {",
    . 'nothing at all about the ones before it');
 t_contains($api, 'requested_by, ignore_backup',
      'and it returns who asked');
-t_contains($api, "\$limit = max(1, min(200, (int) (\$q['limit'] ?? 50)));",
+/* Still bounded, at a ceiling that can serve the page sizes the log offers.
+ *
+ * The old clamp was min(200), which silently served 200 rows to a request for
+ * 500 and showed no sign of the truncation. The bound itself is kept -- the
+ * point was never the number, it was that a query string cannot ask this
+ * server for every scan it has ever run -- and "All" (limit <= 0) is bounded
+ * by the same ceiling, with a `capped` flag so the UI can say when it did not
+ * get everything. */
+t_contains($api, '$HARD_MAX = 5000;',
+     'there is still a hard ceiling on how many rows one request can take');
+t_contains($api, '$limit  = $raw <= 0 ? $HARD_MAX : max(1, min($HARD_MAX, $raw));',
      'BOUNDED: the row count is clamped, so a limit from the query string '
    . 'cannot ask this server for every scan it has ever run');
 

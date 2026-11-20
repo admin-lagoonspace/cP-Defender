@@ -619,14 +619,47 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
         // scan; one customer may not see another's name.
         case 'jobs':
             return (function () use ($q) {
-                $limit = max(1, min(200, (int) ($q['limit'] ?? 50)));
-                return ['success' => true, 'data' => Database::fetchAll(
+                /* Paged, and it says how many there are.
+                 *
+                 * This returned the newest 50 with no offset and a hard cap of
+                 * 200, so a server with months of nightly sweeps showed its
+                 * most recent fifty and gave no way to reach the rest -- or
+                 * any sign that a rest existed. "Did last Tuesday's scan
+                 * finish?" was unanswerable from the panel.
+                 *
+                 * limit <= 0 means ALL, which the UI offers as its last page
+                 * size. It is still bounded: a browser asked to lay out a
+                 * hundred thousand rows stops responding, and a log you cannot
+                 * scroll is no more use than one you cannot page. The total
+                 * below is the real count either way, so the UI can say when
+                 * it is showing a truncated "all".
+                 */
+                $HARD_MAX = 5000;
+                $raw    = (int) ($q['limit'] ?? 50);
+                $limit  = $raw <= 0 ? $HARD_MAX : max(1, min($HARD_MAX, $raw));
+                $offset = max(0, (int) ($q['offset'] ?? 0));
+
+                $total = (int) (Database::fetchOne(
+                    'SELECT COUNT(*) AS c FROM scan_jobs')['c'] ?? 0);
+
+                $items = Database::fetchAll(
                     "SELECT id, scan_type, status, scan_path, started_at, finished_at,
                             files_scanned, threats_found, requested_by, ignore_backup,
                             stop_reason
                        FROM scan_jobs
                       ORDER BY COALESCE(started_at, created_at) DESC
-                      LIMIT {$limit}")];
+                      LIMIT {$limit} OFFSET {$offset}");
+
+                return ['success' => true, 'data' => [
+                    'items'  => $items,
+                    'total'  => $total,
+                    'limit'  => $limit,
+                    'offset' => $offset,
+                    // True when "All" was asked for and could not be honoured
+                    // in full. The UI says so rather than quietly showing a
+                    // prefix and calling it everything.
+                    'capped' => ($raw <= 0 && $total > $HARD_MAX),
+                ]];
               })();
         // GET scanner/running — what is in progress, so the UI can offer Stop
         case 'running':

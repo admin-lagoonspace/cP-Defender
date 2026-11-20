@@ -826,6 +826,63 @@ try {
         break;
     }
 
+    /* Apply the threat policy to one recorded threat.
+     *
+     * THE REAL-TIME MONITOR'S ONLY ROUTE TO THE POLICY.
+     *
+     * The daemon is Python and the policy is PHP, so real-time detection had
+     * its own containment: a plain move into the quarantine directory, gated
+     * on auto_quarantine, and nothing else. That meant a CRITICAL finding the
+     * scanner would have deleted was handled differently -- or, when the
+     * gate read anything but '1', not handled at all, leaving live malware in
+     * place on a server whose monitor had just identified it.
+     *
+     * Reimplementing the policy in Python would have given us two policies to
+     * keep in step, and they would have drifted the first time either moved.
+     * The daemon shells out to this instead, so there is exactly one set of
+     * rules: the mass-detection bound, report-only feeds, the auto_quarantine
+     * switch, per-feed disable, and severity -> delete or quarantine.
+     *
+     * Prints one line of JSON so the caller can log what happened.
+     */
+    case 'apply-policy': {
+        $id = (int) ($rest[0] ?? 0);
+        if ($id <= 0) {
+            fwrite(STDERR, "usage: serverscrub apply-policy <threat-id>" . PHP_EOL);
+            exit(2);
+        }
+
+        $t = Database::fetchOne(
+            'SELECT id, file_path, severity, threat_name, scan_job_id FROM threats WHERE id=?',
+            [$id]
+        );
+        if (!$t) {
+            fwrite(STDERR, "no such threat: {$id}" . PHP_EOL);
+            exit(3);
+        }
+
+        $sc = new Scanner();
+        $r  = $sc->applyThreatPolicy(
+            (string) $t['file_path'],
+            (int) $t['id'],
+            (string) ($t['severity'] ?? 'medium'),
+            (string) ($t['threat_name'] ?? ''),
+            (int) ($t['scan_job_id'] ?? 0)
+        );
+
+        echo json_encode([
+            'id'     => $id,
+            'action' => (string) ($r['action'] ?? 'none'),
+            'reason' => (string) ($r['reason'] ?? ($r['error'] ?? '')),
+        ]) . PHP_EOL;
+
+        // A policy that decided to do nothing is a SUCCESS: the operator
+        // turned auto-quarantine off, or a bound held, or the feed is not
+        // promoted. Only a failure to carry out a decision is an error, and
+        // the caller falls back to its own containment on a non-zero exit.
+        exit(($r['action'] ?? '') === 'failed' ? 1 : 0);
+    }
+
     case 'quarantine': {
         $sub = $rest[0] ?? 'status';
         switch ($sub) {

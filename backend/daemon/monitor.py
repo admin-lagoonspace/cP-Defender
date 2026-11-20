@@ -9,6 +9,7 @@ Environment: SG_ROOT must be set (defaults to 2 dirs up from this script)
 """
 
 import os, re, sys, time, signal, logging, sqlite3, shutil, datetime, hashlib
+import json, subprocess
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -1053,8 +1054,7 @@ def handle(conn, path, limits=None, limiter=None, debouncer=None):
 
     log.warning('THREAT %s -> %s (id=%s sev=%s)', path, t, tid, sev)
     db_event(conn, 'realtime_threat', '%s in %s' % (t, path))
-    if db_get(conn,'auto_quarantine') == '1':
-        quarantine(conn, path, tid)
+    apply_policy(conn, path, tid, sev)
 
 
 def _seen_before(path):
@@ -1080,6 +1080,109 @@ def _seen_before(path):
         # not-seen only loses the escalation; treating it as seen would mark
         # every first detection a recurrence.
         return False
+
+def _php_binary():
+    """A PHP CLI that exists, or None.
+
+    The daemon runs from cron/systemd with a minimal PATH, so `php` alone is
+    not safe to rely on. cPanel's own build is checked first because it is the
+    one the rest of the product runs under.
+    """
+    for p in ('/usr/local/cpanel/3rdparty/bin/php', '/usr/bin/php',
+              '/usr/local/bin/php', '/opt/cpanel/ea-php82/root/usr/bin/php',
+              '/opt/cpanel/ea-php81/root/usr/bin/php'):
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def apply_policy(conn, path, tid, sev):
+    """Contain a real-time detection using the SAME policy as the scanner.
+
+    THE BUG THIS FIXES
+    ------------------
+    Real-time detection recorded the threat, logged it, raised an event --
+    and then did this, and only this:
+
+        if db_get(conn, 'auto_quarantine') == '1':
+            quarantine(conn, path, tid)
+
+    Two things were wrong with it.
+
+      1. It was a plain move, with no notion of severity. The scanner deletes
+         anything critical or high (policy_high_action defaults to 'delete')
+         and quarantines the rest with an expiry. Real time never deleted
+         anything, so the two engines treated the same file differently
+         depending on which one happened to find it.
+
+      2. When the gate read anything other than '1' it did NOTHING AT ALL --
+         no quarantine, no disable, no flag. The monitor identified live
+         malware, wrote a row about it, and left the file executable on the
+         server. That is the whole complaint: a real-time detector that does
+         not contain anything is an alarm, not a defence.
+
+    It also skipped the mass-detection bound, report-only feeds, the
+    disable-before-acting step, and the owner/mode capture a restore needs.
+    All of those live in Scanner::applyThreatPolicy.
+
+    So this does not reimplement the policy; it CALLS it. One set of rules in
+    one language. A second copy in Python would have drifted from the first
+    the next time either changed.
+
+    Returns the action taken, as a string.
+    """
+    php = _php_binary()
+    cli = os.path.join(SG_ROOT, 'backend', 'cli', 'serverscrub.php')
+
+    if php and os.path.isfile(cli):
+        try:
+            # stdout=PIPE/universal_newlines rather than capture_output/text:
+            # cPanel hosts run RHEL-family Python 3.6, where neither keyword
+            # exists. scripts/check-python-compat.py pins this.
+            r = subprocess.run([php, cli, 'apply-policy', str(tid)],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               universal_newlines=True, timeout=120)
+            out = (r.stdout or '').strip().splitlines()
+            payload = {}
+            if out:
+                try:
+                    payload = json.loads(out[-1])
+                except ValueError:
+                    payload = {}
+            action = str(payload.get('action', '') or '')
+            reason = str(payload.get('reason', '') or '')
+
+            if r.returncode == 0 and action:
+                if action == 'none':
+                    log.warning('THREAT id=%s LEFT IN PLACE: %s', tid, reason or 'policy declined')
+                else:
+                    log.info('Policy applied to id=%s: %s%s', tid, action,
+                             (' (%s)' % reason) if reason else '')
+                return action
+
+            log.error('apply-policy failed for id=%s (rc=%s): %s',
+                      tid, r.returncode, (r.stderr or '').strip()[:200])
+        except subprocess.TimeoutExpired:
+            log.error('apply-policy timed out for id=%s', tid)
+        except Exception as e:
+            log.error('apply-policy could not run for id=%s: %s', tid, e)
+    else:
+        log.error('apply-policy unavailable (php=%s cli=%s)', php, os.path.isfile(cli))
+
+    # FALLBACK. The policy could not be consulted, so fall back to the
+    # containment this code has always had rather than leave a known-malicious
+    # file untouched. The operator's switch is still honoured -- quarantining
+    # against an explicit "off" would be acting without consent -- but when it
+    # is off we now say so in the log instead of silently doing nothing.
+    if db_get(conn, 'auto_quarantine') == '1':
+        log.warning('Falling back to plain quarantine for id=%s', tid)
+        quarantine(conn, path, tid)
+        return 'quarantined'
+
+    log.warning('THREAT id=%s LEFT IN PLACE at %s: auto_quarantine is off and the '
+                'policy could not be reached', tid, path)
+    return 'none'
+
 
 def quarantine(conn, path, tid):
     day  = datetime.date.today().strftime('%Y-%m-%d')
@@ -1179,7 +1282,7 @@ def add_watch_tree(conn, ino, wds, root, fl, limits, limiter, debouncer):
         if len(wds) >= limits['max_watches']:
             log.warning('inotify: watch cap (%d) reached; not watching %s',
                         limits['max_watches'], r)
-            db_set(conn, 'rt_watch_capped', '1')
+            record_watch_state(conn, len(wds), True, 'ceiling')
             break
         try:
             wd = ino.add_watch(r, fl)
@@ -1190,7 +1293,7 @@ def add_watch_tree(conn, ino, wds, root, fl, limits, limiter, debouncer):
             continue
         except OSError as e:
             log.error('inotify: cannot watch %s (%s)', r, e)
-            db_set(conn, 'rt_watch_capped', '1')
+            record_watch_state(conn, len(wds), True, 'kernel')
             break
 
         # Files already inside it. Their CREATE events were never delivered
@@ -1206,13 +1309,66 @@ def add_watch_tree(conn, ino, wds, root, fl, limits, limiter, debouncer):
     return added
 
 
-def run_inotify(conn, paths, limits):
-    import inotify_simple
-    fl = inotify_simple.flags.CREATE | inotify_simple.flags.MODIFY | inotify_simple.flags.MOVED_TO
-    ISDIR = inotify_simple.flags.ISDIR
-    ino = inotify_simple.INotify()
-    wds = {}
+def publish_effective(conn, limits):
+    """Publish what is ACTUALLY in effect, so the panel reports enforcement.
+
+    Called at startup and again on every reload that changes something. It
+    used to be startup only, which meant that changing a limit and saving it
+    left the panel reporting the value the daemon had booted with -- for ever,
+    or until someone restarted the process. A card whose whole claim is "this
+    is what is in force" cannot be written once and left.
+    """
+    db_set(conn, 'rt_effective_profile',       limits['profile'])
+    db_set(conn, 'rt_effective_files_per_sec', str(limits['files_per_sec']))
+    db_set(conn, 'rt_effective_poll_interval', str(limits['poll_interval']))
+    db_set(conn, 'rt_effective_nice',          str(limits['nice']))
+    db_set(conn, 'rt_effective_max_watches',   str(limits['max_watches']))
+    db_set(conn, 'rt_effective_max_file_mb',   str(limits['max_file_size'] // (1024*1024)))
+    db_set(conn, 'rt_effective_debounce',      str(limits['debounce']))
+
+
+def record_watch_state(conn, count, capped, reason=''):
+    """One place that writes the watch counters, so they cannot disagree.
+
+    `reason` separates the two ways coverage goes partial, because the remedy
+    is different and telling them apart is the whole point:
+
+      'ceiling' -- rt_max_watches, OUR setting. Raising it here is the fix.
+      'kernel'  -- fs.inotify.max_user_watches, the HOST's. Raising ours
+                   changes nothing; the sysctl has to go up.
+
+    Conflating them is what makes an operator raise the ceiling, see the
+    warning stay, and conclude the setting is broken.
+    """
+    db_set(conn, 'rt_watch_count', str(count))
+    db_set(conn, 'rt_watch_capped', '1' if capped else '0')
+    db_set(conn, 'rt_watch_cap_reason', reason if capped else '')
+
+
+def rewatch_to_cap(conn, ino, wds, paths, fl, limits):
+    """Take up the watches a previous, lower ceiling refused.
+
+    THE BUG THIS FIXES
+    ------------------
+    The watch list is built by walking the tree once, at startup. Nothing
+    re-ran that walk, so raising rt_max_watches had no effect until the
+    process was restarted: the daemon kept exactly the watches it already
+    had, rt_watch_count stayed at the old number, and rt_watch_capped stayed
+    at 1. The panel then showed "watch limit reached" and a count against a
+    ceiling that was no longer the binding one -- reported against the NEW
+    ceiling, so it read as 20,000 / 100,000, which is not a state the kernel
+    was actually in.
+
+    Saving a setting and refreshing the page has to be enough. Restarting a
+    security monitor to change a number is a gap in coverage taken for an
+    edit, and nobody should trade one for the other.
+
+    Returns (added, capped, reason).
+    """
+    have = set(wds.values())
+    added = 0
     capped = False
+    reason = ''
 
     for base in paths:
         for root, dirs, _ in os.walk(base, followlinks=False):
@@ -1220,6 +1376,52 @@ def run_inotify(conn, paths, limits):
                        if d not in limits['excludes'] and not d.startswith('.')]
             if len(wds) >= limits['max_watches']:
                 capped = True
+                reason = 'ceiling'
+                break
+            if root in have:
+                continue
+            try:
+                wd = ino.add_watch(root, fl)
+                wds[wd] = root
+                added += 1
+            except (PermissionError, FileNotFoundError):
+                continue
+            except OSError as e:
+                # The HOST refused, not our ceiling. Raising rt_max_watches
+                # would do nothing here and saying so would send the operator
+                # to the wrong knob.
+                log.error('inotify: kernel refused a watch (%s) at %d dirs. '
+                          'Raise fs.inotify.max_user_watches on the host.',
+                          e, len(wds))
+                capped = True
+                reason = 'kernel'
+                break
+        if capped:
+            break
+
+    record_watch_state(conn, len(wds), capped, reason)
+    log.info('inotify: re-walk added %d watch(es), now %d (cap %d)%s',
+             added, len(wds), limits['max_watches'],
+             ' - CAPPED by ' + reason if capped else '')
+    return added, capped, reason
+
+
+def run_inotify(conn, paths, limits):
+    import inotify_simple
+    fl = inotify_simple.flags.CREATE | inotify_simple.flags.MODIFY | inotify_simple.flags.MOVED_TO
+    ISDIR = inotify_simple.flags.ISDIR
+    ino = inotify_simple.INotify()
+    wds = {}
+    capped = False
+    cap_reason = ''
+
+    for base in paths:
+        for root, dirs, _ in os.walk(base, followlinks=False):
+            dirs[:] = [d for d in dirs
+                       if d not in limits['excludes'] and not d.startswith('.')]
+            if len(wds) >= limits['max_watches']:
+                capped = True
+                cap_reason = 'ceiling'
                 break
             try:
                 wd = ino.add_watch(root, fl)
@@ -1235,14 +1437,14 @@ def run_inotify(conn, paths, limits):
                           'Raise fs.inotify.max_user_watches or lower rt_max_watches.',
                           e, len(wds))
                 capped = True
+                cap_reason = 'kernel'
                 break
         if capped:
             break
 
     log.info('inotify: %d dirs (cap %d)%s', len(wds), limits['max_watches'],
-             ' - CAPPED' if capped else '')
-    db_set(conn, 'rt_watch_count', str(len(wds)))
-    db_set(conn, 'rt_watch_capped', '1' if capped else '0')
+             ' - CAPPED by ' + cap_reason if capped else '')
+    record_watch_state(conn, len(wds), capped, cap_reason)
 
     limiter   = RateLimiter(limits['files_per_sec'])
     debouncer = Debouncer(limits['debounce'])
@@ -1275,10 +1477,21 @@ def run_inotify(conn, paths, limits):
         if time.time() - last_reload >= 60:
             fresh = load_profile(conn)
             if fresh != limits:
+                prev_max = limits['max_watches']
                 limits = fresh
                 limiter.update(limits['files_per_sec'])
                 debouncer.update(limits['debounce'])
                 apply_cpu_priority_nice(limits['nice'])
+                # Re-publish, or the panel keeps reporting the values this
+                # process booted with and the "in effect" row becomes a lie
+                # the moment anything is changed.
+                publish_effective(conn, limits)
+                # A ceiling that moved has to be acted on, not just recorded.
+                # Up: take the watches the old ceiling refused. Down: the
+                # count is recomputed against the new ceiling so the flag
+                # stops describing a limit nobody is under any more.
+                if limits['max_watches'] != prev_max:
+                    rewatch_to_cap(conn, ino, wds, paths, fl, limits)
                 log.info('resource profile reloaded: %s', limits['profile'])
             backups.reload(conn)
             load_exclusions(conn)
@@ -1385,6 +1598,11 @@ def run_polling(conn, paths, limits):
             limiter.update(limits['files_per_sec'])
             debouncer.update(limits['debounce'])
             apply_cpu_priority_nice(limits['nice'])
+            # Same reason as the inotify path: published once at startup, the
+            # "in effect" row describes the settings this process booted with
+            # and nothing else, however many times they are changed after.
+            # Polling has no watch list, so there is nothing to re-walk here.
+            publish_effective(conn, limits)
             log.info('resource profile reloaded: %s', limits['profile'])
         backups.reload(conn)
 
@@ -1449,19 +1667,7 @@ def main():
                  limits['max_file_size'] // (1024*1024), limits['poll_interval'],
                  limits['max_watches'], limits['debounce'])
 
-        # Publish what is actually in effect so the UI shows the real limits
-        # rather than what someone believes they configured.
-        db_set(conn,'rt_effective_profile', limits['profile'])
-        db_set(conn,'rt_effective_files_per_sec', str(limits['files_per_sec']))
-        db_set(conn,'rt_effective_poll_interval', str(limits['poll_interval']))
-        # nice and the watch ceiling were not published, so the panel could only
-        # infer them from the profile NAME -- which works for a preset and shows
-        # nothing at all for 'custom', the one case where the operator typed the
-        # numbers and most wants them confirmed.
-        db_set(conn,'rt_effective_nice', str(limits['nice']))
-        db_set(conn,'rt_effective_max_watches', str(limits['max_watches']))
-        db_set(conn,'rt_effective_max_file_mb', str(limits['max_file_size'] // (1024*1024)))
-        db_set(conn,'rt_effective_debounce', str(limits['debounce']))
+        publish_effective(conn, limits)
 
         paths = watch_paths(conn)
         if not paths:

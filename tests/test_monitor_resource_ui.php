@@ -204,10 +204,30 @@ t_contains($render, 'd.effective_nice',
      'and its real nice value, which "custom" could never be inferred from');
 t_contains($render, 'd.watch_capped',
      'and it reads the capped flag');
-t_contains($render, 'coverage is partial until one of those changes',
+t_contains($render, 'are NOT being watched',
      'A CAPPED WATCH COUNT IS PARTIAL COVERAGE: the card says so plainly '
    . 'rather than reporting itself healthy, which is how the silent inotify '
    . 'ceiling went unnoticed in the first place');
+
+// ONE CAUSE, NAMED. Not both.
+//
+// The message used to list our ceiling AND the host sysctl together for every
+// capped state. An operator whose KERNEL was the binding limit raised the
+// ceiling on the page, watched nothing change, and reported the setting as
+// broken -- which it effectively was, because the panel had sent them to the
+// wrong knob.
+t_contains($render, "d.watch_cap_reason === 'kernel'",
+     'THE RIGHT KNOB: the card branches on which limit actually refused');
+// Matched on a fragment: the sentence is split across concatenated JS string
+// literals in the source, so the full phrase never appears contiguously.
+t_contains($render, 'page will not help',
+     'and when the HOST refused, it says so outright instead of suggesting a '
+   . 'setting that cannot move the limit');
+t_contains($render, 'fs.inotify.max_user_watches has to go up',
+     'naming the sysctl that can');
+t_contains($render, 'no restart.',
+     'and when OUR ceiling is the limit, it says raising it takes effect '
+   . 'without a restart — which is only true because the daemon re-walks');
 t_contains($render, 'polling',
      'and it names polling mode, where the interval is the setting that '
    . 'actually decides the load');
@@ -216,12 +236,31 @@ t_contains($render, 'polling',
 t_contains($saver, "if (!res?.success)",
      'a failed save is reported as not applied, rather than leaving the '
    . 'operator believing a limit is in force');
-t_contains($saver, 'loadMonResourceValues()',
-     'and the values are read BACK after saving, so a clamped number is '
-   . 'shown as what it became');
-t_contains($saver, 'loadMonitor()',
-     'and the in-effect row is refreshed, so it cannot keep showing the '
-   . 'previous profile as though nothing happened');
+t_contains($saver, 'loadMonResourceValues(true)',
+     'and the values are read BACK after saving — FORCED, because the loader '
+   . 'is guarded against clobbering a half-typed field and that guard would '
+   . 'otherwise skip the one read that matters here');
+t_contains($saver, 'refreshMonitorPage()',
+     'and the whole page is refreshed, so the in-effect row cannot keep '
+   . 'showing the previous profile as though nothing happened');
+
+// THE REFRESH BUTTON HAS TO MEAN REFRESH.
+//
+// It ran loadMonitor(), which re-pulls the STATUS and leaves every control
+// showing whatever it was last filled with -- and loadMonResourceValues() has
+// a one-shot guard, so it returned early. Pressing Refresh right after saving
+// a limit was a no-op for precisely the fields that had just been edited.
+$html2 = file_get_contents($repo . '/frontend/index.html');
+t_contains($html2, 'doRefresh(this, refreshMonitorPage)',
+     'THE REFRESH BUTTON RE-READS EVERYTHING: it no longer calls a loader '
+   . 'that leaves the controls alone');
+preg_match('/async function refreshMonitorPage\(\).*?^}/ms', $js, $rm2);
+t_contains($rm2[0] ?? '', '_monResForce = true',
+     'by forcing the guarded loader for one pass');
+preg_match('/async function loadMonResourceValues\(force\).*?^}/ms', $js, $lm);
+t_contains($lm[0] ?? '', 'if (_monResLoaded && !force) return;',
+     'while the periodic refresh keeps the guard, so a timer tick still '
+   . 'cannot overwrite a number being typed');
 
 // Editing a limit under a preset must not silently discard it.
 preg_match('/function monResEdited\(\).*?^}/ms', $js, $em);

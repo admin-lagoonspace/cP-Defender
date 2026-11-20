@@ -1561,21 +1561,97 @@ async function showScanThreats(jobId, ev) {
   }).join('');
 }
 
+/* Scanner-log paging.
+ *
+ * Deliberately the same shape as the WAF events paging above: same sizes,
+ * same sessionStorage-backed preference, same reset-to-first-page rules. The
+ * scan log used to fetch a fixed newest-50 with no way to see that anything
+ * older existed, which is the same defect the WAF table had.
+ *
+ * 0 means "All", and the API bounds it -- see the jobs route. A reading
+ * preference, so sessionStorage, and every access is wrapped because it
+ * throws in a private window.
+ */
+const SCANLOG_PAGE_KEY = 'sg.scanlog.pagesize';
+const SCANLOG_PAGE_SIZES = [50, 100, 200, 500, 0];
+const ScanLogPage = { offset: 0, total: 0 };
+
+function scanLogPageSize() {
+  let n = NaN;
+  try { n = parseInt(sessionStorage.getItem(SCANLOG_PAGE_KEY) || '', 10); }
+  catch (e) { n = NaN; }
+  // Explicit isNaN rather than `|| 0`: 0 IS a valid size here ("All"), and a
+  // falsy-check would silently turn a stored "All" back into 50.
+  return SCANLOG_PAGE_SIZES.includes(n) ? n : 50;
+}
+
+function scanLogSetPageSize(v) {
+  const n = SCANLOG_PAGE_SIZES.includes(Number(v)) ? Number(v) : 50;
+  try { sessionStorage.setItem(SCANLOG_PAGE_KEY, String(n)); } catch (e) { /* not fatal */ }
+  document.querySelectorAll('.scanlog-page-size').forEach(sel => { sel.value = String(n); });
+  // Page 3 of 50 is not page 3 of 500, and landing past the end shows an
+  // empty table on a server with plenty of history.
+  ScanLogPage.offset = 0;
+  loadScanJobs();
+}
+
+function scanLogPage(dir) {
+  const size = scanLogPageSize();
+  if (!size) return;                       // "All" is one page; nowhere to go
+  ScanLogPage.offset = Math.max(0, ScanLogPage.offset + dir * size);
+  loadScanJobs();
+}
+
 async function loadScanJobs() {
   const body = document.getElementById('scanlog-body');
   if (!body) return;
 
-  const res  = Demo.active ? Demo.mockScanJobs()
-                           : await API.get('scanner/jobs?limit=50');
-  const jobs = res?.data || [];
-  const note = document.getElementById('scanlog-note');
+  const size = scanLogPageSize();
+  document.querySelectorAll('.scanlog-page-size').forEach(sel => {
+    sel.value = String(size);
+  });
+
+  const res  = Demo.active
+    ? Demo.mockScanJobs()
+    : await API.get('scanner/jobs?limit=' + size + '&offset=' + ScanLogPage.offset);
+
+  /* The response used to be a bare array and is now {items,total,...}. Both
+   * shapes are accepted: a browser holding a cached app.js against a freshly
+   * updated backend, or the reverse, must not render an empty log. */
+  const d     = res?.data;
+  const jobs  = Array.isArray(d) ? d : (d?.items || []);
+  const total = Array.isArray(d) ? jobs.length : Number(d?.total || 0);
+  const capped = !Array.isArray(d) && !!d?.capped;
+  ScanLogPage.total = total;
+
+  const note     = document.getElementById('scanlog-note');
+  const pageNote = document.getElementById('scanlog-page-note');
+  const prev     = document.getElementById('scanlog-prev');
+  const next     = document.getElementById('scanlog-next');
+
+  // Buttons reflect where we are BEFORE the empty check, so a page past the
+  // end still offers a way back rather than stranding the operator.
+  if (prev) prev.disabled = !size || ScanLogPage.offset <= 0;
+  if (next) next.disabled = !size || (ScanLogPage.offset + size) >= total;
 
   if (!jobs.length) {
-    body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--txt3);padding:20px">No scans have run yet</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--txt3);padding:20px">'
+                   + (total ? 'No scans on this page' : 'No scans have run yet')
+                   + '</td></tr>';
     if (note) note.textContent = '';
+    if (pageNote) pageNote.textContent = total ? ('0 of ' + total) : '';
     return;
   }
-  if (note) note.textContent = 'last ' + jobs.length + ' scan(s)';
+
+  const first = ScanLogPage.offset + 1;
+  const last  = ScanLogPage.offset + jobs.length;
+  if (note) note.textContent = total + ' scan(s) recorded';
+  if (pageNote) {
+    pageNote.textContent = capped
+      ? ('showing the newest ' + jobs.length + ' of ' + total
+         + ' \u2014 too many to show at once')
+      : (first + '\u2013' + last + ' of ' + total);
+  }
 
   const COLOR = { done: 'var(--green)', running: 'var(--amber)',
                   pending: 'var(--amber)', cancelling: 'var(--amber)',
@@ -4808,7 +4884,11 @@ function renderMonResources(d) {
   if (badge) {
     if (d.watch_capped) {
       badge.className = 'badge badge-red';
-      badge.textContent = 'Watch limit reached';
+      // Name the limit that is actually binding. "Watch limit reached" over a
+      // count well below the configured ceiling reads as a stuck panel, which
+      // is exactly how this was reported.
+      badge.textContent = (d.watch_cap_reason === 'kernel')
+        ? 'Kernel watch limit' : 'Watch ceiling reached';
     } else if (!d.running) {
       badge.className = 'badge';
       badge.textContent = 'Monitor stopped';
@@ -4822,10 +4902,30 @@ function renderMonResources(d) {
   if (note) {
     const bits = [];
     if (d.watch_capped) {
-      bits.push('The kernel refused more inotify watches, so some directories '
-              + 'are NOT being watched. Raise the ceiling here and '
-              + 'fs.inotify.max_user_watches on the host, or narrow the watch '
-              + 'paths \u2014 coverage is partial until one of those changes.');
+      // ONE OF THESE, NOT BOTH.
+      //
+      // This used to name our setting and the host sysctl in the same
+      // sentence, for every capped state. An operator whose ceiling was the
+      // binding limit was sent to edit a sysctl that was fine; one whose
+      // KERNEL was the limit raised our ceiling, saw the warning stay, and
+      // reasonably concluded the setting did nothing. The daemon knows which
+      // one refused, so say that one.
+      if (d.watch_cap_reason === 'kernel') {
+        bits.push('The HOST KERNEL refused more inotify watches at '
+                + fmtNum(d.watch_count || 0) + ', below the ceiling set here, so some '
+                + 'directories are NOT being watched. Raising the ceiling on this '
+                + 'page will not help: fs.inotify.max_user_watches has to go up on '
+                + 'the server, or the watch paths have to be narrower.');
+      } else if (d.watch_cap_reason === 'ceiling') {
+        bits.push('The watch ceiling set here was reached, so some directories are '
+                + 'NOT being watched. Raise "Maximum inotify watches" below and save '
+                + '\u2014 the monitor takes up the extra watches within a minute, with '
+                + 'no restart.');
+      } else {
+        bits.push('More inotify watches were refused, so some directories are NOT '
+                + 'being watched. Raise the ceiling below, or '
+                + 'fs.inotify.max_user_watches on the host, or narrow the watch paths.');
+      }
     }
     if (eff !== asked) {
       bits.push('Settings ask for "' + asked + '" and the daemon reports "' + eff
@@ -4843,7 +4943,24 @@ function renderMonResources(d) {
   }
 
   renderCpuCapMode(d);
-  loadMonResourceValues();
+  loadMonResourceValues(_monResForce);
+  _monResForce = false;
+}
+
+/* Set for one pass by refreshMonitorPage(), so the controls are re-read from
+ * the server on an explicit Refresh and left alone on the timer. */
+let _monResForce = false;
+
+/**
+ * What the page's Refresh button runs.
+ *
+ * It used to call loadMonitor() alone, which refreshes the STATUS and leaves
+ * every control showing whatever it was last filled with. After saving a
+ * limit that is the one thing it needed to do.
+ */
+async function refreshMonitorPage() {
+  _monResForce = true;
+  await loadMonitor();
 }
 
 /**
@@ -4899,13 +5016,17 @@ function fmtDuration(secs) {
 let _monResLoaded = false;
 
 /**
- * Fill the controls from stored settings, once per page visit.
+ * Fill the controls from stored settings.
  *
- * loadMonitor() runs on a timer, and re-filling on every tick would overwrite
- * a number the operator is part-way through typing.
+ * Guarded by default because loadMonitor() runs on a timer, and re-filling on
+ * every tick would overwrite a number the operator is part-way through
+ * typing. `force` is for the explicit Refresh button, which must mean refresh
+ * EVERYTHING: the complaint that produced this was saving a value, pressing
+ * Refresh, and seeing the old one -- the guard made the button a no-op for
+ * precisely the controls the operator had just changed.
  */
-async function loadMonResourceValues() {
-  if (_monResLoaded) return;
+async function loadMonResourceValues(force) {
+  if (_monResLoaded && !force) return;
   _monResLoaded = true;
 
   const res = Demo.active ? null : await API.getSettings();
@@ -5039,8 +5160,7 @@ async function saveMonitorResources() {
   }
 
   // Read back the stored values, which may have been clamped.
-  _monResLoaded = false;
-  await loadMonResourceValues();
+  await loadMonResourceValues(true);
 
   if (status) {
     status.textContent = 'Applied. The monitor picks these up within a minute '
@@ -5049,9 +5169,11 @@ async function saveMonitorResources() {
   }
   toast('Resource limits applied', 'success');
 
-  // The row above reports what the daemon is doing, so refresh it rather than
-  // leaving it showing the previous profile as though nothing had changed.
-  loadMonitor();
+  // The row above reports what the DAEMON is doing, and the daemon re-reads
+  // its settings on a cycle -- so right after a save it still describes the
+  // previous ones. Refresh it, and say plainly that the numbers above lag by
+  // up to a minute rather than letting them look stuck.
+  refreshMonitorPage();
 }
 
 let _monitorBusy = false;

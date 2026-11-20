@@ -475,6 +475,12 @@ class Database {
                 -- than implying a ceiling the kernel never agreed to.
                 ('scan_cpu_cap_mode',       'nice'),
                 ('scan_cpu_cap_probe',      ''),
+                -- Why the inotify watch list stopped growing: 'ceiling' (our
+                -- rt_max_watches) or 'kernel' (the host's
+                -- fs.inotify.max_user_watches). Empty when not capped. The
+                -- two have different fixes, and an operator who raises our
+                -- ceiling against a kernel limit sees nothing change.
+                ('rt_watch_cap_reason',     ''),
                 -- Update checker
                 ('update_available',        '0'),
                 ('update_latest_ver',       ''),
