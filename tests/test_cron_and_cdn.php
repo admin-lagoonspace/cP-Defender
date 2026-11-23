@@ -71,10 +71,30 @@ t_ok(strpos($pub, "-fsS -o /dev/null -w '%{http_code}'") === false,
    . 'fires as well, and the two concatenate into "404000"');
 t_contains($pub, '[[ "$_cdn_code" =~ ^[0-9]{3}$ ]] || _cdn_code=000',
      'anything that is not a three-digit status reads as unreachable');
-t_contains($pub, 'Installs will use the GitHub mirror (CDN is not serving)',
-     'THE CONTRADICTION: the closing line does not promise "CDN will pick it '
-   . 'up" directly underneath "CDN IS NOT SERVING ANYTHING" — printing both '
-   . 'is how the 404 stayed invisible for so long');
+// REPLACED 2026-11-23, and not quietly: the line this used to pin no longer
+// exists, because the behaviour it described is the one the spec reverses.
+//
+// It asserted that the cheerful closing line said "Installs will use the
+// GitHub mirror (CDN is not serving)" instead of "CDN will pick it up". Both
+// of those close a release that is NOT mirrored with exit 0, and that is how
+// nine releases (4.37.1 ... 4.37.9) were reported as done while
+// serverscrub.com/releases stayed frozen on 4.37.0 for a month. publish.sh
+// now waits for the mirror and FAILS the release when it does not appear, so
+// there is no closing success line on that path at all.
+//
+// The property is strictly stronger than the one it replaces: no success
+// sentence may be reachable without an observed mirror.
+t_contains($pub, 'RELEASE IS IN GIT BUT NOT MIRRORED',
+     'THE PROMISE IS GONE: a release whose mirror never appeared fails and '
+   . 'says which half happened, instead of closing with a sentence about '
+   . 'what the CDN will do in ten minutes');
+t_ok(strpos($pub, 'CDN will pick it up') === false,
+     'and nothing anywhere in the script promises a mirror it has not '
+   . 'observed — that sentence was printed for every one of the nine '
+   . 'releases that never reached the CDN');
+t_contains($pub, 'ok "Published ${TAG}: in git, readable at the tag, and mirrored on the CDN."',
+     'the only "Published" line left is inside the branch where both halves '
+   . 'of done were verified');
 t_contains($pub, 'CDN IS NOT SERVING ANYTHING',
      'and says so in plain words when it is not');
 t_contains($pub, 'they fall back to the GitHub mirror',

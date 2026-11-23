@@ -337,6 +337,22 @@
         </div>
       </div>
 
+      <!-- Update check could not be corroborated, or no channel answered.
+           THREE STATES, NOT TWO. "There is no newer version" and "I could not
+           find out" are different facts about the patch level of a security
+           product, and the panel rendered them identically: app.js has set
+           #dash-update-error since the unreachable-channel fix, and no element
+           with that id existed anywhere in this file, so getElementById
+           returned null and the whole branch did nothing. A server that has
+           not been able to ask about updates for weeks looked identical to a
+           patched one. -->
+      <div id="dash-update-error" style="display:none;margin-bottom:18px;padding:12px 16px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);border-radius:10px;font-size:.82rem;color:var(--txt2)"></div>
+
+      <!-- A release channel serving an older version than another one. Nine
+           releases (4.37.1 ... 4.37.9) were never mirrored to the CDN and
+           nothing anywhere a human looks said so. -->
+      <div id="dash-mirror-lag" style="display:none;margin-bottom:18px;padding:12px 16px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:10px;font-size:.82rem;color:var(--txt2)"></div>
+
       <div class="page-header">
         <div>
           <div class="page-title">Security Dashboard</div>

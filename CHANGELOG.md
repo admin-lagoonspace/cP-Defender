@@ -17,6 +17,90 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+### Fixed
+
+- **"Already up to date — v4.37.7", printed minutes after v4.37.8 was
+  published.** The operator upgraded production right after the release and was
+  told the server was current. The claim was produced honestly from evidence
+  that was five minutes stale, and nothing in the output hinted that it might
+  be. On a security product a confident wrong negative about patch level is the
+  same class of defect as the WAF reporting `action='block'` while blocking
+  nothing.
+
+  Both mitigations that exist for exactly this were already in the copy that
+  ran — `git diff v4.37.7 HEAD -- update.sh` was empty — and both fail on the
+  GitHub channel, measured 2026-11-23:
+
+  * `?cb=` does not defeat `raw.githubusercontent.com`'s edge cache. Same
+    object, two consecutive requests: plain → `X-Cache: MISS`, `?cb=…` →
+    `X-Cache: HIT`, identical ETag. The branch path carries `max-age=300`,
+    which is the five-minute window the operator landed in.
+  * `…/main/latest/VERSION` is a **404** — there is no `latest/` tree in the
+    repo — so the cross-check written specifically to catch a cached manifest
+    has never been able to fire on the channel that is now the only working
+    one. A 404 was being treated as nothing to disagree with, which reads
+    downstream as a cross-check that passed.
+
+  The version now comes from a path that NAMES it and so cannot be served
+  stale: the newest release tag, and the manifest committed under that tag,
+  carrying that tag's `url` and `sha256` so the download stays
+  checksum-verified. When no such path can be reached the branch answer still
+  stands — a firewalled server must still be able to update — but it is
+  labelled, and "Already up to date" is not printed: the output says which
+  channel answered, that the answer may be up to five minutes old, and that
+  this is not a confirmation that the install is current. Exit status stays 0,
+  because cron and the one-click updater both read it. `update.sh`,
+  `upgrade.sh` and `UpdateChecker` all resolve on these terms.
+
+  The per-version manifest fetch was also asking for the wrong path on this
+  channel: on raw, a version is a git ref and REPLACES the branch component,
+  so `…/<repo>/main/v4.37.8/latest.json` is a 404 and always was.
+
+- **A mirror frozen since September blocked the documented upgrade path
+  outright.** `upgrade.sh` took the first channel that answered, with no cache
+  buster and no cross-check — the pattern removed from `update.sh` at v4.28.10
+  and left here. With the CDN first in the channel list and serving 4.37.0
+  against an installed 4.37.7, it printed "Refusing to downgrade" and exited 1
+  **without ever reaching `update.sh`**, which would have found 4.37.9 on
+  GitHub. It now asks every channel, takes the highest, names every channel and
+  the version it gave, reports a channel behind the others as a stalled mirror,
+  and only refuses as a downgrade on the basis of the highest **corroborated**
+  version anywhere. It also fetches the updater from the version-pinned tree
+  that ships with the release being installed, rather than from a mirror
+  frozen three weeks earlier.
+
+- **Nine releases were reported as mirrored when none of them were.** 4.37.1
+  through 4.37.9 are in git; the CDN has served 4.37.0 since 4.37.0, from
+  origin and not from a cache (`latest.json` and `latest/VERSION` agree,
+  `v4.37.8/latest.json` 404s). Nobody found out for a month because both ends
+  of the release process reported success:
+
+  * `cdn-sync.sh` already read the public url back, already reached the right
+    diagnosis and already logged `WARNING:` — and then logged
+    `published v<ver>` anyway and exited 0. A failed read-back is now a failed
+    publish: it says it did not publish, skips the retention prune rather than
+    deleting builds in a state nobody has verified, and exits non-zero.
+  * `publish.sh` asked the CDN exactly once, immediately after the push — the
+    one moment it is guaranteed to still be serving the previous version — and
+    printed "it pulls <ver> within ~10 min". It now waits for the mirror (every
+    30s for up to 12 minutes, one full `*/10` sync cycle plus runtime) and
+    requires both halves of done: `latest.json` serving the new version on a
+    **plain** request, and `v<version>/latest.json` returning 200. If either
+    fails the release fails, non-zero, stating that it is in git and not
+    mirrored and printing the force-sync and read-only diagnosis commands. No
+    sentence anywhere now promises a mirror that has not been observed. Its
+    GitHub-side check reads the tag path too, so it cannot be satisfied by a
+    cached copy of the previous release.
+
+- **The dashboard had no element to show a failed update check in.** `app.js`
+  has written to `#dash-update-error` since the unreachable-channel fix and no
+  element with that id existed anywhere in `index.html`, so a server that had
+  not reached a release channel for weeks looked identical to a patched one.
+  The element now exists, and it carries the third state as well: a check that
+  could not be corroborated is no longer rounded down to a clean dot. A second
+  element reports a release channel that is behind the newest version seen,
+  which is where nine unmirrored releases would have surfaced.
+
 ## [4.37.9] - 2026-11-23
 
 ### Changed

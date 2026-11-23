@@ -77,7 +77,11 @@ HTACCESS_FN = block('_write_docroot_htaccess() {', '}')
 i_ht   = SRC.index('_write_docroot_htaccess || true')
 i_pub  = SRC.index('place "${TMP}/latest.json"   "${DOCROOT}/latest.json"')
 i_purge = SRC.index('_purge_manifest_cache || true')
-i_verify = SRC.index('_verify_public_manifest || true')
+# The anchor, not the assertion, moved: the read-back used to be called as
+# `_verify_public_manifest || true`, and discarding its status is what let
+# nine releases be logged as published while the public url served 4.37.0.
+# The ORDERING property asserted below is unchanged.
+i_verify = SRC.index('if _verify_public_manifest; then')
 ok(i_ht < i_pub,
    'ORDER: the cache-control block is written BEFORE the manifest is placed, '
    'so there is no window in which a cacheable manifest is live')

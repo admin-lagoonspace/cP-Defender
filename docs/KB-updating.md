@@ -97,6 +97,30 @@ you already have. If we fix something in the updater itself, your server cannot
 benefit from that fix, because the old updater is the thing doing the updating.
 `upgrade.sh` closes that gap. It is the recommended route for a manual update.
 
+### If the version it reports looks too old
+
+`raw.githubusercontent.com` serves the `main/` path with `Cache-Control:
+max-age=300`, and a query string does not change what its edge cache answers
+with — measured 2026-11-23: the same object, plain and "cache-busted", came
+back with the same ETag and `X-Cache: HIT`. So the `curl` in step 1 can hand you
+a copy of `upgrade.sh` up to five minutes old, and that copy can read a
+five-minute-old version number.
+
+Two things follow, and neither needs anything installing:
+
+* `upgrade.sh` no longer acts on a version it could not confirm against a path
+  that NAMES the version (the release tag, or the per-build manifest on the
+  CDN). When it could not, it says so in those words instead of telling you
+  the server is current.
+* If you have just published a release and want to be certain, wait five
+  minutes and run step 1 again, or fetch the tagged copy directly:
+
+```
+curl -fsSL https://raw.githubusercontent.com/admin-lagoonspace/cP-Defender/v4.37.9/upgrade.sh -o /home/upgrade.sh
+```
+
+A tag path is written once and is never served stale.
+
 ---
 
 ## What an update does

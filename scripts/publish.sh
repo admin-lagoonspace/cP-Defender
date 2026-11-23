@@ -430,60 +430,152 @@ if [[ -n "$VERIFY_FAIL" ]]; then
 fi
 ok "Tag ${TAG} verified: annotated, on ${TAG_COMMIT:0:7}, newest by version, on origin"
 
-# ── 7. CDN mirror ──────────────────────────────────────────────────────────────
-# The CDN no longer needs an FTP push from here. The server runs
-# scripts/cdn-sync.sh on a cron and PULLS this release from GitHub, so there is
-# nothing to upload and no credential to hold. See scripts/cdn-sync.sh.
+# ── 7. The GitHub channel, verified THROUGH THE TAG ─────────────────
 #
-# ASK THE CDN, do not assume.
+# Not through .../main/latest.json. MEASURED 2026-11-23, same object, two
+# consecutive requests to raw.githubusercontent.com:
 #
-# This used to print "CDN mirrors automatically" and stop, which was a claim
-# nobody checked. The CDN had in fact never been populated under the current
-# account: every serverscrub.com URL 404d and every install silently fell back
-# to the GitHub mirror, for release after release, because nothing in the
-# release ever looked. One HTTP request settles it.
+#   .../main/latest.json                   -> X-Cache: MISS  ETag "f7a7cab..."
+#   .../main/latest.json?cb=17954488137754 -> X-Cache: HIT   ETag "f7a7cab..."
+#
+# The query string is not part of Fastly's cache key for raw, and the branch
+# path is served with max-age=300. A check against that url can be satisfied
+# by a cached copy of the PREVIOUS release -- which is to say it can pass
+# without the release having happened. The tag path is written once and cannot
+# be stale, so this is the only version of this check that proves anything.
+info "Verifying the GitHub channel through the tag..."
+GH_TAG_BASE="https://raw.githubusercontent.com/${SLUG}/${TAG}"
+_gh_tries="${SG_GH_POLL_TRIES:-6}"
+_gh_wait="${SG_GH_POLL_SECS:-10}"
+_gh_ver=""
+for _try in $(seq 1 "$_gh_tries"); do
+    _gh_ver="$(curl -fsS --max-time 15 "${GH_TAG_BASE}/latest.json" 2>/dev/null \
+               | grep -o '"version"[^,]*' | head -1 \
+               | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
+    [[ "$_gh_ver" == "$VER" ]] && break
+    if [[ "$_try" -lt "$_gh_tries" ]]; then
+        info "  tag path not readable yet (${_try}/${_gh_tries}); ${_gh_wait}s..."
+        sleep "$_gh_wait"
+    fi
+done
+if [[ "$_gh_ver" == "$VER" ]]; then
+    ok "GitHub channel serves ${VER} at ${GH_TAG_BASE}/latest.json"
+else
+    echo "" >&2
+    err "RELEASE NOT READABLE ON THE GITHUB CHANNEL"
+    echo "    ${GH_TAG_BASE}/latest.json served ${_gh_ver:-nothing}, expected ${VER}." >&2
+    echo "" >&2
+    echo "    The commit and the tag ARE pushed -- git is not the problem and" >&2
+    echo "    nothing here rolls that back. What is missing is latest.json at" >&2
+    echo "    that tag, so every installed server resolving the release through" >&2
+    echo "    the tag path will not see ${VER}." >&2
+    echo "" >&2
+    echo "    Check: git show ${TAG}:latest.json | head -5" >&2
+    echo "    and:   curl -fsS ${GH_TAG_BASE}/latest.json" >&2
+    echo "" >&2
+    exit 1
+fi
+
+# ── 7b. The CDN mirror, WAITED FOR and then verified ────────────
+#
+# The rule is that a release is not done until the build is in git AND in a
+# v<version>/ folder on the CDN. This step used to ask the CDN exactly once,
+# immediately after the push -- the one moment it is guaranteed to still be
+# serving the previous version -- and then print
+#
+#   "CDN is live, serving 4.37.0 - it pulls 4.37.9 within ~10 min"
+#   "Published v4.37.9. CDN will pick it up within ~10 min."
+#
+# and exit 0. Nothing ever looked again. Nine releases (4.37.1 ... 4.37.9) went
+# out that way; the mirror has been frozen at 4.37.0 since September and nobody
+# found out for a month. A sentence that promises a mirror nobody has observed
+# is the defect, not the frozen mirror.
+#
+# So: wait for the sync (cron is */10) and then require BOTH halves of the
+# user's definition of done, or fail the release.
 CDN_BASE="${SG_CDN_BASE:-https://serverscrub.com/releases}"
 CDN_ACCT="${SG_CDN_ACCOUNT:-serversc}"
-info "Checking the CDN…"
-# No -f. With it, curl exits non-zero on a 404, the `|| echo 000` fires as
-# well, and the two concatenate into "404000".
-_cdn_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 12              "${CDN_BASE}/latest.json" 2>/dev/null)"
-[[ "$_cdn_code" =~ ^[0-9]{3}$ ]] || _cdn_code=000
-if [[ "$_cdn_code" == "200" ]]; then
-  _cdn_ver="$(curl -fsS --max-time 12 "${CDN_BASE}/latest.json" 2>/dev/null               | grep -o '"version"[^,]*' | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
-  if [[ "$_cdn_ver" == "$VER" ]]; then
-    ok "CDN already serving ${VER}"
-  else
-    info "CDN is live, serving ${_cdn_ver:-unknown} — it pulls ${VER} within ~10 min"
-    info "  Force it now:  /home/${CDN_ACCT}/bin/cdn-sync.sh   (as ${CDN_ACCT})"
-  fi
+# Defaults are the stated bound: every 30s for 12 minutes, which covers one
+# full */10 cron cycle plus the sync's own runtime. Overridable so a test can
+# exercise this without a 12-minute wait.
+CDN_TRIES="${SG_CDN_POLL_TRIES:-24}"
+CDN_WAIT="${SG_CDN_POLL_SECS:-30}"
+info "Waiting for the CDN mirror (every ${CDN_WAIT}s, up to ${CDN_TRIES} times)..."
+
+_cdn_code=000
+_cdn_ver=""
+_cdn_pinned=000
+_cdn_ok=false
+for _try in $(seq 1 "$CDN_TRIES"); do
+    # NO cache-buster. This is the url every installed server actually
+    # requests, so this is the url that has to be right.
+    _cdn_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+                 "${CDN_BASE}/latest.json" 2>/dev/null || true)"
+    [[ "$_cdn_code" =~ ^[0-9]{3}$ ]] || _cdn_code=000
+    _cdn_ver=""
+    if [[ "$_cdn_code" == "200" ]]; then
+        _cdn_ver="$(curl -fsS --max-time 15 "${CDN_BASE}/latest.json" 2>/dev/null \
+                    | grep -o '"version"[^,]*' | head -1 \
+                    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
+    fi
+    # Half the definition of done: the per-version folder. update.sh reads
+    # v<ver>/latest.json when the top-level manifest looks stale, and that is
+    # the path that carries this build's own checksum.
+    _cdn_pinned="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+                   "${CDN_BASE}/v${VER}/latest.json" 2>/dev/null || true)"
+    [[ "$_cdn_pinned" =~ ^[0-9]{3}$ ]] || _cdn_pinned=000
+    if [[ "$_cdn_ver" == "$VER" && "$_cdn_pinned" == "200" ]]; then
+        _cdn_ok=true
+        break
+    fi
+    if [[ "$_try" -lt "$CDN_TRIES" ]]; then
+        info "  ${CDN_BASE}/latest.json -> ${_cdn_ver:-HTTP $_cdn_code}, v${VER}/latest.json -> HTTP ${_cdn_pinned} (${_try}/${CDN_TRIES})"
+        sleep "$CDN_WAIT"
+    fi
+done
+
+if $_cdn_ok; then
+    ok "CDN mirror verified: ${CDN_BASE}/latest.json serves ${VER} on a plain request"
+    ok "  and ${CDN_BASE}/v${VER}/latest.json returns 200"
 else
-  warn "CDN IS NOT SERVING ANYTHING (${CDN_BASE}/latest.json → HTTP ${_cdn_code})."
-  warn "  Every serverscrub.com install and update URL 404s right now."
-  warn "  Installs still work -- they fall back to the GitHub mirror -- but the"
-  warn "  CDN is doing nothing until the sync is installed. One-time setup,"
-  warn "  as ROOT on the server that serves the domain:"
-  warn ""
-  warn "    bash <(curl -fsSL https://raw.githubusercontent.com/${SLUG}/main/scripts/cdn-setup.sh)"
-  warn ""
-  # Deliberately the setup script and not the five commands it replaces. Those
-  # hard-code /home/<acct>/public_html, which is the right docroot only if the
-  # domain is that account's MAIN domain; on an addon or subdomain cdn-sync.sh
-  # publishes into a directory no vhost serves, logs "published", and exits 0.
-  # cdn-setup.sh reads the docroot out of cPanel's own userdata and then checks
-  # the public URL, so it cannot report success over a CDN that still 404s.
-  warn "  It reads the docroot from cPanel, installs the 10-minute sync cron,"
-  warn "  runs it once, and then checks the public URL before claiming success."
+    echo "" >&2
+    err "RELEASE IS IN GIT BUT NOT MIRRORED"
+    echo "" >&2
+    echo "    ${TAG} is committed, tagged and pushed, and readable on the" >&2
+    echo "    GitHub channel. Nothing below rolls any of that back." >&2
+    echo "" >&2
+    if [[ "$_cdn_code" != "200" ]]; then
+        # Different diagnosis, different fix: a CDN that is not answering is a
+        # vhost/DNS problem, not a sync that has fallen behind.
+        echo "    CDN IS NOT SERVING ANYTHING: ${CDN_BASE}/latest.json -> HTTP ${_cdn_code}." >&2
+        echo "    Every serverscrub.com install and update url is failing right now." >&2
+        echo "    One-time setup, as ROOT on the server that serves the domain:" >&2
+        echo "      bash <(curl -fsSL https://raw.githubusercontent.com/${SLUG}/main/scripts/cdn-setup.sh)" >&2
+    else
+        echo "    The CDN IS answering, with the WRONG release:" >&2
+        echo "      ${CDN_BASE}/latest.json          -> v${_cdn_ver:-unparseable}  (expected v${VER})" >&2
+        echo "      ${CDN_BASE}/v${VER}/latest.json  -> HTTP ${_cdn_pinned}" >&2
+        echo "    The sync has not published since, or is publishing to a path" >&2
+        echo "    nothing serves." >&2
+    fi
+    echo "" >&2
+    echo "    Force the sync now, as ${CDN_ACCT}:" >&2
+    echo "      /home/${CDN_ACCT}/bin/cdn-sync.sh" >&2
+    echo "" >&2
+    echo "    Then diagnose, read-only, as root:" >&2
+    echo "      crontab -l -u ${CDN_ACCT} | grep -i cdn" >&2
+    echo "      tail -n 60 /home/${CDN_ACCT}/logs/cdn-sync.log" >&2
+    echo "      grep -hE '^documentroot:' /var/cpanel/userdata/${CDN_ACCT}/* | sort -u" >&2
+    echo "      bash /home/${CDN_ACCT}/bin/cdn-setup.sh --check" >&2
+    echo "" >&2
+    echo "    Installs still work -- they fall back to the GitHub mirror -- but" >&2
+    echo "    this release is NOT mirrored, and no output above says it is." >&2
+    echo "" >&2
+    exit 1
 fi
 
 echo ""
-# Only promise the CDN when the CDN answered. Saying "CDN will pick it up"
-# directly under "CDN IS NOT SERVING ANYTHING" is how the 404 stayed invisible.
-if [[ "$_cdn_code" == "200" ]]; then
-  ok "Published ${TAG}. CDN will pick it up within ~10 min."
-else
-  ok "Published ${TAG}. Installs will use the GitHub mirror (CDN is not serving)."
-fi
+ok "Published ${TAG}: in git, readable at the tag, and mirrored on the CDN."
 
 # UPGRADE FIRST, install second.
 #

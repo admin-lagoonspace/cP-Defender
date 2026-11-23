@@ -258,8 +258,39 @@ t_eq(function_exists('shell_exec')
 $uc = t_code(dirname(__DIR__) . '/backend/lib/UpdateChecker.php');
 t_contains($uc, 'latest.json',
      'UpdateChecker reads the release manifest');
-t_ok(strpos($uc, 'api.github.com') === false,
-     'and does NOT consult the GitHub Releases API, which can lag behind it');
+// NARROWED 2026-11-23, deliberately, and not to make new code pass quietly.
+//
+// This assertion read `strpos($uc, 'api.github.com') === false`. What it was
+// written to forbid is the RELEASES api as a version source, for the reason
+// above: publish.sh skips creating the Release object when there is no gh and
+// no GH_TOKEN, so /releases/latest can describe a version older than the
+// manifest. That reason applies to the releases endpoint, not to the host.
+//
+// The host-wide ban also forbade the only immutable reading of "what is the
+// newest version" that the GitHub channel has. Measured 2026-11-23: the
+// branch path .../main/latest.json is served with max-age=300 and ?cb= does
+// NOT miss Fastly's cache (same ETag, X-Cache: HIT), and .../main/latest/
+// VERSION is a 404 -- so every source this class was allowed to read could be
+// five minutes stale, which is how "Already up to date -- v4.37.7" came to be
+// printed minutes after v4.37.8 was published. /tags is a ref listing, it
+// cannot be skipped by a release the way a Release object can, and the answer
+// taken from it is confirmed against the manifest committed under that tag.
+//
+// So: the releases endpoint stays banned by name, and the tags endpoint is
+// required.
+t_ok(strpos($uc, 'api.github.com/repos/') !== false
+     || strpos($uc, "api.github.com/repos/' . self::repoSlug()") !== false,
+     'the version is discovered through an immutable git ref, not only '
+   . 'through a branch path a cache can hold for five minutes');
+t_contains($uc, '/tags?per_page=',
+     'and that ref listing is /tags, which no release-time step can skip');
+// Matched against api.github.com rather than against the bare word: the CDN
+// base is https://serverscrub.com/releases, so a plain substring test for
+// '/releases' passes or fails on the wrong thing entirely.
+t_ok(!preg_match('#api\.github\.com.{0,120}releases#s', $uc),
+     'and the RELEASES api is still not consulted: publish.sh skips creating '
+   . 'the Release object when there is no gh and no GH_TOKEN, which is how '
+   . 'v4.6.0 shipped with the api describing 4.5.1');
 
 $up = t_shell(dirname(__DIR__) . '/update.sh');
 t_contains($up, 'latest.json',
