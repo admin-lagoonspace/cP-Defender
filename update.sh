@@ -673,10 +673,32 @@ else
     IMM_BEST=""; IMM_BEST_BASE=""; IMM_BEST_JSON=""; IMM_BEST_URL=""
     for BASE in "${CHANNELS[@]}"; do
         IMM_VER="$(_immutable_channel_version "$BASE" 2>/dev/null || true)"
+        # NO FALLBACK TO THE BRANCH ANSWER. This block read
+        #
+        #     [[ -z "$IMM_VER" ]] && IMM_VER="$LATEST_VERSION"
+        #
+        # which made the whole check a tautology, and shipped a WORSE claim
+        # than the one it was written to fix. v<X>/latest.json proves that
+        # version X exists; it never proves X is the newest. Every released
+        # version has a tag, and cdn-sync.sh retains KEEP_VERSIONS old
+        # v<ver>/ folders, so that path always answers -- the confirmation
+        # could not fail. With the tags api rate-limited and a branch manifest
+        # cached at 4.37.7 beside a real v4.37.8 tag, the updater printed
+        #
+        #     Already up to date - v4.37.7
+        #       Confirmed against .../v4.37.7/latest.json (no cache can stale it)
+        #
+        # i.e. an explicit assurance of freshness, on a stale read, in exactly
+        # the case requirement 4 exists to hedge.
+        #
+        # A pinned manifest may only corroborate a version that an immutable
+        # source NAMED as current. There are two such sources and no others:
+        # the tag list, read on the line above, and <channel>/latest/VERSION,
+        # used after this loop -- that one is read out of the deployed build
+        # and can disagree with the manifest beside it. A channel with neither
+        # has no immutable source today, and its answer stays labelled.
         if [[ -z "$IMM_VER" ]]; then
-            # No ref listing on this channel. Its per-build manifest is still
-            # addressed by version, so it can corroborate the answer in hand.
-            IMM_VER="$LATEST_VERSION"
+            continue
         fi
         # Only ever corroborate forwards. A ref older than the answer in hand
         # is a lagging mirror -- reported above -- and nothing to download.
@@ -693,7 +715,7 @@ else
         if [[ -n "$PIN_JSON" && "$PIN_VER" == "$IMM_VER" ]]; then
             IMM_BEST="$IMM_VER"; IMM_BEST_BASE="$BASE"
             IMM_BEST_JSON="$PIN_JSON"; IMM_BEST_URL="$PIN_URL"
-        elif [[ "$IMM_VER" != "$LATEST_VERSION" ]]; then
+        else
             # The ref exists but the manifest under it does not, or disagrees:
             # mid-push, or a tag made over a tree without the file. Nothing to
             # take, and nothing is claimed -- this channel simply has no

@@ -92,6 +92,29 @@ heading or touch VERSION mid-week._
     GitHub-side check reads the tag path too, so it cannot be satisfied by a
     cached copy of the previous release.
 
+- **A release blocked at the mirror gate could not be finished.** The CDN check
+  runs after the tag is pushed — a mirror cannot be verified before the thing it
+  mirrors is on origin — so failing it left the tag on origin, and the re-run
+  then died on the "tag already exists on origin" guard. The two routes that
+  guard offered were burning a version number or deleting a pushed tag, and
+  `update.sh` now resolves versions **from** tags, so deleting one withdraws
+  that release from every server in the field. `publish.sh` now recognises its
+  own tag — same object, same commit — as a **resume**: it re-creates nothing
+  that is already on origin, leaves an existing Release page alone, and
+  re-checks the mirror. The mirror failure text ends with the exact command to
+  finish the release, and says not to bump or delete anything. A tag of that
+  name on any other commit is still a hard refusal, and a rebuild that changes
+  tracked files during a resume stops before anything is pushed.
+
+- **`upgrade.sh` blamed the release mirrors when it could not read the installed
+  version.** `sort -V` puts the literal string `unknown` above every real
+  version, so a missing or unreadable `VERSION` — the broken install the script
+  exists to repair — took the "every channel is behind this install" branch and
+  told the operator a mirror's sync had stalled, four lines after correctly
+  reporting the newest version. An unreadable installed version is now handled
+  before any comparison: it says what it could not read and hands over to the
+  updater.
+
 - **The dashboard had no element to show a failed update check in.** `app.js`
   has written to `#dash-update-error` since the unreachable-channel fix and no
   element with that id existed anywhere in `index.html`, so a server that had

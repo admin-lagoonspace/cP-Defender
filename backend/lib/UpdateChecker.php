@@ -369,11 +369,18 @@ class UpdateChecker {
         foreach (self::channels() as $base) {
             $base = rtrim($base, '/');
             $iv = self::immutableChannelVersion($base);
-            if ($iv === '') {
-                // No ref listing here. Its per-build manifest is still
-                // addressed by version, so it can corroborate what we have.
-                $iv = $bestVer;
-            }
+            // NO FALLBACK TO THE BRANCH ANSWER. This read `$iv = $bestVer;`
+            // when no ref listing was available, which made the check a
+            // tautology: v<X>/latest.json proves version X exists, never that
+            // X is the newest, and every released version has that path (plus
+            // cdn-sync.sh retains old v<ver>/ folders), so it could not fail.
+            // The result was `corroborated => true` with an empty
+            // uncorroborated_note in exactly the case the panel's third state
+            // was built for, which left #dash-update-error hidden.
+            //
+            // Only a version that an immutable source NAMED as current may be
+            // corroborated by its pinned manifest. The other such source is
+            // <channel>/latest/VERSION, handled in channelManifest().
             if ($iv === '' || !preg_match('/^\d+\.\d+\.\d+/', $iv)) {
                 continue;
             }

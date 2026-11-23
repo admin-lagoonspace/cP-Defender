@@ -90,6 +90,7 @@ with open(os.path.join(REPO, 'scripts', 'publish.sh'), encoding='utf-8') as fh:
 with open(os.path.join(REPO, 'scripts', 'cdn-sync.sh'), encoding='utf-8') as fh:
     SYNC = fh.read()
 
+REMOTE_TAG_GUARD = _block(PUB, 'RESUMING=no', 'fi')
 GH_VERIFY = _between(PUB, 'info "Verifying the GitHub channel through the tag',
                      '# ── 7b.')
 CDN_WAIT  = _between(PUB, 'CDN_BASE="${SG_CDN_BASE:-', '# UPGRADE FIRST, install second.')
@@ -224,6 +225,15 @@ ok('Published' not in r.stdout,
    'and nothing says Published, because it was not')
 ok('4.37.0' in r.stdout and '4.37.9' in r.stdout,
    'the failure names what was served and what was expected')
+ok('bash scripts/publish.sh 4.37.9' in r.stdout,
+   'AND IT SAYS HOW TO FINISH. The tag is pushed before this gate, so a '
+   'failure here used to leave the release unfinishable: the re-run died on '
+   'the remote-tag guard, and the only routes offered were burning a version '
+   'or deleting a pushed tag that update.sh now treats as the authoritative '
+   'version source')
+ok('Do NOT bump VERSION' in r.stdout,
+   'naming the two things not to do, because both of them look like the '
+   'obvious move')
 
 # ── The mirror appears on the third poll ─────────────────────────────────────
 r = publish_cdn(FROZEN, MIRRORED, switch=2, tries=6)
@@ -336,6 +346,78 @@ ok('published v4.37.9' not in r.stdout,
    'A PUBLIC URL THAT CANNOT BE READ AT ALL is also not a publish')
 eq(1, r.returncode, 'and also exits non-zero')
 
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 4. publish.sh can be re-run to finish a release blocked at the CDN gate
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# The guard is executed with git stubbed, so this is the real decision and not
+# a reading of it.
+
+GUARD = r'''
+set -euo pipefail
+warn() { echo "WARN $*"; }
+err()  { echo "ERR  $*"; }
+TAG="v4.37.9"
+git() {
+    case "$*" in
+        "ls-remote --tags origin refs/tags/${TAG}")
+            [ -n "${SG_REMOTE_SHA:-}" ] || return 0
+            printf '%s\trefs/tags/%s\n' "$SG_REMOTE_SHA" "$TAG" ;;
+        "rev-parse -q --verify refs/tags/${TAG}")
+            [ -n "${SG_LOCAL_SHA:-}" ] || return 1
+            printf '%s\n' "$SG_LOCAL_SHA" ;;
+        "rev-parse -q --verify refs/tags/${TAG}^{commit}")
+            [ -n "${SG_LOCAL_COMMIT:-}" ] || return 1
+            printf '%s\n' "$SG_LOCAL_COMMIT" ;;
+        "rev-parse HEAD")
+            printf '%s\n' "${SG_HEAD:-}" ;;
+        *) echo "UNEXPECTED git $*" >&2; return 1 ;;
+    esac
+}
+'''
+
+
+def guard(remote=None, local=None, local_commit=None, head='c0ffee1'):
+    script = GUARD + REMOTE_TAG_GUARD + '\necho "RESULT resuming=${RESUMING}"\n'
+    env = {'SG_HEAD': head,
+           'SG_REMOTE_SHA': remote or '',
+           'SG_LOCAL_SHA': local or '',
+           'SG_LOCAL_COMMIT': local_commit or ''}
+    r = run(script, {}, {}, env=env)
+    val = None
+    for line in r.stdout.splitlines():
+        if line.startswith('RESULT resuming='):
+            val = line.split('=', 1)[1]
+    return val, r
+
+
+val, r = guard(remote=None)
+eq('no', val,
+   'NO REMOTE TAG: a first publish is not a resume and nothing changes')
+eq(0, r.returncode, 'and the run continues')
+
+val, r = guard(remote='tagobj1', local='tagobj1', local_commit='c0ffee1', head='c0ffee1')
+eq('yes', val,
+   'A RESUME: the same tag object, on this same commit, is the release that '
+   'got as far as the push and stopped at the CDN gate')
+eq(0, r.returncode, 'so the run continues instead of dying on line 72')
+ok('RESUME' in r.stdout, 'and says so, rather than silently proceeding')
+
+val, r = guard(remote='tagobj2', local='tagobj1', local_commit='c0ffee1', head='c0ffee1')
+eq(1, r.returncode,
+   'A DIFFERENT TAG OBJECT of the same name on origin is a real conflict and '
+   'still refuses — the identity check is the whole safety of this')
+ok('not this commit' in r.stdout, 'saying which')
+ok('withdraws that release' in r.stdout,
+   'and warning that deleting a published tag withdraws the release, because '
+   'update.sh resolves versions from tags now')
+
+val, r = guard(remote='tagobj1', local='tagobj1', local_commit='old1234', head='c0ffee1')
+eq(1, r.returncode,
+   'and a tag that does not point at HEAD refuses too: resuming would publish '
+   'a mirror for a commit that is not the one on disk')
 
 print('')
 print('%d passed, %d failed' % (_passed, _failed))

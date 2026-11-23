@@ -418,10 +418,22 @@ channel even if `latest/VERSION` had existed there.
 **3. Corroboration, and a 404 is not a pass.** `channelManifest()` now tries
 repo-root `VERSION` when `latest/VERSION` 404s, and marks that reading as a
 separately-keyed *second opinion* rather than a confirmation -- it sits behind
-the same `max-age=300`. Only two things set corroborated: a manifest read from
-a version-named path, or `latest/VERSION` agreeing with the manifest (the one
-place `?cb=` was measured to work). The `|| true` on the `latest/VERSION` fetch
-is untouched.
+the same `max-age=300`.
+
+Only two things set corroborated, and the distinction matters — getting it
+wrong the first time was the blocker in
+`docs/findings/2026-11-23-stale-channel-read-and-frozen-cdn.md`:
+
+1. a pinned manifest **for a version that an immutable source named as
+   current** — the tag list, or `latest/VERSION`;
+2. `latest/VERSION` agreeing with the manifest beside it (the one place `?cb=`
+   was measured to work).
+
+A pinned manifest for the version the branch path already handed us proves only
+that the version exists, never that it is current, and every released version
+has that path. Substituting the branch answer there made the check unfalsifiable
+and printed "no cache can stale it" over a stale read. The `|| true` on the
+`latest/VERSION` fetch is untouched.
 
 **4. The hedge.** `update.sh` prints "Already up to date" only when
 `VER_IMMUTABLE=true`, and names the url that confirmed it. Otherwise it says
@@ -550,3 +562,12 @@ check", which is correct mid-week. No commit subject in this batch begins with
   to re-verify by hand.
 * Whether `check_error` vs `uncorroborated_note` is the right split, given that
   `scheduler.php:394` returns early on a non-empty `update_check_error`.
+
+### Second pass (Wasooli, 2026-11-23)
+
+Shakaal returned FAIL — one blocker, two majors. All three fixed; the write-up
+is at the end of `docs/findings/2026-11-23-stale-channel-read-and-frozen-cdn.md`.
+Briefly: corroboration could not fail and has been made falsifiable; a release
+blocked at the mirror gate can now be finished by re-running `publish.sh`,
+which recognises its own tag on its own commit as a resume; and an unreadable
+installed `VERSION` no longer makes `upgrade.sh` blame the release mirrors.

@@ -206,7 +206,16 @@ done
 for BASE in "${CHANNELS[@]}"; do
     [[ -n "$LATEST" ]] || break
     IMM_VER="$(_immutable_channel_version "$BASE" 2>/dev/null || true)"
-    [[ -n "$IMM_VER" ]] || IMM_VER="$LATEST"
+    # NO FALLBACK TO THE BRANCH ANSWER. This line read
+    #     [[ -n "$IMM_VER" ]] || IMM_VER="$LATEST"
+    # which made the check a tautology: v<X>/latest.json proves X exists, never
+    # that X is newest, and every released version has that path -- so the
+    # confirmation could not fail, and a stale branch read was reported as
+    # "a url that names the version, so no cache can have answered it with a
+    # different build". Only a version an immutable source NAMED may be
+    # corroborated this way. latest/VERSION, handled in the loop above, is the
+    # other such source.
+    [[ -n "$IMM_VER" ]] || continue
     IMM_VER="${IMM_VER#v}"
     # Only ever forwards. A ref older than the answer in hand is a lagging
     # mirror, reported below, and nothing to install from.
@@ -253,8 +262,11 @@ done
 ok "Available: v${LATEST}  (from ${CHANNEL_USED})"
 [[ -n "$SHA" ]] && info "Expected SHA-256: ${SHA:0:16}..."
 if $CORROBORATED; then
-    info "Confirmed against ${CORROB_SRC} - a url that names the version, so no"
-    info "  cache can have answered it with a different build."
+    # Accurate for both kinds of corroborator: a url that NAMES the version
+    # (the tag, or the per-build manifest), or latest/VERSION, which is read
+    # out of the deployed tree and cannot claim a build that is not there.
+    info "Confirmed against ${CORROB_SRC} - a source a cache cannot have"
+    info "  answered with a different build."
 else
     warn "UNCONFIRMED: v${LATEST} comes only from ${CHANNEL_USED}/latest.json, which is"
     warn "  a cacheable url and may be up to 5 minutes behind a release. Nothing"
@@ -262,7 +274,20 @@ else
 fi
 
 # ── Decide ──────────────────────────────────────────────────────────────
-if _ver_gt "$LATEST" "$CURRENT"; then
+# "unknown" FIRST, before any comparison.
+#
+# `sort -V` puts the literal string `unknown` ABOVE every real version, so an
+# unreadable ${INSTALL_DIR}/VERSION -- the broken install this script exists to
+# repair -- fell into the branch below that means "every channel is behind this
+# install". It then told the operator the release mirrors had stalled, four
+# lines after correctly reporting the newest version as corroborated, and
+# blamed our CDN for a fault on the server in front of them. The shipped code
+# had a `!= "unknown"` guard on that claim.
+if [[ "$CURRENT" == "unknown" ]]; then
+    warn "Cannot read ${INSTALL_DIR}/VERSION, so there is nothing here to compare"
+    warn "  v${LATEST} against. This says nothing about the release channels."
+    warn "  Handing over to the updater, which decides for itself."
+elif _ver_gt "$LATEST" "$CURRENT"; then
     :   # there is something newer; fall through to the updater
 elif [[ "$LATEST" == "$CURRENT" ]]; then
     if $CORROBORATED; then
@@ -280,7 +305,10 @@ else
     warn "No channel offers anything newer than the installed v${CURRENT}."
     warn "  A mirror behind the installed version is a stalled sync, not a release"
     warn "  being withdrawn."
-    if $CORROBORATED && [[ "$CURRENT" != "unknown" ]]; then
+    # No `!= "unknown"` clause here any more: unknown is handled above and
+    # cannot reach this branch. A clause that can never be false reads as a
+    # guard and is not one.
+    if $CORROBORATED; then
         err "Refusing to replace v${CURRENT} with the older v${LATEST}."
         echo "      To roll back deliberately:  bash ${INSTALL_DIR}/update.sh --version ${LATEST} --allow-downgrade" >&2
         echo "      To pin a channel:           SG_MANIFEST_URL=${GITHUB_BASE}/latest.json bash \"$0\"" >&2

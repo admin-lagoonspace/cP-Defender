@@ -304,6 +304,57 @@ eq('false', res.get('immutable'),
    'is current on the strength of it')
 eq(0, r.returncode, 'and an unreachable tags api is not an error')
 
+# ── THE TAUTOLOGY: a pinned manifest may not corroborate ITSELF ──────────────
+#
+# Shakaal's blocker, 2026-11-23. The first version of this fix substituted the
+# branch answer when no immutable ref could be read, and then "confirmed" it by
+# fetching v<that same version>/latest.json:
+#
+#     [[ -z "$IMM_VER" ]] && IMM_VER="$LATEST_VERSION"
+#
+# v<X>/latest.json proves that version X exists. It never proves X is the
+# newest. Every released version has a tag, and cdn-sync.sh retains
+# KEEP_VERSIONS old v<ver>/ folders, so the check could not fail -- and the
+# output got STRONGER than the one it replaced:
+#
+#     ok   Already up to date - v4.37.7
+#     ->     Confirmed against .../v4.37.7/latest.json (no cache can stale it)
+#
+# printed with the tags api rate-limited, a branch manifest cached at 4.37.7
+# and a real v4.37.8 tag sitting there. An explicit assurance of freshness on a
+# stale read, in the exact case requirement 4 exists to hedge.
+#
+# These fixtures are the real shape of the GitHub channel: the installed
+# version's own tag manifest IS present, because it always is.
+res, urls, r = corroborate({
+    GH + '/latest.json': manifest('4.37.7', base=GH),
+    GHTAG % '4.37.7':    manifest('4.37.7', base=GH),
+    GHTAG % '4.37.8':    manifest('4.37.8', sha='d' * 64, base=GH),
+}, [CDN, GH], latest='4.37.7')
+eq('false', res.get('immutable'),
+   'THE TAUTOLOGY: with the tags api unreachable, the branch answer is NOT '
+   'corroborated even though v4.37.7/latest.json answers. That url proves '
+   '4.37.7 exists; it cannot prove 4.37.7 is current, and there is a v4.37.8 '
+   'tag right beside it')
+eq('', res.get('source'), 'and no source is claimed for it')
+ok(not any(('/v4.37.7/' in u) for u in urls),
+   'the pinned manifest for the version in hand is not even fetched: a '
+   'version no immutable source named is not a candidate, so asking about it '
+   'is a request that can only produce a false confirmation')
+
+# Same shape on a channel that has no ref listing at all. cdn-sync.sh keeps old
+# v<ver>/ folders, so the CDN frozen at 4.37.0 still serves v4.37.0/latest.json
+# -- which is why "the pinned manifest answered" can never be the whole test.
+res, urls, r = corroborate({
+    CDN + '/latest.json':         manifest('4.37.0'),
+    CDN + '/v4.37.0/latest.json': manifest('4.37.0'),
+}, [CDN], latest='4.37.0')
+eq('false', res.get('immutable'),
+   'A FILE CHANNEL WITH NO latest/VERSION: its retained per-build manifest '
+   'does not corroborate the answer either. The frozen CDN serves exactly '
+   'this, and it has been nine releases behind for a month')
+
+
 # ── A TAG WITH NO MANIFEST UNDER IT ──────────────────────────────────────────
 res, urls, r = corroborate({
     GH + '/latest.json': manifest('4.37.7', base=GH),
@@ -430,6 +481,35 @@ eq(0, r.returncode,
    'check. There is nothing to install either way')
 
 
+# THE REPRODUCTION FROM THE FINDING, end to end: resolve then gate, with the
+# tags api dead and the installed version's own tag manifest present.
+script = (HARNESS_HEAD
+          + PINNED_FN + '\n' + IMMUTABLE_FN + '\n'
+          + VER_GT.replace('    _ver_gt', '_ver_gt') + '\n'
+          + 'CHANNELS=("%s" "%s")\n' % (CDN, GH)
+          + 'LATEST_VERSION="4.37.7"\nCURRENT_VERSION="4.37.7"\n'
+          + 'DOWNLOAD_URL=""\nMIRROR_URL=""\nRELEASE_URL=""\nEXPECTED_SHA256=""\n'
+          + 'BEST_LIVE=""\nBEST_LIVE_BASE=""\n'
+          + 'ACTIVE_BASE="%s"\nDIST_BASE="%s/dist"\n' % (GH, GH)
+          + 'VER_IMMUTABLE=false\nVER_SOURCE=""\n'
+          + CORROBORATE + '\n' + GATE + '\n'
+          + 'echo "RESULT reached_end=1"\n')
+_, _, r = run(script, {
+    GH + '/latest.json': manifest('4.37.7', base=GH),
+    GHTAG % '4.37.7':    manifest('4.37.7', base=GH),
+    GHTAG % '4.37.8':    manifest('4.37.8', sha='d' * 64, base=GH),
+})
+ok('Already up to date' not in r.stdout,
+   'THE FINDING, END TO END: with the tags api dead, a branch manifest cached '
+   'at 4.37.7 and a v4.37.8 tag present, the updater does NOT print "Already '
+   'up to date". On the first version of this fix it printed it WITH a '
+   '"no cache can stale it" assurance attached')
+ok('no cache can stale it' not in r.stdout,
+   'and claims no freshness it cannot demonstrate')
+ok('NOT a confirmation' in r.stdout, 'it prints the hedge instead')
+eq(0, r.returncode, 'still exit 0')
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 3. upgrade.sh: a lagging mirror must not block the documented upgrade path
 # ═════════════════════════════════════════════════════════════════════════════
@@ -530,6 +610,43 @@ eq('1', res.get('reached_end'),
    'it hands over to update.sh, which has the downgrade guard and the '
    'rollback')
 eq(0, r.returncode, 'and does not fail the run')
+
+# ── upgrade.sh carries the same tautology, and must not either ──────────────
+res, urls, r = upgrade({
+    GH + '/latest.json': manifest('4.37.7', base=GH),
+    GHTAG % '4.37.7':    manifest('4.37.7', base=GH),
+    GHTAG % '4.37.8':    manifest('4.37.8', sha='d' * 64, base=GH),
+}, [GH], '4.37.7')
+eq('false', res.get('corroborated'),
+   'THE TAUTOLOGY IN upgrade.sh: a pinned manifest for the version the branch '
+   'already named does not corroborate it')
+ok('Already on v4.37.7' not in r.stdout,
+   'so it does not report "nothing to do" with a v4.37.8 tag sitting beside '
+   'the answer it was given')
+eq('1', res.get('reached_end'), 'it hands over to the updater instead')
+eq(0, r.returncode, 'exit 0')
+
+# ── An unreadable installed VERSION is not the mirrors' fault ───────────────
+#
+# Shakaal, 2026-11-23: `sort -V` puts the literal string `unknown` above every
+# real version, so a missing ${SG_ROOT}/VERSION -- the broken install this
+# script exists to repair -- took the "every channel is behind this install"
+# branch and told the operator the release mirrors had stalled, four lines
+# after reporting the newest version as corroborated.
+res, _, r = upgrade(FROZEN_CDN_AND_LIVE_GITHUB, [CDN, GH], 'unknown')
+ok('No channel offers anything newer' not in r.stdout,
+   'UNREADABLE VERSION: it does not claim every channel is behind the install')
+ok('stalled sync, not a release' not in r.stdout,
+   'and does not blame the release mirrors for a fault on the server in front '
+   'of the operator')
+ok('Cannot read' in r.stdout,
+   'it says what it actually could not do: read the installed version')
+eq('1', res.get('reached_end'), 'and hands over to the updater')
+eq(0, r.returncode, 'exit 0')
+ok('4.37.0' in r.stdout,
+   'the per-channel report still names the lagging mirror, which is a '
+   'different statement from blaming it')
+
 
 # ── No channel answers at all ────────────────────────────────────────────────
 res, _, r = upgrade({}, [CDN, GH], '4.37.7')

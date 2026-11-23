@@ -67,9 +67,49 @@ info "Publishing ${BOLD}${TAG}${NC}"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 [[ "$BRANCH" == "main" ]] || warn "Current branch is '${BRANCH}', not 'main' — continuing anyway"
 
-# Abort if this tag/release already exists remotely (avoid clobbering a release)
-if git ls-remote --tags origin "refs/tags/${TAG}" 2>/dev/null | grep -q "${TAG}"; then
-    die "Tag ${TAG} already exists on origin. Bump VERSION or delete the tag first."
+# Abort if this tag/release already exists remotely (avoid clobbering a
+# release) -- UNLESS it is the same tag object, on this same commit, in which
+# case this run is a RESUME.
+#
+# WHY A RESUME EXISTS AT ALL. Section 7b fails the release when the CDN never
+# serves the new version, and it fails AFTER the tag has been pushed, because
+# a mirror cannot be checked before the thing it mirrors is on origin. Git is
+# deliberately left alone. But this guard then refused the re-run, and the two
+# routes it offered were both bad: burn a version number, or delete a pushed
+# tag that update.sh now treats as THE authoritative version source. So a
+# release blocked on a frozen mirror -- which is the live situation -- was
+# unfinishable. The local guard further down already makes exactly this
+# distinction ("already exists locally on <sha> -- reusing it"); this is the
+# same rule against origin.
+#
+# The identity check is strict: the remote tag OBJECT must be byte-identical
+# to the local one, and the local tag must point at HEAD. A tag of this name
+# created by anyone else, or on any other commit, is still a hard refusal.
+RESUMING=no
+_remote_tag_sha="$(git ls-remote --tags origin "refs/tags/${TAG}" 2>/dev/null | awk 'NR==1 {print $1}' || true)"
+if [[ -n "$_remote_tag_sha" ]]; then
+    _local_tag_sha="$(git rev-parse -q --verify "refs/tags/${TAG}" 2>/dev/null || true)"
+    _local_tag_commit="$(git rev-parse -q --verify "refs/tags/${TAG}^{commit}" 2>/dev/null || true)"
+    _head_commit="$(git rev-parse HEAD)"
+    if [[ -n "$_local_tag_sha" && "$_local_tag_sha" == "$_remote_tag_sha" \
+          && "$_local_tag_commit" == "$_head_commit" ]]; then
+        RESUMING=yes
+        warn "Tag ${TAG} is already on origin, as the same object, on HEAD (${_head_commit:0:7})."
+        warn "  Treating this run as a RESUME of a release that got as far as the push."
+        warn "  Nothing already on origin is re-created; the CDN mirror is re-checked."
+    else
+        echo "" >&2
+        err "Tag ${TAG} already exists on origin, and it is not this commit's tag."
+        echo "    origin: ${_remote_tag_sha:0:7}    local: ${_local_tag_sha:0:7}" >&2
+        echo "    local tag commit: ${_local_tag_commit:0:7}    HEAD: ${_head_commit:0:7}" >&2
+        echo "" >&2
+        echo "    This is a real conflict, not a resume. Either bump VERSION, or" >&2
+        echo "    delete the tag on origin if you are certain it is wrong -- but note" >&2
+        echo "    that update.sh resolves versions FROM tags, so deleting a published" >&2
+        echo "    one withdraws that release from every server in the field." >&2
+        echo "" >&2
+        exit 1
+    fi
 fi
 
 # ── 0. Version bump sanity check ───────────────────────────────────────────────
@@ -202,6 +242,23 @@ fi
 
 if git diff --cached --quiet; then
     warn "Nothing new to commit — proceeding to push/release with existing HEAD"
+elif [[ "$RESUMING" == "yes" ]]; then
+    # A resume re-runs the build, and a rebuild that comes out byte-identical
+    # stages nothing. If something DID change, committing it would move HEAD
+    # away from the tag that is already on origin, and the tag guard below
+    # would then refuse -- after another push. Stop here instead, where
+    # nothing has left the machine.
+    echo "" >&2
+    err "Resuming ${TAG}, but the rebuild changed tracked files."
+    git diff --cached --name-only | sed 's/^/      /' >&2
+    echo "" >&2
+    echo "    ${TAG} on origin describes the previous commit, so these changes" >&2
+    echo "    cannot go out under it. Either:" >&2
+    echo "      git checkout -- \$(git diff --cached --name-only | tr '\\n' ' ')" >&2
+    echo "    and re-run to finish the mirror step for the release as tagged, or" >&2
+    echo "    bump VERSION and publish these changes as a new release." >&2
+    echo "" >&2
+    exit 1
 else
     git commit -m "Release ${TAG}"
     ok "Committed ${TAG}"
@@ -315,7 +372,25 @@ NOTES="$(awk -v hdr="## [${VER}]" '
 
 # ── 6. Create the GitHub Release (this is what the updater watches) ─────────────
 info "Creating GitHub Release ${TAG}…"
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+# On a resume the Release page may already exist, and creating a release for a
+# tag that already has one fails -- `gh release create` non-zero, the API 422 --
+# which under `set -e` would end the run before the mirror step this resume
+# exists to reach. Checked through whichever credential this machine has.
+_release_exists=no
+if [[ "$RESUMING" == "yes" ]]; then
+    if command -v gh >/dev/null 2>&1 && gh release view "$TAG" >/dev/null 2>&1; then
+        _release_exists=yes
+    elif [[ -n "$TOKEN" ]] && curl -fsS --max-time 15 \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${SLUG}/releases/tags/${TAG}" \
+            >/dev/null 2>&1; then
+        _release_exists=yes
+    fi
+fi
+if [[ "$_release_exists" == "yes" ]]; then
+    ok "Release ${TAG} already exists on GitHub — left alone (resume)"
+elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     printf '%s' "$NOTES" | gh release create "$TAG" "$ZIP" \
         --title "ServerScrub ${TAG}" --notes-file - --target main
     ok "Release created via gh (asset attached)"
@@ -570,6 +645,16 @@ else
     echo "" >&2
     echo "    Installs still work -- they fall back to the GitHub mirror -- but" >&2
     echo "    this release is NOT mirrored, and no output above says it is." >&2
+    echo "" >&2
+    # A failure that does not say how to finish is how a blocked release
+    # becomes a burned version number.
+    echo "    TO FINISH THIS RELEASE once the CDN serves ${VER}:" >&2
+    echo "      bash scripts/publish.sh ${VER}" >&2
+    echo "" >&2
+    echo "    The commit and tag are already on origin; the re-run recognises its" >&2
+    echo "    own tag on this commit, re-creates nothing, and re-checks the mirror." >&2
+    echo "    Do NOT bump VERSION and do NOT delete the tag -- update.sh resolves" >&2
+    echo "    versions from tags, so deleting this one withdraws the release." >&2
     echo "" >&2
     exit 1
 fi

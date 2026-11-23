@@ -127,6 +127,46 @@ t_eq(false, !empty($m['_corroborated']),
      'but it is NOT corroborated, so nothing may present it as a confirmed '
    . 'patch level');
 
+// ── THE TAUTOLOGY: a pinned manifest may not corroborate ITSELF ───────────
+//
+// Shakaal's blocker, 2026-11-23. The first version of this fix substituted the
+// branch answer when no immutable ref could be read (`$iv = $bestVer;`) and
+// then "confirmed" it by fetching v<that same version>/latest.json. That url
+// proves the version EXISTS; it never proves it is the newest. Every released
+// version has a tag, and cdn-sync.sh retains KEEP_VERSIONS old v<ver>/
+// folders, so the check could not fail — and it set corroborated => true with
+// an empty note in exactly the case the panel's third state was built for,
+// leaving #dash-update-error hidden on a stale read.
+//
+// These fixtures are the real shape of the channel: the installed version's
+// own tag manifest IS present, because it always is.
+$m = $resolve([
+    $GH . '/latest.json'        => $manifest('4.37.7', str_repeat('a', 64), $GH),
+    $TAG . '4.37.7/latest.json' => $manifest('4.37.7', str_repeat('a', 64), $GH),
+    $TAG . '4.37.8/latest.json' => $manifest('4.37.8', str_repeat('d', 64), $GH),
+]);
+t_eq('4.37.7', $m['version'] ?? null,
+     'with the tags api unreachable the branch answer still stands');
+t_eq(false, !empty($m['_corroborated']),
+     'THE TAUTOLOGY: but it is NOT corroborated, even though '
+   . 'v4.37.7/latest.json answers — that url proves 4.37.7 exists, and there '
+   . 'is a v4.37.8 tag sitting next to it');
+t_ok(!in_array($TAG . '4.37.7/latest.json', $bare(), true),
+     'and the pinned manifest for the version in hand is not even requested: '
+   . 'a version no immutable source named is not a candidate, so the request '
+   . 'could only ever produce a false confirmation');
+
+// The CDN shape of the same thing: cdn-sync.sh keeps old v<ver>/ folders, so
+// the mirror frozen at 4.37.0 serves v4.37.0/latest.json perfectly well.
+$m = $resolve([
+    $CDN . '/latest.json'         => $manifest('4.37.0', str_repeat('b', 64), $CDN),
+    $CDN . '/v4.37.0/latest.json' => $manifest('4.37.0', str_repeat('b', 64), $CDN),
+]);
+t_eq(false, !empty($m['_corroborated']),
+     'A FILE CHANNEL WITH NO latest/VERSION: its retained per-build manifest '
+   . 'does not corroborate the answer either. The frozen CDN serves exactly '
+   . 'this and has been nine releases behind for a month');
+
 // ── latest/VERSION 404 IS NOT A PASSED CROSS-CHECK ──────────────────────────
 $m = $resolve([
     $GH . '/latest.json' => $manifest('4.37.7', str_repeat('a', 64), $GH),
@@ -256,6 +296,22 @@ t_eq('', (string)$s['check_error'],
      'check_error stays empty: the scheduler SKIPS the automatic update when '
    . 'that setting is non-empty (scheduler.php:394), and an uncorroborated '
    . 'check is not a reason to stop applying an update that was found');
+
+// ── And the tautology, all the way through to the panel ──────────────────
+//
+// This is where the consequence landed: corroborated true, note empty, notice
+// hidden, on a reading that could be five minutes old.
+$s = $check([
+    $GH . '/latest.json'         => $manifest($cur, str_repeat('a', 64), $GH),
+    $TAG . $cur . '/latest.json' => $manifest($cur, str_repeat('a', 64), $GH),
+]);
+t_eq(false, (bool)$s['corroborated'],
+     'THROUGH TO THE PANEL: a pinned manifest for the version the branch '
+   . 'already named leaves the check uncorroborated');
+t_ok((string)$s['uncorroborated_note'] !== '',
+     'and the note is NOT empty, so #dash-update-error shows rather than the '
+   . 'dashboard collapsing back to two states in the one case the third was '
+   . 'added for');
 
 // 4. A lagging mirror reaches the panel.
 $s = $check([
