@@ -17,6 +17,8 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+## [4.37.8] - 2026-11-23
+
 ### Fixed
 
 - **A scan whose worker was gone kept the daily schedule from running for two
@@ -180,6 +182,32 @@ heading or touch VERSION mid-week._
   invisible outside one cron log line. The scheduler records the refusal, and
   the page says what is in the way and how long it has been running — which is
   the part of this incident that made it undiagnosable.
+
+### Known limitations in this release
+
+Stated rather than left to assume. All of this was verified in a container on
+AlmaLinux 8 against PHP 7.4 and 8.2, a real `/proc` and a real sqlite — but a
+container is not your server.
+
+- **Nothing in this release was run against production.** Which of the two
+  mechanisms — a reused pid or a silent heartbeat — actually stalled the 57-hour
+  job on the live server is still read out of the code, not observed. After this
+  release the row's own `stop_reason` answers it the next time it happens.
+- **There is still no cap on how long a scan may run, deliberately.** A full
+  `/home` scan on that server took 57h41m against a *daily* schedule. This
+  release makes the resulting overlap visible on the Scanner page instead of
+  silent; it does not decide what should happen. That policy call is still
+  open.
+- **Only the standalone install path was exercised.** cpsrvd, WHM AppConfig,
+  LiveAPI and the CGI wrappers are proven by installing on a cPanel box, and
+  that has not been done for this build.
+- **Scale was 8 seeded accounts, not 132.** The resource bounds (one process
+  table read on a healthy pass, two on a pass that acts, 50 candidate rows per
+  pass, nothing under `/home` walked) were measured, not estimated — but at
+  that size.
+- **ModSecurity, Exim and ClamAV were stubbed.** Audit-log parsing, `exim -bp`
+  and EICAR only. Every sweep timing recorded for this work is therefore a
+  floor, not a worst case.
 
 ## [4.37.7] - 2026-11-20
 
