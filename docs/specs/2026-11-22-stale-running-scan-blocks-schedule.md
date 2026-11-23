@@ -523,6 +523,58 @@ that findings file. What it changes in the notes above:
   ordering requirement, nothing weakened. Stated plainly because editing a
   passing test is normally not allowed here.
 
+### Second revision after Shakaal's second pass (2026-11-23)
+
+`docs/findings/2026-11-23-stale-running-scan-reconcile-pass2.md` returned PASS
+WITH CAVEATS: two minors, both in code this change introduced, both fixed here.
+
+- **Finding 9. A pause is revoked only on a fresh look.**
+  `pausedForBackup()` writes -- it clears the flag when nothing supports it --
+  and it was deciding that from `backupRunning()`'s 30-second cache, while the
+  `$fresh` parameter added in the same change sat unused. Shakaal traced the
+  one interleaving that reaches it: a scheduler tick with
+  `scan_pause_on_backup=1`, whose scan task probes for a backup and caches "no
+  backup" before `startScan()` reaches the reconcile. A backup starting in that
+  sub-second gap, with a worker already holding the pause, had the gate throw
+  away a pause that was genuinely in force -- and the reconcile then signals a
+  scan that is waiting out a real backup, which this spec puts out of scope.
+  It now reads `backupRunning(true)`: one process-table read, and only when the
+  flag is set.
+- **The wait loop asks freshly too, which its own comment has claimed since
+  before there was a way to ask.** `waitOutBackup()` called plain
+  `backupRunning()` under "Force a fresh look rather than the 30s cache", so a
+  wait could run up to 30 seconds past the end of a backup. The note below
+  about the loop being "driven by `backupRunning()`, not by the flag" was
+  correct about the mechanism and wrong about the freshness; both the call and
+  the comment are now right.
+- **Finding 10. A zombie is not a running backup.** The fix for finding 5
+  landed in `procSnapshot()` and `processAlive()` and was missed in
+  `RealTimeMonitor::backupProcesses()`, which matches on `/proc/<pid>/comm` --
+  populated for a zombie, unlike `cmdline` -- and never looked at the state. A
+  dead, unwaited `rsync` therefore read as a backup in progress, which is worse
+  than it first appears: it is the signal finding 2's fix now depends on, so the
+  Scanner page claimed a backup and the stall watchdog stood down; and the
+  real-time monitor suspends itself while a backup runs, so a corpse left
+  monitoring off. It also invalidated two of Shakaal's probe runs. The state is
+  now checked for a pid that is about to be counted -- one stat read per
+  candidate, not per process on the host.
+
+`pidIsZombie()` is deliberately a three-line copy in each class rather than a
+dependency: `Scanner` and `RealTimeMonitor` already require each other lazily,
+in both directions, and a hard edge between them is how a cron script fatals.
+
+Covered by `tests/test_scan_stall_reconcile.php` sections 15 and 16, built on
+the process table the test controls: a stale cache against a real backup, and a
+zombie `rsync` against a live one. With either one-liner reverted, four
+assertions fail -- checked, not assumed.
+
+Finding 9 is also confirmed in the container with Shakaal's own
+`probe_pause_cache_window.php` (the pause held), and a live `rsync` is still
+reported there. The zombie half of finding 10 was NOT re-demonstrated against
+a real zombie in the container -- my fixture reaped itself and the retry ran
+out of container time -- so that one rests on the suite and on Shakaal's own
+fixture. Said plainly rather than implied.
+
 #### What to look at hardest on the second pass
 
 1. **The two-phase pass under load.** The fresh read happens between judging
@@ -535,7 +587,8 @@ that findings file. What it changes in the notes above:
    page load. Worth checking it cannot fight a worker that is genuinely in
    `waitOutBackup()` at that moment: the wait loop is driven by
    `backupRunning()`, not by the flag, so a cleared flag does not shorten a
-   wait -- but that is the interaction to probe.
+   wait -- but that is the interaction to probe. (Shakaal did, and found
+   finding 9 in it: the gate was deciding from a cached reading. Fixed above.)
 3. **`RealTimeMonitor::backupProcesses()` gained an optional process-table
    root.** Default unchanged, one caller passes `Scanner::procDir()`. The
    monitor's own callers are unaffected, and that is worth confirming rather

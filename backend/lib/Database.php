@@ -430,7 +430,12 @@ class Database {
                 -- (600s), so three missed batches in a row is not a slow file,
                 -- it is a wedged worker. A job sleeping on purpose
                 -- (scan_paused_for_backup) is exempt -- waiting is not
-                -- stalling. Clamped to 300-86400 where it is read.
+                -- stalling. Clamped to 300-86400 where it is read, and
+                -- floored at THREE batch timeouts there as well: progress is
+                -- only recorded when a batch completes, so a worker grinding
+                -- through one slow archive is silent for as long as a batch
+                -- may take. Clamping the two independently let a legal pair
+                -- of settings reap a scan that was working.
                 ('scan_stall_timeout',      '1800'),
                 -- Quarantine grew without limit until this existed. 0 disables
                 -- pruning, for anyone who would rather keep everything.

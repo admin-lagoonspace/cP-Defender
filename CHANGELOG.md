@@ -108,6 +108,23 @@ heading or touch VERSION mid-week._
   back on every exit from the wait, and the flag is checked against the machine
   before it is believed — a pause nothing is running is cleared on sight.
 
+  That check is made on a **fresh** reading of the process table, not the
+  30-second cached one. Revoking a pause is a destructive decision: a cached
+  "no backup" was enough to throw away a pause that was genuinely in force, and
+  the reconcile would then have stopped a scan that was deliberately waiting.
+  The wait loop itself now asks freshly too — its comment has claimed that
+  since before there was a way to ask, so a wait could run up to 30 seconds
+  past the end of a backup.
+
+- **A dead `rsync` is no longer reported as a running backup.**
+  `/proc/<pid>/comm` survives into the zombie state — unlike `cmdline`, which
+  empties — and the backup probe matched on the name alone. So an exited,
+  unwaited backup process stood the whole gate up: the Scanner page claimed a
+  backup, the stall watchdog stood down, and the real-time monitor, which
+  suspends itself while a backup runs, stayed suspended with a corpse holding
+  the pid. The state is now checked for any process about to be counted as a
+  backup — one stat read per candidate, not one per process on the server.
+
 - **The refusal card no longer claims a job is in progress after the product
   has closed it out.** It was built from four stored settings and computed the
   blocking job's age without asking whether that job was still running, so the

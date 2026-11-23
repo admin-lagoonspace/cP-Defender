@@ -64,6 +64,21 @@ $job = function (int $id): array {
     return Database::fetchOne('SELECT * FROM scan_jobs WHERE id=?', [$id]) ?: [];
 };
 
+/* A backup process, with a state. comm is what backupProcesses() matches on
+ * and it survives into the zombie state, which is the whole of finding 10. */
+$mkbackupfiles = function (string $comm, string $state) use ($proc) {
+    @mkdir($proc . '/4001', 0700, true);
+    file_put_contents($proc . '/4001/comm', $comm . "\n");
+    // A zombie's cmdline reads empty; a live process's does not.
+    file_put_contents($proc . '/4001/cmdline',
+        $state === 'Z' ? '' : "rsync\0-a\0/home/\0/backup/");
+    file_put_contents($proc . '/4001/stat', '4001 (' . $comm . ') ' . $state . ' 1 0 0');
+};
+$rmbackupfiles = function () use ($proc) {
+    foreach (['comm', 'cmdline', 'stat'] as $f) { @unlink($proc . '/4001/' . $f); }
+    @rmdir($proc . '/4001');
+};
+
 // An impossible pid, used wherever a test needs a process that our fake table
 // says exists but the operating system will never be asked to signal.
 const NOPID = 2147483646;
@@ -256,11 +271,8 @@ Database::setSetting('scan_paused_for_backup', '1');
  * switched the stall rule off for every scan that followed. So the pause is
  * only honoured while the machine agrees, and asserting it needs a backup
  * process to exist. rsync is one of the two default rt_backup_procs. */
-$mkbackup = function (string $comm) use ($proc) {
-    @mkdir($proc . '/4001', 0700, true);
-    file_put_contents($proc . '/4001/comm', $comm . "\n");
-    file_put_contents($proc . '/4001/cmdline', "rsync\0-a\0/home/\0/backup/");
-    file_put_contents($proc . '/4001/stat', '4001 (' . $comm . ') S 1 0 0');
+$mkbackup = function (string $comm) use ($mkbackupfiles) {
+    $mkbackupfiles($comm, 'S');
     Scanner::backupRunning(true);
 };
 $mkbackup('rsync');
@@ -278,8 +290,7 @@ t_eq('running', $job($pausedJob)['status'], 'and the scan keeps its slot');
 
 // The backup finishes, and the flag is no longer a reason for anything. The
 // worker that set it is gone, so nothing will ever clear it from the inside.
-foreach (['comm', 'cmdline', 'stat'] as $f) { @unlink($proc . '/4001/' . $f); }
-@rmdir($proc . '/4001');
+$rmbackupfiles();
 Scanner::backupRunning(true);
 Scanner::procSnapshot(true);
 $v = Scanner::judgeJob($job($pausedJob));
@@ -624,6 +635,78 @@ $ref = Scanner::scheduleRefusal();
 t_eq(false, $ref['job_live'], 'a blocking job that does not exist at all is not in progress');
 t_eq('', $ref['job_status'], 'and its status is reported as unknown, not invented');
 Scanner::clearScheduleRefusal();
+
+// ══ 15. A pause is revoked only on a FRESH look at the process table ══════
+// pausedForBackup() WRITES -- it clears the flag when nothing supports it --
+// and it was deciding that from backupRunning()'s 30-second cache, which the
+// $fresh parameter added in the same change existed to avoid. Cache "no
+// backup", let a real one start, let a worker take the pause: the next call
+// inside that window revoked a pause that was genuinely in force, the worker
+// was judged stalled, and the reconcile would then signal a scan that was
+// waiting out a real backup on purpose -- which the spec puts out of scope.
+$cacheJob = Database::insert('scan_jobs', [
+    'scan_type' => 'full', 'status' => 'running',
+    'started_at' => time() - 20000, 'scan_path' => '/home',
+    'worker_pid' => NOPID, 'worker_pgid' => 0, 'progress_at' => time() - 19000,
+]);
+$mkproc(NOPID, 'php /usr/local/serverscrub/backend/cron/scan.php --job-id='
+              . $cacheJob . ' --path=/home');
+
+// The observation that gets cached: nothing is backing up. This is the state
+// a scheduler tick leaves behind when its scan task probes for a backup
+// before starting one.
+t_eq([], Scanner::backupRunning(true), 'the cache is primed with no backup running');
+
+// A backup starts and a worker takes the pause, and NOTHING refreshes the
+// cache -- the window is 30 seconds wide and this is inside it.
+$mkbackupfiles('rsync', 'S');
+Database::setSetting('scan_paused_for_backup', '1');
+t_eq([], Scanner::backupRunning(),
+    'the cached answer still says there is no backup, which is now wrong');
+
+t_eq(true, Scanner::pausedForBackup(),
+    'but a decision that REVOKES a pause is not taken from a cached '
+  . 'observation: the pause is held, because a backup really is running now');
+t_eq('1', Database::setting('scan_paused_for_backup'),
+    'and the flag it would have thrown away is still set');
+Scanner::procSnapshot(true);
+t_eq('paused', Scanner::judgeJob($job($cacheJob))['verdict'],
+    'so a scan waiting out a real backup is not judged stalled, and nothing '
+  . 'signals a worker that is waiting on purpose');
+
+$woBody = t_fn_body(t_code($repo . '/backend/lib/Scanner.php'), 'waitOutBackup', 'php');
+t_contains($woBody, 'self::backupRunning(true)',
+    'the wait loop asks freshly too -- its comment has claimed that since '
+  . 'before there was a parameter to pass, and a cached answer there means '
+  . 'waiting up to 30s past the end of a backup');
+
+// ══ 16. A zombie rsync is not a running backup ════════════════════════════
+// /proc/<pid>/comm survives into the zombie state -- unlike cmdline, which
+// empties -- and backupProcesses() matched on comm alone and never looked at
+// the state. So a dead, unwaited rsync read as a backup in progress: the
+// Scanner page claimed a backup, the stall watchdog stood down, and the
+// real-time monitor, which suspends itself while a backup runs, stayed
+// suspended. It also invalidated two probe runs before the cause was found.
+$mkbackupfiles('rsync', 'Z');
+t_eq([], Scanner::backupRunning(true),
+    'a dead rsync holding its pid is not a running backup -- a name in the '
+  . 'process table is not a process');
+t_eq(false, Scanner::pausedForBackup(),
+    'so the pause it was propping up is given up');
+Scanner::procSnapshot(true);
+t_eq('stalled', Scanner::judgeJob($job($cacheJob))['verdict'],
+    'and the stall watchdog applies again: a corpse must not switch it off');
+
+// Alive again, because the check is about state and not about the name.
+$mkbackupfiles('rsync', 'S');
+t_eq(['rsync'], Scanner::backupRunning(true),
+    'a live rsync is still reported, so the backup gate itself still works');
+
+$rmbackupfiles();
+Scanner::backupRunning(true);
+Database::setSetting('scan_paused_for_backup', '0');
+Database::query("UPDATE scan_jobs SET status='done' WHERE id=?", [$cacheJob]);
+$rmproc(NOPID);
 
 // ══ 9. Wiring: the pass runs where the incident needed it to ═══════════════
 // Structural, because these are the callers that were missing. The behaviour

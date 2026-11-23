@@ -289,6 +289,43 @@ class RealTimeMonitor {
                                         'jb5 backup', 'jetbackup backup'];
 
     /**
+     * Has this process exited and not yet been waited on?
+     *
+     * Field 3 of /proc/<pid>/stat is the state letter; the command in field 2
+     * can contain spaces and parentheses, so it is read from the LAST closing
+     * parenthesis. Scanner::pidIsZombie() is the twin of this, asked of the
+     * scan worker rather than of a backup -- deliberately a copy of three
+     * lines rather than a dependency between these two classes, which require
+     * each other lazily in both directions.
+     *
+     * @param string $dir the /proc/<pid> directory
+     */
+    private static function pidIsZombie(string $dir): bool
+    {
+        $stat = @file_get_contents($dir . '/stat');
+        if ($stat === false || $stat === '') { return false; }
+        $tail = substr($stat, strrpos($stat, ')') + 2);
+        return substr($tail, 0, 1) === 'Z';
+    }
+
+    /**
+     * A NAME IS NOT A RUNNING PROCESS. /proc/<pid>/comm survives into the
+     * zombie state -- unlike cmdline, which empties -- and this matched on the
+     * name alone, so an rsync that had exited and not yet been waited on read
+     * as a backup in progress. Two things went wrong at once. This function
+     * gates the real-time monitor's suspend and resume, so a corpse left file
+     * monitoring switched off; and Scanner::pausedForBackup() believed a pause
+     * nothing was waiting for, which had the Scanner page reporting a backup
+     * and the scan stall watchdog standing down. Same shape as the always-on
+     * daemon exclusion below: present is not running.
+     *
+     * The state is read only for a pid that is about to be COUNTED, so it
+     * costs one stat read per candidate rather than one per process on the
+     * host -- this walk runs from cron every 15 minutes for the life of the
+     * server. A zombie whose name matched falls through to the JetBackup
+     * branch and stops there, because a zombie's cmdline is empty, so it is
+     * not counted either way.
+     *
      * @param string|null $procDir where the process table lives. Defaults to
      *        /proc; Scanner passes its own seam through so the backup gate can
      *        be exercised against a process table a test controls, which is
@@ -334,7 +371,11 @@ class RealTimeMonitor {
             // suspended monitoring permanently on every server with JetBackup.
             if (isset($excl[$comm])) { continue; }
 
-            if (isset($names[$comm])) { $found[] = $comm; continue; }
+            // A name is not a running process; see the note above.
+            if (isset($names[$comm]) && !self::pidIsZombie($dir)) {
+                $found[] = $comm;
+                continue;
+            }
 
             // JetBackup runs jobs under generic interpreter names, so the
             // command line is what identifies one. The fragments looked for

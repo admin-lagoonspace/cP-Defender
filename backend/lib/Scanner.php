@@ -538,7 +538,12 @@ class Scanner {
         if ((Database::setting('scan_paused_for_backup', '0') ?? '0') !== '1') {
             return false;
         }
-        if (self::backupRunning()) { return true; }
+        // FRESH, because this call decides whether to REVOKE a pause. A
+        // 30-second-old "no backup" is enough to throw away a pause that is
+        // genuinely in force -- the worker is then judged stalled, and the
+        // reconcile stops a scan that was deliberately waiting. The cost is
+        // one process-table read, and only when the flag is set.
+        if (self::backupRunning(true)) { return true; }
 
         Database::setSetting('scan_paused_for_backup', '0');
         Logger::info('scan_paused_for_backup was set with no backup running - '
@@ -2857,8 +2862,10 @@ This file was removed and not kept. Restore it from your backups
      * quiet half of the product was suspended and the loud half was not.
      *
      * @param bool $fresh ignore the 30s cache. Used where the answer has to
-     *        be current -- the wait loop, and a test that has just changed
-     *        what the process table says.
+     *        be current: the wait loop, pausedForBackup() -- which uses it to
+     *        decide whether to revoke a pause, and must not do that from a
+     *        stale reading -- and a test that has just changed what the
+     *        process table says.
      */
     public static function backupRunning(bool $fresh = false): array
     {
@@ -2979,8 +2986,11 @@ This file was removed and not kept. Restore it from your backups
             }
             sleep(30);
             $waited += 30;
-            // Force a fresh look rather than the 30s cache.
-            $running = self::backupRunning();
+            // Freshly, which this comment has claimed since before there was a
+            // way to ask for it: a cached answer here means waiting up to 30
+            // seconds past the end of a backup, and the loop has just slept
+            // for 30 anyway.
+            $running = self::backupRunning(true);
         }
 
         if ($logged) {
