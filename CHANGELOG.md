@@ -17,6 +17,15 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+## [4.37.9] - 2026-11-23
+
+### Changed
+
+- Version bump so servers still reading a cached 4.37.7 manifest see a newer
+  release and rotate onto it. No product code changed since 4.37.8 — the scan
+  reconciliation work shipped there. The update-channel and CDN-mirror defects
+  that left 4.37.8 invisible are specified and not yet fixed.
+
 ## [4.37.8] - 2026-11-23
 
 ### Fixed
