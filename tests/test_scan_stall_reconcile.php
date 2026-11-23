@@ -205,8 +205,10 @@ $rmproc(4242);
 // worker is genuinely there and has reported nothing for hours.
 t_eq(1800, Scanner::stallTimeout(), 'the stall threshold defaults to half an hour');
 Database::setSetting('scan_stall_timeout', '10');
-t_eq(300, Scanner::stallTimeout(),
-    'clamped at 300s: below that a slow batch on one large file reads as wedged');
+t_eq(1800, Scanner::stallTimeout(),
+    'and cannot be set below three batch timeouts: progress is only recorded '
+  . 'when a batch COMPLETES, so a worker grinding through one slow archive '
+  . 'reports nothing and is not stalled. See section 13.');
 Database::setSetting('scan_stall_timeout', '999999');
 t_eq(86400, Scanner::stallTimeout(),
     'and at a day, or the watchdog outlives the schedule it protects');
@@ -247,6 +249,23 @@ $pausedJob = Database::insert('scan_jobs', [
 $mkproc(NOPID, 'php /usr/local/serverscrub/backend/cron/scan.php --job-id='
               . $pausedJob . ' --path=/home');
 Database::setSetting('scan_paused_for_backup', '1');
+/* A backup that is really running, in the process table the test controls.
+ *
+ * The flag on its own is deliberately NOT enough any more: it has no owner,
+ * and one left behind by a worker that was cancelled or that timed out
+ * switched the stall rule off for every scan that followed. So the pause is
+ * only honoured while the machine agrees, and asserting it needs a backup
+ * process to exist. rsync is one of the two default rt_backup_procs. */
+$mkbackup = function (string $comm) use ($proc) {
+    @mkdir($proc . '/4001', 0700, true);
+    file_put_contents($proc . '/4001/comm', $comm . "\n");
+    file_put_contents($proc . '/4001/cmdline', "rsync\0-a\0/home/\0/backup/");
+    file_put_contents($proc . '/4001/stat', '4001 (' . $comm . ') S 1 0 0');
+    Scanner::backupRunning(true);
+};
+$mkbackup('rsync');
+t_ok(Scanner::backupRunning() !== [], 'the test has a backup the product can see');
+
 Scanner::procSnapshot(true);
 $v = Scanner::judgeJob($job($pausedJob));
 t_eq('paused', $v['verdict'],
@@ -257,20 +276,23 @@ Scanner::procSnapshot(true);
 t_eq(0, Scanner::reapStaleJobs(), 'so nothing is reconciled while the backup runs');
 t_eq('running', $job($pausedJob)['status'], 'and the scan keeps its slot');
 
-// The flag is cleared once nothing is running, or a worker killed mid-wait
-// would switch stall detection off for every job that followed it.
+// The backup finishes, and the flag is no longer a reason for anything. The
+// worker that set it is gone, so nothing will ever clear it from the inside.
+foreach (['comm', 'cmdline', 'stat'] as $f) { @unlink($proc . '/4001/' . $f); }
+@rmdir($proc . '/4001');
+Scanner::backupRunning(true);
+Scanner::procSnapshot(true);
+$v = Scanner::judgeJob($job($pausedJob));
+t_eq('stalled', $v['verdict'],
+    'once the backup is over, a worker that has reported nothing for 5h is '
+  . 'stalled again -- a stuck flag used to exempt it for ever');
+t_eq('0', Database::setting('scan_paused_for_backup'),
+    'and the stale flag is cleared, so the page stops claiming a backup that '
+  . 'backupRunning() says is not running');
+Scanner::procSnapshot(true);
+Scanner::reapStaleJobs();
 Database::query("UPDATE scan_jobs SET status='done' WHERE id=?", [$pausedJob]);
 $rmproc(NOPID);
-$leftover = Database::insert('scan_jobs', [
-    'scan_type' => 'quick', 'status' => 'running',
-    'started_at' => time() - 7200, 'scan_path' => '/home',
-    'worker_pid' => NOPID, 'worker_pgid' => 0,
-]);
-Scanner::procSnapshot(true);
-t_eq(1, Scanner::reapStaleJobs(), 'the last in-progress row is closed out');
-t_eq('0', Database::setting('scan_paused_for_backup'),
-    'and with nothing running, the backup pause flag is no longer set -- a '
-  . 'stale 1 would exempt every later scan from the stall timer');
 
 // ══ 5. Liveness that cannot be established is reported as unknown ══════════
 // A false "dead" verdict here would kill working scans on every host without
@@ -380,20 +402,228 @@ Database::query("UPDATE scan_jobs SET status='done' WHERE id=?", [$beatJob]);
 
 // ══ 8. A refusal is recorded where the Scanner page can read it ════════════
 t_eq(null, Scanner::scheduleRefusal(), 'no refusal is recorded on a healthy server');
-Scanner::recordScheduleRefusal('Already running 1 of a maximum 1 scan(s) (job 12467).',
-    ['id' => 12467, 'started_at' => time() - 205200]);
+// A real in-progress row, because the card may only claim a job is in
+// progress when it is -- see section 14.
+$blockRow = Database::insert('scan_jobs', [
+    'scan_type' => 'full', 'status' => 'running',
+    'started_at' => time() - 205200, 'scan_path' => '/home',
+    'worker_pid' => NOPID + 11, 'worker_pgid' => 0,
+]);
+Scanner::recordScheduleRefusal('Already running 1 of a maximum 1 scan(s) (job '
+    . $blockRow . ').', ['id' => $blockRow, 'started_at' => time() - 205200]);
 $ref = Scanner::scheduleRefusal();
 t_ok($ref !== null, 'a refused scheduled scan is recorded, not only logged');
 t_contains($ref['reason'], 'maximum 1 scan',
     'with the reason the scheduler was given, verbatim');
-t_eq(12467, $ref['job'], 'naming the job in the way');
+t_eq($blockRow, $ref['job'], 'naming the job in the way');
 t_ok($ref['job_age'] >= 205200,
     'and its age, because "running for 57h" is the number that tells an '
   . 'operator this is not a scan');
+Database::query("UPDATE scan_jobs SET status='done' WHERE id=?", [$blockRow]);
 Scanner::clearScheduleRefusal();
 t_eq(null, Scanner::scheduleRefusal(),
     'and it is forgotten once a scheduled scan does start, so the page cannot '
   . 'warn about a problem that has gone');
+
+/* ══ 10. A snapshot older than the job cannot show the worker is gone ═══════
+ *
+ * SHAKAAL'S BLOCKER, reproduced through the real scheduler on real /proc.
+ * judgeJob() applied no startup grace to a job that HAD a recorded pid, and
+ * procSnapshot() is cached for 5 seconds and shared across a process. The
+ * scheduler is one process that runs for minutes: it reconciled at the top of
+ * a tick, the scan task started the daily scan, and a later task in the same
+ * tick reconciled again from the cached snapshot -- which predated the worker.
+ *
+ *   job 7  interrupted  /home  36488  "worker pid 36488 is gone"
+ *   pid 36488 ALIVE : php .../scan.php --job-id=7 --path=/home
+ *
+ * Three things wrong at once: a false claim of exactly the class this change
+ * exists to remove; the worker orphaned with no row able to find or stop it;
+ * and liveScans() reading 0, which defeated the one-scan-at-a-time cap and let
+ * a SECOND clamscan sweep start on a 132-account host. "Every verdict is
+ * re-checked next pass" does not save it -- a dead verdict is acted on
+ * immediately and the row is rewritten.
+ */
+$oldJob = Database::insert('scan_jobs', [
+    'scan_type' => 'full', 'status' => 'running',
+    'started_at' => time() - 7200, 'scan_path' => '/home',
+    'worker_pid' => NOPID, 'worker_pgid' => 0, 'progress_at' => time() - 30,
+]);
+// A snapshot taken while this job's worker is NOT in the table...
+$rmproc(NOPID);
+$stale = Scanner::procSnapshot(true);
+t_eq('dead', Scanner::judgeJob($job($oldJob), $stale)['verdict'],
+    'the cached snapshot on its own would still condemn it');
+// ...and the worker appears afterwards, exactly as the scan task left it a
+// moment after the scheduler's tick-opening pass.
+$mkproc(NOPID, 'php /usr/local/serverscrub/backend/cron/scan.php --job-id='
+              . $oldJob . ' --path=/home');
+
+// The pass holds that cached snapshot. Acting on it is what rewrote the row.
+t_eq(0, Scanner::reapStaleJobs(),
+    'THE BLOCKER: a candidate the cached snapshot condemns is judged again '
+  . 'from a FRESH read before anything is written, so the pass closes nothing '
+  . 'out -- the scheduler used to mark its own healthy, just-started scan '
+  . 'interrupted this way');
+$row = $job($oldJob);
+t_eq('running', $row['status'], 'the row is left running');
+t_eq('', (string) $row['stop_reason'], 'and no reason is written against it');
+t_eq(1, count(Scanner::liveScans()),
+    'liveScans() still reports it, so the one-scan-at-a-time cap still holds '
+  . '-- reading 0 here is what let a second clamscan sweep start');
+$pass = Scanner::lastReapPass();
+t_eq('alive', $pass['jobs'][0]['verdict'],
+    'and the pass records the verdict it acted on, which is the fresh one');
+
+// ── Evidence older than the job cannot show the worker is gone ─────────────
+// Defence in depth behind the two rules above: judgeJob() is public, and a
+// caller holding a snapshot from before a job settled must not be able to
+// turn it into a death certificate. The snapshot time is fabricated here --
+// the 5s cache cannot produce one this old -- which is the point: the rule is
+// about the evidence, not about how old the cache is allowed to get.
+$ancient = $stale;
+$ancient['at'] = time() - 300;
+$younger = Database::insert('scan_jobs', [
+    'scan_type' => 'full', 'status' => 'running',
+    'started_at' => time() - 240, 'scan_path' => '/home',
+    'worker_pid' => NOPID + 5, 'worker_pgid' => 0, 'progress_at' => time() - 240,
+]);
+$v = Scanner::judgeJob($job($younger), $ancient);
+t_eq('unknown', $v['verdict'],
+    'a process table read before the job had a worker cannot show the worker '
+  . 'is gone -- it can only show it had not started yet');
+t_contains($v['reason'], 'before this job',
+    'and the reason says the evidence is older than the job, not that the '
+  . 'worker is missing');
+Database::query("UPDATE scan_jobs SET status='done' WHERE id=?", [$younger]);
+
+// ── The same race from the other end: the row is younger than any snapshot ──
+// The worker records its pid as its first act, but the ROW exists before the
+// process does, and a snapshot taken in between sees neither.
+$justNow = Database::insert('scan_jobs', [
+    'scan_type' => 'full', 'status' => 'running',
+    'started_at' => time(), 'scan_path' => '/home',
+    'worker_pid' => NOPID + 7, 'worker_pgid' => 0, 'progress_at' => time(),
+]);
+Scanner::procSnapshot(true);                 // fresh, and the pid is absent
+$v = Scanner::judgeJob($job($justNow));
+t_eq('alive', $v['verdict'],
+    'a job seconds old with a pid no process holds yet is inside the startup '
+  . 'grace -- the 120s window used to cover only a MISSING pid');
+t_contains($v['reason'], 'startup grace', 'and says so');
+t_eq(0, Scanner::reapStaleJobs(), 'nothing is reaped while it is starting up');
+Database::query("UPDATE scan_jobs SET status='done' WHERE id IN (?,?)", [$justNow, $oldJob]);
+$rmproc(NOPID);
+
+// ══ 11. A zombie worker is gone, and is not "another process" ══════════════
+// processAlive() was is_dir('/proc/<pid>'), which is true for a process that
+// has exited and not yet been waited on. Two false statements came out of it:
+// stopScan() reporting that a worker "would not die" when it had died
+// correctly, and a reconcile blaming "another process" for a pid that was
+// still the same worker, unreaped -- and that suffix is the one sentence
+// that is supposed to identify pid reuse for the next occurrence.
+$zJob = Database::insert('scan_jobs', [
+    'scan_type' => 'full', 'status' => 'running',
+    'started_at' => time() - 7200, 'scan_path' => '/home',
+    'worker_pid' => NOPID + 3, 'worker_pgid' => 0, 'progress_at' => time() - 60,
+]);
+$mkproc(NOPID + 3, 'php /usr/local/serverscrub/backend/cron/scan.php --job-id='
+                 . $zJob . ' --path=/home');
+// Exited, not yet collected: state Z and an empty cmdline, which is what the
+// kernel shows for a zombie.
+file_put_contents($proc . '/' . (NOPID + 3) . '/cmdline', '');
+file_put_contents($proc . '/' . (NOPID + 3) . '/stat', (NOPID + 3) . ' (php) Z 1 0 0');
+Scanner::procSnapshot(true);
+$v = Scanner::judgeJob($job($zJob));
+t_eq('dead', $v['verdict'], 'a zombie worker is gone, not alive');
+t_ok(strpos($v['reason'], 'another process') === false,
+    'and is NOT blamed on pid reuse: it is the same worker, unreaped, and a '
+  . 'wrong reuse claim costs the next diagnosis');
+Scanner::procSnapshot(true);
+t_eq(1, Scanner::reapStaleJobs(), 'the row is closed out');
+t_ok(strpos((string) $job($zJob)['stop_reason'], 'would not die') === false,
+    'without claiming the process would not die -- it died correctly');
+$rmproc(NOPID + 3);
+
+// ══ 12. A backup pause that nobody owns must not switch the watchdog off ═══
+// waitOutBackup() wrote '1' and cleared it only when the backup finished.
+// A scan cancelled while waiting, or one that gave up after
+// scan_backup_max_wait (four hours), left it set for ever: from then on every
+// identity-confirmed worker was judged 'paused' however long it had been
+// silent, and the page claimed a backup that was long over.
+Database::setSetting('scan_paused_for_backup', '1');
+t_eq(false, Scanner::pausedForBackup(),
+    'a pause flag with no backup running is stale, not a pause: it was '
+  . 'exempting every later scan from the stall timer');
+t_eq('0', Database::setting('scan_paused_for_backup'),
+    'and it is cleared on the spot rather than left to be read again');
+
+$wo = t_fn_body(t_code($repo . '/backend/lib/Scanner.php'), 'waitOutBackup', 'php');
+t_eq(2, substr_count($wo, 'self::endBackupPause'),
+    'both early exits give the pause back -- the cancelled path and the '
+  . 'max-wait path, which are the two that left it set');
+t_ok(substr_count($wo, 'return false;') === 2,
+    'and those are still the only two ways out that abandon the scan');
+
+// ══ 13. The stall floor is tied to the batch timeout ═══════════════════════
+// The spec justifies 1800s with "a batch is already capped at 600s, so three
+// missed batches is a wedge". The two settings were clamped independently
+// (batch 60..3600, stall 300..86400), so a legal pair had the watchdog
+// killing a scan that was working through one slow archive -- the exact
+// outcome the spec put out of scope.
+Database::setSetting('scan_batch_timeout', '600');
+Database::setSetting('scan_stall_timeout', '1800');
+t_eq(600, Scanner::batchTimeout(), 'the batch limit is read from one place');
+t_eq(1800, Scanner::stallTimeout(), 'and the default pair is unchanged');
+
+Database::setSetting('scan_stall_timeout', '300');
+t_eq(1800, Scanner::stallTimeout(),
+    'a 300s stall timeout cannot stand against a 600s batch: a healthy worker '
+  . 'reports nothing for as long as one batch may take');
+Database::setSetting('scan_batch_timeout', '3600');
+t_eq(10800, Scanner::stallTimeout(),
+    'and raising the batch limit raises the floor with it, to three batches');
+Database::setSetting('scan_batch_timeout', '600');
+Database::setSetting('scan_stall_timeout', '86400');
+t_eq(86400, Scanner::stallTimeout(), 'an operator can still raise it to a day');
+Database::setSetting('scan_stall_timeout', '999999');
+t_eq(86400, Scanner::stallTimeout(),
+    'but no further, or the watchdog outlives the schedule it protects');
+Database::setSetting('scan_stall_timeout', '1800');
+
+// ══ 14. The refusal card must not claim a job is in progress ═══════════════
+// scheduleRefusal() computed the blocking job's age from four settings without
+// asking whether that job was still running, so the Scanner page stated "in
+// progress for 2d 9h", age still climbing, for a job the product had just
+// marked interrupted -- and for one that did not exist at all.
+$blocker = Database::insert('scan_jobs', [
+    'scan_type' => 'full', 'status' => 'running',
+    'started_at' => time() - 205200, 'scan_path' => '/home',
+    'worker_pid' => NOPID + 9, 'worker_pgid' => 0,
+]);
+Scanner::recordScheduleRefusal('Already running 1 of a maximum 1 scan(s) (job '
+    . $blocker . ').', ['id' => $blocker, 'started_at' => time() - 205200]);
+$ref = Scanner::scheduleRefusal();
+t_eq(true, $ref['job_live'], 'while the blocking job really is running, it is reported so');
+t_ok($ref['job_age'] >= 205200, 'with its age, which is the number that tells the story');
+
+// Close it out exactly as a reconcile pass would.
+Scanner::procSnapshot(true);
+t_eq(1, Scanner::reapStaleJobs(), 'the blocking row is reconciled');
+$ref = Scanner::scheduleRefusal();
+t_eq(false, $ref['job_live'],
+    'and the card no longer claims it is in progress -- the reconcile that '
+  . 'closed it out used to leave that claim standing for ever with '
+  . 'scan_schedule off');
+t_eq(0, $ref['job_age'], 'with no age to misread');
+t_eq('interrupted', $ref['job_status'], 'saying instead what became of it');
+t_contains($ref['reason'], 'maximum 1 scan', 'while the refusal itself is still reported');
+
+Database::setSetting('scan_schedule_refused_job', '987654');
+$ref = Scanner::scheduleRefusal();
+t_eq(false, $ref['job_live'], 'a blocking job that does not exist at all is not in progress');
+t_eq('', $ref['job_status'], 'and its status is reported as unknown, not invented');
+Scanner::clearScheduleRefusal();
 
 // ══ 9. Wiring: the pass runs where the incident needed it to ═══════════════
 // Structural, because these are the callers that were missing. The behaviour
@@ -433,8 +663,19 @@ $install = file_get_contents($repo . '/install.sh');
 t_contains($install, 'scan-reap',
     'installing the release closes out the row already stuck on the server, '
   . 'rather than leaving an operator to run a command');
-t_ok(strpos($install, 'scan-reap') < strpos($install, 'INSTALL-ONLY SECTIONS'),
-    'and it runs on --register-only, which is the path an upgrade takes');
+/* It has to sit PAST the end of the install-only span.
+ *
+ * It was above it, where on a full install over an existing install the CLI it
+ * calls does not exist yet -- the old code directory has been removed and the
+ * new one is copied further down -- so the guard was false and the block was
+ * skipped in silence, on one of the two paths its own comment claimed. Below
+ * the span the files are in place on both: a full install, and
+ * install.sh --register-only, which is what update.sh runs. */
+t_ok(strpos($install, 'scan-reap') > strpos($install, 'end INSTALL-ONLY SECTIONS'),
+    'the reconcile runs after the files are installed, so a full install '
+  . 'reaches it as well as --register-only');
+t_contains($install, 'Skipping the in-progress scan reconcile',
+    'and a pass that cannot run says so instead of being skipped quietly');
 
 $cli = t_code($repo . '/backend/cli/serverscrub.php');
 $cliCase = substr($cli, strpos($cli, "case 'scan-reap':"), 1200);

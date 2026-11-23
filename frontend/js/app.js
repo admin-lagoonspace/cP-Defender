@@ -1310,12 +1310,25 @@ function renderScanScheduleNotice(res) {
       + 'it resumes on its own and is not counted as stuck.</div>');
   }
   if (ref && Number(ref.at) > 0) {
+    /* The blocking job is described in the tense the server can defend.
+     *
+     * This said "(blocked by job 12467, in progress for 2d 9h)" from four
+     * stored settings, with the age counting up, for a job the product had
+     * already closed out -- and for one that did not exist at all. The age is
+     * only sent when the job is genuinely still in progress; when it is not,
+     * the card says what became of it instead of implying it is still there. */
+    let blocker = '';
+    if (Number(ref.job) > 0 && ref.job_live) {
+      blocker = ' <span class="dim">(blocked by job ' + Number(ref.job)
+              + ', in progress for ' + esc(age(ref.job_age)) + ')</span>';
+    } else if (Number(ref.job) > 0) {
+      blocker = ' <span class="dim">(job ' + Number(ref.job) + ' is no longer running'
+              + (ref.job_status ? ' — it ended as ' + esc(String(ref.job_status)) : '')
+              + '; the next scheduled tick will start a scan)</span>';
+    }
     lines.push('<div><b style="color:var(--amber)">The scheduled scan did not start.</b> '
       + 'Last refused ' + esc(reltime(Number(ref.at))) + ': ' + esc(String(ref.reason || ''))
-      + (Number(ref.job) > 0
-          ? ' <span class="dim">(blocked by job ' + Number(ref.job) + ', in progress for '
-            + esc(age(ref.job_age)) + ')</span>'
-          : '')
+      + blocker
       + '</div>');
   }
   if (unknown) {

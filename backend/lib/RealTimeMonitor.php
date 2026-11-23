@@ -288,10 +288,17 @@ class RealTimeMonitor {
     public const JETBACKUP_JOB_HINTS = ['jetbackup5/core/queue', 'jetbackup/core/queue',
                                         'jb5 backup', 'jetbackup backup'];
 
-    public static function backupProcesses(): array
+    /**
+     * @param string|null $procDir where the process table lives. Defaults to
+     *        /proc; Scanner passes its own seam through so the backup gate can
+     *        be exercised against a process table a test controls, which is
+     *        the only way to assert "paused for a backup" without one running.
+     */
+    public static function backupProcesses(?string $procDir = null): array
     {
         $found = [];
-        if (!is_dir('/proc')) { return $found; }
+        $proc  = ($procDir !== null && $procDir !== '') ? $procDir : '/proc';
+        if (!is_dir($proc)) { return $found; }
 
         $raw = (string) (Database::setting('rt_backup_procs', 'jetbackup,rsync') ?? '');
         $names = [];
@@ -314,7 +321,7 @@ class RealTimeMonitor {
         }
 
         $self = getmypid();
-        foreach (glob('/proc/[0-9]*') ?: [] as $dir) {
+        foreach (glob($proc . '/[0-9]*') ?: [] as $dir) {
             $pid = (int) basename($dir);
             if ($pid <= 1 || $pid === $self) { continue; }
 

@@ -261,11 +261,18 @@ class Scanner {
      * every question a pass asks -- does this pid exist at all, and is it a
      * scan worker, and whose.
      *
-     * Metadata only: cmdline, and nothing under /home. Cached for 5 seconds
-     * because liveScans() and activeScan() both reconcile and a single API
-     * request calls both.
+     * Metadata only: cmdline, and the state out of stat for a pid with no
+     * cmdline. Nothing under /home. Cached for 5 seconds because liveScans()
+     * and activeScan() both reconcile and a single API request calls both.
      *
-     * @return array{available:bool,pids:array<int,bool>,workers:array<int,int>,reason:string}
+     * IT CARRIES THE TIME IT WAS TAKEN, and that is not decoration. A snapshot
+     * is evidence about one instant. Using one from before a job existed to
+     * conclude that the job's worker is absent is how the scheduler came to
+     * mark its own healthy, just-started scan 'interrupted' -- see judgeJob()
+     * and reapStaleJobs(), which both refuse to act on evidence older than the
+     * thing being judged.
+     *
+     * @return array{available:bool,at:int,pids:array<int,bool>,workers:array<int,int>,reason:string}
      */
     public static function procSnapshot(bool $fresh = false): array
     {
@@ -278,7 +285,8 @@ class Scanner {
         if (!is_dir($dir)) {
             // Not "everything is dead". Nothing can be judged by identity
             // here, and a wrong "dead" verdict kills a scan that is working.
-            return $snap = ['available' => false, 'pids' => [], 'workers' => [],
+            return $snap = ['available' => false, 'at' => $at, 'pids' => [],
+                            'workers'   => [],
                             'reason'    => 'the process table (' . $dir . ') is not'
                                          . ' readable on this host, so a worker'
                                          . ' cannot be identified'];
@@ -291,12 +299,25 @@ class Scanner {
         foreach (glob($dir . '/[0-9]*') ?: [] as $d) {
             $pid = (int) basename($d);
             if ($pid <= 1) { continue; }
-            $pids[$pid] = true;
-            if ($pid === $self) { continue; }
 
             $raw = @file_get_contents($d . '/cmdline');
-            if ($raw === false || $raw === '') { continue; }
-            $cmd = str_replace("\0", ' ', $raw);
+            $cmd = ($raw === false || $raw === '') ? '' : str_replace("\0", ' ', $raw);
+
+            // A zombie is not a process, it is a death certificate waiting to
+            // be collected: it holds the pid until its parent waits on it, has
+            // an empty cmdline, and cannot be signalled. Counting it as
+            // present made stopScan() report "the worker process would not
+            // die" about a worker that had died correctly, and made a
+            // reconcile blame "another process" for a pid that was still the
+            // same worker -- which is the one sentence that is supposed to
+            // identify pid reuse. Only pids with no cmdline are checked, so
+            // this costs a stat read for zombies and kernel threads, not for
+            // every process on the host.
+            if ($cmd === '' && self::pidIsZombie($pid)) { continue; }
+
+            $pids[$pid] = true;
+            if ($pid === $self || $cmd === '') { continue; }
+
             if (strpos($cmd, 'backend/cron/scan.php') === false) { continue; }
 
             // Parsed, not prefix-matched. strpos($cmd, '--job-id=124') is also
@@ -304,8 +325,23 @@ class Scanner {
             // worker onto another job's row.
             $workers[$pid] = preg_match('/--job-id=(\d+)/', $cmd, $m) ? (int) $m[1] : 0;
         }
-        return $snap = ['available' => true, 'pids' => $pids,
+        return $snap = ['available' => true, 'at' => $at, 'pids' => $pids,
                         'workers' => $workers, 'reason' => ''];
+    }
+
+    /**
+     * Has this pid exited and not yet been waited on?
+     *
+     * Field 3 of /proc/<pid>/stat is the state letter; the command in field 2
+     * can contain spaces and parentheses, so it is parsed from the LAST
+     * closing parenthesis, the same way pgidOf() does it.
+     */
+    private static function pidIsZombie(int $pid): bool
+    {
+        $stat = @file_get_contents(self::procDir() . '/' . $pid . '/stat');
+        if ($stat === false || $stat === '') { return false; }
+        $tail = substr($stat, strrpos($stat, ')') + 2);
+        return substr($tail, 0, 1) === 'Z';
     }
 
     /**
@@ -428,16 +464,42 @@ class Scanner {
     }
 
     /**
+     * How long ONE clamscan invocation may run before that batch is abandoned.
+     *
+     * The single definition, because the stall watchdog has to know it: see
+     * stallTimeout(). One was found holding 13 minutes of CPU and 1.3GB of RSS
+     * on a single file, and while it does the worker is blocked and reports no
+     * progress at all.
+     */
+    public static function batchTimeout(): int
+    {
+        return max(60, min(3600,
+            (int) (Database::setting('scan_batch_timeout', '600') ?? 600)));
+    }
+
+    /**
      * How long a job may report no progress before it is not working.
      *
-     * Clamped 300-86400. Below five minutes a slow batch on a large file
-     * would be reaped as wedged; above a day the watchdog outlives the
-     * schedule it exists to protect.
+     * COUPLED TO THE BATCH TIMEOUT ON PURPOSE. progress_at is only written
+     * when a batch COMPLETES, so the longest a healthy worker can legitimately
+     * be silent is one batch. The two settings were clamped independently --
+     * scan_batch_timeout 60..3600, this one 300..86400 -- so a legal pair
+     * (batch 3600 against the default stall of 1800, or the documented minimum
+     * stall of 300 against the default batch of 600) had the watchdog killing
+     * a scan that was working through one slow archive. That is precisely the
+     * outcome the spec put out of scope: a cap that silently destroys coverage
+     * is worse than a long scan.
+     *
+     * So the floor is three batches: long enough that three consecutive
+     * timeouts are not a slow file, short enough to still catch a wedge.
+     * Clamped above at a day, or the watchdog outlives the schedule it exists
+     * to protect.
      */
     public static function stallTimeout(): int
     {
-        $n = (int) (Database::setting('scan_stall_timeout', '1800') ?? 1800);
-        return max(300, min(86400, $n));
+        $n     = (int) (Database::setting('scan_stall_timeout', '1800') ?? 1800);
+        $floor = max(300, 3 * self::batchTimeout());
+        return max($floor, min(86400, $n));
     }
 
     /**
@@ -453,10 +515,35 @@ class Scanner {
         return $beat > 0 ? $beat : (int) ($job['started_at'] ?? 0);
     }
 
-    /** Is a scan asleep on purpose, waiting out a backup? */
+    /**
+     * Is a scan asleep on purpose, waiting out a backup?
+     *
+     * THE FLAG HAS NO OWNER, so it is checked against the machine rather than
+     * trusted. waitOutBackup() writes '1' and used to clear it only on its
+     * normal resume path: a worker cancelled while waiting, or one that gave
+     * up after scan_backup_max_wait (four hours), left it set for ever. From
+     * then on every identity-confirmed worker was judged 'paused' however long
+     * it had been silent -- the stall rule switched off permanently -- and the
+     * Scanner page reported a backup that backupRunning() said was not
+     * running. Both halves are the kind of claim this product is not allowed
+     * to make.
+     *
+     * waitOutBackup() now clears it on every exit; this is the second line of
+     * defence, for a flag left behind by a worker that was killed outright.
+     * The process check only runs when the flag is set, which on a healthy
+     * server is never.
+     */
     public static function pausedForBackup(): bool
     {
-        return (Database::setting('scan_paused_for_backup', '0') ?? '0') === '1';
+        if ((Database::setting('scan_paused_for_backup', '0') ?? '0') !== '1') {
+            return false;
+        }
+        if (self::backupRunning()) { return true; }
+
+        Database::setSetting('scan_paused_for_backup', '0');
+        Logger::info('scan_paused_for_backup was set with no backup running - '
+                   . 'cleared; it was exempting every scan from the stall timer');
+        return false;
     }
 
     /**
@@ -482,6 +569,18 @@ class Scanner {
      *   unknown leave it: liveness could not be established, and a wrong
      *           "dead" verdict kills a scan that is working
      *
+     * NO NEGATIVE VERDICT IS FORMED FROM EVIDENCE OLDER THAN THE JOB. The
+     * snapshot is shared across a pass and cached for seconds, and the
+     * scheduler is one process that runs for minutes: it reconciled at the top
+     * of a tick, the scan task then started a scan, and a later task in the
+     * same tick reconciled again from the cached snapshot -- which predated
+     * the worker. The row was rewritten to 'interrupted', 'worker pid <n> is
+     * gone', while pid <n> was running that exact job; the worker was orphaned
+     * with no row to find it, and liveScans() returning 0 let a SECOND
+     * concurrent sweep start on a 132-account host. Two rules stop it: a
+     * startup grace for a recorded pid as well as a missing one, and a refusal
+     * to judge a job against a snapshot taken before it settled.
+     *
      * @param array|null $snap one procSnapshot() shared by the whole pass
      * @return array{verdict:string,pid:int,reason:string}
      */
@@ -492,6 +591,11 @@ class Scanner {
         $id   = (int) ($job['id'] ?? 0);
         $pid  = (int) ($job['worker_pid'] ?? 0);
         $born = (int) ($job['started_at'] ?? 0);
+        // When this job stops being "starting up": the worker writes its pid
+        // as its first act, so after the grace window a recorded pid that no
+        // process holds is a worker that died.
+        $settled = $born > 0 ? $born + self::WORKER_GRACE : 0;
+        $snapAt  = (int) ($snap['at'] ?? 0);
 
         // A worker for this job running under some OTHER pid is the one thing
         // that must never be called dead: marking a live worker interrupted
@@ -520,6 +624,28 @@ class Scanner {
             return ['verdict' => 'dead', 'pid' => 0,
                     'reason'  => 'no pid recorded within ' . self::WORKER_GRACE
                                . 's of starting'];
+        }
+
+        // A pid IS recorded from here on.
+        //
+        // Still starting. The worker records its pid as its first act, but the
+        // row exists before the process does, and a snapshot taken in between
+        // sees neither.
+        if ($born > 0 && ($now - $born) < self::WORKER_GRACE) {
+            return ['verdict' => 'alive', 'pid' => $pid,
+                    'reason'  => 'started ' . ($now - $born) . 's ago, inside the '
+                               . self::WORKER_GRACE . 's startup grace'];
+        }
+
+        // The evidence is older than the thing it is being used to judge, so
+        // it cannot show that this worker is absent -- it can only show that
+        // the worker had not started yet. reapStaleJobs() answers this by
+        // taking a fresh look before it acts on anything.
+        if ($snapAt > 0 && $settled > 0 && $snapAt < $settled) {
+            return ['verdict' => 'unknown', 'pid' => $pid,
+                    'reason'  => 'the process table was last read '
+                               . max(0, $now - $snapAt) . 's ago, before this job'
+                               . ' had a worker, so it cannot show the worker is gone'];
         }
 
         if (!$snap['available']) {
@@ -618,17 +744,38 @@ class Scanner {
      */
     public static function reapStaleJobs(?int $limit = null): int
     {
-        $max  = $limit !== null ? max(1, min(self::REAP_MAX, $limit)) : self::REAP_MAX;
-        $snap = self::procSnapshot();
-        $now  = time();
-        $rows = Database::fetchAll(
-            "SELECT * FROM scan_jobs WHERE status IN ('running','pending','cancelling')
-              ORDER BY id ASC LIMIT " . (int) $max
-        );
+        $max      = $limit !== null ? max(1, min(self::REAP_MAX, $limit)) : self::REAP_MAX;
+        $rows     = self::reapCandidates($max);
+        $snap     = self::procSnapshot();
+        $now      = time();
+        $verdicts = self::judgeAll($rows, $snap, $now);
+
+        /* NOTHING IS WRITTEN FROM A SNAPSHOT THAT IS ABOUT TO CHANGE SOMETHING.
+         *
+         * The scheduler reconciled at the top of a tick, started the daily
+         * scan, and a later task in the same tick reconciled again from the
+         * cached snapshot -- which predated the worker. It marked its own
+         * healthy scan 'interrupted' with 'worker pid <n> is gone' while that
+         * pid was running that job, orphaned the worker, and then let a SECOND
+         * concurrent sweep start because liveScans() read 0.
+         *
+         * So the cheap cached snapshot decides only whether there is anything
+         * to do. If there is, the rows are read again -- a heartbeat may have
+         * moved in between -- and judged again from a fresh look at /proc. Two
+         * enumerations in the worst case, one when nothing is wrong, which is
+         * every pass on a healthy server. */
+        if (self::passWouldAct($verdicts)) {
+            $snap     = self::procSnapshot(true);
+            $now      = time();
+            $rows     = self::reapCandidates($max);
+            $verdicts = self::judgeAll($rows, $snap, $now);
+        }
+
         $n = 0; $adopted = 0; $left = 0; $unknown = 0; $detail = []; $err = '';
 
         foreach ($rows as $job) {
-            $v   = self::judgeJob($job, $snap, $now);
+            $id  = (int) $job['id'];
+            $v   = $verdicts[$id];
             $act = 'left alone';
             try {
                 if ($v['verdict'] === 'adopt') {
@@ -636,9 +783,9 @@ class Scanner {
                     $pid   = $found ? $found[0] : (int) $v['pid'];
                     Database::query(
                         'UPDATE scan_jobs SET worker_pid=?, worker_pgid=? WHERE id=?',
-                        [$pid, self::pgidOf($pid), (int) $job['id']]
+                        [$pid, self::pgidOf($pid), $id]
                     );
-                    Logger::info('Scan job ' . $job['id'] . ' '
+                    Logger::info('Scan job ' . $id . ' '
                                . 'adopted the running worker ' . $pid);
                     $act = 'adopted worker ' . $pid;
                     $adopted++;
@@ -649,11 +796,11 @@ class Scanner {
                     Database::query(
                         "UPDATE scan_jobs SET status='interrupted', finished_at=?,"
                       . ' stop_reason=? WHERE id=?',
-                        [$now, $why, (int) $job['id']]
+                        [$now, $why, $id]
                     );
                     // Otherwise the customer's page shows a scan still running
                     // that nothing is working on, forever.
-                    self::publishUserStatus((int) $job['id']);
+                    self::publishUserStatus($id);
                     self::announceReap($job, $why);
                     $v['reason'] = $why;
                     $act = 'marked interrupted';
@@ -667,23 +814,16 @@ class Scanner {
                 // A partially reconciled set is acceptable; a crash that takes
                 // the scheduler tick down with it is not.
                 $err = $e->getMessage();
-                Logger::error('Scan reconcile aborted on job ' . $job['id'] . ': ' . $err);
+                Logger::error('Scan reconcile aborted on job ' . $id . ': ' . $err);
                 break;
             }
 
-            $detail[] = ['id'      => (int) $job['id'],
+            $detail[] = ['id'      => $id,
                          'path'    => (string) ($job['scan_path'] ?? ''),
                          'status'  => (string) ($job['status'] ?? ''),
                          'verdict' => $v['verdict'],
                          'reason'  => $v['reason'],
                          'action'  => $act];
-        }
-
-        // Nothing is running, so nothing is paused. Left at '1' by a worker
-        // that was killed mid-wait, this flag would switch stall detection off
-        // for every job that followed it.
-        if ($n > 0 && count($rows) === $n && self::pausedForBackup()) {
-            Database::setSetting('scan_paused_for_backup', '0');
         }
 
         self::$lastPass = ['available' => $snap['available'], 'reason' => $snap['reason'],
@@ -697,6 +837,40 @@ class Scanner {
                        . ' in-progress job(s) left as they are');
         }
         return $n;
+    }
+
+    /** The in-progress rows one pass may look at, oldest first and bounded. */
+    private static function reapCandidates(int $max): array
+    {
+        return Database::fetchAll(
+            "SELECT * FROM scan_jobs WHERE status IN ('running','pending','cancelling')
+              ORDER BY id ASC LIMIT " . (int) $max
+        );
+    }
+
+    /**
+     * Judge every candidate from the one snapshot, writing nothing.
+     *
+     * @return array<int,array> verdict per job id
+     */
+    private static function judgeAll(array $rows, array $snap, int $now): array
+    {
+        $out = [];
+        foreach ($rows as $job) {
+            $out[(int) $job['id']] = self::judgeJob($job, $snap, $now);
+        }
+        return $out;
+    }
+
+    /** Would any of these verdicts change a row, a setting or a process? */
+    private static function passWouldAct(array $verdicts): bool
+    {
+        foreach ($verdicts as $v) {
+            if (!in_array($v['verdict'], ['alive', 'paused', 'unknown'], true)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -797,19 +971,45 @@ class Scanner {
      * The age of the blocking job is computed here rather than stored: a
      * stored age is wrong the second after it is written, and "running for
      * 57h" is the number that tells an operator this is not a scan.
+     *
+     * AND THE JOB IS CHECKED, not assumed. The first version read four
+     * settings and computed the age without ever asking whether that job was
+     * still in progress -- so the moment a reconcile pass closed the blocking
+     * row out, the Scanner page went on stating in the present tense that a
+     * job was "in progress for 2d 9h", with the age still counting up, for a
+     * job that had been marked interrupted or did not exist at all. That is
+     * the same class of false claim this whole change exists to remove, and
+     * with scan_schedule off nothing would ever have corrected it.
+     *
+     * job_live says whether the blockage is still real; job_status is what the
+     * row says now, '' when the row has gone. job_age is 0 unless the job is
+     * genuinely still in progress, so there is no age to misread.
      */
     public static function scheduleRefusal(): ?array
     {
         $at = (int) (Database::setting('scan_schedule_refused_at', '0') ?? 0);
         if ($at <= 0) { return null; }
+
+        $jobId   = (int) (Database::setting('scan_schedule_refused_job', '0') ?? 0);
         $jobBorn = (int) (Database::setting('scan_schedule_refused_job_started', '0') ?? 0);
+
+        $status = '';
+        $live    = false;
+        if ($jobId > 0) {
+            $row = Database::fetchOne('SELECT status FROM scan_jobs WHERE id=?', [$jobId]);
+            $status = (string) ($row['status'] ?? '');
+            $live   = in_array($status, ['running', 'pending', 'cancelling'], true);
+        }
+
         return [
             'at'          => $at,
             'ago'         => max(0, time() - $at),
             'reason'      => (string) (Database::setting('scan_schedule_refused_why', '') ?? ''),
-            'job'         => (int) (Database::setting('scan_schedule_refused_job', '0') ?? 0),
+            'job'         => $jobId,
+            'job_live'    => $live,
+            'job_status'  => $status,
             'job_started' => $jobBorn,
-            'job_age'     => $jobBorn > 0 ? max(0, time() - $jobBorn) : 0,
+            'job_age'     => ($live && $jobBorn > 0) ? max(0, time() - $jobBorn) : 0,
         ];
     }
 
@@ -892,7 +1092,10 @@ class Scanner {
     public static function reapOrphanClamscans(): array
     {
         $killed = [];
-        if (!is_dir('/proc')) { return $killed; }
+        // Through procDir() like every other process read in this file: this
+        // is the one function here that SIGNALS processes, so it was the worst
+        // possible one for the test seam not to reach.
+        if (!is_dir(self::procDir())) { return $killed; }
 
         $deadGroups = [];
         foreach (Database::fetchAll(
@@ -1602,8 +1805,11 @@ class Scanner {
         // one file -- and while it does, the worker is blocked and the scan
         // makes no progress at all. The batch is abandoned rather than the
         // scan, so one bad file costs this batch and nothing more.
-        $timeout = max(60, min(3600,
-            (int) (Database::setting('scan_batch_timeout', '600') ?? 600)));
+        // One definition, two readers: the stall watchdog derives its floor
+        // from this, because a healthy worker reports nothing for as long as a
+        // batch can take. Clamping the two independently had a legal pair of
+        // settings reaping a scan that was working.
+        $timeout = self::batchTimeout();
 
         // The quota goes OUTSIDE timeout, so timeout and clamscan are both
         // inside the capped scope and the 124 handling below still works.
@@ -2649,20 +2855,24 @@ This file was removed and not kept. Restore it from your backups
      * politely idle at 1% CPU while clamscan ran flat out at 58% in
      * uninterruptible I/O wait, competing with rsync for the same disks. The
      * quiet half of the product was suspended and the loud half was not.
+     *
+     * @param bool $fresh ignore the 30s cache. Used where the answer has to
+     *        be current -- the wait loop, and a test that has just changed
+     *        what the process table says.
      */
-    public static function backupRunning(): array
+    public static function backupRunning(bool $fresh = false): array
     {
         static $cachedAt = 0;
         static $cached   = [];
 
-        if ((time() - $cachedAt) < 30) { return $cached; }
+        if (!$fresh && (time() - $cachedAt) < 30) { return $cached; }
 
         if (!class_exists('RealTimeMonitor')) {
             $lib = SG_ROOT . '/backend/lib/RealTimeMonitor.php';
             if (is_file($lib)) { require_once $lib; }
         }
         $cached   = class_exists('RealTimeMonitor')
-            ? RealTimeMonitor::backupProcesses()
+            ? RealTimeMonitor::backupProcesses(self::procDir())
             : [];
         $cachedAt = time();
         return $cached;
@@ -2746,11 +2956,19 @@ This file was removed and not kept. Restore it from your backups
         $waited  = 0;
         $logged  = false;
 
+        // EVERY exit from here clears the flag, not just the resume path.
+        //
+        // The two early returns below left it at '1', and nothing else owns
+        // it: a scan cancelled while waiting, or one that gave up after
+        // scan_backup_max_wait, switched the stall watchdog off for every scan
+        // that followed and left the panel reporting a backup that had
+        // finished four hours earlier. See endBackupPause().
         while ($running) {
-            if (self::isCancelled($jobId)) { return false; }
+            if (self::isCancelled($jobId)) { self::endBackupPause($logged); return false; }
             if ($waited >= $maxWait) {
                 Logger::warn("Scan job {$jobId}: backup still running after {$waited}s; "
                            . 'deferring the rest of this scan');
+                self::endBackupPause($logged);
                 return false;
             }
             if (!$logged) {
@@ -2770,6 +2988,23 @@ This file was removed and not kept. Restore it from your backups
             Database::setSetting('scan_paused_for_backup', '0');
         }
         return true;
+    }
+
+    /**
+     * Give up the backup pause this worker took.
+     *
+     * Called from every exit of waitOutBackup(), not only the one where the
+     * backup finished. The flag it clears has no other owner: left at '1' by a
+     * worker that was cancelled or that hit scan_backup_max_wait, it exempted
+     * every later scan from the stall timer and had the Scanner page reporting
+     * a backup that was long over. pausedForBackup() checks the machine as
+     * well, for a worker killed outright, but this is where the state is
+     * supposed to be given back.
+     */
+    private static function endBackupPause(bool $logged): void
+    {
+        if (!$logged) { return; }
+        Database::setSetting('scan_paused_for_backup', '0');
     }
 
     /** True once a stop has been requested for this job. */
@@ -2913,10 +3148,27 @@ This file was removed and not kept. Restore it from your backups
         return isset($f[2]) ? (int) $f[2] : 0;
     }
 
+    /**
+     * Is this pid a process that is still executing?
+     *
+     * A zombie is NOT: it has exited and is holding its pid until its parent
+     * waits on it, and no signal will reach it. Counting one as alive made
+     * stopScan() report that a worker "would not die" when it had died
+     * correctly, and on a host whose init does not reap promptly that is every
+     * stop.
+     *
+     * Where there is no /proc this falls back to posix_kill($pid, 0), which is
+     * also false on EPERM -- so a process owned by another uid reads as
+     * absent. Worker, scheduler, CLI and panel all run as root, so that is
+     * latent rather than live, and judgeJob() never turns an unverifiable pid
+     * into a 'dead' verdict on its own.
+     */
     private static function processAlive(int $pid): bool
     {
         if ($pid <= 1) { return false; }
-        if (is_dir(self::procDir())) { return is_dir(self::procDir() . '/' . $pid); }
+        if (is_dir(self::procDir())) {
+            return is_dir(self::procDir() . '/' . $pid) && !self::pidIsZombie($pid);
+        }
         if (function_exists('posix_kill')) { return @posix_kill($pid, 0); }
         @exec('kill -0 ' . $pid . ' 2>/dev/null', $o, $rc);
         return $rc === 0;

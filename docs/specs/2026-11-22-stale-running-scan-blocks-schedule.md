@@ -463,6 +463,90 @@ test's pid 2147483646 could never have caught it.
   now run the process-table pass on every request, and an unsmoked route is one
   whose first execution happens on a customer's server.
 
+### Revision after Shakaal's first pass (2026-11-23)
+
+`docs/findings/2026-11-23-stale-running-scan-reconcile.md` returned FAIL on one
+blocker and three majors, all in code this change introduced. Fixed; minors 5,
+6 and 8 fixed with them; the full response, with measurements, is at the end of
+that findings file. What it changes in the notes above:
+
+- **Requirement 11's "one `/proc` enumeration per pass" is now one on a pass
+  that finds nothing wrong, and two on a pass that acts.** The single cached
+  snapshot could be older than the job it was judging: the scheduler is one
+  process, it reconciled at the top of a tick, started the daily scan, and a
+  later task in the same tick judged the new job against the pre-scan snapshot
+  — marking its own healthy scan `interrupted` with `worker pid <n> is gone`,
+  orphaning the worker, and letting a second concurrent clamscan sweep start
+  because `liveScans()` read 0. A cheaper pass that can lie is not worth
+  keeping, so the cached read now only decides *whether* there is anything to
+  do, and anything that would change a row is re-read and re-judged first. The
+  second read is still shared by every candidate, so the bound is 2, not 1+N.
+- **The 120s startup grace covers a recorded pid as well as a missing one.**
+  The row exists before the process does; the grace used to apply only when
+  `worker_pid` was absent.
+- **A negative verdict is never formed from evidence older than the job.**
+  `procSnapshot()` carries the time it was taken and `judgeJob()` returns
+  `unknown` when the read predates the job settling.
+- **Requirement 5's pause is checked against the machine.** My original
+  mitigation (reset the flag when a pass closed out every in-progress row)
+  could not fire in the `scan_backup_max_wait` case, because the worker closes
+  its own row. `waitOutBackup()` now gives the pause back on every exit, and
+  `pausedForBackup()` clears a flag that no running backup supports rather than
+  letting it exempt every later scan from the stall timer.
+- **Requirement 12's card no longer claims a job is in progress without
+  establishing that it is.** `scheduleRefusal()` reads the job's current status
+  and sends `job_live` / `job_status`; `job_age` is 0 unless it really is
+  running.
+- **Requirement 4's threshold is floored at three batch timeouts.**
+  `scan_batch_timeout` and `scan_stall_timeout` were clamped independently, so
+  a legal pair reaped a healthy scan — the outcome this spec puts out of scope.
+  `Scanner::batchTimeout()` is now the single definition and feeds both.
+- **A zombie pid is treated as gone**, so `stopScan()` no longer reports that a
+  worker "would not die" when it died correctly, and a zombie is not
+  misattributed to pid reuse.
+- **The upgrade pass (requirement 13) moved below the install-only span.** It
+  was above it, where on a full install the CLI it calls does not exist yet, so
+  it was skipped in silence on that path. It now runs on a full install and on
+  `--register-only`, and says so when it is skipped.
+- **Correction to the file list above:** every *process-table* read in
+  `Scanner.php` goes through `procDir()`. `/proc/self/fd` in `fdsAboveStderr()`
+  is this process's own descriptor list, not a liveness question, and stays
+  literal.
+- **The accepted `/proc` deviation carries one more caveat:** with no readable
+  process table, `posix_kill($pid, 0)` is false on EPERM as well as ESRCH, so a
+  worker owned by another uid would read as absent and be reaped. Latent today
+  — worker, scheduler, CLI and panel all run as root — and now written into
+  `processAlive()`'s docblock.
+- **Two passing assertions in `tests/test_scan_concurrency.php` were
+  rewritten** from fixed character windows to `t_fn_body()`, because the fixes
+  above are inside the functions those windows slice. Same claims, same
+  ordering requirement, nothing weakened. Stated plainly because editing a
+  passing test is normally not allowed here.
+
+#### What to look at hardest on the second pass
+
+1. **The two-phase pass under load.** The fresh read happens between judging
+   and writing, so the remaining window is the microseconds between that read
+   and the UPDATE. I believe the startup grace covers everything inside it, but
+   it is where I would look.
+2. **`pausedForBackup()` writes a setting from what reads like an accessor.**
+   It clears a flag no running backup supports. That is self-healing and logged,
+   and it is called from `judgeJob()`, which the API reaches on every Scanner
+   page load. Worth checking it cannot fight a worker that is genuinely in
+   `waitOutBackup()` at that moment: the wait loop is driven by
+   `backupRunning()`, not by the flag, so a cleared flag does not shorten a
+   wait -- but that is the interaction to probe.
+3. **`RealTimeMonitor::backupProcesses()` gained an optional process-table
+   root.** Default unchanged, one caller passes `Scanner::procDir()`. The
+   monitor's own callers are unaffected, and that is worth confirming rather
+   than taking from me.
+4. **Acceptance 3 end to end on a host whose init reaps**, now that a zombie is
+   read as gone. In the container a setsid'd worker leaves `/proc` entirely and
+   the reason carries no "would not die"; a worker parented by a shell that
+   does not wait is the case the suite covers synthetically.
+5. **`waitOutBackup`'s `sleep(30)` window test** has 93 characters of headroom
+   and is the next fixed-window assertion in that file to break.
+
 ### What Shakaal should look at hardest
 
 1. **Acceptance 7, in a browser.** The refusal card is the only part of this

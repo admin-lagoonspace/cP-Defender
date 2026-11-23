@@ -70,8 +70,74 @@ heading or touch VERSION mid-week._
   command.
 
   Bounded, because this is a 132-account server: at most 50 candidate rows per
-  pass and **one** look at the process table, shared by every candidate.
-  Nothing under `/home` is touched and no directory is walked.
+  pass, and **one** look at the process table on a pass that finds nothing
+  wrong — which is every pass on a healthy server. A pass that is about to
+  change a row takes **one more**, shared by every candidate, before it writes
+  anything. Nothing under `/home` is touched and no directory is walked.
+
+- **No reconcile acts on evidence older than the job it is judging.** Found in
+  review, on the first scheduled tick: the snapshot of the process table is
+  cached for seconds and shared across a process, and the scheduler is one
+  process that runs for minutes. It reconciled at the top of a tick, the scan
+  task started the daily scan, and a later task in the same tick reconciled
+  again from the cached snapshot — which predated the worker. The row was
+  rewritten to `interrupted`, `worker pid 36488 is gone`, while pid 36488 was
+  running that exact job.
+
+  Three faults at once, and all three are the thing this release exists to
+  prevent: a false claim that a worker is gone; a worker orphaned with no row
+  able to find or stop it; and `liveScans()` reading zero, which defeated the
+  one-scan-at-a-time cap and let a **second** clamscan sweep start on a server
+  where each one loads the whole signature database into its own memory. It
+  also reinstated the original bug in a new form — the daily scan starts, is
+  orphaned, never finishes.
+
+  Three rules now stop it. The 120-second startup grace covers a job that
+  **has** recorded a pid, not only one that has not (the row exists before the
+  process does). A judgement from a process-table read taken before the job
+  settled returns `unknown`, not `dead`. And a pass re-reads both the rows and
+  `/proc` before it acts, so a heartbeat that moved in between, or a worker the
+  first read missed, is seen.
+
+- **A backup pause left behind by a worker no longer switches the stall rule
+  off for ever.** `waitOutBackup()` wrote `scan_paused_for_backup=1` and
+  cleared it only when the backup finished: a scan cancelled while waiting, or
+  one that gave up after `scan_backup_max_wait` (four hours), left it set. From
+  then on every worker was judged "paused" however long it had been silent, and
+  the panel reported a backup that had been over for hours. It is now given
+  back on every exit from the wait, and the flag is checked against the machine
+  before it is believed — a pause nothing is running is cleared on sight.
+
+- **The refusal card no longer claims a job is in progress after the product
+  has closed it out.** It was built from four stored settings and computed the
+  blocking job's age without asking whether that job was still running, so the
+  Scanner page said "in progress for 2d 9h", with the age still climbing, for a
+  job that had just been marked `interrupted` — and for one that did not exist
+  at all. The age is only sent when the job really is in progress; otherwise
+  the card says what became of it.
+
+- **`scan_stall_timeout` is now floored at three batch timeouts.** The two
+  settings were clamped independently (`scan_batch_timeout` 60–3600, the stall
+  300–86400), and progress is only recorded when a batch *completes*, so a
+  legal pair — a 3600s batch against the default 1800s stall, or the documented
+  minimum 300s stall against the default 600s batch — had the watchdog stopping
+  a scan that was working through one slow archive. The defaults were safe; the
+  combination was not. One definition of the batch limit now feeds both.
+
+- **A zombie worker is read as gone, which it is.** Liveness was
+  `is_dir('/proc/<pid>')`, true for a process that has exited and not yet been
+  waited on. Two false statements came out of that: `stopScan()` reporting that
+  a worker "would not die" when it had died correctly, and a reconcile blaming
+  "another process" for a pid that was still the same worker, unreaped — and
+  that second sentence is the one that is supposed to identify pid reuse for
+  whoever reads the row next.
+
+- **A full `install.sh` over an existing install reconciles too.** The pass sat
+  above the install-only section, where on a full install the CLI it calls does
+  not exist yet — the old code directory has been removed and the new one is
+  copied further down — so the guard was false and the whole step was skipped
+  in silence, on one of the two paths its own comment claimed. It now runs
+  after the files are in place, on both paths, and says so when it cannot run.
 
 - **A reconciled scan now says what happened to it.** It ends at
   `interrupted` — the status the UI already renders red — with `finished_at`
