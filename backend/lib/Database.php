@@ -424,6 +424,14 @@ class Database {
                 -- After this long waiting, the scan gives up and the next
                 -- scheduled run picks it up rather than sleeping for ever.
                 ('scan_backup_max_wait',    '14400'),
+                -- How long a scan whose worker is ALIVE may report no progress
+                -- before the job is closed out as interrupted. Half an hour: a
+                -- single clamscan batch is already capped at scan_batch_timeout
+                -- (600s), so three missed batches in a row is not a slow file,
+                -- it is a wedged worker. A job sleeping on purpose
+                -- (scan_paused_for_backup) is exempt -- waiting is not
+                -- stalling. Clamped to 300-86400 where it is read.
+                ('scan_stall_timeout',      '1800'),
                 -- Quarantine grew without limit until this existed. 0 disables
                 -- pruning, for anyone who would rather keep everything.
                 ('quarantine_retention_days', '7'),
@@ -629,6 +637,21 @@ class Database {
         // every scan, on every update) stayed invisible for months.
         if (!in_array('stop_reason', $jobCols)) {
             $db->exec("ALTER TABLE scan_jobs ADD COLUMN stop_reason TEXT NOT NULL DEFAULT ''");
+        }
+        // When this job last reported progress -- the server-side heartbeat.
+        //
+        // A scan row sat at 'running' for 57 hours on a live server and the
+        // daily schedule did not fire once in that time, because nothing
+        // could tell a worker that was WORKING from one that was wedged:
+        // recordProgress() wrote files_scanned and threats_found per batch and
+        // no timestamp at all. The only stall detection in the product was in
+        // the browser, which could print a hint and do nothing else.
+        //
+        // Additive, no backfill: a row written before this column exists keeps
+        // NULL and the Scanner heartbeat reader falls back to started_at, which is
+        // the honest reading -- "nothing has been reported since it began".
+        if (!in_array('progress_at', $jobCols)) {
+            $db->exec("ALTER TABLE scan_jobs ADD COLUMN progress_at INTEGER");
         }
         // What a disabled file's permissions were before we took them away.
         // Without it, "disable" is a one-way door: nobody can put a false

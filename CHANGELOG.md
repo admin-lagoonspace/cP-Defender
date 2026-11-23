@@ -17,6 +17,87 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+### Fixed
+
+- **A scan whose worker was gone kept the daily schedule from running for two
+  days, and the panel reported it as "running" throughout.** From a live
+  server: a scheduled full `/home` scan sat at `status='running'` for 57 hours
+  with 289,200 files recorded, and the daily sweep did not start once in that
+  time. Reported as "Scanner logs still show its running, thats ridiculous."
+
+  Reconciliation was built, shipped and being called from five places. It was
+  returning **zero**, because liveness was decided by
+  `is_dir('/proc/' . $pid)` — which asks whether *some* process holds that
+  number, never whether it is this job's scan worker. On a host with 132
+  accounts the pid space wraps in hours, so the dead worker's pid had been
+  reused by a php-fpm child or a cron and the row read alive for ever. Every
+  fifteen minutes the scheduler then found a scan "already running", declined
+  to stack a second one — correctly — left the task due, and logged one line
+  nobody was tailing. The same row also blocked `update.sh`'s post-update
+  resume.
+
+  A worker is now judged alive only when `/proc/<pid>/cmdline` names
+  `backend/cron/scan.php` **and this job's id** — the way `scanWorkerPids()`
+  has always identified one, which `jobWorkerAlive()` only ever reached for
+  when the pid was *absent*. The job id is matched as a whole number too:
+  `--job-id=124` was a prefix match for the worker of job 1247, which could
+  adopt one job's worker onto another job's row.
+
+- **A scan worker that was alive but had stopped working was never
+  reconciled.** `recordProgress()` wrote two counters per batch and no
+  timestamp, so nothing could tell a scan that was scanning from one wedged in
+  uninterruptible IO. The only stall detection in the product was in the
+  browser, which could print a hint and take no action.
+
+  `scan_jobs` gains a `progress_at` heartbeat, written by the same statement
+  that already wrote the counters — same cadence, no extra write. A job whose
+  worker is alive and identity-confirmed but has reported nothing for
+  `scan_stall_timeout` (default 1800s, clamped 300–86400) is stopped through
+  the existing `stopScan()` path and the row closed out. A row that cannot be
+  made true by killing is still made honest: if the process survives, the
+  reason says so. A scan asleep on purpose for a backup is **not** stalled and
+  is left alone, however old its heartbeat.
+
+- **Nothing reconciled on a tick of its own.** The pass now runs at the start
+  of every scheduler tick, before the task loop and independently of
+  `scan_schedule` — a server whose schedule is `off` is exactly the one where a
+  stuck row would never be looked at again, because reconciliation only
+  happened as a side effect of a scan being due. `GET scanner/jobs` reconciles
+  before it lists, so the Scanner page an operator is staring at can no longer
+  be the one place guaranteed to keep showing a dead scan. The pass also runs
+  once from `install.sh --register-only`, so the row already stuck on a server
+  is closed out by installing the release rather than by an operator running a
+  command.
+
+  Bounded, because this is a 132-account server: at most 50 candidate rows per
+  pass and **one** look at the process table, shared by every candidate.
+  Nothing under `/home` is touched and no directory is walked.
+
+- **A reconciled scan now says what happened to it.** It ends at
+  `interrupted` — the status the UI already renders red — with `finished_at`
+  and a specific `stop_reason`: `worker pid <n> is gone (that pid now belongs
+  to another process)`, `no pid recorded within 120s of starting`, or `no
+  progress for <n>m (last file at <time>); worker <n> stopped`. It also raises
+  a warning security event, so it appears in Recent events on the dashboard
+  rather than only in a log file. `serverscrub scan-reap` reports its decision
+  per job, including the jobs it deliberately left alone and the ones it could
+  not judge — "Stale jobs cleared: 0" was true and useless on the server that
+  needed it. Partial results are kept: `files_scanned`, `threats_found` and
+  the `threats` rows stand, and a reconciled job is never reported as `done`.
+
+- **Where liveness cannot be established, it is reported as unknown.** On a
+  host with no readable process table, a pid that exists cannot be confirmed as
+  this scan, so the row is left exactly as it was and the pass says it could
+  not judge — a wrong "dead" verdict would kill scans that are working. A pid
+  that provably does not exist anywhere is still closed out; that claim can
+  still be verified.
+
+- **Two days of silent 15-minute refusals are now visible on the Scanner
+  page.** Declining to start a second scan is the correct outcome and was
+  invisible outside one cron log line. The scheduler records the refusal, and
+  the page says what is in the way and how long it has been running — which is
+  the part of this incident that made it undiagnosable.
+
 ## [4.37.7] - 2026-11-20
 
 ### Fixed
