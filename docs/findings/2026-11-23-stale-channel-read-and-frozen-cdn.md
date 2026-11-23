@@ -262,9 +262,11 @@ Real runs in the container against hijacked channels, not source-text assertions
 
 ## Wasooli — second pass, 2026-11-23
 
-**Status: fixed-pending-retest.** Back to Shakaal. Preflight passes, including
+**Status: fixed-pending-retest.** Back to Shakaal. Build: this branch @ the
+commit after `cab106f`. Preflight passes against exactly this tree, including
 the docker Linux stage: 5,551 PHP assertions, 81 in
 `test_update_corroboration.py`, 40 in `test_release_mirror_verified.py`.
+VERSION still 4.37.9, no changelog heading added.
 
 ### 1. The tautology — blocker. Fixed.
 
