@@ -1220,6 +1220,49 @@ fi
 
 fi  # ═══ end INSTALL-ONLY SECTIONS ═══════════════════════════════════════════════
 
+# ── Close out scan rows whose worker is gone ──────────────────
+#
+# A scheduled full /home scan sat at status 'running' for 57 hours on a live
+# server, and because one scan at a time is the rule, the daily schedule
+# refused to start for two days -- every fifteen minutes, in silence. The row
+# looked alive because liveness was "does /proc/<pid> exist", and on a host
+# with 132 accounts that pid had been reused by something else entirely.
+#
+# The fix is in the code, but the row that is already stuck is still stuck
+# after installing it: nothing reconciles until the scheduler's next tick, and
+# an operator should not have to run a command to make the panel stop lying.
+#
+# POSITION MATTERS. This sat above the INSTALL-ONLY span, where the CLI it
+# calls does not exist yet on a full install -- the old code directory has
+# been removed by then and the new one is copied further down -- so the guard
+# was false and the whole block was skipped in silence, on the one path whose
+# comment claimed it ran. Here, just past the end of that span, the files are
+# in place on BOTH paths: a full install and install.sh --register-only, which
+# is what update.sh runs.
+#
+# In install.sh rather than update.sh because an update runs the INSTALLED
+# (old) update.sh, so a step added there would first run one release after it
+# was written.
+#
+# Bounded and read-only on the filesystem: at most 50 in-progress rows, one
+# look at the process table, nothing under /home walked. Never fatal.
+if [[ -n "${SG_PHP:-}" && -f "${INSTALL_DIR}/backend/cli/serverscrub.php" \
+      && -f "${INSTALL_DIR}/database/serverscrub.db" ]]; then
+  if _SG_REAP_OUT="$("$SG_PHP" "${INSTALL_DIR}/backend/cli/serverscrub.php" scan-reap 2>&1)"; then
+    printf '%s\n' "$_SG_REAP_OUT" | sed 's/^/    /'
+    ok "  In-progress scan rows reconciled against what is really running"
+  else
+    warn "  Could not reconcile in-progress scan rows — run by hand:"
+    warn "    serverscrub scan-reap"
+  fi
+else
+  # Said out loud rather than skipped quietly: a reconcile that did not happen
+  # is the difference between a panel that tells the truth after an upgrade and
+  # one that does not.
+  info "  Skipping the in-progress scan reconcile (no database or no CLI yet)"
+fi
+
+
 # ── Firewall & WAF integration (CSF/LFD + ModSecurity) ─────────────────────────
 # These wire ServerScrub into the server's existing security stack. They are
 # idempotent (guarded by grep) so they run safely on both fresh installs and

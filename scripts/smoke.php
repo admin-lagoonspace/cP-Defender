@@ -44,6 +44,13 @@ $routes = [
     // whose clamp has never been proved to produce valid SQL.
     ['GET', 'scanner/jobs'],
     ['GET', 'scanner/jobs?limit=5'],
+    // Both of these now RECONCILE before they answer -- a dead scan must not
+    // keep being reported as running by the page an operator is looking at --
+    // so they execute Scanner's process-table pass on every load. A route that
+    // is not smoke-tested is one whose first execution is on a customer's
+    // server.
+    ['GET', 'scanner/active'],
+    ['GET', 'scanner/running'],
     ['GET', 'firewall/stats'],
     ['GET', 'firewall/rules'],
     ['GET', 'firewall/blocked'],

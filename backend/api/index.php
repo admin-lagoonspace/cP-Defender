@@ -537,8 +537,18 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
         // appeared for a scan THIS browser tab had started. A scan started by
         // cron, or by another admin, or before a page reload, ran with no way
         // to stop it from the interface at all.
+        // GET scanner/active — the scan in progress, if there is one, plus the
+        // reasons the Scanner page needs to tell the truth about one that is
+        // NOT in progress: the last time the scheduled scan was refused and
+        // what was in the way, and whether a scan is asleep for a backup
+        // rather than stuck. activeScan() reconciles first, so this route
+        // cannot be the thing that keeps reporting a dead scan as running.
         case 'active':
-            return ['success' => true, 'data' => Scanner::activeScan()];
+            return ['success'  => true,
+                    'data'     => Scanner::activeScan(),
+                    'paused'   => Scanner::pausedForBackup(),
+                    'refusal'  => Scanner::scheduleRefusal(),
+                    'reconcile'=> Scanner::lastReapPass()];
         case 'start':
             return $method === 'POST'
                 ? (function () use ($scanner, $body) {
@@ -590,11 +600,20 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
             return $method === 'POST'
                 ? (function () {
                     $jobs = Scanner::reapStaleJobs();
+                    $pass = Scanner::lastReapPass();
                     $pids = Scanner::reapOrphanClamscans();
+                    // Says what it decided and why, including the jobs it left
+                    // alone: "cleared 0" on a server with a stuck row is the
+                    // answer that sent this incident unexamined for two days.
                     return ['success' => true,
                             'stale_jobs' => $jobs, 'killed' => count($pids),
+                            'reconcile'  => $pass,
                             'message' => "Cleared {$jobs} stale job(s), killed "
-                                       . count($pids) . ' orphaned clamscan process(es)'];
+                                       . count($pids) . ' orphaned clamscan process(es)'
+                                       . (!$pass['available'] ? '; worker liveness could '
+                                          . 'not be determined here, so '
+                                          . $pass['candidates'] . ' job(s) were left as '
+                                          . 'they are' : '')];
                   })()
                 : ['success' => false, 'error' => 'POST required', 'code' => 405];
         // POST scanner/stop {job_id?} — stop a running scan AND the clamscan it
@@ -619,6 +638,16 @@ function routeScanner(string $action, string $method, array $body, array $q, ?st
         // scan; one customer may not see another's name.
         case 'jobs':
             return (function () use ($q) {
+                /* Reconciled BEFORE it is listed.
+                 *
+                 * This table read scan_jobs raw, so the page an operator was
+                 * looking at was the one place guaranteed to keep showing a
+                 * dead scan as 'running' -- for 57 hours, in the report that
+                 * produced this change. The pass is the same bounded one the
+                 * scheduler runs: 50 rows at most, one look at the process
+                 * table, nothing walked. */
+                Scanner::reapStaleJobs();
+
                 /* Paged, and it says how many there are.
                  *
                  * This returned the newest 50 with no offset and a hard cap of

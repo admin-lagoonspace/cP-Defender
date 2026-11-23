@@ -219,12 +219,21 @@ $tasks = [
             try {
                 $job = $sc->startScan(implode(',', $usable), $type, false, '@schedule');
                 slog("  started $type scan of " . implode(', ', $usable) . " (job $job)");
+                // The schedule is working again; stop saying it is not.
+                Scanner::clearScheduleRefusal();
             } catch (Throwable $e) {
                 // Declining to stack a second scan is the correct outcome, not
                 // a failure worth alarming about -- but it is also not a run,
                 // so the nightly scan stays due rather than being skipped for
                 // a day because one was already in progress at 02:00.
+                //
+                // RECORDED, because a correct refusal repeated every fifteen
+                // minutes for two days is indistinguishable from a broken
+                // scheduler when the only trace is this log line. The Scanner
+                // page reads it back and says what is in the way and how old
+                // it is.
                 slog('  ' . $e->getMessage());
+                Scanner::recordScheduleRefusal($e->getMessage());
                 return false;
             }
             return true;
@@ -953,6 +962,39 @@ if ($status) {
            . 'scan-stop-all` releases a lock held by a running scan.' . PHP_EOL;
     }
     exit(0);
+}
+
+// ── Reconcile in-progress scans, before anything is decided ──────────────────
+//
+// Not a task, and deliberately not governed by scan_schedule: a server whose
+// schedule is 'off' is exactly the server where a row stuck at 'running' would
+// never be looked at again, and reconciliation used to happen only as a side
+// effect of a scan being due. A stuck row refuses every subsequent scan, so on
+// the production server the thing that would have cleared it was the thing it
+// was blocking.
+//
+// Bounded and cheap: at most 50 candidate rows and ONE look at the process
+// table. Nothing under /home is touched. Silent unless it changed something,
+// because the scheduler is silent when idle by design.
+if (!$dryRun) {
+    try {
+        Scanner::reapStaleJobs();
+        $pass = Scanner::lastReapPass();
+        foreach ($pass['jobs'] as $j) {
+            if ($j['action'] === 'left alone') { continue; }
+            slog('scan reconcile: job ' . $j['id'] . ' ' . $j['action']
+               . ' - ' . $j['reason']);
+        }
+        if ($pass['error'] !== '') {
+            slog('scan reconcile: aborted after ' . $pass['examined']
+               . ' job(s) - ' . $pass['error']);
+        }
+    } catch (Throwable $e) {
+        // One failing step must not stop the tick: the tasks below are the
+        // product's whole scheduled surface.
+        slog('scan reconcile: ERROR ' . $e->getMessage());
+        Logger::error('scheduler[reconcile]: ' . $e->getMessage());
+    }
 }
 
 foreach ($tasks as $name => $t) {

@@ -813,6 +813,25 @@ try {
 
     case 'scan-reap': {
         $jobs = Scanner::reapStaleJobs();
+        $pass = Scanner::lastReapPass();
+
+        // Per job, what was decided and why -- including the ones deliberately
+        // left alone and the ones that could not be judged. "Stale jobs
+        // cleared: 0" was the entire output on a server whose stuck row was
+        // blocking the daily scan, and it was both true and useless.
+        if (!$pass['available']) {
+            echo 'Worker liveness could not be determined: ' . $pass['reason'] . PHP_EOL;
+        }
+        echo 'In-progress jobs examined: ' . $pass['examined']
+           . ' of ' . $pass['candidates'] . PHP_EOL;
+        foreach ($pass['jobs'] as $j) {
+            echo '  job ' . $j['id'] . ' [' . $j['verdict'] . '] ' . $j['action']
+               . ' - ' . $j['reason'] . PHP_EOL;
+        }
+        if ($pass['error'] !== '') {
+            echo 'Pass aborted: ' . $pass['error']
+               . ' (the remaining rows are unchanged)' . PHP_EOL;
+        }
         $pids = Scanner::reapOrphanClamscans();
         echo "Stale jobs cleared: {$jobs}" . PHP_EOL;
         echo 'Orphaned clamscan processes killed: ' . count($pids)

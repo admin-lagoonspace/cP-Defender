@@ -155,9 +155,22 @@ t_contains($workerPaths, 'Scanner::isCancelled($jobId)',
 // One was found holding 13 minutes of CPU and 1.3GB of RSS on a single file,
 // blocking its worker for all of it.
 $sc = t_code($repo . '/backend/lib/Scanner.php');
-$batch = substr($sc, strpos($sc, 'private function scanBatch'), 1800);
+/* t_fn_body, not substr(..., 1800).
+ *
+ * This read a fixed 1,800-character window from the start of scanBatch, so the
+ * assertions below held only while nothing above them in that function grew --
+ * and the limit then moved into Scanner::batchTimeout(), because the stall
+ * watchdog has to read the same number (clamping the two independently had a
+ * legal pair of settings reaping a healthy scan). The window would have failed
+ * for a reason that has nothing to do with whether a batch is bounded. Same
+ * three claims, asserted against the whole function and the accessor it now
+ * calls. */
+$batch = t_fn_body($sc, 'scanBatch', 'php');
+t_ok($batch !== '', 'scanBatch is still where the batch is built');
 t_contains($batch, 'timeout %d', 'each clamscan batch is bounded by timeout(1)');
-t_contains($batch, 'scan_batch_timeout', 'with a configurable limit');
+t_contains($batch, 'self::batchTimeout()', 'with a limit read from the settings');
+t_contains(t_fn_body($sc, 'batchTimeout', 'php'), 'scan_batch_timeout',
+    'which is the configurable one, clamped in one place');
 t_contains($batch, '$rc === 124', 'and a batch that is cut off is logged');
 
 // -- Reaping orphans must not touch cPanel's own clamscan -------------------
@@ -304,7 +317,18 @@ t_contains($sc, 'function scanWorkerPids', 'workers are discoverable from /proc'
 t_contains($sc, "backend/cron/scan.php", 'by the script they are running');
 t_contains($sc, '--job-id=', 'and can be matched to a specific job');
 
-$reap = substr($sc, strpos($sc, 'public static function reapStaleJobs'), 1800);
+/* t_fn_body, not substr(..., 1800).
+ *
+ * The 1,800-character window reached its three needles with 193 characters to
+ * spare, and the fix for a blocker inside this function -- judging a pass
+ * twice, from a fresh snapshot, before writing anything -- pushed the last one
+ * past the end. The window would then have failed while the behaviour it is
+ * about was intact and better covered than before. Same three claims, same
+ * order requirement, asserted against the whole function. The behaviour itself
+ * is exercised in tests/test_scan_stall_reconcile.php against a process table
+ * the test controls. */
+$reap = t_fn_body($sc, 'reapStaleJobs', 'php');
+t_ok($reap !== '', 'reapStaleJobs is still the reconciliation pass');
 t_contains($reap, 'self::scanWorkerPids((int) $job',
     'a job with no recorded pid is checked against the running processes');
 t_contains($reap, 'adopted the running worker',

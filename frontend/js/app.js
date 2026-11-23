@@ -1252,6 +1252,12 @@ async function adoptRunningScan() {
   if (Demo.active) return;
   let res;
   try { res = await API.scanActive(); } catch (e) { return; }
+
+  // Why the scheduled scan is not running, if it is not. Rendered BEFORE the
+  // early return below: the case that matters is the one where there is no job
+  // to adopt and the operator is asking why the daily scan has not fired.
+  renderScanScheduleNotice(res);
+
   const job = res?.data;
   if (!job || !job.id) return;
   if (State.scanJobId === job.id && State.scanInterval) return;   // already following
@@ -1263,6 +1269,91 @@ async function adoptRunningScan() {
   const st = g('scan-live-status');
   if (st) st.textContent = job.status === 'cancelling' ? 'Stopping\u2026' : 'Running';
   followScan(job.id);
+}
+
+// Why the scheduled scan is not running, on the page where it is asked.
+//
+// A scheduled scan that cannot start because one is already running is a
+// CORRECT refusal, and the scheduler has always logged it and left the task
+// due so it retries in fifteen minutes. On the production server that happened
+// every quarter hour for two days behind a scan row whose worker was long
+// dead, and the panel said nothing at all: the Scanner page showed a scan
+// "running" and the Dashboard showed a schedule that was fine. Two days of
+// silent refusals is the part of that incident that made it undiagnosable.
+//
+// The card is built here rather than in index.html because it exists only when
+// there is something to say. Nothing in it is interactive.
+function renderScanScheduleNotice(res) {
+  const page = g('page-scanner');
+  if (!page) return;
+
+  const job     = res?.data;
+  const ref     = res?.refusal;
+  const paused  = !!res?.paused;
+  const rec     = res?.reconcile;
+  // Liveness that could not be established is reported as unknown, never as
+  // health: the same rule as the rest of the product.
+  const unknown = !!(rec && rec.available === false && Number(rec.candidates) > 0);
+
+  const age = s => {
+    const n = Number(s) || 0;
+    if (n <= 0) return 'an unknown time';
+    if (n < 3600) return Math.floor(n / 60) + 'm';
+    if (n < 86400) return Math.floor(n / 3600) + 'h ' + Math.floor((n % 3600) / 60) + 'm';
+    return Math.floor(n / 86400) + 'd ' + Math.floor((n % 86400) / 3600) + 'h';
+  };
+
+  const lines = [];
+  if (paused && job && job.id) {
+    lines.push('<div><b style="color:var(--amber)">Scan paused for a backup.</b> '
+      + 'Job ' + Number(job.id) + ' is waiting for the backup to finish, not stalled — '
+      + 'it resumes on its own and is not counted as stuck.</div>');
+  }
+  if (ref && Number(ref.at) > 0) {
+    /* The blocking job is described in the tense the server can defend.
+     *
+     * This said "(blocked by job 12467, in progress for 2d 9h)" from four
+     * stored settings, with the age counting up, for a job the product had
+     * already closed out -- and for one that did not exist at all. The age is
+     * only sent when the job is genuinely still in progress; when it is not,
+     * the card says what became of it instead of implying it is still there. */
+    let blocker = '';
+    if (Number(ref.job) > 0 && ref.job_live) {
+      blocker = ' <span class="dim">(blocked by job ' + Number(ref.job)
+              + ', in progress for ' + esc(age(ref.job_age)) + ')</span>';
+    } else if (Number(ref.job) > 0) {
+      blocker = ' <span class="dim">(job ' + Number(ref.job) + ' is no longer running'
+              + (ref.job_status ? ' — it ended as ' + esc(String(ref.job_status)) : '')
+              + '; the next scheduled tick will start a scan)</span>';
+    }
+    lines.push('<div><b style="color:var(--amber)">The scheduled scan did not start.</b> '
+      + 'Last refused ' + esc(reltime(Number(ref.at))) + ': ' + esc(String(ref.reason || ''))
+      + blocker
+      + '</div>');
+  }
+  if (unknown) {
+    lines.push('<div><b style="color:var(--amber)">Scan liveness could not be '
+      + 'determined.</b> ' + esc(String(rec.reason || ''))
+      + ' — ' + Number(rec.candidates) + ' in-progress job(s) were left exactly as '
+      + 'they are rather than guessed at.</div>');
+  }
+
+  let el = g('scan-schedule-notice');
+  if (!lines.length) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'scan-schedule-notice';
+    el.className = 'card mb-5';
+    el.style.borderLeft = '3px solid var(--amber)';
+    const card = g('scan-progress-card');
+    if (card && card.parentNode === page) page.insertBefore(el, card);
+    else page.appendChild(el);
+  }
+  el.innerHTML = '<div class="card-body" style="font-size:.8rem;display:grid;gap:6px">'
+               + lines.join('') + '</div>';
 }
 
 // ---- Custom scan: which accounts ------------------------------------------
