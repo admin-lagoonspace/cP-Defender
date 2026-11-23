@@ -568,12 +568,14 @@ the process table the test controls: a stale cache against a real backup, and a
 zombie `rsync` against a live one. With either one-liner reverted, four
 assertions fail -- checked, not assumed.
 
-Finding 9 is also confirmed in the container with Shakaal's own
-`probe_pause_cache_window.php` (the pause held), and a live `rsync` is still
-reported there. The zombie half of finding 10 was NOT re-demonstrated against
-a real zombie in the container -- my fixture reaped itself and the retry ran
-out of container time -- so that one rests on the suite and on Shakaal's own
-fixture. Said plainly rather than implied.
+Both are also confirmed in the container. Finding 9 with Shakaal's own
+`probe_pause_cache_window.php` (`the pause held`), and a live `rsync` still
+reported, so the backup gate is not switched off. Finding 10 against a real
+zombie -- `state=Z cmdline=empty` -- which `backupRunning()` does not count,
+which gives up the pause, and after which a worker silent for 55 hours is
+judged `stalled` again. The fixture that works is a PHP parent holding the
+corpse with `proc_open` and never waiting: a bash parent reaps when it runs
+`kill`, so the first attempt had no zombie in it at all.
 
 #### What to look at hardest on the second pass
 

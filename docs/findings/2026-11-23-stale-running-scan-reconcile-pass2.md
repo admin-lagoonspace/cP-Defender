@@ -543,12 +543,21 @@ Current headroom in the three windows this change came near:
 - A live `rsync` is still reported by `backupRunning(true)` in the container
   (`["rsync"]`), so finding 10's fix has not turned the backup gate off.
 
-**What I did NOT demonstrate in the container, stated so it is not assumed:**
-finding 10's zombie half, against a real zombie. My first fixture reaped
-itself (bash waits when it runs `kill`), and the second attempt -- a PHP parent
-holding the corpse with `proc_open` -- never ran, because the container spent
-ten minutes in a `dnf` install of nftables and I stopped it rather than hold
-the release. The zombie path is covered deterministically in section 16
-against a process table the test writes, and it fails when the state check is
-reverted; and you already have a working zombie fixture, which is how finding
-10 was found. That is the one thing worth re-running on your side.
+- **Finding 10 against a real zombie, in the container.** This was open when I
+  first handed back -- my first fixture reaped itself, because bash waits when
+  it runs `kill` -- so it is worth saying what the working fixture is: a PHP
+  parent holding the corpse with `proc_open('exec /tmp/fakebk/rsync 2')` and
+  never waiting on it.
+
+  ```
+  rsync-named processes                 : 632 state=Z cmdline=empty
+  backupRunning() sees                  : []
+  pausedForBackup() with only a corpse  : false
+  flag afterwards                       : 0
+  verdict for a silent worker           : stalled
+  ```
+
+  So: the corpse is not counted, the pause it was propping up is given up, and
+  the stall watchdog applies again to an identity-confirmed worker that has
+  reported nothing for 55 hours -- which is the behaviour the zombie was
+  switching off.
