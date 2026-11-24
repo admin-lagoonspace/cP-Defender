@@ -154,6 +154,18 @@ heading or touch VERSION mid-week._
   element reports a release channel that is behind the newest version seen,
   which is where nine unmirrored releases would have surfaced.
 
+- **`publish.sh` refused to run from a git worktree.** The check was
+  `[[ -d .git ]]`, and in a worktree `.git` is a *file* holding
+  `gitdir: …` rather than a directory, so the script died on its fourth
+  line with "Not a git repo" about a directory that is one, having built
+  nothing. This release is the first cut from a worktree, which is itself the
+  safer way to do it: the main checkout held three unrelated workstreams, and
+  the staging step would have swept them into a customer release. The check is
+  now `git rev-parse --is-inside-work-tree` plus a comparison of the toplevel
+  against the script's own root — the second half matters, because being
+  *inside* a repository is also true of a copy of this script sitting in some
+  other project's subdirectory, and this script stages and commits.
+
 ### Known limitations in this release
 
 - **The CDN freeze itself is not fixed.** serverscrub.com/releases still serves

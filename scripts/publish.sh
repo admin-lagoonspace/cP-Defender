@@ -46,7 +46,32 @@ err()  { echo -e "${RED}[x]${NC} $*" >&2; }
 # ── Locate repo root ───────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
-[[ -d .git ]] || die "Not a git repo: $REPO_ROOT"
+# A WORKTREE'S .git IS A FILE, NOT A DIRECTORY.
+#
+# This was `[[ -d .git ]]`, and it refused the first release that needed a
+# worktree: 4.37.10 was prepared in `git worktree` precisely because the main
+# checkout held three concurrent workstreams, and the `git add -A -- <dir>`
+# further down would have swept them into a customer release. The run died
+# here, on line 49, before building anything -- "Not a git repo" about a
+# directory that is one.
+#
+# `--is-inside-work-tree` is true in both shapes. On its own it is too loose:
+# a copy of this script dropped into a SUBDIRECTORY of some other repository
+# would pass it, and then the staging step would commit that repository. So
+# the toplevel git reports has to be this directory and not merely some
+# directory above it.
+#
+# Both paths are normalised through `cd && pwd` rather than compared as
+# strings: on Windows `--show-toplevel` answers `C:/Users/...` while `pwd` in
+# Git Bash answers `/c/Users/...`, and a plain `!=` between those two is
+# always true.
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || die "Not a git repo: $REPO_ROOT"
+_GIT_TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+_GIT_TOP="$([[ -n "$_GIT_TOP" ]] && cd "$_GIT_TOP" 2>/dev/null && pwd || true)"
+if [[ "$_GIT_TOP" != "$REPO_ROOT" ]]; then
+    die "${REPO_ROOT} is inside the git repo at ${_GIT_TOP:-<unknown>}, not the root of one. Run this from the repository (or worktree) it is releasing."
+fi
 
 TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 TAG_PUSHED=no
