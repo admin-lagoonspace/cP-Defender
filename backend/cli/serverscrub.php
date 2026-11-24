@@ -1406,7 +1406,10 @@ Usage: serverscrub <command> [args] [--json]
 
   version                      Show version and install mode
   status                       Scanner, firewall, CSF and service status
-  scan [path] [--full|--quick] Start a scan (default: /home quick)
+  scan [path] [--full|--quick] Start a scan (default: /home quick). Quick is
+                               all account home directories, including mail,
+                               with per-account time and file limits; full is
+                               every scan path, unbounded
   scan mass-bound [N]          Show or set how many files ONE signature may
                                have quarantined in one scan before the product
                                flags instead (0 disables). Shows the last trip,

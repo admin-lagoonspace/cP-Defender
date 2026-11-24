@@ -676,6 +676,13 @@ function topStatusFor(sc) {
     return ['threat', fmtNum(threats) + ' threat' + (threats > 1 ? 's' : '') + ' open',
             'Open threats across every scan. Scanner > Threats lists them.'];
   }
+  // A quick scan that hit a per-account limit did not look at everything, so
+  // "nothing is open" is not a clean bill of health. Amber, never green.
+  if (sc.last_scan.status === 'incomplete') {
+    return ['partial', 'Last scan incomplete',
+            'The last scan hit a per-account limit and did not examine every '
+            + 'file. See the Scan Log for which accounts.'];
+  }
   return ['clean', 'No open threats', 'The last scan finished and nothing is open.'];
 }
 
@@ -856,6 +863,15 @@ async function refreshDashboard() {
     scanBadge.textContent = 'No scan yet';
     scanStatus.title = 'Nothing has been scanned on this server yet, so there is '
                      + 'nothing to report either way. Run a scan.';
+  } else if (lastJob.status === 'incomplete') {
+    // Same rule as the pill (topStatusFor): a capped scan is not "Protected".
+    scanIcon.textContent = '⚠️';
+    scanStatus.textContent = 'Last scan incomplete';
+    scanStatus.style.color = 'var(--amber)';
+    scanBadge.className = 'badge badge-amber';
+    scanBadge.textContent = 'Incomplete';
+    scanStatus.title = 'The last scan hit a per-account limit and did not examine '
+                     + 'every file. See the Scan Log for which accounts.';
   } else {
     scanIcon.textContent = '✅';
     scanStatus.textContent = 'Protected';
@@ -1109,7 +1125,7 @@ async function startScan() {
       ? (homes.length <= 3
           ? homes.join(', ')
           : homes.slice(0, 3).join(', ') + ' and ' + (homes.length - 3) + ' more')
-      : (type === 'quick' ? 'web roots' : 'the whole server');
+      : (type === 'quick' ? 'all account home directories, including mail, with per-account time and file limits' : 'the whole server');
     te.textContent = label;
     te.title = homes.join(', ');
     tw.style.display = '';
@@ -1224,14 +1240,17 @@ function followScan(jobId) {
       State.scanInterval = null;
       State.scanJobId = null;
       setScanButton(false);
-      document.getElementById('scan-spinner').textContent = job.status === 'done' ? '✅' : '❌';
-      document.getElementById('scan-progress-text').textContent =
-        `Scan complete — ${job.threats_found || 0} threats found`;
+      const partial = job.status === 'incomplete';
+      document.getElementById('scan-spinner').textContent =
+        job.status === 'done' ? '✅' : (partial ? '⚠️' : '❌');
+      document.getElementById('scan-progress-text').textContent = partial
+        ? `Scan incomplete — ${job.threats_found || 0} threats found; some accounts hit a limit (see Scan Log)`
+        : `Scan complete — ${job.threats_found || 0} threats found`;
       loadThreats();
       // The scan that just ended is a row in the log now. Leaving it out until
       // the operator reloads the page is how a log stops being a log.
       loadScanJobs();
-      toast(`Scan complete. ${job.threats_found || 0} threats found.`, job.threats_found ? 'error' : 'success');
+      toast(`Scan ${partial ? "incomplete" : "complete"}. ${job.threats_found || 0} threats found.`, job.threats_found ? "error" : (partial ? "warning" : "success"));
     }
   }, 2000);
 }
@@ -1766,7 +1785,10 @@ async function loadScanJobs() {
 
   const COLOR = { done: 'var(--green)', running: 'var(--amber)',
                   pending: 'var(--amber)', cancelling: 'var(--amber)',
-                  error: 'var(--red)', interrupted: 'var(--red)' };
+                  error: 'var(--red)', interrupted: 'var(--red)',
+                  // A bounded quick scan that did not see everything. Amber,
+                  // not green: green is what "clean" looks like.
+                  incomplete: 'var(--amber)' };
 
   body.innerHTML = jobs.map(j => {
     const [who, whoColor] = scanTriggerLabel(j.requested_by);

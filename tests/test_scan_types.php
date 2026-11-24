@@ -121,10 +121,15 @@ t_eq(false, $accts['carol']['has_web'] ?? null, 'and one without says so too');
 
 $qc = Scanner::resolveScanPaths('quick', $home);
 sort($qc['paths']);
-t_eq([$home . '/alice/public_html', $home . '/bob/public_html'], $qc['paths'],
-    'AND THE QUICK SCAN IS BOUNDED THERE TOO: two web roots, not every home '
-  . 'directory on the server. This is the assertion that was only ever '
-  . 'evaluated on a machine with no cPanel');
+// REQUIREMENT CHANGED in 4.37.11 (docs/specs/2026-11-24-quick-scan-whole-
+// homedir.md): quick is every account's HOME, not its web root -- the April
+// 2026 dropper was in ~/.cache. What stays asserted on a cPanel-shaped host
+// is that the list is cPanel's: root is not in it, and neither is anything
+// on disk that cPanel does not list. The bound is now per-account caps,
+// tested in tests/test_quick_scan_whole_homedir.php.
+t_eq([$home . '/alice', $home . '/bob', $home . '/carol'], $qc['paths'],
+    'ON A CPANEL-SHAPED HOST a quick scan walks every cPanel account home, whole, '
+  . 'home -- carol, who has no public_html, included -- and not root');
 
 // ── Shape 2: no cPanel. The fallback walks the scan roots.
 Scanner::setCpanelUsersDir($ctx['sandbox'] . '/no-cpanel-here');
@@ -138,12 +143,12 @@ t_eq(true,  $accts['alice']['has_web'], 'an account with a web root says so');
 t_eq(false, $accts['carol']['has_web'], 'and one without says so too');
 t_eq($home . '/alice/public_html', $accts['alice']['docroot'], 'with its document root');
 
-// Quick: web roots only.
+// Quick: every account home (changed in 4.37.11, see above).
 $q = Scanner::resolveScanPaths('quick', $home);
 sort($q['paths']);
-t_eq([$home . '/alice/public_html', $home . '/bob/public_html'], $q['paths'],
-    'a quick scan walks the web roots, where public code runs');
-t_ok(strpos($q['note'], 'web root') !== false, 'and says what it chose');
+t_eq([$home . '/alice', $home . '/bob', $home . '/carol'], $q['paths'],
+    'a quick scan walks every account home, including one with no web root');
+t_contains($q['note'], '3 home dir(s)', 'and says how many it chose');
 
 // Full: everything.
 $f = Scanner::resolveScanPaths('full', $home);
@@ -170,14 +175,15 @@ t_eq([], $c3['paths'],
     'a custom scan with nothing selected resolves to nothing, not to the whole server');
 
 // -- Quick must degrade honestly ---------------------------------------------
-// A server with no public_html anywhere must still scan something, and must
-// not pretend a full scan was a quick one.
+// A server with no accounts at all must still scan something, and must not
+// pretend a full scan was a quick one. (Until 4.37.11 the trigger was "no
+// public_html anywhere"; an account without one is now an account to scan.)
 $bare = $ctx['sandbox'] . '/bare';
-@mkdir($bare . '/dave', 0777, true);
+@mkdir($bare, 0777, true);
 Database::setSetting('scan_paths', $bare);
 $qb = Scanner::resolveScanPaths('quick', $bare);
-t_eq([$bare], $qb['paths'], 'with no web roots a quick scan falls back to the full root');
-t_contains($qb['note'], 'no web roots found',
+t_eq([$bare], $qb['paths'], 'with no accounts a quick scan falls back to the full root');
+t_contains($qb['note'], 'no accounts found',
     'and says so, rather than silently scanning everything under the word "quick"');
 
 Database::setSetting('scan_paths', $home);
