@@ -17,6 +17,8 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+## [4.37.10] - 2026-11-24
+
 ### Fixed
 
 - **"Already up to date — v4.37.7", printed minutes after v4.37.8 was
@@ -151,6 +153,31 @@ heading or touch VERSION mid-week._
   could not be corroborated is no longer rounded down to a clean dot. A second
   element reports a release channel that is behind the newest version seen,
   which is where nine unmirrored releases would have surfaced.
+
+### Known limitations in this release
+
+- **The CDN freeze itself is not fixed.** serverscrub.com/releases still serves
+  4.37.0. The production host could not be reached while this was built, and
+  the read-only commands that would show why the mirror stopped (open question
+  1 in the spec) have still not been run. This release makes the next failed
+  mirror impossible to miss and lets a blocked publish be finished; it cannot
+  make the mirror publish. Until the mirror is repaired, servers update from
+  GitHub, which this release now reads correctly.
+- **A firewalled server will always see "could not confirm".** A server that
+  can reach neither the GitHub tags API nor the CDN's `latest/VERSION` has no
+  path that names a version, so it now always shows the "not confirmed" note
+  instead of "Already up to date". That is deliberate: it is the honest answer
+  for that server. It still updates, and the exit status is still 0.
+- **cPanel-mode integration is untested.** All verification ran on a
+  standalone install: cpsrvd, the WHM AppConfig registration, LiveAPI and the
+  CGI wrappers were not exercised.
+- **`publish.sh` has not been run against the real origin or the real GitHub
+  API.** Its new mirror wait and resume were tested end to end against a local
+  bare repository with the CDN stubbed. This release is its first real run, and
+  is expected to push the tag and then stop at the mirror gate while the CDN is
+  still frozen.
+- **No real ModSecurity, Exim or ClamAV** in the test environment, and 8 seeded
+  accounts rather than a full server.
 
 ## [4.37.9] - 2026-11-23
 
