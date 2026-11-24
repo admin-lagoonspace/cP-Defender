@@ -569,12 +569,32 @@ _verify_public_manifest() {
     fi
     return 1
 }
-_verify_public_manifest || true
-
-log "published v${NEW_VER}"
+# A FAILED READ-BACK IS A FAILED PUBLISH.
+#
+# This read-back already existed, already reached the right diagnosis, and
+# already logged WARNING -- and the next line logged "published v${NEW_VER}"
+# anyway and the script exited 0. So nine releases (4.37.1 ... 4.37.9) were
+# reported as mirrored while serverscrub.com/releases stayed on 4.37.0, and
+# publish.sh, reading the same cheerful exit status, reported the same thing.
+# A release process that can claim a mirror that did not happen is the actual
+# defect here; the frozen mirror is only what it hid.
+PUBLISH_OK=true
+if _verify_public_manifest; then
+    log "published v${NEW_VER}"
+else
+    PUBLISH_OK=false
+    log "ERROR: NOT published. v${NEW_VER} was written to ${DOCROOT} but the public"
+    log "       url does not serve it, so no installed server can get this build."
+    log "       The files are on disk; what is wrong is between ${DOCROOT} and the"
+    log "       public url -- a docroot that is no longer the served one, a vhost,"
+    log "       or a proxy cache (the lines above say which)."
+fi
 
 # ── Optional retention ────────────────────────────────────────────────────────
-if [ "$KEEP_VERSIONS" -gt 0 ] 2>/dev/null; then
+# Skipped when the publish could not be verified. Deleting old builds while it
+# is unclear what the public url is actually serving could remove the only
+# version customers can still reach. Flag it and leave the data alone.
+if [ "$PUBLISH_OK" = true ] && [ "$KEEP_VERSIONS" -gt 0 ] 2>/dev/null; then
     mapfile -t OLD < <(find "${DOCROOT}" -maxdepth 1 -type d -name 'v[0-9]*' -printf '%f\n' 2>/dev/null \
         | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | head -n -"${KEEP_VERSIONS}")
     for v in "${OLD[@]:-}"; do
@@ -583,4 +603,8 @@ if [ "$KEEP_VERSIONS" -gt 0 ] 2>/dev/null; then
     done
 fi
 
+# Non-zero so a cron log and a caller can tell a published release from one
+# that only reached the disk. publish.sh now waits for the public url itself,
+# and both have to agree.
+$PUBLISH_OK || exit 1
 exit 0

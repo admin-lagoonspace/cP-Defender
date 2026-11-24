@@ -426,10 +426,30 @@ async function checkForUpdates(forceLive = false) {
     // dashboard shows a clean dot on a server that has not been able to ask
     // about updates for weeks -- which is the state an unpatched install sits
     // in, looking healthy the whole time.
+    //
+    // THREE STATES, NOT TWO. "No newer version" and "could not find out" are
+    // different facts, and the second one now has its own text. On 2026-11-23
+    // the updater reported v4.37.7 as current minutes after v4.37.8 was
+    // published, from a manifest a cache had held for five minutes; the panel
+    // was reading the same source and would have agreed. When the newest
+    // version seen could not be confirmed against a url that names the
+    // version, the server sends that sentence in `uncorroborated_note` and it
+    // is shown here rather than being rounded down to a clean dot.
     const chk = g('dash-update-error');
     if (chk) {
-      chk.style.display = d.check_error ? 'block' : 'none';
-      chk.textContent   = d.check_error || '';
+      const note = d.check_error
+        || (d.corroborated === false ? (d.uncorroborated_note || '') : '');
+      chk.style.display = note ? 'block' : 'none';
+      chk.textContent   = note;
+    }
+
+    // A channel behind the newest version seen is a release-mirror problem,
+    // not an update problem for this server: nine releases went unmirrored
+    // and the only place it showed was a line in a cron log nobody reads.
+    const lag = g('dash-mirror-lag');
+    if (lag) {
+      lag.style.display = d.mirror_lag ? 'block' : 'none';
+      lag.textContent   = d.mirror_lag || '';
     }
   } catch (_) {}
 }

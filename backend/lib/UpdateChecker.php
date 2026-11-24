@@ -87,6 +87,83 @@ class UpdateChecker {
         return [$cdn, $raw];
     }
 
+    private static function repoSlug(): string
+    {
+        return getenv('SG_RELEASES_REPO') ?: 'admin-lagoonspace/cP-Defender';
+    }
+
+    /**
+     * The url of a manifest that is addressed BY VERSION, and so cannot be
+     * served stale by anything.
+     *
+     * `?cb=` is not enough on every channel. MEASURED 2026-11-23 against
+     * raw.githubusercontent.com, the same object, two consecutive requests:
+     *
+     *   .../main/latest.json                   -> X-Cache: MISS  ETag "f7a7cab..."
+     *   .../main/latest.json?cb=17954488137754 -> X-Cache: HIT   ETag "f7a7cab..."
+     *
+     * Identical ETag, cache HIT on the "cache-busted" url: the query string is
+     * not part of Fastly's cache key for raw, so the trick that does defeat
+     * cPanel's nginx cache in front of our own CDN does nothing there. The
+     * branch path is served with max-age=300, which is the five-minute window
+     * the operator landed in when v4.37.8 was published and the updater
+     * reported v4.37.7 as current.
+     *
+     * The shape differs per channel. On raw the version is a git ref and
+     * REPLACES the branch component; appending v<ver> to .../<repo>/main/ is a
+     * 404 and always was. On a file channel it is a directory under the root.
+     */
+    private static function pinnedManifestUrl(string $base, string $ver): string
+    {
+        if (strncmp($base, 'https://raw.githubusercontent.com/', 34) === 0) {
+            return 'https://raw.githubusercontent.com/' . self::repoSlug()
+                 . '/v' . $ver . '/latest.json';
+        }
+        return rtrim($base, '/') . '/v' . $ver . '/latest.json';
+    }
+
+    /**
+     * The newest version a channel can name without reading a mutable path.
+     *
+     * For the GitHub channel that is the tag list. The releases API is not
+     * used: github.com/<repo>/releases/latest 302s to /releases, which is what
+     * a repo with no published Release objects does, so there is no "latest
+     * release" object to read. Tags exist, and publish.sh fails a release
+     * without one.
+     *
+     * One request. Unauthenticated the limit is 60/hour/IP and the answer
+     * carries s-maxage=60 -- so the LIST can be a minute old, which is worth
+     * saying plainly. It is the manifest under the tag that cannot be stale,
+     * and that is what gets fetched and compared next.
+     *
+     * A channel that is just files over HTTP has no ref listing; it
+     * corroborates through latest/VERSION and its per-build manifest instead.
+     */
+    private static function immutableChannelVersion(string $base): string
+    {
+        if (strncmp($base, 'https://raw.githubusercontent.com/', 34) !== 0) {
+            return '';
+        }
+        $body = self::httpGet('https://api.github.com/repos/' . self::repoSlug()
+                            . '/tags?per_page=10');
+        if ($body === null) {
+            return '';
+        }
+        if (!preg_match_all('/"name"\s*:\s*"v?(\d+\.\d+\.\d+[^"]*)"/', $body, $mm)) {
+            return '';
+        }
+        // Highest by version, not whatever the API listed first: tag order is
+        // not a documented guarantee, and v4.9.0 sorts above v4.36.0 when
+        // compared one character at a time.
+        $best = '';
+        foreach ($mm[1] as $v) {
+            if ($best === '' || version_compare($v, $best, '>')) {
+                $best = $v;
+            }
+        }
+        return $best;
+    }
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
@@ -139,6 +216,22 @@ class UpdateChecker {
             // looks identical to one that is up to date, and that is the state
             // an unpatched install sits in for months.
             'check_error'       => Database::setting('update_check_error', ''),
+            // THREE STATES, not two. "No newer version" and "could not find
+            // out" are different facts about a security product's patch
+            // level, and until now the panel rendered them identically.
+            //
+            // `corroborated` is false when the newest version seen came only
+            // from a cacheable url -- which, on the GitHub channel, can be up
+            // to five minutes behind a release (max-age=300, and ?cb= does not
+            // miss Fastly's cache). The note says so in words, and the
+            // dashboard shows it where the unreachable-channel message goes.
+            'corroborated'      => Database::setting('update_corroborated', '0') === '1',
+            'version_source'    => Database::setting('update_version_source', ''),
+            'uncorroborated_note' => Database::setting('update_uncorroborated', ''),
+            // A channel behind the newest version seen is a release that was
+            // never mirrored. Nine of them (4.37.1 ... 4.37.9) went that way
+            // with no indication anywhere a human looks.
+            'mirror_lag'        => Database::setting('update_mirror_lag', ''),
         ];
     }
 
@@ -172,6 +265,33 @@ class UpdateChecker {
 
         $available = version_compare($latest, $current, '>');
 
+        // Recorded as a fact about the EVIDENCE, separately from the version.
+        // The updater and the panel may only claim an install is current when
+        // the newest version seen was confirmed against a url that names the
+        // version, because nothing else can be ruled out as a cached answer.
+        $corroborated = !empty($m['_corroborated']);
+        $source       = (string)($m['_source'] ?? '');
+        $note         = '';
+        if (!$corroborated) {
+            $note = 'Latest version read as v' . $latest . ' from '
+                  . (string)($m['_base'] ?? 'the release channel')
+                  . '/latest.json, a cacheable url that can be up to 5 minutes '
+                  . 'behind a release. Nothing addressed by version could be '
+                  . 'reached to confirm it, so this is not a confirmation that '
+                  . 'this install is current.';
+        }
+        Database::setSetting('update_corroborated',   $corroborated ? '1' : '0');
+        Database::setSetting('update_version_source', $source);
+        Database::setSetting('update_uncorroborated',  $note);
+        Database::setSetting('update_mirror_lag',     (string)($m['_lag'] ?? ''));
+        if (!$corroborated) {
+            Logger::warn('UpdateChecker: v' . $latest . ' is an uncorroborated '
+                       . 'reading from a cacheable url');
+        }
+        if (($m['_lag'] ?? '') !== '') {
+            Logger::warn('UpdateChecker: ' . $m['_lag']);
+        }
+
         Database::setSetting('update_available',   $available ? '1' : '0');
         Database::setSetting('update_latest_ver',  $latest);
         Database::setSetting('update_checked_at',  (string)time());
@@ -188,16 +308,10 @@ class UpdateChecker {
             Logger::info("UpdateChecker: up to date (v{$current})");
         }
 
-        return [
-            'update_available' => $available,
-            'current_version'  => $current,
-            'latest_version'   => $latest,
-            'checked_at'       => time(),
-            'release_url'      => (string)($m['notes'] ?? ''),
-            'release_notes'    => Database::setting('update_release_notes', ''),
-            'download_url'     => (string)($m['url'] ?? ''),
-            'sha256'           => (string)($m['sha256'] ?? ''),
-        ];
+        // One shape, derived from what was just persisted, so a caller
+        // cannot see a field here that getCachedStatus() would answer
+        // differently on the next page load.
+        return self::getCachedStatus();
     }
 
     /**
@@ -222,9 +336,11 @@ class UpdateChecker {
     {
         $best    = null;
         $bestVer = '';
+        $seen    = [];          // channel => version it answered with
 
         foreach (self::channels() as $base) {
-            $m = self::channelManifest(rtrim($base, '/'));
+            $base = rtrim($base, '/');
+            $m = self::channelManifest($base);
             if ($m === null) {
                 continue;
             }
@@ -233,9 +349,83 @@ class UpdateChecker {
                 Logger::warn("UpdateChecker: $base answered but carried no usable version");
                 continue;
             }
+            $seen[$base] = $v;
             if ($best === null || version_compare($v, $bestVer, '>')) {
                 $best    = $m;
                 $bestVer = $v;
+            }
+        }
+
+        // ── Corroborate against a url that names the version ───────────────
+        //
+        // Both mitigations above -- ask every channel, cross-check the tree --
+        // were already here on 2026-11-23 and both missed the reported
+        // failure, because on the GitHub channel ?cb= does not miss the edge
+        // cache and latest/VERSION is a 404. So the answer is confirmed
+        // against the manifest committed under the newest release tag, which
+        // is written once and cannot be stale. If that cannot be reached the
+        // branch answer still stands -- the panel has to keep working on a
+        // firewalled box -- but it is marked uncorroborated and said out loud.
+        foreach (self::channels() as $base) {
+            $base = rtrim($base, '/');
+            $iv = self::immutableChannelVersion($base);
+            // NO FALLBACK TO THE BRANCH ANSWER. This read `$iv = $bestVer;`
+            // when no ref listing was available, which made the check a
+            // tautology: v<X>/latest.json proves version X exists, never that
+            // X is the newest, and every released version has that path (plus
+            // cdn-sync.sh retains old v<ver>/ folders), so it could not fail.
+            // The result was `corroborated => true` with an empty
+            // uncorroborated_note in exactly the case the panel's third state
+            // was built for, which left #dash-update-error hidden.
+            //
+            // Only a version that an immutable source NAMED as current may be
+            // corroborated by its pinned manifest. The other such source is
+            // <channel>/latest/VERSION, handled in channelManifest().
+            if ($iv === '' || !preg_match('/^\d+\.\d+\.\d+/', $iv)) {
+                continue;
+            }
+            // Only ever corroborate forwards. A ref older than the answer in
+            // hand is a lagging mirror, reported below, not something to take.
+            if ($bestVer !== '' && version_compare($iv, $bestVer, '<')) {
+                continue;
+            }
+            $url = self::pinnedManifestUrl($base, $iv);
+            $body = self::httpGet($url);
+            if ($body === null) {
+                continue;
+            }
+            $j = json_decode($body, true);
+            if (!is_array($j) || ltrim((string)($j['version'] ?? ''), 'v') !== $iv) {
+                // Ref exists, manifest under it does not or disagrees:
+                // mid-push, or a tag over a tree without the file. Nothing is
+                // claimed from it.
+                continue;
+            }
+            if ($bestVer === '' || version_compare($iv, $bestVer, '>')) {
+                Logger::warn('UpdateChecker: channel manifests say v'
+                           . ($bestVer === '' ? '(none)' : $bestVer)
+                           . ' but the newest release ref holds v' . $iv
+                           . ' — taking the version-pinned manifest');
+                $j['_base'] = $base;
+                $best    = $j;
+                $bestVer = $iv;
+            }
+            $best['_corroborated'] = true;
+            $best['_source']       = $url;
+        }
+
+        if ($best !== null) {
+            $lag = [];
+            foreach ($seen as $base => $v) {
+                if (version_compare($v, $bestVer, '<')) {
+                    $lag[] = $base . ' serves v' . $v;
+                }
+            }
+            if ($lag) {
+                $best['_lag'] = 'Release mirror behind: ' . implode(', ', $lag)
+                              . ' — newest is v' . $bestVer
+                              . '. That mirror\'s sync has stalled; installs '
+                              . 'pointed at it cannot get the current build.';
             }
         }
 
@@ -262,6 +452,7 @@ class UpdateChecker {
             $j = json_decode($body, true);
             if (is_array($j) && isset($j['version'])) {
                 $manifest = $j;
+                $manifest['_base'] = $base;
             } else {
                 Logger::warn("UpdateChecker: $base/latest.json answered but was not a manifest");
             }
@@ -269,21 +460,51 @@ class UpdateChecker {
             Logger::debug("UpdateChecker: $base/latest.json did not answer");
         }
 
-        $live = self::httpGet($base . '/latest/VERSION');
-        $live = $live === null ? '' : ltrim(trim($live), 'v');
-        // A channel serving only dist/ has no latest/ tree. Normal, not an error.
-        if ($live === '' || !preg_match('/^\d+\.\d+\.\d+/', $live)) {
+        $live    = self::httpGet($base . '/latest/VERSION');
+        $live    = $live === null ? '' : ltrim(trim($live), 'v');
+        $liveSrc = $base . '/latest/VERSION';
+        // A channel serving only dist/ has no latest/ tree. Normal, not an
+        // error -- and NOT a passed cross-check either, which is how the one
+        // safety net built for a cached manifest came to be a no-op on the
+        // channel that matters: raw.githubusercontent.com/<repo>/main/latest/
+        // VERSION is a 404 and always has been, because there is no latest/
+        // tree in the repo. Where that path is missing, try the one that does
+        // exist on a git-shaped channel: VERSION at the repo root. It shares
+        // the manifest's five-minute cache window, so it corroborates only in
+        // the weak sense of being a separately-keyed object -- enough to catch
+        // a manifest the cache has pinned on its own, not enough to call the
+        // answer confirmed.
+        if (!preg_match('/^\d+\.\d+\.\d+/', $live)) {
+            $live = '';
+            $root = self::httpGet($base . '/VERSION');
+            $root = $root === null ? '' : ltrim(trim($root), 'v');
+            if (preg_match('/^\d+\.\d+\.\d+/', $root)) {
+                $live    = $root;
+                $liveSrc = $base . '/VERSION';
+            }
+        }
+        if ($live === '') {
             return $manifest;
         }
 
         $mVer = $manifest === null ? '' : ltrim((string)($manifest['version'] ?? ''), 'v');
         if ($mVer !== '' && version_compare($live, $mVer, '<=')) {
-            return $manifest;   // manifest is current, or ahead mid-sync
+            // Manifest is current, or ahead mid-sync. latest/VERSION is read
+            // out of the extracted build and a ?cb= request WAS measured to
+            // miss cPanel's nginx cache in front of it, so when it agrees with
+            // the manifest the answer is corroborated. The repo-root VERSION
+            // is not: it sits behind the same edge cache as the manifest.
+            if ($manifest !== null && $live === $mVer
+                && substr($liveSrc, -15) === '/latest/VERSION') {
+                $manifest['_corroborated'] = true;
+                $manifest['_source']       = $liveSrc;
+            }
+            return $manifest;
         }
 
         Logger::warn("UpdateChecker: $base serves manifest v"
                    . ($mVer === '' ? '(none)' : $mVer)
-                   . " but latest/VERSION reads v$live — trusting the deployed tree");
+                   . " but $liveSrc reads v$live — trusting the deployed tree");
 
         // cdn-sync.sh writes a per-version copy of the manifest beside each
         // build. That url is requested about once ever, so no cache holds it,
@@ -292,6 +513,8 @@ class UpdateChecker {
         if ($pinned !== null) {
             $j = json_decode($pinned, true);
             if (is_array($j) && ltrim((string)($j['version'] ?? ''), 'v') === $live) {
+                $j['_corroborated'] = true;
+                $j['_source']       = $base . '/v' . $live . '/latest.json';
                 return $j;
             }
         }
@@ -303,6 +526,7 @@ class UpdateChecker {
         return [
             'version' => $live,
             'notes'   => $manifest === null ? '' : (string)($manifest['notes'] ?? ''),
+            '_base'   => $base,
         ];
     }
 

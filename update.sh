@@ -231,6 +231,12 @@ BACKUP_ROOT="/var/backups/serverscrub"
 TMP_DIR="$(mktemp -d /tmp/sg-update.XXXXXX)"
 AUTO_YES=false
 ALLOW_DOWNGRADE=false
+# Off by default. The cache measurements behind an unconfirmed version check are
+# the right thing to be able to see and the wrong thing to print on every cron
+# run; SG_VERBOSE=1 is here because cron lines are edited less readily than they
+# are inherited.
+VERBOSE=false
+[[ "${SG_VERBOSE:-0}" == "1" ]] && VERBOSE=true
 FORCE_VERSION=""
 FORCE_URL=""
 EXPECTED_SHA256=""
@@ -239,6 +245,7 @@ EXPECTED_SHA256=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --yes)              AUTO_YES=true ;;
+        --verbose|-v)       VERBOSE=true ;;
         # Separate from --yes on purpose: see the downgrade guard below.
         --allow-downgrade)  ALLOW_DOWNGRADE=true ;;
         --version)          shift; FORCE_VERSION="${1:-}"; FORCE_VERSION="${FORCE_VERSION#v}" ;;
@@ -292,6 +299,73 @@ _nocache() { # _nocache <url> -> same url with a single-use cache-buster
     local u="$1" sep='?'
     case "$u" in *\?*) sep='&' ;; esac
     printf '%s%scb=%s' "$u" "$sep" "$CACHE_BUST"
+}
+
+# -- Helper: a url that is addressed BY VERSION, and so cannot be stale -------
+#
+# `?cb=` is not enough on every channel. MEASURED 2026-11-23 against
+# raw.githubusercontent.com, the same object, two consecutive requests:
+#
+#   .../main/latest.json                   -> X-Cache: MISS  ETag "f7a7cab..."
+#   .../main/latest.json?cb=17954488137754 -> X-Cache: HIT   ETag "f7a7cab..."
+#
+# Identical ETag, cache HIT on the "cache-busted" url: the query string is NOT
+# part of Fastly's cache key for raw, so the trick that defeats cPanel's nginx
+# cache on our own CDN does nothing there. The branch path carries
+# Cache-Control: max-age=300, which is the five-minute window the operator
+# landed in when v4.37.8 was published and this updater answered
+# "Already up to date -- v4.37.7".
+#
+# A path that names a version is written once and never rewritten, so no cache
+# layer can hold a wrong answer for it. The shape differs per channel:
+#
+#   raw.githubusercontent.com/<repo>/v4.37.9/latest.json   <- the git TAG
+#   <cdn>/v4.37.9/latest.json                              <- per-build copy
+#
+# On raw the version replaces the BRANCH component, it is not appended to it:
+# .../<repo>/main/v4.37.9/latest.json is a 404 and always was.
+_pinned_manifest_url() { # _pinned_manifest_url <channel-base> <version>
+    local base="${1%/}" ver="$2"
+    case "$base" in
+        https://raw.githubusercontent.com/*)
+            printf 'https://raw.githubusercontent.com/%s/v%s/latest.json' \
+                   "$RELEASES_REPO" "$ver" ;;
+        *)  printf '%s/v%s/latest.json' "$base" "$ver" ;;
+    esac
+}
+
+# -- Helper: the newest version a channel can name without a mutable path -----
+#
+# For the GitHub channel that is the tag list. The releases API is NOT used:
+# github.com/<repo>/releases/latest 302s to /releases, which is what a repo
+# with no published Release objects does, so there is no "latest release" to
+# read. Tags do exist, and publish.sh fails the release without one.
+#
+# One request, `Cache-Control: s-maxage=60` on the answer and 60 requests an
+# hour unauthenticated -- and this runs once a day on a schedule. The 60s is
+# worth stating plainly: the tag list can be a minute old, so this is not a
+# perfectly live reading. It is the manifest UNDER the tag that cannot be
+# stale, and that is what gets fetched and compared next.
+#
+# A channel that is just files over HTTP has no ref listing at all; it
+# corroborates through latest/VERSION and its per-build manifest instead.
+_immutable_channel_version() { # _immutable_channel_version <channel-base>
+    local base="$1" tags=""
+    case "$base" in
+        https://raw.githubusercontent.com/*)
+            tags="$(curl -fsSL --max-time 10 "${NOCACHE_HDRS[@]}" \
+                     -H 'Accept: application/vnd.github+json' \
+                     "$(_nocache "https://api.github.com/repos/${RELEASES_REPO}/tags?per_page=10")" \
+                     2>/dev/null || true)"
+            # Highest by version, not whatever the API listed first. Tag order
+            # is not a documented guarantee, and `v4.9.0` sorts above `v4.36.0`
+            # one character at a time.
+            printf '%s' "$tags" \
+                | grep -oE '"name"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+[^"]*"' \
+                | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^"]*' \
+                | sort -V | tail -1
+            ;;
+    esac
 }
 
 # ── Helper: download a URL to a file (curl first, wget fallback) ──────────────
@@ -502,6 +576,21 @@ else
     fi
     [[ -z "$LATEST_VERSION" ]] && die "Could not parse version from manifest."
 
+    # --- How solid is this answer? -------------------------------------------
+    #
+    # Tracked, not assumed. "Already up to date" is a factual claim about the
+    # patch level of a security product, and it may only be printed when the
+    # version behind it came from somewhere a cache cannot have staled.
+    # Everything else gets hedged, in words, naming the channel.
+    VER_IMMUTABLE=false
+    VER_SOURCE=""
+    # Why that source cannot be stale. Carried alongside, because the two
+    # corroborators are trustworthy for DIFFERENT reasons and the output said
+    # "addressed by version" for both -- which is false for latest/VERSION, a
+    # mutable path on the mirror. Claiming the right version for the wrong
+    # stated reason is the same class of defect as the rest of this spec.
+    VER_SOURCE_WHY=""
+
     # --- latest/VERSION OVERRIDES a lower manifest version -------------------
     #
     # This cross-check used to be informational: it printed "channel mid-sync"
@@ -533,6 +622,14 @@ else
         # which the stale top-level manifest does not. Preferred over guessing
         # the dist path precisely so the download stays checksum-verified.
         PINNED_URL="${BEST_LIVE_BASE}/v${BEST_LIVE}/latest.json"
+        # The two shapes differ: on raw the version is a git ref and REPLACES
+        # the branch component, so appending v<ver> to .../<repo>/main/ is a
+        # 404 every time. Written out here rather than called out to
+        # _pinned_manifest_url so this block reads in one piece.
+        case "$BEST_LIVE_BASE" in
+            https://raw.githubusercontent.com/*)
+                PINNED_URL="https://raw.githubusercontent.com/${RELEASES_REPO}/v${BEST_LIVE}/latest.json" ;;
+        esac
         info "  Fetching the per-version manifest: ${PINNED_URL}"
         PINNED_JSON="$(curl -fsSL --max-time 15 "${NOCACHE_HDRS[@]}" "$(_nocache "$PINNED_URL")" 2>/dev/null || true)"
         PINNED_VER="$(printf '%s' "$PINNED_JSON" | grep -oP '"version"\s*:\s*"\K[^"]+' | head -1 || true)"
@@ -547,6 +644,12 @@ else
             EXPECTED_SHA256="$(printf '%s' "$PINNED_JSON" | grep -oP '"sha256"\s*:\s*"\K[0-9a-fA-F]+' | head -1 || true)"
             RELEASE_URL="$(printf '%s' "$PINNED_JSON"     | grep -oP '"notes"\s*:\s*"\K[^"]+' | head -1 || true)"
             ok "  Took v${LATEST_VERSION} from the per-version manifest (checksum included)"
+            # Addressed by version, so no cache can have answered with another
+            # build. This is a corroborated reading, and the only kind the
+            # "Already up to date" line below is allowed to rest on.
+            VER_IMMUTABLE=true
+            VER_SOURCE="$PINNED_URL"
+            VER_SOURCE_WHY="addressed by version, so no cache can hold a wrong answer for it"
         else
             # No per-version manifest. Still better to install the version the
             # tree says is current than to tell the operator they are up to
@@ -562,6 +665,111 @@ else
     elif [[ -n "${LIVE_VER:-}" && "$LIVE_VER" != "$LATEST_VERSION" ]]; then
         warn "Manifest says v${LATEST_VERSION} but latest/ holds v${LIVE_VER} — channel mid-sync."
     fi
+    # --- CORROBORATE: the answer must come from a url no cache can stale ----
+    #
+    # The two mitigations above -- ask every channel, and let latest/VERSION
+    # override a lower manifest -- were both already here on 2026-11-23, and
+    # both missed the reported failure:
+    #
+    #   * ?cb= is not in raw.githubusercontent.com's cache key (measured; see
+    #     _pinned_manifest_url), so the GitHub manifest can be 5 minutes old
+    #     however it is requested.
+    #   * .../main/latest/VERSION is a 404 -- there is no latest/ tree in the
+    #     repo -- so the cross-check built to catch exactly this has never been
+    #     able to fire on the channel that is now the only working one. A 404
+    #     is not a passed cross-check.
+    #
+    # So: find the newest version each channel can name through an immutable
+    # ref, confirm it against the manifest committed under that ref, and take
+    # it. If nothing immutable can be reached, the branch answer still stands
+    # -- the updater has to keep working on a firewalled box -- but it is
+    # labelled, and the "Already up to date" line below refuses to print.
+    IMM_BEST=""; IMM_BEST_BASE=""; IMM_BEST_JSON=""; IMM_BEST_URL=""
+    for BASE in "${CHANNELS[@]}"; do
+        IMM_VER="$(_immutable_channel_version "$BASE" 2>/dev/null || true)"
+        # NO FALLBACK TO THE BRANCH ANSWER. This block read
+        #
+        #     [[ -z "$IMM_VER" ]] && IMM_VER="$LATEST_VERSION"
+        #
+        # which made the whole check a tautology, and shipped a WORSE claim
+        # than the one it was written to fix. v<X>/latest.json proves that
+        # version X exists; it never proves X is the newest. Every released
+        # version has a tag, and cdn-sync.sh retains KEEP_VERSIONS old
+        # v<ver>/ folders, so that path always answers -- the confirmation
+        # could not fail. With the tags api rate-limited and a branch manifest
+        # cached at 4.37.7 beside a real v4.37.8 tag, the updater printed
+        #
+        #     Already up to date - v4.37.7
+        #       Confirmed against .../v4.37.7/latest.json (no cache can stale it)
+        #
+        # i.e. an explicit assurance of freshness, on a stale read, in exactly
+        # the case requirement 4 exists to hedge.
+        #
+        # A pinned manifest may only corroborate a version that an immutable
+        # source NAMED as current. There are two such sources and no others:
+        # the tag list, read on the line above, and <channel>/latest/VERSION,
+        # used after this loop -- that one is read out of the deployed build
+        # and can disagree with the manifest beside it. A channel with neither
+        # has no immutable source today, and its answer stays labelled.
+        if [[ -z "$IMM_VER" ]]; then
+            continue
+        fi
+        # Only ever corroborate forwards. A ref older than the answer in hand
+        # is a lagging mirror -- reported above -- and nothing to download.
+        if _ver_gt "$LATEST_VERSION" "$IMM_VER"; then
+            continue
+        fi
+        if [[ -n "$IMM_BEST" ]] && ! _ver_gt "$IMM_VER" "$IMM_BEST"; then
+            continue
+        fi
+        PIN_URL="$(_pinned_manifest_url "$BASE" "$IMM_VER")"
+        PIN_JSON="$(curl -fsSL --max-time 10 "${NOCACHE_HDRS[@]}" "$(_nocache "$PIN_URL")" 2>/dev/null || true)"
+        PIN_VER="$(printf '%s' "$PIN_JSON" | grep -oP '"version"\s*:\s*"\K[^"]+' | head -1 || true)"
+        PIN_VER="${PIN_VER#v}"
+        if [[ -n "$PIN_JSON" && "$PIN_VER" == "$IMM_VER" ]]; then
+            IMM_BEST="$IMM_VER"; IMM_BEST_BASE="$BASE"
+            IMM_BEST_JSON="$PIN_JSON"; IMM_BEST_URL="$PIN_URL"
+        else
+            # The ref exists but the manifest under it does not, or disagrees:
+            # mid-push, or a tag made over a tree without the file. Nothing to
+            # take, and nothing is claimed -- this channel simply has no
+            # immutable source today.
+            warn "${BASE} names v${IMM_VER} but ${PIN_URL} does not carry it - ignoring that ref."
+        fi
+    done
+
+    if [[ -n "$IMM_BEST" ]]; then
+        if _ver_gt "$IMM_BEST" "$LATEST_VERSION"; then
+            warn "The channel manifests say v${LATEST_VERSION}; the newest release ref holds v${IMM_BEST}."
+            warn "  Taking the version-pinned manifest: a branch path can be answered from a"
+            warn "  cache for up to 5 minutes, and a path naming the version cannot."
+            LATEST_VERSION="$IMM_BEST"
+            ACTIVE_BASE="$IMM_BEST_BASE"
+            DIST_BASE="${IMM_BEST_BASE}/dist"
+            DOWNLOAD_URL="$(printf '%s' "$IMM_BEST_JSON"    | grep -oP '"url"\s*:\s*"\K[^"]+' | head -1 || true)"
+            MIRROR_URL="$(printf '%s' "$IMM_BEST_JSON"      | grep -oP '"mirror"\s*:\s*"\K[^"]+' | head -1 || true)"
+            EXPECTED_SHA256="$(printf '%s' "$IMM_BEST_JSON" | grep -oP '"sha256"\s*:\s*"\K[0-9a-fA-F]+' | head -1 || true)"
+            RELEASE_URL="$(printf '%s' "$IMM_BEST_JSON"     | grep -oP '"notes"\s*:\s*"\K[^"]+' | head -1 || true)"
+        fi
+        if [[ "$IMM_BEST" == "$LATEST_VERSION" ]]; then
+            VER_IMMUTABLE=true
+            VER_SOURCE="$IMM_BEST_URL"
+            VER_SOURCE_WHY="addressed by version, so no cache can hold a wrong answer for it"
+            ok "Corroborated v${LATEST_VERSION} against ${IMM_BEST_URL}"
+        fi
+    fi
+
+    # The deployed tree is the other reading a cache cannot fake: latest/VERSION
+    # is read out of the build itself, and on our own CDN a ?cb= request was
+    # measured to miss the proxy. Accepted as corroboration only when it AGREES
+    # with the version being acted on.
+    if [[ "$VER_IMMUTABLE" == false && -n "$BEST_LIVE" && "$BEST_LIVE" == "$LATEST_VERSION" ]]; then
+        VER_IMMUTABLE=true
+        VER_SOURCE="${BEST_LIVE_BASE}/latest/VERSION"
+        VER_SOURCE_WHY="read out of the deployed build, so it cannot name a version the tree does not hold"
+        ok "Corroborated v${LATEST_VERSION} against ${VER_SOURCE}"
+    fi
+
     [[ -z "$DOWNLOAD_URL"   ]] && DOWNLOAD_URL="${DIST_BASE}/serverscrub-${LATEST_VERSION}.zip"
 fi
 
@@ -571,7 +779,57 @@ info "Latest version:  ${BOLD}v${LATEST_VERSION}${NC}"
 # Skip version comparison when forced via --version or --url flags
 if [[ -z "$FORCE_VERSION" && -z "$FORCE_URL" ]]; then
     if [[ "$CURRENT_VERSION" == "$LATEST_VERSION" ]]; then
-        ok "Already up to date — v${CURRENT_VERSION}"
+        # ONLY on corroborated evidence.
+        #
+        # This line is a factual claim about the patch level of a security
+        # product, and on 2026-11-23 it was printed -- honestly, from a
+        # five-minute-old cached manifest -- minutes after v4.37.8 was
+        # published, telling the operator that v4.37.7 was current. Nothing in
+        # the output hinted that the evidence could be stale. That is the same
+        # class of defect as the WAF reporting action='block' while blocking
+        # nothing: not a lie, just a claim beyond what was verified.
+        if [[ "${VER_IMMUTABLE:-false}" == true ]]; then
+            ok "Already up to date — v${CURRENT_VERSION}"
+            # The REASON comes from the source, not from a hardcoded string.
+            # This line said "(addressed by version; no cache can stale it)"
+            # for every source, including latest/VERSION -- which is a mutable
+            # path, and whose cache purge is explicitly best-effort.
+            info "  Confirmed against ${VER_SOURCE}${VER_SOURCE_WHY:+ — ${VER_SOURCE_WHY}}."
+            exit 0
+        fi
+        # ONE line of what is true, then stop.
+        #
+        # This was six warn lines and two curl commands, with the operative
+        # sentence last, after five lines of cache archaeology -- printed on
+        # every daily cron run on a server where nothing is wrong and, if it is
+        # firewalled off github.com, nothing can be. A block that long and that
+        # frequent trains an operator to skip it, which is how the next real
+        # warning gets missed. The claim is unchanged; the delivery is not.
+        warn "NOT CONFIRMED: nothing newer than the installed v${CURRENT_VERSION} was offered,"
+        warn "  but that is not a confirmation that this install is current — the only"
+        warn "  answer came from ${ACTIVE_BASE:-the release channel}/latest.json, a cacheable"
+        warn "  url that can be up to 5 minutes behind a release."
+        if [[ "${VERBOSE:-false}" == true ]]; then
+            info "  Measured on raw.githubusercontent.com: a cache-busted request is served"
+            info "  from the SAME cached object (identical ETag, X-Cache: HIT), and"
+            info "  .../main/latest/VERSION is a 404, so there is nothing on that channel"
+            info "  that a cache cannot have answered. Nothing addressed by version could"
+            info "  be reached to check it."
+        else
+            info "  Re-run with --verbose for why, or in a few minutes for a confirmed answer."
+        fi
+        # Only when someone is watching. On a cron run these two lines are
+        # advice nobody will read, in a log everybody greps.
+        if [[ -t 1 ]]; then
+            echo ""
+            echo -e "  ${BOLD}To settle it by hand (immutable paths only):${NC}"
+            echo -e "    curl -fsS 'https://api.github.com/repos/${RELEASES_REPO}/tags?per_page=5' | grep name | head -3"
+            echo -e "    curl -fsS https://raw.githubusercontent.com/${RELEASES_REPO}/v<version>/latest.json"
+            echo ""
+        fi
+        # Exit 0 on purpose. Cron and the one-click updater both call this, and
+        # a nonzero exit would read as a failed update rather than an
+        # unconfirmed check. There is nothing to install either way.
         exit 0
     fi
 
