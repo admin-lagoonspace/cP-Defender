@@ -206,3 +206,88 @@ t_contains(file_get_contents($repo . '/frontend/index.html'),
     'the Settings page says what quick now scans');
 t_contains(t_js($repo . '/frontend/js/app.js'), "incomplete: 'var(--amber)'",
     'an incomplete scan is amber in the scan log, not green');
+
+/* ── 9. A CUSTOMER'S QUICK SCAN STAYS IN THE CUSTOMER'S HOME ──────────────
+ *
+ * Shakaal, first review of this change: UserScanRequest calls
+ * startScan($home, 'quick', true, $user), and resolveScanPaths('quick')
+ * ignored the path whenever any account existed. A scan requested for one
+ * account in the container resolved to all 8 homes. On prod, any of 132
+ * customers could start a run of up to 20 hours over every mailbox -- with
+ * the backup wait waived, because that argument was meant for ONE account. */
+$bob = $R . '/bob';
+@mkdir($bob . '/mail', 0777, true);
+file_put_contents($bob . '/mail/secret.php', t_inert_payload('another customer\'s file'));
+file_put_contents($cp . '/bob', "USER=bob\n");
+
+$u = Scanner::resolveScanPaths('quick', $R . '/alice');
+t_eq([$R . '/alice'], $u['paths'],
+    'a quick scan given ONE account\'s home resolves to that home and nothing else -- '
+  . 'not to every account on the server');
+t_eq('1 home dir(s)', $u['note'], 'and the note counts one');
+
+$sub = Scanner::resolveScanPaths('quick', $R . '/alice/public_html');
+t_eq([$R . '/alice/public_html'], $sub['paths'], 'a path inside one account is kept as given');
+
+$root = Scanner::resolveScanPaths('quick', $R);
+sort($root['paths']);
+t_eq([$R . '/alice', $R . '/bob', $R . '/carol'], $root['paths'],
+    'a scan ROOT (what the scheduler, WHM and the CLI pass) still expands to every home under it');
+$none = Scanner::resolveScanPaths('quick', '');
+sort($none['paths']);
+t_eq([$R . '/alice', $R . '/bob', $R . '/carol'], $none['paths'],
+    'and so does no path at all');
+
+// Behaviour, end to end through the walk: nothing of bob's is examined.
+$j = $newJob('quick', $R . '/alice');
+$sc->runPaths($u['paths'], $j, 'quick');
+$aliceOnly = (int) Database::fetchOne('SELECT files_scanned FROM scan_jobs WHERE id=?', [$j])['files_scanned'];
+$j2 = $newJob('quick', $R . '/alice,' . $bob);
+$sc->runPaths([$R . '/alice', $bob], $j2, 'quick');
+$both = (int) Database::fetchOne('SELECT files_scanned FROM scan_jobs WHERE id=?', [$j2])['files_scanned'];
+t_ok($aliceOnly > 0 && $both === $aliceOnly + 1,
+    "the customer's run examined $aliceOnly file(s); adding bob adds exactly his one -- so "
+  . 'the customer run never read another account\'s home');
+
+// ── 10. An empty directory past the depth limit hides nothing ────────────────
+// carol/a/b/c is depth 3: past a limit of 2, and empty. (A directory that
+// holds only empty directories still counts as hiding something: telling
+// would need a walk below the limit, which is what the limit exists to stop.)
+@mkdir($R . '/carol/a/b/c', 0777, true);
+Scanner::setQuickBounds(['depth' => 2]);
+$j   = $newJob('quick', $R . '/carol');
+$run = $sc->runPaths([$R . '/carol'], $j, 'quick');
+t_eq([], $run['incomplete'], 'empty directories past the depth limit do not make an account incomplete');
+file_put_contents($R . '/carol/a/b/c/x.php', t_inert_payload('a file past the depth limit'));
+$run = $sc->runPaths([$R . '/carol'], $newJob('quick', $R . '/carol'), 'quick');
+t_eq(['carol: depth limit 2 reached'], $run['incomplete'], 'but one holding a file does');
+Scanner::setQuickBounds(null);
+
+/* ── 11. AN INCOMPLETE LAST SCAN IS NOT "PROTECTED" ───────────────────────
+ *
+ * Shakaal, first review: getStats() returns the newest job whatever its
+ * status, and the dashboard painted any finished job with no open threats
+ * green "Protected", with the top-bar pill saying "The last scan finished and
+ * nothing is open" -- after a scan that had just reported it did not look at
+ * everything. */
+Database::query("UPDATE threats SET status='deleted' WHERE status='active'");
+$last = $newJob('quick', $R);
+Database::query("UPDATE scan_jobs SET status='incomplete', finished_at=? WHERE id=?", [time(), $last]);
+$st = $sc->getStats();
+t_eq('incomplete', $st['last_scan']['status'] ?? null,
+    'the stats the dashboard reads carry the incomplete status of the last scan');
+
+$js   = t_js($repo . '/frontend/js/app.js');
+$pill = t_fn_body($js, 'topStatusFor', 'js');
+$pPos = strpos($pill, "sc.last_scan.status === 'incomplete'");
+t_ok($pPos !== false && $pPos < strpos($pill, "'clean', 'No open threats'"),
+    'THE PILL: an incomplete last scan is checked BEFORE the green state, so it can never read '
+  . '"The last scan finished and nothing is open"');
+t_contains($pill, "'partial', 'Last scan incomplete'", 'and it has its own state and words');
+t_contains(file_get_contents($repo . '/frontend/css/app.css'), '.status-pill.sp-partial',
+    'which is styled, amber, and does not pulse like the clean state');
+$card = t_fn_body($js, 'refreshDashboard', 'js');
+$cPos = strpos($card, "lastJob.status === 'incomplete'");
+t_ok($cPos !== false && $cPos < strpos($card, "scanStatus.textContent = 'Protected'"),
+    'THE CARD: the incomplete branch comes before "Protected", same order as the pill');
+t_contains($card, "scanBadge.className = 'badge badge-amber'", 'and is amber, not green');

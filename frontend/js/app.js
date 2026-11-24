@@ -676,6 +676,13 @@ function topStatusFor(sc) {
     return ['threat', fmtNum(threats) + ' threat' + (threats > 1 ? 's' : '') + ' open',
             'Open threats across every scan. Scanner > Threats lists them.'];
   }
+  // A quick scan that hit a per-account limit did not look at everything, so
+  // "nothing is open" is not a clean bill of health. Amber, never green.
+  if (sc.last_scan.status === 'incomplete') {
+    return ['partial', 'Last scan incomplete',
+            'The last scan hit a per-account limit and did not examine every '
+            + 'file. See the Scan Log for which accounts.'];
+  }
   return ['clean', 'No open threats', 'The last scan finished and nothing is open.'];
 }
 
@@ -856,6 +863,15 @@ async function refreshDashboard() {
     scanBadge.textContent = 'No scan yet';
     scanStatus.title = 'Nothing has been scanned on this server yet, so there is '
                      + 'nothing to report either way. Run a scan.';
+  } else if (lastJob.status === 'incomplete') {
+    // Same rule as the pill (topStatusFor): a capped scan is not "Protected".
+    scanIcon.textContent = '⚠️';
+    scanStatus.textContent = 'Last scan incomplete';
+    scanStatus.style.color = 'var(--amber)';
+    scanBadge.className = 'badge badge-amber';
+    scanBadge.textContent = 'Incomplete';
+    scanStatus.title = 'The last scan hit a per-account limit and did not examine '
+                     + 'every file. See the Scan Log for which accounts.';
   } else {
     scanIcon.textContent = '✅';
     scanStatus.textContent = 'Protected';

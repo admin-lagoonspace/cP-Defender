@@ -141,9 +141,11 @@ t_contains($clean, 'animation: pulse-dot',
 // four assertions are what a browser would otherwise have to find.
 preg_match_all("/return \['(\w+)',/", $fn, $states);
 $applied = array_unique(array_merge($states[1] ?? [], ['down']));
-t_eq(5, count($applied),
-     'five states are applied by the code (unknown, never, threat, clean, '
-   . 'down) — if a sixth is added, this count is what notices');
+// Sixth state added in 4.37.11: 'partial', an incomplete last scan (quick
+// scan bounds). It is styled in app.css; the loop below checks that.
+t_eq(6, count($applied),
+     'six states are applied by the code (unknown, never, threat, partial, '
+   . 'clean, down) — if a seventh is added, this count is what notices');
 
 foreach ($applied as $state) {
     // 'never' deliberately shares the grey unknown styling: "nothing has been

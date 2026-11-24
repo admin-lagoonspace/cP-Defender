@@ -35,7 +35,13 @@ heading or touch VERSION mid-week._
   the accounts and bounds as the reason), never `done`, which is what the
   dashboard and the customer's page show as "Clean". Full and custom scans are
   not bounded. The Settings page, the scan target label and the CLI help now
-  say what quick covers.
+  say what quick covers. A quick scan given one account's home (a customer's
+  own scan) stays in that home: until now the quick branch ignored the path
+  whenever any account existed, so one customer's "scan my account" walked
+  every account — and with this change would have walked every mailbox, for up
+  to 20 hours, with the backup wait waived. Only a scan root, or no path, is
+  expanded to every home. The dashboard card and the top-bar pill show an
+  incomplete last scan in amber as "Last scan incomplete", not "Protected".
 
 ## [4.37.10] - 2026-11-24
 

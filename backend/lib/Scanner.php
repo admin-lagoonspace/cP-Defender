@@ -1277,8 +1277,42 @@ class Scanner {
                 // that serves nothing can still be where the dropper lives.
                 $homes = [];
                 foreach (self::listAccounts() as $a) {
-                    if (!empty($a['home'])) { $homes[] = $a['home']; }
+                    if (!empty($a['home'])) { $homes[] = rtrim($a['home'], '/'); }
                 }
+
+                /* THE PATH GIVEN IS THE SCOPE. A customer's scan arrives here
+                 * as startScan($home, 'quick', ...) from UserScanRequest, and
+                 * this branch used to ignore $path whenever any account
+                 * existed -- one customer's "scan my account" became a walk
+                 * of every account on the server, every mailbox included.
+                 * So each given path is kept as it is, unless it is a ROOT
+                 * that holds accounts (the scheduler, WHM and the CLI pass
+                 * the scan roots, e.g. /home); only then is it expanded to
+                 * the account homes under it. */
+                if ($given && $homes) {
+                    $out = [];
+                    foreach ($given as $g) {
+                        $under = [];
+                        foreach ($homes as $h) {
+                            if ($h === $g || strpos($g . '/', $h . '/') === 0) {
+                                $under = null;          // an account, or inside one
+                                break;
+                            }
+                            if (strpos($h, $g . '/') === 0) { $under[] = $h; }
+                        }
+                        if ($under) {
+                            foreach ($under as $h) { $out[] = $h; }
+                        } else {
+                            $out[] = $g;
+                        }
+                    }
+                    $out = array_values(array_unique($out));
+                    $nh  = count(array_intersect($out, $homes));
+                    return ['paths' => $out,
+                            'note'  => $nh === count($out) ? $nh . ' home dir(s)'
+                                                           : count($out) . ' path(s)'];
+                }
+
                 if ($homes) {
                     return ['paths' => $homes, 'note' => count($homes) . ' home dir(s)'];
                 }
@@ -1821,7 +1855,15 @@ class Scanner {
     {
         if ($this->walkBound === null) { return false; }
         if ($this->depthBelowRoot($dir) <= $this->walkBound['depth']) { return false; }
-        if ($this->boundHit === '') {
+        // An EMPTY directory past the limit hides nothing, so it does not make
+        // the account incomplete. One readdir of that directory, no deeper.
+        $hidesSomething = true;
+        try {
+            $hidesSomething = (new FilesystemIterator($dir))->valid();
+        } catch (Exception $e) {
+            $hidesSomething = true;   // could not tell: assume it does
+        }
+        if ($hidesSomething && $this->boundHit === '') {
             $this->boundHit = 'depth limit ' . $this->walkBound['depth'] . ' reached';
         }
         return true;

@@ -214,6 +214,9 @@ h1,h2,h3,h4 { font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
 /* Open threats. */
 .status-pill.sp-threat     { color: var(--red); }
 .status-pill.sp-threat .status-dot { background: var(--red); box-shadow: 0 0 0 2px rgba(239,83,80,.18); }
+/* The last scan hit a limit and did not look at everything: amber, still. */
+.status-pill.sp-partial    { color: var(--amber2); }
+.status-pill.sp-partial .status-dot { background: var(--amber2); }
 /* Never scanned, or the count could not be read: grey, and NOT pulsing. */
 .status-pill.sp-unknown    { color: var(--txt2); }
 .status-pill.sp-unknown .status-dot { background: var(--txt3); }

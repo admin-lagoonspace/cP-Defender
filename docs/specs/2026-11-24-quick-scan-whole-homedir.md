@@ -173,3 +173,21 @@ Not done / for Shakaal:
 - Dashboard "files scanned" reads the last `done` job, so it ignores
   `incomplete` ones.
 - The cap figures are guesses; check the first prod run.
+
+## Wasooli, round 2 (after Shakaal FAIL)
+
+- Blocker fixed: `resolveScanPaths('quick', $path)` keeps each given path
+  that is an account home or inside one; only a path that holds account homes
+  (a scan root such as `/home`) or no path expands to every home. Test 9 in
+  `test_quick_scan_whole_homedir.php` proves a one-account run never examines
+  another account's files.
+- Major fixed: `topStatusFor()` returns `partial` / "Last scan incomplete"
+  before the clean state; the dashboard card has an amber "Incomplete" branch
+  before "Protected"; `.sp-partial` styled. `test_top_status_pill.php` state
+  count raised 5 -> 6 because a state was deliberately added (that assertion
+  exists to force exactly this review).
+- Minor fixed cheaply: a past-depth directory with no entries does not mark
+  the account incomplete. One holding only empty subdirectories still does
+  (finding out would require walking past the limit).
+- Still open (not in scope): cancelled/error/interrupted last scans also
+  reach the green "Protected" branch, as on `main`.
