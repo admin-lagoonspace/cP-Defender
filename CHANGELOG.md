@@ -56,6 +56,21 @@ heading or touch VERSION mid-week._
   channel: on raw, a version is a git ref and REPLACES the branch component,
   so `…/<repo>/main/v4.37.8/latest.json` is a 404 and always was.
 
+  The unconfirmed case says its one thing and stops: what is true first, the
+  channel and the staleness bound with it, three lines. The cache measurements
+  behind `--verbose` (or `SG_VERBOSE=1`), and the two by-hand `curl` commands
+  only when a terminal is attached. It was six warning lines plus two commands
+  on every daily cron run of a server where nothing was wrong — and on a
+  firewalled server, where nothing can be — with the operative sentence last.
+  A block that long and that frequent is how an operator learns to skip the
+  one that will matter.
+
+  And the confirmed case now states the reason that actually applies to the
+  source it used. It said "(addressed by version; no cache can stale it)" for
+  every source, including `latest/VERSION`, which is a mutable path whose cache
+  purge is explicitly best-effort. The version was right and the stated reason
+  was not, which is the defect this whole change is about.
+
 - **A mirror frozen since September blocked the documented upgrade path
   outright.** `upgrade.sh` took the first channel that answered, with no cache
   buster and no cross-check — the pattern removed from `update.sh` at v4.28.10
@@ -98,13 +113,26 @@ heading or touch VERSION mid-week._
   then died on the "tag already exists on origin" guard. The two routes that
   guard offered were burning a version number or deleting a pushed tag, and
   `update.sh` now resolves versions **from** tags, so deleting one withdraws
-  that release from every server in the field. `publish.sh` now recognises its
-  own tag — same object, same commit — as a **resume**: it re-creates nothing
-  that is already on origin, leaves an existing Release page alone, and
-  re-checks the mirror. The mirror failure text ends with the exact command to
-  finish the release, and says not to bump or delete anything. A tag of that
-  name on any other commit is still a hard refusal, and a rebuild that changes
-  tracked files during a resume stops before anything is pushed.
+  that release from every server in the field.
+
+  `publish.sh` now recognises its own tag — same object, same commit — as a
+  **resume**, and a resume **does not rebuild**. The release artifacts are
+  committed and `make-release.sh` is not byte-reproducible (the zip records
+  file mtimes), so a rebuild changes the zip, the `sha256` in `latest.json`
+  derived from it, and `dist/latest.json` — which would either refuse the run
+  or publish a different build under a tag that describes the first one. The
+  committed artifacts at the tag *are* the release: a resume verifies the tag,
+  the GitHub channel and the mirror, and nothing else. It leaves an existing
+  Release page alone, and refuses if the committed zip is not on disk, because
+  then this checkout is not the tree that was released.
+
+  The mirror failure text ends with the exact command to finish the release and
+  says not to bump or delete anything. A tag of that name on any other commit
+  is still a hard refusal. If the tree is dirty during a resume the run stops
+  before anything is pushed, and the recovery it prints is
+  `git reset --hard HEAD` — not `git checkout -- <paths>`, which restores the
+  working tree *from the index* and so exits 0 having changed nothing when the
+  index is the dirty side.
 
 - **`upgrade.sh` blamed the release mirrors when it could not read the installed
   version.** `sort -V` puts the literal string `unknown` above every real

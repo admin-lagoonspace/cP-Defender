@@ -91,6 +91,8 @@ with open(os.path.join(REPO, 'scripts', 'cdn-sync.sh'), encoding='utf-8') as fh:
     SYNC = fh.read()
 
 REMOTE_TAG_GUARD = _block(PUB, 'RESUMING=no', 'fi')
+BUILD_OR_RESUME  = _between(PUB, 'if [[ "$RESUMING" == "yes" ]]; then',
+                            '# \u2500\u2500 3b. The tree must be clean')
 GH_VERIFY = _between(PUB, 'info "Verifying the GitHub channel through the tag',
                      '# ── 7b.')
 CDN_WAIT  = _between(PUB, 'CDN_BASE="${SG_CDN_BASE:-', '# UPGRADE FIRST, install second.')
@@ -418,6 +420,88 @@ val, r = guard(remote='tagobj1', local='tagobj1', local_commit='old1234', head='
 eq(1, r.returncode,
    'and a tag that does not point at HEAD refuses too: resuming would publish '
    'a mirror for a commit that is not the one on disk')
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 5. A resume does not rebuild
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Shakaal's reopened blocker, 2026-11-23, measured against a real bare origin:
+# the resume printed by the mirror failure could never succeed. The build ran
+# BEFORE the resume check, make-release.sh is not byte-reproducible (the zip
+# records file mtimes; two consecutive runs gave sha256 25b86c39... and
+# dbcb9b48...), and the release artifacts are committed -- so the zip, the
+# sha256 in latest.json derived from it, and dist/latest.json were dirty by the
+# time the check was reached, on every possible run.
+#
+# This runs the real build-or-resume block with make-release.sh replaced by a
+# script that records that it was called.
+
+RESUME_HARNESS = r'''
+set -euo pipefail
+info() { echo "INFO $*"; }
+ok()   { echo "OK   $*"; }
+warn() { echo "WARN $*"; }
+err()  { echo "ERR  $*"; }
+die()  { echo "DIE  $*"; exit 1; }
+VER="4.37.10"
+TAG="v4.37.10"
+cd "$SG_FIXDIR/repo"
+# A make-release.sh that leaves a mark instead of building.
+mkdir -p scripts dist
+printf '#!/usr/bin/env bash\necho rebuilt >> "$SG_FIXDIR/built"\n' > scripts/make-release.sh
+git() { echo "GIT $*" >> "$SG_FIXDIR/git.log"; return 0; }
+sha256sum() { printf '%s  %s\n' "0000000000000000000000000000000000000000000000000000000000000000" "$1"; }
+'''
+
+
+def build_or_resume(resuming, zip_present=True):
+    d = tempfile.mkdtemp(prefix='sg-resume-')
+    repo = os.path.join(d, 'repo', 'dist')
+    os.makedirs(repo)
+    if zip_present:
+        with open(os.path.join(repo, 'serverscrub-4.37.10.zip'), 'w') as fh:
+            fh.write('zip bytes')
+    with open(os.path.join(d, 'repo', 'dist', 'latest.json'), 'w') as fh:
+        fh.write('{}')
+    script = (RESUME_HARNESS
+              + 'RESUMING=%s\n' % resuming
+              + BUILD_OR_RESUME + '\n'
+              + 'echo "RESULT reached_end=1"\n')
+    path = os.path.join(d, 'harness.sh')
+    with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write(script)
+    e = dict(os.environ)
+    e['SG_FIXDIR'] = d.replace(chr(92), '/')
+    r = subprocess.run([BASH, path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       universal_newlines=True, env=e, cwd=d)
+    built = os.path.exists(os.path.join(d, 'built'))
+    return built, r
+
+
+built, r = build_or_resume('yes')
+eq(False, built,
+   'A RESUME DOES NOT REBUILD: make-release.sh is not called. It ran before '
+   'the resume check, the build is not byte-reproducible, and the artifacts '
+   'are committed -- so the rebuild dirtied the tree and the run refused '
+   'itself, every time, making the resume unreachable by construction')
+eq(0, r.returncode, 'and the block completes')
+ok('not rebuilding' in r.stdout,
+   'it says so, naming the committed artifact it is using instead')
+ok('GIT add' not in r.stdout and not os.path.exists('git.log'),
+   'and nothing is staged: a resume has nothing new to commit, and a commit '
+   'would move HEAD off the tag that is already on origin')
+
+built, r = build_or_resume('no')
+eq(True, built,
+   'A NORMAL RELEASE STILL BUILDS: the skip is conditional, not a removal')
+
+built, r = build_or_resume('yes', zip_present=False)
+eq(1, r.returncode,
+   'A RESUME WITHOUT THE COMMITTED ZIP REFUSES: the zip is committed at the '
+   'tag, so its absence means this checkout is not the tree that was '
+   'released, and resuming would mirror something else')
+ok('is missing' in r.stdout, 'saying which file')
 
 print('')
 print('%d passed, %d failed' % (_passed, _failed))

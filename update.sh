@@ -231,6 +231,12 @@ BACKUP_ROOT="/var/backups/serverscrub"
 TMP_DIR="$(mktemp -d /tmp/sg-update.XXXXXX)"
 AUTO_YES=false
 ALLOW_DOWNGRADE=false
+# Off by default. The cache measurements behind an unconfirmed version check are
+# the right thing to be able to see and the wrong thing to print on every cron
+# run; SG_VERBOSE=1 is here because cron lines are edited less readily than they
+# are inherited.
+VERBOSE=false
+[[ "${SG_VERBOSE:-0}" == "1" ]] && VERBOSE=true
 FORCE_VERSION=""
 FORCE_URL=""
 EXPECTED_SHA256=""
@@ -239,6 +245,7 @@ EXPECTED_SHA256=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --yes)              AUTO_YES=true ;;
+        --verbose|-v)       VERBOSE=true ;;
         # Separate from --yes on purpose: see the downgrade guard below.
         --allow-downgrade)  ALLOW_DOWNGRADE=true ;;
         --version)          shift; FORCE_VERSION="${1:-}"; FORCE_VERSION="${FORCE_VERSION#v}" ;;
@@ -577,6 +584,12 @@ else
     # Everything else gets hedged, in words, naming the channel.
     VER_IMMUTABLE=false
     VER_SOURCE=""
+    # Why that source cannot be stale. Carried alongside, because the two
+    # corroborators are trustworthy for DIFFERENT reasons and the output said
+    # "addressed by version" for both -- which is false for latest/VERSION, a
+    # mutable path on the mirror. Claiming the right version for the wrong
+    # stated reason is the same class of defect as the rest of this spec.
+    VER_SOURCE_WHY=""
 
     # --- latest/VERSION OVERRIDES a lower manifest version -------------------
     #
@@ -636,6 +649,7 @@ else
             # "Already up to date" line below is allowed to rest on.
             VER_IMMUTABLE=true
             VER_SOURCE="$PINNED_URL"
+            VER_SOURCE_WHY="addressed by version, so no cache can hold a wrong answer for it"
         else
             # No per-version manifest. Still better to install the version the
             # tree says is current than to tell the operator they are up to
@@ -740,6 +754,7 @@ else
         if [[ "$IMM_BEST" == "$LATEST_VERSION" ]]; then
             VER_IMMUTABLE=true
             VER_SOURCE="$IMM_BEST_URL"
+            VER_SOURCE_WHY="addressed by version, so no cache can hold a wrong answer for it"
             ok "Corroborated v${LATEST_VERSION} against ${IMM_BEST_URL}"
         fi
     fi
@@ -751,6 +766,7 @@ else
     if [[ "$VER_IMMUTABLE" == false && -n "$BEST_LIVE" && "$BEST_LIVE" == "$LATEST_VERSION" ]]; then
         VER_IMMUTABLE=true
         VER_SOURCE="${BEST_LIVE_BASE}/latest/VERSION"
+        VER_SOURCE_WHY="read out of the deployed build, so it cannot name a version the tree does not hold"
         ok "Corroborated v${LATEST_VERSION} against ${VER_SOURCE}"
     fi
 
@@ -774,26 +790,46 @@ if [[ -z "$FORCE_VERSION" && -z "$FORCE_URL" ]]; then
         # nothing: not a lie, just a claim beyond what was verified.
         if [[ "${VER_IMMUTABLE:-false}" == true ]]; then
             ok "Already up to date — v${CURRENT_VERSION}"
-            info "  Confirmed against ${VER_SOURCE} (addressed by version; no cache can stale it)."
+            # The REASON comes from the source, not from a hardcoded string.
+            # This line said "(addressed by version; no cache can stale it)"
+            # for every source, including latest/VERSION -- which is a mutable
+            # path, and whose cache purge is explicitly best-effort.
+            info "  Confirmed against ${VER_SOURCE}${VER_SOURCE_WHY:+ — ${VER_SOURCE_WHY}}."
             exit 0
         fi
-        warn "No channel offered anything newer than the installed v${CURRENT_VERSION}."
-        warn "  But that answer came only from ${ACTIVE_BASE:-the release channel}/latest.json,"
-        warn "  which is a cacheable url. Measured on raw.githubusercontent.com: a"
-        warn "  cache-busted request is answered from the SAME cached object, and the"
-        warn "  branch path is served with max-age=300 - so this reading may be up to"
-        warn "  5 minutes behind a release."
-        warn "  Nothing addressed by version could be reached to confirm it, so this is"
-        warn "  NOT a confirmation that this install is current."
-        echo ""
-        echo -e "  ${BOLD}To settle it by hand (immutable paths only):${NC}"
-        echo -e "    curl -fsS 'https://api.github.com/repos/${RELEASES_REPO}/tags?per_page=5' | grep name | head -3"
-        echo -e "    curl -fsS https://raw.githubusercontent.com/${RELEASES_REPO}/v<version>/latest.json"
-        echo ""
+        # ONE line of what is true, then stop.
+        #
+        # This was six warn lines and two curl commands, with the operative
+        # sentence last, after five lines of cache archaeology -- printed on
+        # every daily cron run on a server where nothing is wrong and, if it is
+        # firewalled off github.com, nothing can be. A block that long and that
+        # frequent trains an operator to skip it, which is how the next real
+        # warning gets missed. The claim is unchanged; the delivery is not.
+        warn "NOT CONFIRMED: nothing newer than the installed v${CURRENT_VERSION} was offered,"
+        warn "  but that is not a confirmation that this install is current — the only"
+        warn "  answer came from ${ACTIVE_BASE:-the release channel}/latest.json, a cacheable"
+        warn "  url that can be up to 5 minutes behind a release."
+        if [[ "${VERBOSE:-false}" == true ]]; then
+            info "  Measured on raw.githubusercontent.com: a cache-busted request is served"
+            info "  from the SAME cached object (identical ETag, X-Cache: HIT), and"
+            info "  .../main/latest/VERSION is a 404, so there is nothing on that channel"
+            info "  that a cache cannot have answered. Nothing addressed by version could"
+            info "  be reached to check it."
+        else
+            info "  Re-run with --verbose for why, or in a few minutes for a confirmed answer."
+        fi
+        # Only when someone is watching. On a cron run these two lines are
+        # advice nobody will read, in a log everybody greps.
+        if [[ -t 1 ]]; then
+            echo ""
+            echo -e "  ${BOLD}To settle it by hand (immutable paths only):${NC}"
+            echo -e "    curl -fsS 'https://api.github.com/repos/${RELEASES_REPO}/tags?per_page=5' | grep name | head -3"
+            echo -e "    curl -fsS https://raw.githubusercontent.com/${RELEASES_REPO}/v<version>/latest.json"
+            echo ""
+        fi
         # Exit 0 on purpose. Cron and the one-click updater both call this, and
-        # a nonzero exit would read as a failed update rather than as an
+        # a nonzero exit would read as a failed update rather than an
         # unconfirmed check. There is nothing to install either way.
-        info "Nothing newer to install. Re-run in a few minutes for a confirmed answer."
         exit 0
     fi
 

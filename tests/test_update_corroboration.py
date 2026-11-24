@@ -445,15 +445,33 @@ ok(urls and all('cb=' in u for u in urls),
 # 2. update.sh: the "Already up to date" gate
 # ═════════════════════════════════════════════════════════════════════════════
 
-def gate(immutable, current='4.37.7', latest='4.37.7', source='https://pinned/x'):
+def gate(immutable, current='4.37.7', latest='4.37.7', source='https://pinned/x',
+         why='addressed by version, so no cache can hold a wrong answer for it',
+         verbose=False):
     script = (HARNESS_HEAD
               + 'CURRENT_VERSION="%s"\nLATEST_VERSION="%s"\n' % (current, latest)
               + 'VER_IMMUTABLE=%s\nVER_SOURCE="%s"\nACTIVE_BASE="%s"\n'
                 % (immutable, source, GH)
+              + 'VER_SOURCE_WHY="%s"\nVERBOSE=%s\n' % (why, 'true' if verbose else 'false')
               + GATE + '\n'
               + 'echo "RESULT reached_end=1"\n')
     return run(script, {})
 
+
+# The reason comes from the source. latest/VERSION is NOT addressed by
+# version -- it is a mutable path on the mirror whose purge is best-effort --
+# and this line claimed it was, for every source.
+res, _, r = gate('true', source='https://cdn.example/releases/latest/VERSION',
+                 why='read out of the deployed build, so it cannot name a '
+                     'version the tree does not hold')
+ok('read out of the deployed build' in r.stdout,
+   'THE STATED REASON MATCHES THE SOURCE: confirming against latest/VERSION '
+   'is justified by it being read out of the build, not by being "addressed '
+   'by version" -- which that path is not')
+ok('addressed by version' not in r.stdout,
+   'so the wrong justification is not printed for it. Claiming the right '
+   'version for a reason that does not hold is the same class of defect as '
+   'the rest of this work')
 
 res, _, r = gate('true')
 ok('Already up to date' in r.stdout,
@@ -468,13 +486,21 @@ ok('Already up to date' not in r.stdout,
    'UNCORROBORATED: "Already up to date" is NOT printed. This is the sentence '
    'the operator was given minutes after v4.37.8 was published, from a '
    'manifest a cache had held for five minutes')
-ok('NOT a confirmation' in r.stdout,
+ok('not a confirmation that this install is current' in r.stdout,
    'the output says in plain words that this is not a confirmation that the '
-   'install is current')
+   'install is current, and says it BEFORE the explanation: this prints on '
+   'every daily cron run, and the operative sentence used to be the sixth '
+   'line of six')
 ok('5 minutes' in r.stdout,
    'and how stale the evidence can be, in minutes, rather than leaving the '
    'operator to guess')
 ok(GH in r.stdout, 'naming the channel the answer came from')
+ok(len([l for l in r.stdout.splitlines() if l.startswith('WARN')]) <= 4,
+   'in at most four lines. It was six warn lines plus two curl commands on '
+   'every cron run of a server where nothing was wrong, which is how an '
+   'operator learns to skip the block that will one day matter')
+ok('X-Cache' not in r.stdout,
+   'and the cache measurement is NOT in the default output')
 eq(0, r.returncode,
    'and it still exits 0: cron and the one-click updater both call this, and '
    'a nonzero exit would read as a failed update rather than an unconfirmed '
@@ -506,7 +532,8 @@ ok('Already up to date' not in r.stdout,
    '"no cache can stale it" assurance attached')
 ok('no cache can stale it' not in r.stdout,
    'and claims no freshness it cannot demonstrate')
-ok('NOT a confirmation' in r.stdout, 'it prints the hedge instead')
+ok('not a confirmation that this install is current' in r.stdout,
+   'it prints the hedge instead')
 eq(0, r.returncode, 'still exit 0')
 
 

@@ -379,3 +379,376 @@ cause, and still un-run.
   will see the hedge on every check. That is honest but it is also permanent
   for them; if you think it reads as alarming rather than informative, that is
   a wording question worth raising with the user.
+
+---
+
+# Retest — 2026-11-23 (second pass)
+
+**Build:** `fix/stale-channel-read-and-frozen-cdn` @ `191d716` (`e3c72e1` + `191d716` on `cab106f`), not pushed
+**Environment:** AlmaLinux 8 in docker/compose.yml, PHP 7.4.33 and 8.2, sqlite 3.26.0, python 3.6.8
+**Verdict:** FAIL — findings 1 and 3 are fixed and verified. Finding 2 is **not** fixed and is now worse: the resume it added cannot succeed. One new minor.
+
+**Status: fixed-pending-retest (Wasooli, third pass, 2026-11-23).** Finding 2 is fixed and
+exercised the way you asked — a real bare origin, a real build, no stubbed `git`. Finding 5 and
+the hedge wording are done. Detail at the end of this file.
+
+## Status of the previous findings
+
+| | |
+|---|---|
+| 1. Tautological corroboration — blocker | **FIXED, verified** |
+| 2. Blocked publish cannot be finished — major | **NOT FIXED — now a blocker** |
+| 3. `unknown` blames the mirrors — major | **FIXED, verified** |
+| 4. Criterion 13 unverified / req 14 inert — minor | accepted, unchanged |
+
+### 1. Fixed, verified on all three paths
+
+Same hijacked-GitHub fixtures as the first pass: branch manifest cached at 4.37.7,
+`v4.37.7/latest.json` present (as on real GitHub), real newest tag 4.37.8, tags API 403,
+install 4.37.7.
+
+`update.sh --yes` — tags API 403, and again with the API unreachable:
+
+```
+->  Latest version:  v4.37.7
+!!  No channel offered anything newer than the installed v4.37.7.
+!!    Nothing addressed by version could be reached to confirm it, so this is
+!!    NOT a confirmation that this install is current.
+EXIT=0
+```
+
+No `Corroborated`, no `Already up to date`, exit 0. `upgrade.sh --check` likewise prints
+`UNCONFIRMED` and hands over to the updater instead of `Already on v4.37.7 - nothing to do`.
+`UpdateChecker::checkForUpdates()` through the fetcher seam now returns `corroborated: false`,
+empty `version_source`, and a populated `uncorroborated_note` — so `#dash-update-error` shows.
+The tautological `v4.37.7/latest.json` request is gone from the fetch log entirely; one fewer
+request per check.
+
+No regression on the good paths: the incident fixture (tags API healthy, tag v4.37.8) still
+resolves `Corroborated v4.37.8 against .../v4.37.8/latest.json` and offers 4.37.7 -> 4.37.8;
+the lagging-mirror case (criteria 5/6) is unchanged.
+
+**Negative probed, as asked.** Three more fixtures, all against the pinned-channel worst case:
+
+* *Firewalled* — only `latest.json`, no tags API, no `latest/VERSION`, no `v<ver>/` folders:
+  never corroborated, hedge every time. Correct.
+* *Repo-root `VERSION` agreeing* — `latest/VERSION` 404s, `main/VERSION` reads 4.37.7,
+  `v4.37.7/latest.json` present: **still uncorroborated.** Root `VERSION` is read as a second
+  opinion and is not allowed to confirm, matching `channelManifest()`'s
+  `substr($liveSrc, -15) === '/latest/VERSION'` rule. Shell and PHP agree.
+* *Frozen origin with a consistent tree* — `latest.json` and `latest/VERSION` both 4.37.0:
+  corroborated via `latest/VERSION`. This is requirement 3 working as written (it names
+  `latest/VERSION` as the corroborator) and it is a genuine second opinion — the two objects are
+  separately keyed and the override block exists because they *can* disagree. Not a defect.
+  The wording is, though — see finding 5.
+
+Wasooli's belief that only the tag list and `latest/VERSION` remain is correct as far as I can
+drive it.
+
+### 3. Fixed, verified
+
+`${SG_ROOT}/VERSION` absent, CDN 4.37.0, GitHub 4.37.9:
+
+```
+ok  Available: v4.37.9  (from .../main)
+->  Confirmed against .../v4.37.9/latest.json - a source a cache cannot have
+->    answered with a different build.
+!!  Cannot read /harness/root/VERSION, so there is nothing here to compare
+!!    v4.37.9 against. This says nothing about the release channels.
+!!    Handing over to the updater, which decides for itself.
+vunknown  ->  v4.37.9
+```
+
+No mirror blame, no spurious "uncorroborated", and it still hands over. **The dropped
+`!= "unknown"` clause checks out:** `unknown` is now intercepted by the first branch of the
+`if`, so the clause in the downgrade branch could never have been false. Dropping it is right.
+
+## Findings
+
+### 2 (reopened). The resume `publish.sh` now prints cannot succeed — blocker
+
+**What happens:** the remote-tag guard is fixed and the resume is recognised, but a new
+unconditional block downstream refuses it every time. Exercised against a **real local bare
+repo as origin**, with `curl` stubbed and the repo-local interpreters on PATH.
+
+Case A, CDN never serves the release: correct. Tag pushed, `exit 1`, right diagnosis
+("The CDN IS answering, with the WRONG release"), and the new closing text:
+
+```
+    TO FINISH THIS RELEASE once the CDN serves 4.37.10:
+      bash scripts/publish.sh 4.37.10
+    ...
+    Do NOT bump VERSION and do NOT delete the tag -- update.sh resolves
+    versions from tags, so deleting this one withdraws the release.
+```
+
+Case B, that exact command, with the CDN now healthy and the working tree clean and HEAD on
+the tag:
+
+```
+!!  Tag v4.37.10 is already on origin, as the same object, on HEAD (43c24c5).
+!!    Treating this run as a RESUME of a release that got as far as the push.
+[+] Built dist/serverscrub-4.37.10.zip (1400540 bytes), sha256 25b86c39084f8d99...
+[x] Resuming v4.37.10, but the rebuild changed tracked files.
+      dist/latest.json
+      dist/serverscrub-4.37.10.zip
+      latest.json
+EXIT=1
+```
+
+The release artifacts are committed to the repo and **the build is not byte-reproducible**: two
+consecutive runs produced sha256 `25b86c39...` and `dbcb9b48...`. The zip changes, so
+`latest.json`'s `sha256` changes, so `dist/latest.json` changes. The rebuild runs *before* the
+`RESUMING` + `git diff --cached` check, so the check is dirty by the time it is reached, on every
+possible run. The resume is unreachable by construction, not by operator error.
+
+And the recovery it offers does not work even on its own terms:
+
+```
+      git checkout -- $(git diff --cached --name-only | tr '\n' ' ')
+```
+
+`git checkout -- <paths>` restores the **working tree from the index**, and the index is what is
+dirty. Run verbatim:
+
+```
+$ git diff --cached --name-only         # dist/latest.json dist/serverscrub-4.37.10.zip latest.json
+$ git checkout -- $(git diff --cached --name-only | tr '\n' ' ')   # rc=0
+$ git diff --cached --quiet && echo CLEAN || echo "STILL DIRTY"
+STILL DIRTY
+```
+
+So: the operator runs the printed resume command, gets a refusal, runs the printed fix, re-runs,
+and gets the identical refusal. A loop. I confirmed `git checkout HEAD -- <paths>` does clean the
+index — and that it makes no difference, because the next run rebuilds and re-dirties it anyway.
+
+Net effect is finding 2 unchanged: a release blocked at the mirror still cannot be finished, and
+the two routes that do exist are now the two the text correctly tells you not to take.
+
+**Reproduce:** `git init --bare origin.git`; clone the repo; `git remote set-url origin` to the
+bare repo; bump VERSION / `latest.json` / `config.php` / `index.html` and date the changelog
+heading; put a `curl` stub and the repo-local `python3`/`php` on PATH; then
+`SG_SKIP_VERSION_CHECK=1 SG_SKIP_TESTS=1 SG_CDN_POLL_TRIES=2 SG_CDN_POLL_SECS=1 SG_GH_POLL_TRIES=1 bash scripts/publish.sh`
+with the stub serving the old version, then again with it serving the new one.
+
+**Expected:** on `RESUMING=yes`, do not rebuild — the artifacts for this tag are already
+committed and already on origin; skip section 1 and the staging step and go straight to the
+verification steps. If a rebuild must happen, compare it against the tag's artifacts excluding
+the zip bytes and the sha256 derived from them, and say so. Either way the printed recovery
+command needs to be `git checkout HEAD -- <paths>` or `git reset --hard HEAD`, not
+`git checkout --`.
+
+**Also note:** `publish.sh` reported `[*] Repository: C:/tmp/pubsand/origin` and then
+`GitHub channel serves 4.37.10 at https://raw.githubusercontent.com/C:/tmp/pubsand/origin/v4.37.10/latest.json`.
+That is my sandbox's remote URL being parsed into `SLUG`, not a product defect — recorded so the
+log above is not misread.
+
+Case D, conflicting remote tag (origin tag on a different commit): correct, hard refusal,
+`exit 1`, with the withdraw warning. Case C (an existing Release page left alone) could not be
+exercised — no `gh` and no token in the sandbox, so the script took its documented
+"no gh and no GH_TOKEN" branch.
+
+### 5 (new). `update.sh` claims the evidence is "addressed by version" when it is `latest/VERSION` — minor
+
+**What happens:** the confirmed-current line has a hardcoded parenthetical:
+
+```
+->    Confirmed against https://serverscrub.com/releases/latest/VERSION (addressed by version; no cache can stale it).
+```
+
+`latest/VERSION` is not addressed by version. It is a mutable path on the mirror, and
+`_purge_manifest_cache()` is explicitly best-effort. The version reported is right; the stated
+reason it can be trusted is not — which is the class of defect this whole spec is about.
+
+Wasooli fixed exactly this wording in `upgrade.sh` this round ("a source a cache cannot have
+answered with a different build"), and `update.sh`'s copy was left behind.
+
+**Reproduce:** CDN healthy at 4.37.9 with `latest/VERSION`, GitHub tags API unreachable,
+install 4.37.9, all channels (no `SG_MANIFEST_URL`) — i.e. normal operation with a rate-limited
+API, not a contrived pin:
+
+```
+ok  Corroborated v4.37.9 against https://serverscrub.com/releases/latest/VERSION
+ok  Already up to date — v4.37.9
+->    Confirmed against https://serverscrub.com/releases/latest/VERSION (addressed by version; no cache can stale it).
+```
+
+**Expected:** the same two-case wording `upgrade.sh` now uses, or a parenthetical chosen from
+`VER_SOURCE`.
+
+## Answers to the two questions raised
+
+**The firewalled server's permanent hedge.** My read: honest, and the right default, but the
+wording is pitched for the incident rather than for the steady state. Six warn-coloured lines
+plus two curl commands, every check, forever, on a server where nothing is wrong and nothing can
+be — and the operative sentence ("NOT a confirmation that this install is current") is the last
+of the six, after five lines of Fastly cache archaeology. On a daily cron that is noise that
+trains people to skip the block, which is how the next real warning gets missed. I would keep the
+claim and shorten the delivery: one line of what is true ("no channel offered anything newer than
+v4.37.7; this could not be confirmed against an immutable source, so it is not a guarantee"), the
+measurement detail behind a `--verbose`, and the two curl commands only when the operator asked
+interactively rather than on every cron run. Not a release blocker either way, and the call is
+the user's.
+
+**`preflight.py` and `text=True`.** It did not affect this run — there is no system Python on
+this machine, and I ran the docker suite directly (`docker compose run --rm test`) rather than
+through `scripts/preflight.py`, on both passes. Two things follow. First, I have never used
+preflight as a gate, so my verdicts rest on the container suite plus the targeted work above, not
+on preflight's extra stages. Second, the bug is plausible rather than theoretical: the suite's
+own banners are full of box-drawing characters and they show up throughout the output I captured,
+so a cp1252 console reader thread is being fed exactly the input described. Out of scope here;
+worth its own ticket before anyone relies on preflight in CI.
+
+## What passed on the retest
+
+- **Full regression, both streams.** PHP 7.4.33: 5562 assertions, exit 0. PHP 8.2: 5562
+  assertions, exit 0. Python checks under 3.6.8 on Linux.
+- Findings 1 and 3 fixed as described, with the negative probed three ways.
+- `publish.sh` case A (mirror never appears) and case D (conflicting remote tag) both behave
+  correctly against a real local bare origin.
+- No regression on acceptance criteria 1, 3, 4, 5, 6, or on the version-pinned updater fetch.
+
+---
+
+## Wasooli — third pass, 2026-11-23
+
+**Status: fixed-pending-retest.** Back to Shakaal.
+
+**On verification, stated plainly:** `scripts/preflight.py` does **not** pass on this tree, and
+not for anything in this change. Another agent's in-progress CSF work has two untracked files in
+`docker/` (`csf-stub.sh`, `seed-csf.sh`) that still carry the old product name, which fails the
+rebrand assertion and, through it, preflight's docker stage. So I verified my own work by running
+the container suite directly, as you did: `docker compose -f docker/compose.yml run --rm test`
+→ **5742 assertions, exactly one failure, and it is that rebrand assertion naming those two
+files.** Locally `php tests/run.php` gives the same single failure (5729 assertions there). My
+three test files pass in both. Nothing of mine is named in it, and I have not touched their
+files.
+
+### 2 (reopened). The resume could never succeed — fixed
+
+Your diagnosis was exact, and the test I wrote could not have caught it: four stubbed-`git`
+cases with nothing built. I reproduced it first, in your sandbox shape, before changing anything.
+
+**The fix is the shape you proposed.** `RESUMING=yes` now skips step 1 (build), step 2 and
+step 3 (stage, zip-coverage check, commit) **entirely**; the run resumes at 3b and goes on to the
+tag verification, the GitHub tag path and the mirror gate. The committed artifacts at the tag are
+the release — a rebuild can only produce a different one. The resume reads the committed zip for
+its size and sha, and refuses if it is not on disk, because then this checkout is not the tree
+that was released:
+
+```
+[x] Resuming v4.37.10 but dist/serverscrub-4.37.10.zip is missing. This checkout is not the
+    tree v4.37.10 was built from; check out v4.37.10 and re-run.
+```
+
+The dead `RESUMING` branch in the commit block is gone with it — it was inside the region that is
+now skipped. Its replacement is in 3b, which *is* reached on a resume.
+
+**And the recovery command was wrong twice, not once.** You measured
+`git checkout -- <paths>`. The obvious correction,
+`git checkout HEAD -- $(git diff --cached --name-only | tr '\n' ' ')`, is also wrong: when the
+dirt is **unstaged**, that substitution is empty, so the command is `git checkout HEAD --`, which
+git accepts, ignores, and exits 0 from. Measured on the sandbox:
+
+```
+$ git status --porcelain              #  M frontend/index.html
+$ git checkout HEAD -- $(git diff --cached --name-only | tr '\n' ' ')
+M       frontend/index.html
+rc=0
+$ (git diff --quiet && git diff --cached --quiet) && echo CLEAN || echo "STILL DIRTY"
+STILL DIRTY
+```
+
+Same loop, one level down. What is printed now is `git reset --hard HEAD`, which clears both
+sides unconditionally, with `git checkout HEAD -- <path>` given literally for the per-file case
+rather than built from a substitution that can come out empty. Both are in a comment in the
+script so the next person does not re-derive the broken one.
+
+**Exercised against a real local bare origin, with a real build.** `git init --bare origin.git`,
+a clone of this branch with `origin` pointed at it, a `curl` stub for the CDN and raw, the
+repo-local `php`/`python3` on PATH, VERSION bumped to 4.37.10 with the other three files and the
+changelog heading, `SG_SKIP_VERSION_CHECK=1 SG_SKIP_TESTS=1 SG_CDN_POLL_TRIES=2
+SG_CDN_POLL_SECS=0 SG_GH_POLL_TRIES=1`:
+
+* **A — mirror stuck on 4.37.9.** Builds, commits, pushes, tags, pushes the tag, verifies the
+  tag path, waits, then `RELEASE IS IN GIT BUT NOT MIRRORED`, exit 1, tree clean, and the
+  `TO FINISH THIS RELEASE / bash scripts/publish.sh 4.37.10` text.
+* **B — that exact command, mirror now serving 4.37.10.** Recognised as a resume;
+  `Resume: not rebuilding. Using the committed dist/serverscrub-4.37.10.zip (1401275 bytes),
+  sha256 de972b5f…`; `Everything up-to-date` on both pushes; tag reused; tag path verified;
+  `CDN mirror verified`; `Published v4.37.10: in git, readable at the tag, and mirrored on the
+  CDN.`; **exit 0**. `make-release.sh` was not called.
+* **C — dirty tree during a resume.** Refuses at 3b before anything is pushed, prints the
+  resume-specific recovery; running `git reset --hard HEAD` verbatim leaves the tree clean, and
+  the next resume then completes as in B. The loop closes.
+* **E — committed zip missing.** Refuses with the message above.
+
+Checked while there, since the resume prints a sha: the zip on disk, the committed blob, the
+`sha256` in `latest.json` and the sha the resume printed are all `de972b5f…`. The resume does
+not report a figure that disagrees with the manifest it is mirroring.
+
+Case D (conflicting remote tag) is unchanged code and you verified it; I did not re-run it.
+Case C (existing Release page) still cannot be exercised without `gh` or a token — unchanged.
+
+**Automated as well as demonstrated.** `tests/test_release_mirror_verified.py` now extracts the
+real build-or-resume block and runs it with `make-release.sh` replaced by a script that records
+being called: resume → not called, completes; normal release → called; resume with no committed
+zip → exit 1. 47 assertions in that file.
+
+### 5 (new). "addressed by version" for `latest/VERSION` — fixed
+
+The reason now comes from the source rather than from a hardcoded string: `VER_SOURCE_WHY` is set
+beside `VER_SOURCE` at each of the three places that can corroborate, so a tag-pinned manifest
+says "addressed by version, so no cache can hold a wrong answer for it" and `latest/VERSION` says
+"read out of the deployed build, so it cannot name a version the tree does not hold". Pinned by
+two assertions in `tests/test_update_corroboration.py`: the right reason appears, and
+"addressed by version" does **not** appear for the `latest/VERSION` case.
+
+### The hedge, shortened as you suggested
+
+Your read is right and I have taken it. The default output is three warning lines, operative
+claim **first**:
+
+```
+!!  NOT CONFIRMED: nothing newer than the installed v4.37.7 was offered,
+!!    but that is not a confirmation that this install is current - the only
+!!    answer came from https://raw.githubusercontent.com/<repo>/main/latest.json, a cacheable
+!!    url that can be up to 5 minutes behind a release.
+->    Re-run with --verbose for why, or in a few minutes for a confirmed answer.
+```
+
+The cache measurements move behind `--verbose` (or `SG_VERBOSE=1`, because cron lines get
+inherited rather than edited), and the two by-hand `curl` commands print only when `-t 1` — i.e.
+never on a cron run.
+
+**One deliberate deviation from "one line".** The channel name and the five-minute bound stay in
+the default output, because requirement 4 names both specifically ("naming the channel and that
+its answer may be up to 5 minutes old"). What moved is the ETag/X-Cache archaeology. If you would
+rather the bound went behind `--verbose` too, that is a spec change and the user's call, not
+mine. A test asserts the default block is at most four warning lines and contains no `X-Cache`.
+
+### One test assertion changed, for the wording
+
+`tests/test_update_corroboration.py` asserted the literal `NOT a confirmation`; the sentence is
+now `not a confirmation that this install is current` and reordered to come first. The assertion
+matches the new wording and its message says why the order matters. Same property, and the
+harness gained `VERBOSE` / `VER_SOURCE_WHY` because the gate reads them — a harness that omits a
+variable the code under test reads is not running its preconditions.
+
+### 4. Still recorded, not actioned
+
+Unchanged: the Z bump is Gabbar's at the cut, and `cdn-sync.sh` has to be hand-copied to the box
+before requirement 14 affects the live freeze.
+
+### Where to look hardest this time
+
+* The resume now skips a large region. Everything it skips is build-and-commit; everything it
+  still runs is verification. Worth checking I have not skipped something a *first* release needs
+  that a resume also needs — `ZIP` and `SHA` are the only two variables the skipped region sets
+  that later steps read, and both are set in the resume branch.
+* The resume reads `dist/serverscrub-${VER}.zip` from the worktree, not from the tag. On a
+  resume from a *different* commit the clean-tree gate at 3b and the tag-identity guard both have
+  to catch that; I believe they do, and case E covers the missing-file half.
+* `-t 1` as the test for "someone is watching". Correct for cron and for the panel's detached
+  updater, both of which redirect; if there is a caller that keeps a tty and still logs, it will
+  now get two extra lines.
