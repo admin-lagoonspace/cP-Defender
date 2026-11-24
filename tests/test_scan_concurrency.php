@@ -134,7 +134,10 @@ t_contains($worker, 'for ($slot = 0; $slot < $maxSlots', 'taking the first free 
 t_contains($worker, '__sg_scan_lock',
     'and keeps the handle alive, since closing it would release the lock');
 $lockPos = strpos($worker, 'flock(');
-$scanPos = strpos($worker, 'runClamScan');
+// The per-path loop moved into Scanner::runPaths() in 4.37.11, so the quick
+// scan's per-account bounds could be tested on a real tree; the worker's one
+// call into scanning is that.
+$scanPos = strpos($worker, '->runPaths(');
 t_ok($lockPos !== false && $scanPos !== false && $lockPos < $scanPos,
     'the lock is taken before any scanning starts');
 t_contains($worker, "status='skipped'",
@@ -146,9 +149,11 @@ $task  = substr($sched, strpos($sched, "'scan' => ["), 1500);
 t_eq(1, substr_count($task, 'startScan('),
     'the scheduler calls startScan once, not once per configured path');
 t_contains($task, 'implode', 'passing every path to the one job');
-$workerPaths = substr($worker, strpos($worker, '$paths = array_values'), 900);
-t_contains($workerPaths, 'foreach ($paths as $one)', 'and the worker walks them all');
-t_contains($workerPaths, 'Scanner::isCancelled($jobId)',
+t_contains($worker, '$scanner->runPaths($paths, $jobId',
+    'the worker hands every path to one run');
+$runPaths = t_fn_body(t_code($repo . '/backend/lib/Scanner.php'), 'runPaths', 'php');
+t_contains($runPaths, 'foreach ($paths as $i => $one)', 'and the worker walks them all');
+t_contains($runPaths, 'self::isCancelled($jobId)',
     'stopping takes effect between paths, not only between batches');
 
 // -- A single clamscan must not run for ever --------------------------------

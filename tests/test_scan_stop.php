@@ -92,8 +92,12 @@ t_contains($worker, 'worker_pgid', 'and records the group for the stopper to sig
 
 // A cancelled scan must not be recorded as a completed one: it examined part
 // of the tree, and calling that 'done' tells the operator it was all checked.
-t_contains($worker, "'cancelled' : 'done'",
+// Decided in Scanner::finalStatus() since 4.37.11; asserted on behaviour.
+t_contains($worker, 'Scanner::finalStatus(', 'the worker decides its end status in one place');
+t_eq('cancelled', Scanner::finalStatus('cancelling', [], 1)[0],
     'a cancelled scan is not written up as done');
+t_eq('cancelled', Scanner::finalStatus('cancelled', [], 1)[0],
+    'nor is one already marked cancelled');
 
 // -- The UI must call the API, not just hide its own progress bar ------------
 $js = file_get_contents($repo . '/frontend/js/app.js');

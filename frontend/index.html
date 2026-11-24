@@ -1605,7 +1605,14 @@
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label">Scheduled scan type</label>
+              <label class="form-label">Scheduled scan type
+                <span id="set-scan-type-hint" style="display:block;font-weight:400;font-size:.72rem;color:var(--txt3);margin-top:3px">
+                  Quick: all account home directories, including mail, with
+                  per-account time and file limits (1,000,000 files, 60 min;
+                  20 h per run). An account that hits a limit is reported
+                  incomplete, never clean. Full: every scan path, no limits.
+                </span>
+              </label>
               <select class="form-input" id="set-scan-type">
                 <option value="full">Full scan</option>
                 <option value="quick">Quick scan</option>

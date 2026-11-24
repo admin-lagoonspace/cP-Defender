@@ -62,8 +62,13 @@ if ($runMode === 'update-sigs') {
 }
 
 if ($runMode === 'cron') {
+    // Resolved the same way startScan() resolves it, so "quick" from cron
+    // means every account home, bounded -- not the first scan root walked as
+    // if it were one account.
     $raw      = Database::setting('scan_paths', '/home') ?? '/home';
-    $scanPath = trim(explode(',', $raw)[0]);
+    $scanPath = $scanType === 'quick'
+        ? (implode(',', Scanner::resolveScanPaths('quick')['paths']) ?: '/home')
+        : trim(explode(',', $raw)[0]);
     $jobId    = Database::insert('scan_jobs', [
         'scan_type'=>$scanType,'status'=>'running',
         'started_at'=>time(),'scan_path'=>$scanPath
@@ -181,19 +186,12 @@ try {
     $paths = array_values(array_filter(array_map('trim', explode(',', (string) $scanPath))));
     if (!$paths) { $paths = ['/home']; }
 
-    $threats = [];
-    foreach ($paths as $one) {
-        if (!is_dir($one)) {
-            Logger::warn("scan.php: job $jobId skipping missing path $one");
-            continue;
-        }
-        $threats = array_merge($threats, $scanner->runClamScan($one, $jobId));
-        // Stopping must take effect between paths as well as between batches.
-        if (Scanner::isCancelled($jobId)) {
-            Logger::info("scan.php: job $jobId cancelled, skipping remaining path(s)");
-            break;
-        }
-    }
+    // The per-path loop lives in Scanner::runPaths() so a quick scan's
+    // per-account bounds can be tested on a real tree. It returns one line
+    // per account that was not fully scanned.
+    $run        = $scanner->runPaths($paths, $jobId, (string) $job['scan_type']);
+    $threats    = $run['threats'];
+    $incomplete = $run['incomplete'];
     $ms      = (int)((microtime(true)-$t)*1000);
 
     // files_scanned is written incrementally by the scan itself. It used to be
@@ -216,9 +214,15 @@ try {
      * rows written by the earlier build exist, and writing 'done' over one
      * would report a scan that stopped itself as a scan that finished. A
      * status the product no longer produces still has to render truthfully. */
-    $wasCancelled = in_array($final['status'] ?? '', ['cancelling', 'cancelled', 'halted'], true);
-    $endStatus    = ($final['status'] ?? '') === 'halted' ? 'halted'
-                  : ($wasCancelled ? 'cancelled' : 'done');
+    /* A quick scan that hit a bound, or could not open an account, has not
+     * looked at everything. 'done' is what the dashboard and the customer's
+     * page render as "Clean", so Scanner::finalStatus() writes 'incomplete'
+     * with the accounts and bounds as the reason. */
+    [$endStatus, $why] = Scanner::finalStatus((string) ($final['status'] ?? ''), $incomplete, count($paths));
+    if ($why !== '') {
+        Database::query('UPDATE scan_jobs SET stop_reason=? WHERE id=?', [$why, $jobId]);
+        Logger::warn("scan.php: job $jobId $why");
+    }
 
     /* threats_found comes from the TABLE, not from this process's count.
      * count($threats) is what this worker happened to collect in memory, and

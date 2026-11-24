@@ -209,7 +209,11 @@ $cron = t_code($repo . '/backend/cron/scan.php');
 t_contains($cron, 'SELECT COUNT(*) AS c FROM threats WHERE scan_job_id=?',
      'and the final figure a finished job records is counted from the rows, '
    . 'not from whatever this worker happened to hold in memory');
-t_contains($cron, "'cancelling', 'cancelled', 'halted'",
+// The end-status decision moved from cron/scan.php into
+// Scanner::finalStatus() in 4.37.11 (quick-scan bounds); asserted on
+// behaviour now, plus that the worker uses it.
+t_contains($cron, 'Scanner::finalStatus(', 'the worker decides its end status in one place');
+t_eq('halted', Scanner::finalStatus('halted', [], 1)[0],
      'a job that ALREADY carries "halted" keeps it: nothing sets that status '
    . 'any more, but rows from the earlier build exist, and writing "done" over '
    . 'one would report a scan that stopped itself as one that finished');

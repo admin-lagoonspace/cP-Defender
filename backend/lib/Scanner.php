@@ -1252,12 +1252,14 @@ class Scanner {
      * same time. Three options that do the same thing are worse than one
      * option, because the operator believes they chose something.
      *
-     *   quick  - every account's web root. Where public code runs and where
-     *            almost everything gets in, at a fraction of the files.
+     *   quick  - all account home directories, including mail, with
+     *            per-account time and file limits (see QUICK_MAX_FILES). It
+     *            was every account's web root until 4.37.11; the April 2026
+     *            dropper lived in ~/.cache, which no web-root scan reaches.
      *   full   - the configured roots, entire.
      *   custom - the accounts the operator picked.
      *
-     * Quick falls back to the full roots when no web root can be found, and
+     * Quick falls back to the full roots when no account can be found, and
      * says so. Scanning nothing would be the worst possible answer to "scan my
      * server"; silently scanning everything under the word "quick" is the
      * second worst.
@@ -1271,16 +1273,18 @@ class Scanner {
 
         switch ($type) {
             case 'quick': {
-                $webs = [];
+                // The whole home, with or without a public_html: an account
+                // that serves nothing can still be where the dropper lives.
+                $homes = [];
                 foreach (self::listAccounts() as $a) {
-                    if (!empty($a['docroot'])) { $webs[] = $a['docroot']; }
+                    if (!empty($a['home'])) { $homes[] = $a['home']; }
                 }
-                if ($webs) {
-                    return ['paths' => $webs, 'note' => count($webs) . ' web root(s)'];
+                if ($homes) {
+                    return ['paths' => $homes, 'note' => count($homes) . ' home dir(s)'];
                 }
                 $fall = $given ?: self::scanRoots();
                 return ['paths' => $fall,
-                        'note'  => 'no web roots found, scanning in full'];
+                        'note'  => 'no accounts found, scanning in full'];
             }
 
             case 'custom': {
@@ -1706,9 +1710,20 @@ class Scanner {
         return UserReport::writeInHome($user, 'scan-status.json', $json);
     }
 
-    /** Directories that are never worth scanning. */
+    /**
+     * Directories that are never worth scanning.
+     *
+     * Nothing a CUSTOMER owns is on this list. Until 4.37.11 it also pruned
+     * 'node_modules', '.git', '.svn', 'cache' and '.cache' by name, at every
+     * depth, for every scan type. The April 2026 qTox dropper sat at
+     * /home/officialwebspace/.cache/.<41 hex> -- inside a directory this list
+     * told every scan, full included, never to open. A name is not a reason to
+     * trust a directory: an attacker picks the name. What stays is either
+     * not customer content at all (kernel pseudo-filesystems, bind-mounted
+     * copies, snapshots) or ours.
+     */
     private const SCAN_SKIP_DIRS = [
-        'node_modules', '.git', '.svn', 'cache', '.cache', 'proc', 'sys', 'dev',
+        'proc', 'sys', 'dev',
         // THE BIND-MOUNTED COPIES. Absent here until 4.29.8, while
         // getPhpFiles() had pruned them for a long time -- two walks over the
         // same tree with two different ideas of what to skip.
@@ -1732,6 +1747,176 @@ class Scanner {
         // nothing -- they are ours -- and holds when the setting does not.
         '.serverscrub', '.sentinel-gate',
     ];
+
+    /* QUICK-SCAN BOUNDS. Per account, plus one for the whole run.
+     *
+     * Quick covers every account's entire home directory -- mail, backups and
+     * all -- so what keeps it quicker than full is that no single account can
+     * take the night. The last full scan took 57h41m; a daily schedule needs a
+     * sweep that ends. These figures are estimates, not measurements: Maildir
+     * stores one file per message, so a mail-heavy account may hit the file
+     * limit. An account that hits ANY bound is reported as incomplete and the
+     * job ends 'incomplete', never 'done' -- a capped walk has not looked at
+     * everything and must not be shown as clean. Full and custom scans are
+     * not bounded. */
+    public const QUICK_MAX_FILES       = 1000000; // files walked per account
+    public const QUICK_MAX_DEPTH       = 25;      // directory levels below $HOME
+    public const QUICK_ACCOUNT_SECONDS = 3600;    // wall-clock per account
+    public const QUICK_SWEEP_SECONDS   = 72000;   // wall-clock for the whole run (20h)
+
+    /** Test hook, as setCpanelUsersDir(): lets a fixture trip a bound in seconds. */
+    private static ?array $quickBoundsOverride = null;
+
+    public static function setQuickBounds(?array $b): void { self::$quickBoundsOverride = $b; }
+
+    /** @return array{files:int,depth:int,account_seconds:int,sweep_seconds:int} */
+    public static function quickBounds(): array
+    {
+        $d = [
+            'files'           => self::QUICK_MAX_FILES,
+            'depth'           => self::QUICK_MAX_DEPTH,
+            'account_seconds' => self::QUICK_ACCOUNT_SECONDS,
+            'sweep_seconds'   => self::QUICK_SWEEP_SECONDS,
+        ];
+        return self::$quickBoundsOverride ? array_merge($d, self::$quickBoundsOverride) : $d;
+    }
+
+    /** The bound on the walk in progress; null means unbounded (full, custom). */
+    private ?array $walkBound = null;
+
+    /** Which bound the current walk hit, '' while none has. */
+    private string $boundHit = '';
+
+    /** Directory depth of $p below the bounded walk's root ($HOME/a is 1). */
+    private function depthBelowRoot(string $p): int
+    {
+        $root = (string) $this->walkBound['root'];
+        $rel  = ltrim(substr(str_replace(DIRECTORY_SEPARATOR, '/', $p), strlen($root)), '/');
+        return $rel === '' ? 0 : substr_count($rel, '/') + 1;
+    }
+
+    /**
+     * May the bounded walk take one more file? $n is how many it has taken.
+     * Records the bound and answers false the moment one is exceeded.
+     */
+    private function boundAllowsAnother(int $n): bool
+    {
+        if ($this->walkBound === null) { return true; }
+        $b = $this->walkBound;
+        if ($n >= $b['files']) {
+            $this->boundHit = 'file limit ' . $b['files'] . ' reached';
+            return false;
+        }
+        if (microtime(true) >= $b['deadline']) {
+            $this->boundHit = $b['deadline'] >= $b['sweep_end']
+                ? 'whole-run time limit ' . $b['sweep_seconds'] . 's reached'
+                : 'time limit ' . $b['account_seconds'] . 's reached';
+            return false;
+        }
+        return true;
+    }
+
+    /** Should the bounded walk prune this directory for depth? Records it if so. */
+    private function boundPrunesDir(string $dir): bool
+    {
+        if ($this->walkBound === null) { return false; }
+        if ($this->depthBelowRoot($dir) <= $this->walkBound['depth']) { return false; }
+        if ($this->boundHit === '') {
+            $this->boundHit = 'depth limit ' . $this->walkBound['depth'] . ' reached';
+        }
+        return true;
+    }
+
+    /**
+     * Walk every path of one job, bounding each account when the type is quick.
+     *
+     * Moved here from cron/scan.php so the bounds can be exercised on a real
+     * tree. Returns the threats and one line per account that was NOT fully
+     * scanned -- capped, missing, unreadable, or never reached. A non-empty
+     * list means the job is incomplete, whatever it found.
+     *
+     * @param string[] $paths
+     * @return array{threats:array,incomplete:string[]}
+     */
+    public function runPaths(array $paths, int $jobId, string $type): array
+    {
+        $bounded  = $type === 'quick';
+        $b        = self::quickBounds();
+        $sweepEnd = microtime(true) + $b['sweep_seconds'];
+        $threats  = [];
+        $short    = [];
+        $paths    = array_values($paths);
+
+        foreach ($paths as $i => $one) {
+            $acct = basename(rtrim($one, '/'));
+            if ($bounded && microtime(true) >= $sweepEnd) {
+                // One line per account, so the count in the job's reason is a
+                // count of accounts.
+                $left = count($paths) - $i;
+                foreach (array_slice($paths, $i) as $rest) {
+                    $short[] = basename(rtrim($rest, '/')) . ': not reached, whole-run time limit '
+                             . $b['sweep_seconds'] . 's reached';
+                }
+                Logger::warn("Scan job {$jobId}: whole-run time limit {$b['sweep_seconds']}s"
+                           . " reached, {$left} account(s) not scanned");
+                break;
+            }
+            if (!is_dir($one) || !is_readable($one)) {
+                Logger::warn("Scan job {$jobId} skipping missing or unreadable path {$one}");
+                if ($bounded) { $short[] = $acct . ': home directory missing or unreadable'; }
+                continue;
+            }
+
+            $this->boundHit  = '';
+            $this->walkBound = $bounded ? [
+                'root'            => rtrim(str_replace(DIRECTORY_SEPARATOR, '/', $one), '/'),
+                'files'           => (int) $b['files'],
+                'depth'           => (int) $b['depth'],
+                'account_seconds' => (int) $b['account_seconds'],
+                'sweep_seconds'   => (int) $b['sweep_seconds'],
+                'sweep_end'       => $sweepEnd,
+                'deadline'        => min(microtime(true) + $b['account_seconds'], $sweepEnd),
+            ] : null;
+            try {
+                $threats = array_merge($threats, $this->runClamScan($one, $jobId));
+            } finally {
+                $this->walkBound = null;
+            }
+            if ($this->boundHit !== '') {
+                $short[] = $acct . ': ' . $this->boundHit;
+                Logger::warn("Scan job {$jobId}: account {$acct} incomplete -- {$this->boundHit}");
+                $this->boundHit = '';
+            }
+
+            // Stopping must take effect between paths as well as between batches.
+            if (self::isCancelled($jobId)) {
+                Logger::info("Scan job {$jobId} cancelled, skipping remaining path(s)");
+                break;
+            }
+        }
+        return ['threats' => $threats, 'incomplete' => $short];
+    }
+
+    /**
+     * The status a finished job is written with, and why.
+     *
+     * 'done' is what the dashboard and the customer's page render as Clean.
+     * A job with any account not fully scanned is 'incomplete' instead; a
+     * cancelled or halted one keeps that status, which already says partial.
+     *
+     * @param string[] $incomplete from runPaths()
+     * @return array{0:string,1:string} [status, stop_reason]
+     */
+    public static function finalStatus(string $current, array $incomplete, int $pathCount): array
+    {
+        if ($current === 'halted') { return ['halted', '']; }
+        if (in_array($current, ['cancelling', 'cancelled'], true)) { return ['cancelled', '']; }
+        if (!$incomplete) { return ['done', '']; }
+        $why = count($incomplete) . ' of ' . $pathCount . ' home dir(s) incomplete: '
+             . implode('; ', $incomplete);
+        if (strlen($why) > 900) { $why = substr($why, 0, 897) . '...'; }
+        return ['incomplete', $why];
+    }
 
     /**
      * Every regular file under $path, lazily.
@@ -1768,6 +1953,7 @@ class Scanner {
                 if (in_array(strtolower($current->getFilename()), self::SCAN_SKIP_DIRS, true)) {
                     return false;
                 }
+                if ($this->boundPrunesDir($current->getPathname())) { return false; }
                 // Compared by resolved path, not by name: the directory is
                 // configurable and may be called anything.
                 if ($quarReal !== false) {
@@ -1781,8 +1967,14 @@ class Scanner {
             return substr($current->getFilename(), -11) !== '.quarantine';
         });
 
+        $n = 0;
         foreach (new RecursiveIteratorIterator($filter, RecursiveIteratorIterator::LEAVES_ONLY) as $file) {
-            if ($file->isFile()) { yield $file->getPathname(); }
+            if (!$file->isFile()) { continue; }
+            // A quick scan's per-account bound. Stops the walk, and the hit is
+            // recorded so the account is reported incomplete, not clean.
+            if (!$this->boundAllowsAnother($n)) { return; }
+            $n++;
+            yield $file->getPathname();
         }
     }
 
@@ -2187,19 +2379,32 @@ class Scanner {
                      self::SCAN_SKIP_DIRS))
                . ')(?:/|$)#i';
         try {
-            $it = new RecursiveIteratorIterator(
+            // Depth is pruned here, not filtered after the fact, so a quick
+            // scan's depth bound actually saves the walk.
+            $dirs = new RecursiveCallbackFilterIterator(
                 new RecursiveDirectoryIterator(
                     $path,
                     FilesystemIterator::SKIP_DOTS | FilesystemIterator::CURRENT_AS_FILEINFO
                 ),
+                function ($current) {
+                    return !($current->isDir() && !$current->isLink()
+                             && $this->boundPrunesDir($current->getPathname()));
+                }
+            );
+            $it = new RecursiveIteratorIterator(
+                $dirs,
                 RecursiveIteratorIterator::LEAVES_ONLY,
                 RecursiveIteratorIterator::CATCH_GET_CHILD
             );
+            $n = 0;
             foreach ($it as $file) {
                 $p = str_replace(DIRECTORY_SEPARATOR, '/', $file->getPathname());
                 if (preg_match($prune, $p)) continue;
                 if ($file->isLink())  continue;
                 if (!$file->isFile()) continue;
+                // Counted as walked, not as inspected: the walk is the cost.
+                if (!$this->boundAllowsAnother($n)) { return; }
+                $n++;
 
                 if (Heuristics::shouldInspect($p, (int)$file->getSize())) {
                     yield $p;
@@ -3071,7 +3276,7 @@ This file was removed and not kept. Restore it from your backups
         if (!$job) {
             return ['success' => false, 'error' => 'No scan is running', 'code' => 404];
         }
-        if (in_array($job['status'], ['done', 'error', 'cancelled'], true)) {
+        if (in_array($job['status'], ['done', 'incomplete', 'error', 'cancelled'], true)) {
             return ['success' => false,
                     'error'   => 'That scan has already finished (' . $job['status'] . ')',
                     'code'    => 409];

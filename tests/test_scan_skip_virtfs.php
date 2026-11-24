@@ -61,8 +61,12 @@ foreach (['walkFiles', 'getPhpFiles'] as $fn) {
          'THE MULTIPLICATIVE WALK: ' . $fn . '() does not descend into '
        . 'virtfs. One bind mount per account turns a /home scan into 118 '
        . 'scans, and files a finding under an account that does not exist');
-    t_eq(0, $under('/node_modules/'),
-         $fn . '() still skips node_modules');
+    // REQUIREMENT CHANGED in 4.37.11: nothing inside a customer's home is
+    // pruned by name any more (docs/specs/2026-11-24-quick-scan-whole-
+    // homedir.md). This asserted the opposite until then.
+    t_eq(1, $under('/node_modules/'),
+         $fn . '() walks node_modules: a name an attacker can choose is not a '
+       . 'reason to skip a directory');
     t_eq(0, $under('/.cagefs/'),
          $fn . '() skips the CageFS tree for the same reason');
 

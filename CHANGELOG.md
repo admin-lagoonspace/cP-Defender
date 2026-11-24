@@ -17,6 +17,26 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+### Changed
+
+- **Quick scan now covers each account's whole home directory, mail
+  included — and no scan skips `.cache` any more.** The April 2026 dropper sat
+  at `/home/officialwebspace/.cache/.<41 hex>`. Quick walked only
+  `public_html`, and every scan type, full included, pruned `cache`, `.cache`,
+  `node_modules`, `.git` and `.svn` by name at every depth — so no scan this
+  product could run would ever have opened the directory it was in, and the
+  57-hour full scan walked straight past it. Quick now resolves to every cPanel
+  account's home (accounts with no `public_html` included), and those five
+  names are no longer pruned anywhere; only `virtfs`, snapshot, CageFS and our
+  own directories still are. What keeps quick quicker than full is a bound per
+  account — 1,000,000 files, depth 25, 60 minutes — and 20 hours for the run.
+  These figures are estimates, not measurements. An account that hits a bound,
+  or whose home cannot be opened, ends the job as **incomplete** (amber, with
+  the accounts and bounds as the reason), never `done`, which is what the
+  dashboard and the customer's page show as "Clean". Full and custom scans are
+  not bounded. The Settings page, the scan target label and the CLI help now
+  say what quick covers.
+
 ## [4.37.10] - 2026-11-24
 
 ### Fixed
