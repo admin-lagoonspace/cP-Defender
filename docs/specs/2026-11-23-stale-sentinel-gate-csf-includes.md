@@ -306,3 +306,13 @@ case-sensitive (AQ1), any file under the directory (AQ3). No backup (AQ2).
 - Tests: symlink (runs where bash can make symlinks, i.e. the Linux/docker
   run; prints a SKIP line on Windows), hard link, NUL byte. The hard-link and
   NUL cases fail against the previous function (checked).
+
+**Rework 2 (Shakaal R1/R2, 2026-11-25)**: the hard-link in-place write and its
+backup/restore are removed. It truncated before writing, so a failed or killed
+write could leave csf.allow empty (R1), and it leaked raw bash errors (R2). A
+file whose resolved target has more than one hard link (`stat -c %h`) is now
+not rewritten at all: `warn` names the file and each exact line to remove by
+hand, and no temp file is created. Symlink handling and `grep -a` unchanged.
+Test: hard-linked file byte-identical under both names, mtime unchanged,
+warning names file and line, never reported as removed; these 6 assertions
+fail against a80a0be.

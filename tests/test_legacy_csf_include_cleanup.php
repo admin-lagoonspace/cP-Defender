@@ -299,12 +299,17 @@ if ($bash !== '') {
     //
     // `mv tmp csf.allow` replaced a symlink with a plain copy and left the
     // stale line in the file it pointed to; with a hard link the other name
-    // kept the stale line. Config-managed servers link these files. And a NUL
+    // kept the stale line. Config-managed servers link these files. A first
+    // fix wrote hard-linked files in place, which truncates before it writes:
+    // a failed or killed write left csf.allow EMPTY (Shakaal R1). A
+    // hard-linked file is now left alone and reported instead. And a NUL
     // byte made grep report "Binary file ... matches" as the removed line --
     // on the warn path, as the line the operator should delete by hand.
     $stale = "Include /etc/sentinel-gate/csf_allow.txt\n";
     file_put_contents("$dir/target.allow", "192.0.2.40\n" . $stale . "keep\n");
-    file_put_contents("$dir/h1.allow", "192.0.2.41\n" . $stale . "keep\n");
+    $hIn = "192.0.2.41\n" . $stale . "keep\n";
+    file_put_contents("$dir/h1.allow", $hIn);
+    touch("$dir/h1.allow", $old);
     file_put_contents("$dir/nul.allow", "a\0b\nInclude /etc/sentinel-gate/a\nkeep\n");
 
     $links = "set -euo pipefail\n"
@@ -343,10 +348,19 @@ if ($bash !== '') {
         echo "SKIP symlink case: this bash cannot create symlinks here\n";
     }
 
-    t_eq("192.0.2.41\nkeep\n", (string)@file_get_contents("$dir/h2.allow"),
-         'a hard-linked csf.allow is cleaned under BOTH names: the content is '
-       . 'written into the shared file, not mv\'d over one name');
-    t_contains($lt, 'HLINKS=2', 'and the two names are still one file');
+    t_eq($hIn, (string)@file_get_contents("$dir/h1.allow"),
+         'a hard-linked csf.allow is NOT rewritten: byte-identical. Every '
+       . 'rewrite either splits the link or truncates first, and a truncate that '
+       . 'fails or is interrupted leaves the firewall allow list empty');
+    t_eq($hIn, (string)@file_get_contents("$dir/h2.allow"), 'and neither is its other name');
+    t_eq($old, filemtime("$dir/h1.allow"), 'not even touched: its mtime is unchanged');
+    t_contains($lt, 'HLINKS=2', 'the two names are still one file');
+    t_contains($lt, "WARN:   $bdir/h1.allow is hard-linked, so it was not rewritten",
+               'the operator is told, with the file named');
+    t_contains($lt, 'WARN:     Include /etc/sentinel-gate/csf_allow.txt',
+               'and the exact line to remove by hand');
+    t_ok(strpos($lt, "Removed stale Sentinel Gate include from $bdir/h1.allow") === false,
+         'and is never told it was removed');
 
     t_eq("a\0b\nkeep\n", (string)@file_get_contents("$dir/nul.allow"),
          'a file with a NUL byte loses only the stale line');

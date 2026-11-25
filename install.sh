@@ -1299,8 +1299,9 @@ section "CSF / LFD firewall integration"
 # operator's and stays. Every other byte of the file is kept; a file with no
 # match is not rewritten at all. The rewrite goes to a temp file beside the
 # original and is mv'd over it, so a failure leaves the original intact. A
-# symlinked file is rewritten at its target, and a hard-linked one in place
-# (from a backup), so a config-managed server's links stay links.
+# symlinked file is rewritten at its target, so the link stays a link. A
+# hard-linked file is never rewritten: it is reported, line by line, for the
+# operator to fix, because no safe rewrite keeps every name pointing at it.
 #
 # The same function is in uninstall.sh, byte for byte, and
 # tests/test_legacy_csf_include_cleanup.php fails if the two drift. It is
@@ -1308,7 +1309,7 @@ section "CSF / LFD firewall integration"
 # fixed file list, and a new helper file would not reach the server until the
 # release after.
 _ss_strip_legacy_csf_includes() {
-  local _f="$1" _re _hits _rc=0 _real _tmp _bak _trail=0 _done=false _l
+  local _f="$1" _re _hits _rc=0 _real _tmp _trail=0 _l
   _re=$'^[ \t]*Include[ \t]+/etc/sentinel-gate/'
   [[ -f "${_f}" ]] || return 0
 
@@ -1327,6 +1328,18 @@ _ss_strip_legacy_csf_includes() {
   _real=$(readlink -f -- "${_f}" 2>/dev/null) || _real=""
   [[ -n "${_real}" && -f "${_real}" ]] || _real="${_f}"
 
+  # Hard-linked: left alone. mv would split this name from the others, which
+  # keep the stale line, and writing in place truncates before it writes, so
+  # a failed or interrupted write empties csf.allow. Neither is acceptable for
+  # a cosmetic fix; the operator gets the exact lines instead.
+  if [[ "$(stat -c %h -- "${_real}" 2>/dev/null || echo 1)" -gt 1 ]]; then
+    warn "  ${_f} is hard-linked, so it was not rewritten. Remove by hand:"
+    while IFS= read -r _l; do
+      warn "    ${_l%$'\r'}"
+    done <<< "${_hits}"
+    return 0
+  fi
+
   # Keep a missing final newline missing: only the matched lines may change.
   [[ -z "$(tail -c 1 "${_real}" 2>/dev/null)" ]] && _trail=1
 
@@ -1338,28 +1351,8 @@ _ss_strip_legacy_csf_includes() {
      && awk -v BINMODE=3 -v re="${_re}" -v trail="${_trail}" '
           $0 ~ re { next }
           { if (n++) printf "\n"; printf "%s", $0 }
-          END { if (n && trail) printf "\n" }' "${_real}" > "${_tmp}" 2>/dev/null; then
-    if [[ "$(stat -c %h -- "${_real}" 2>/dev/null || echo 1)" -gt 1 ]]; then
-      # Hard-linked: mv would split this name from the others, which keep
-      # the stale line. Write the content into the same inode instead, from
-      # a backup taken first so a failed write puts the original back.
-      _bak=$(mktemp "${_real}.ss-XXXXXX" 2>/dev/null) || _bak=""
-      if [[ -n "${_bak}" ]] && cp -p "${_real}" "${_bak}" 2>/dev/null; then
-        if cat "${_tmp}" > "${_real}" 2>/dev/null; then
-          _done=true
-        else
-          cat "${_bak}" > "${_real}" 2>/dev/null || true
-        fi
-      fi
-      rm -f "${_tmp}" ${_bak:+"${_bak}"} 2>/dev/null || true
-      _tmp=""
-    elif mv -f "${_tmp}" "${_real}" 2>/dev/null; then
-      _done=true
-      _tmp=""
-    fi
-  fi
-
-  if ${_done}; then
+          END { if (n && trail) printf "\n" }' "${_real}" > "${_tmp}" 2>/dev/null \
+     && mv -f "${_tmp}" "${_real}" 2>/dev/null; then
     while IFS= read -r _l; do
       ok "  Removed stale Sentinel Gate include from ${_f}: ${_l%$'\r'}"
     done <<< "${_hits}"
