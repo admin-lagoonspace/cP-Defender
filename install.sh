@@ -1298,7 +1298,9 @@ section "CSF / LFD firewall integration"
 # /etc/sentinel-gate/. A comment that merely mentions sentinel-gate is the
 # operator's and stays. Every other byte of the file is kept; a file with no
 # match is not rewritten at all. The rewrite goes to a temp file beside the
-# original and is mv'd over it, so a failure leaves the original intact.
+# original and is mv'd over it, so a failure leaves the original intact. A
+# symlinked file is rewritten at its target, and a hard-linked one in place
+# (from a backup), so a config-managed server's links stay links.
 #
 # The same function is in uninstall.sh, byte for byte, and
 # tests/test_legacy_csf_include_cleanup.php fails if the two drift. It is
@@ -1306,11 +1308,13 @@ section "CSF / LFD firewall integration"
 # fixed file list, and a new helper file would not reach the server until the
 # release after.
 _ss_strip_legacy_csf_includes() {
-  local _f="$1" _re _hits _rc=0 _tmp _trail=0 _l
+  local _f="$1" _re _hits _rc=0 _real _tmp _bak _trail=0 _done=false _l
   _re=$'^[ \t]*Include[ \t]+/etc/sentinel-gate/'
   [[ -f "${_f}" ]] || return 0
 
-  _hits=$(grep -E -- "${_re}" "${_f}" 2>/dev/null) || _rc=$?
+  # -a: a stray NUL or non-UTF-8 byte must not turn the matched lines into
+  # grep's "Binary file ... matches", which is what would then be reported.
+  _hits=$(grep -a -E -- "${_re}" "${_f}" 2>/dev/null) || _rc=$?
   [[ ${_rc} -eq 1 ]] && return 0
   if [[ ${_rc} -ne 0 ]]; then
     warn "  Could not read ${_f} to check for stale Sentinel Gate includes."
@@ -1318,19 +1322,44 @@ _ss_strip_legacy_csf_includes() {
     return 0
   fi
 
+  # Rewrite the file a symlink points at, not the link: mv over the link
+  # would turn it into a plain copy and leave the stale line in the target.
+  _real=$(readlink -f -- "${_f}" 2>/dev/null) || _real=""
+  [[ -n "${_real}" && -f "${_real}" ]] || _real="${_f}"
+
   # Keep a missing final newline missing: only the matched lines may change.
-  [[ -z "$(tail -c 1 "${_f}" 2>/dev/null)" ]] && _trail=1
+  [[ -z "$(tail -c 1 "${_real}" 2>/dev/null)" ]] && _trail=1
 
   # BINMODE=3 keeps a CRLF line's \r: Windows gawk strips it otherwise, and
   # every other awk ignores the variable.
-  _tmp=$(mktemp "${_f}.ss-XXXXXX" 2>/dev/null) || _tmp=""
+  _tmp=$(mktemp "${_real}.ss-XXXXXX" 2>/dev/null) || _tmp=""
   if [[ -n "${_tmp}" ]] \
-     && cp -p "${_f}" "${_tmp}" 2>/dev/null \
+     && cp -p "${_real}" "${_tmp}" 2>/dev/null \
      && awk -v BINMODE=3 -v re="${_re}" -v trail="${_trail}" '
           $0 ~ re { next }
           { if (n++) printf "\n"; printf "%s", $0 }
-          END { if (n && trail) printf "\n" }' "${_f}" > "${_tmp}" 2>/dev/null \
-     && mv -f "${_tmp}" "${_f}" 2>/dev/null; then
+          END { if (n && trail) printf "\n" }' "${_real}" > "${_tmp}" 2>/dev/null; then
+    if [[ "$(stat -c %h -- "${_real}" 2>/dev/null || echo 1)" -gt 1 ]]; then
+      # Hard-linked: mv would split this name from the others, which keep
+      # the stale line. Write the content into the same inode instead, from
+      # a backup taken first so a failed write puts the original back.
+      _bak=$(mktemp "${_real}.ss-XXXXXX" 2>/dev/null) || _bak=""
+      if [[ -n "${_bak}" ]] && cp -p "${_real}" "${_bak}" 2>/dev/null; then
+        if cat "${_tmp}" > "${_real}" 2>/dev/null; then
+          _done=true
+        else
+          cat "${_bak}" > "${_real}" 2>/dev/null || true
+        fi
+      fi
+      rm -f "${_tmp}" ${_bak:+"${_bak}"} 2>/dev/null || true
+      _tmp=""
+    elif mv -f "${_tmp}" "${_real}" 2>/dev/null; then
+      _done=true
+      _tmp=""
+    fi
+  fi
+
+  if ${_done}; then
     while IFS= read -r _l; do
       ok "  Removed stale Sentinel Gate include from ${_f}: ${_l%$'\r'}"
     done <<< "${_hits}"

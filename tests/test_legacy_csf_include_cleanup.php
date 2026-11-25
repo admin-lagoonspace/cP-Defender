@@ -295,6 +295,68 @@ if ($bash !== '') {
          'nor rewrites them: both mtimes are unchanged, so every upgrade after '
        . 'the first leaves CSF\'s files alone');
 
+    // ── Links, and bytes grep calls binary (Shakaal, 2026-11-25) ────────────
+    //
+    // `mv tmp csf.allow` replaced a symlink with a plain copy and left the
+    // stale line in the file it pointed to; with a hard link the other name
+    // kept the stale line. Config-managed servers link these files. And a NUL
+    // byte made grep report "Binary file ... matches" as the removed line --
+    // on the warn path, as the line the operator should delete by hand.
+    $stale = "Include /etc/sentinel-gate/csf_allow.txt\n";
+    file_put_contents("$dir/target.allow", "192.0.2.40\n" . $stale . "keep\n");
+    file_put_contents("$dir/h1.allow", "192.0.2.41\n" . $stale . "keep\n");
+    file_put_contents("$dir/nul.allow", "a\0b\nInclude /etc/sentinel-gate/a\nkeep\n");
+
+    $links = "set -euo pipefail\n"
+           . "ok()   { echo \"OK: \$*\"; }\n"
+           . "info() { echo \"INFO: \$*\"; }\n"
+           . "warn() { echo \"WARN: \$*\"; }\n"
+           . $fnInstall
+           . "cd '$bdir'\n"
+           . "ln -s target.allow link.allow 2>/dev/null || true\n"
+           . "if [[ -L link.allow ]]; then echo SYMLINK=yes; " . FN_NAME . " '$bdir/link.allow'; "
+           .   "[[ -L link.allow ]] && echo LINK_AFTER=symlink || echo LINK_AFTER=plain; "
+           . "else echo SYMLINK=no; rm -f link.allow; fi\n"
+           . "ln h1.allow h2.allow\n"
+           . FN_NAME . " '$bdir/h1.allow'\n"
+           . "echo HLINKS=\$(stat -c %h h1.allow)\n"
+           . FN_NAME . " '$bdir/nul.allow'\n"
+           . "echo DONE\n";
+    file_put_contents("$dir/links.sh", $links);
+    $lo = []; $lrc = 1;
+    exec(escapeshellarg($bash) . ' ' . escapeshellarg("$bdir/links.sh") . ' 2>&1', $lo, $lrc);
+    clearstatcache();
+    $lt = implode("\n", $lo);
+    t_eq(0, $lrc, 'the link and binary-byte cases run to completion'
+                . ($lrc === 0 ? '' : ' (output: ' . str_replace("\n", ' | ', substr($lt, 0, 300)) . ')'));
+
+    if (strpos($lt, 'SYMLINK=yes') !== false) {
+        t_contains($lt, 'LINK_AFTER=symlink',
+                   'a symlinked csf.allow is still a symlink afterwards, not a '
+                 . 'plain copy that the config manager will fight');
+        t_eq("192.0.2.40\nkeep\n", (string)@file_get_contents("$dir/target.allow"),
+             'and the file it points at is the one cleaned: before the fix the '
+           . 'stale line survived there and CSF kept printing the error');
+    } else {
+        // Windows without developer mode cannot make a symlink. The docker run
+        // of this suite (Linux) is where this half executes.
+        echo "SKIP symlink case: this bash cannot create symlinks here\n";
+    }
+
+    t_eq("192.0.2.41\nkeep\n", (string)@file_get_contents("$dir/h2.allow"),
+         'a hard-linked csf.allow is cleaned under BOTH names: the content is '
+       . 'written into the shared file, not mv\'d over one name');
+    t_contains($lt, 'HLINKS=2', 'and the two names are still one file');
+
+    t_eq("a\0b\nkeep\n", (string)@file_get_contents("$dir/nul.allow"),
+         'a file with a NUL byte loses only the stale line');
+    t_contains($lt, "from $bdir/nul.allow: Include /etc/sentinel-gate/a",
+               'and the report names the actual line, not grep\'s "Binary file '
+             . '... matches", which on the warn path would be the "line" the '
+             . 'operator is told to delete');
+    t_ok(strpos($lt, 'Binary file') === false, 'grep\'s binary summary never reaches the output');
+    t_eq([], glob("$dir/*.ss-*") ?: [], 'no temp or backup file is left by the link cases');
+
     foreach (glob("$dir/*") ?: [] as $f) { @unlink($f); }
     @rmdir($dir);
 }

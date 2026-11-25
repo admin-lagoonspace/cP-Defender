@@ -289,3 +289,20 @@ case-sensitive (AQ1), any file under the directory (AQ3). No backup (AQ2).
    holding the old path in one `OLD=` variable and wording comments so every
    remaining mention carries `(legacy)` after it, per that test's convention.
    The rebrand test itself was not changed.
+
+**Rework after Shakaal (2026-11-25, docs/findings/2026-11-25-stale-sentinel-gate-csf-includes.md)**
+
+- Rebased onto main (v4.37.11) as branch `fix/stale-sentinel-gate-csf-includes`;
+  the CHANGELOG entry was moved back under `[Unreleased]` → `### Fixed` by hand.
+- Finding 2: `grep -a -E`, so a NUL/non-UTF-8 byte no longer turns the
+  reported line into "Binary file ... matches".
+- Finding 3: the path is resolved with `readlink -f` and the target is
+  rewritten, so a symlink stays a symlink. If the target has more than one
+  hard link (`stat -c %h`), the new content is written into the same inode
+  with `cat tmp > target`, after a `cp -p` backup; a failed write restores
+  from the backup. That in-place write is not atomic the way `mv` is: a crash
+  between truncate and write could leave the hard-linked file short. Single-
+  link files still take the atomic `mv` path.
+- Tests: symlink (runs where bash can make symlinks, i.e. the Linux/docker
+  run; prints a SKIP line on Windows), hard link, NUL byte. The hard-link and
+  NUL cases fail against the previous function (checked).
