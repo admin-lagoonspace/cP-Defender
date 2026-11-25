@@ -83,6 +83,12 @@ COPY seed-logs.sh   /usr/local/bin/seed-logs.sh
 COPY entrypoint.sh  /usr/local/bin/entrypoint.sh
 COPY apachectl-stub.sh /usr/sbin/apachectl
 RUN chmod +x /usr/local/bin/seed-cpanel.sh /usr/local/bin/seed-logs.sh              /usr/local/bin/entrypoint.sh /usr/sbin/apachectl  && ln -sf /usr/sbin/apachectl /usr/sbin/apache2ctl
+# CSF stub and a migrated server's /etc/csf. The stub is deliberately NOT put
+# at /usr/sbin/csf here: every other test still runs on a server without CSF.
+# `seed-csf.sh` installs it there on demand (see the header of each file).
+COPY csf-stub.sh /usr/local/lib/serverscrub-test/csf-stub
+COPY seed-csf.sh /usr/local/bin/seed-csf.sh
+RUN chmod +x /usr/local/lib/serverscrub-test/csf-stub /usr/local/bin/seed-csf.sh
 
 # The install expects to be root on a server. It is root in a container too,
 # which is the point: permissions, ownership and the 0700 database directory
