@@ -165,7 +165,13 @@ t_contains($card, 'Last scan: never',
 // found nothing" were painted identically -- the same defect as the three
 // above, in a state nobody had rendered.
 
-t_contains($card, "} else if (!lastJob?.finished_at) {",
+// CHANGED 2026-11-26 (spec protected-only-from-a-finished-scan): this used to
+// pin `} else if (!lastJob?.finished_at) {`. That test of the NEWEST row is
+// itself the defect -- a running scan made a scanned server read "Not yet
+// scanned". "Has any scan ever finished" is now decided server-side and the
+// card renders it; the behaviour is asserted on seeded rows in
+// test_top_status_pill.php (CASE 2, CASE 6).
+t_contains($card, "} else if (cardState === 'never') {",
      'the zero-threats branch asks whether a scan has ever finished before it '
    . 'claims anything');
 t_contains($card, "scanStatus.textContent = 'Not yet scanned'",
@@ -181,6 +187,11 @@ $neverPos  = strpos($card, "scanStatus.textContent = 'Not yet scanned'");
 t_ok($neverPos !== false && $greenPos !== false && $neverPos < $greenPos,
      'the never-scanned branch is tested BEFORE the green one, so green is '
    . 'only reachable for a server that has been scanned and was clean');
-t_contains($card, "No open threats, as of the last scan.",
+// CHANGED 2026-11-26: the fixed sentence "No open threats, as of the last
+// scan." was false whenever the last scan was cancelled. The title now comes
+// from Scanner::protectionStatus(), which names the complete scan it is
+// relative to; test_top_status_pill.php CASE 1 asserts its wording.
+$greenBody = substr($card, (int) $greenPos, 600);
+t_contains($greenBody, 'scanStatus.title = cardTitle;',
      'and the green state says what it is relative to, rather than asserting a '
    . 'standing condition');

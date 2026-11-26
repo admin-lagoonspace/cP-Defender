@@ -17,6 +17,23 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+### Fixed
+- **"Protected" is now earned only by a complete server scan.** Green meant
+  "the newest job row has no open threats", whatever happened to that job.
+  Every release cancels running scans ("stopped by the 4.37.x update"), so
+  after each update the dashboard and the topbar pill read "Protected / The
+  last scan finished and nothing is open" about a scan that had not finished;
+  a failed or interrupted scan did the same. And while any scan ran, the
+  newest row had no finish time, so a server scanned every night read "Not
+  yet scanned". Now green needs a `done` scan that covered the whole server
+  (scheduled, or an operator/CLI scan over every account home or `/home`),
+  at most 8 days old. A customer's one-account scan never counts toward it.
+  A scan that was cancelled, failed or interrupted shows amber "Last scan did
+  not finish" unless a complete scan within 8 days exists, in which case the
+  green title says a later scan did not finish. A complete scan older than 8
+  days shows amber "Last complete scan N days ago". The decision is made once,
+  in `Scanner::protectionStatus()`, and the card and the pill both render it.
+
 ## [4.37.11] - 2026-11-24
 
 ### Changed

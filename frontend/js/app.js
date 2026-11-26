@@ -654,36 +654,58 @@ function setTopStatus(state, text, title) {
 }
 
 /**
- * The pill's state for one scanner-stats payload.
+ * The protection state for one scanner-stats payload: the pill AND the
+ * dashboard card both render this, so they cannot disagree.
  *
- * Deliberately the same two inputs the card uses -- the open-threat count and
- * whether any scan has ever finished -- read the same way: a count is a number
- * or it is unknown, and `|| 0` is what made undefined, a failed fetch and a
- * real zero indistinguishable.
+ * The decision itself is made by the server (Scanner::protectionStatus), which
+ * knows which scans finished, which covered the whole server and how old they
+ * are. Here: a count is a number or it is unknown (`|| 0` is what made
+ * undefined, a failed fetch and a real zero indistinguishable), and green is
+ * only ever produced by the explicit 'clean' branch below -- an older backend
+ * that sends no `protection` gets amber or never, not green.
+ *
+ * Returns [state, pillText, title, cardText, badgeText].
  */
 function topStatusFor(sc) {
   const threats = Number.isFinite(sc?.active) ? sc.active : null;
   if (threats === null) {
     return ['unknown', 'Status unknown',
-            'The open-threat count could not be read from the server.'];
+            'The open-threat count could not be read from the server.',
+            'Unknown', 'No data'];
   }
-  if (!sc?.last_scan?.finished_at) {
-    return ['never', 'Not yet scanned',
-            'Nothing has been scanned on this server yet, so there is nothing '
-            + 'to report either way.'];
+  const p = sc?.protection;
+  if (!p || typeof p.state !== 'string') {
+    // Older backend, or a payload without the decision: never green.
+    if (threats > 0) {
+      return ['threat', fmtNum(threats) + ' threat' + (threats > 1 ? 's' : '') + ' open',
+              'Open threats across every scan. Scanner > Threats lists them.',
+              fmtNum(threats) + ' Active Threat' + (threats > 1 ? 's' : ''), 'Threats Found'];
+    }
+    if (!sc?.last_scan?.finished_at) {
+      return ['never', 'Not yet scanned',
+              'Nothing has been scanned on this server yet, so there is nothing '
+              + 'to report either way.', 'Not yet scanned', 'No scan yet'];
+    }
+    return ['partial', 'No complete scan on record',
+            'The server did not say whether a complete scan has finished, so '
+            + 'this cannot be shown as protected.', 'No complete scan on record', 'Unconfirmed'];
   }
-  if (threats > 0) {
+  const title = String(p.title || '');
+  if (p.state === 'threat' || threats > 0) {
     return ['threat', fmtNum(threats) + ' threat' + (threats > 1 ? 's' : '') + ' open',
-            'Open threats across every scan. Scanner > Threats lists them.'];
+            'Open threats across every scan. Scanner > Threats lists them.',
+            fmtNum(threats) + ' Active Threat' + (threats > 1 ? 's' : ''), 'Threats Found'];
   }
-  // A quick scan that hit a per-account limit did not look at everything, so
-  // "nothing is open" is not a clean bill of health. Amber, never green.
-  if (sc.last_scan.status === 'incomplete') {
-    return ['partial', 'Last scan incomplete',
-            'The last scan hit a per-account limit and did not examine every '
-            + 'file. See the Scan Log for which accounts.'];
+  if (p.state === 'never') {
+    return ['never', 'Not yet scanned', title, 'Not yet scanned', String(p.badge || 'No scan yet')];
   }
-  return ['clean', 'No open threats', 'The last scan finished and nothing is open.'];
+  if (p.state === 'clean') {
+    return ['clean', 'No open threats', title, 'Protected', 'Protected'];
+  }
+  // Anything else the server says, including a state this page does not know,
+  // is amber: the scan did not cover everything, or did not finish.
+  return ['partial', String(p.text || 'Last scan incomplete'), title,
+          String(p.card || p.text || 'Last scan incomplete'), String(p.badge || 'Incomplete')];
 }
 
 /** Apply the pill from a payload the caller already has. No extra request. */
@@ -831,55 +853,57 @@ async function refreshDashboard() {
   // read the threat count must not look like a clean bill of health.
   const threats = Number.isFinite(sc?.active) ? sc.active : null;
 
-  if (threats === null) {
+  /* ONE DECISION, TWO RENDERINGS. The card used to run its own cascade on the
+   * newest job row, so a scan cancelled by our own updater still read
+   * "Protected", and a scan merely running read "Not yet scanned". It now
+   * renders topStatusFor(sc) -- the same answer the pill shows -- and only
+   * chooses icon and colour here. */
+  const [cardState, , cardTitle, cardText, cardBadge] = topStatusFor(sc);
+
+  if (cardState === 'unknown') {
     scanIcon.textContent = '❔';
     scanStatus.textContent = 'Unknown';
     scanStatus.style.color = 'var(--txt2)';
     scanBadge.className = 'badge badge-gray';
     scanBadge.textContent = 'No data';
     scanStatus.title = 'The threat count could not be read from the server.';
-  } else if (threats > 0) {
+  } else if (cardState === 'threat') {
     scanIcon.textContent = '⚠️';
     scanStatus.textContent = `${fmtNum(threats)} Active Threat${threats > 1 ? 's' : ''}`;
     scanStatus.style.color = 'var(--red)';
     scanBadge.className = 'badge badge-red';
     scanBadge.textContent = 'Threats Found';
     scanStatus.title = 'Open threats across every scan, not just the last one.';
-  } else if (!lastJob?.finished_at) {
+  } else if (cardState === 'never') {
     /* ZERO OPEN THREATS ACROSS ZERO SCANS IS NOT A CLEAN BILL OF HEALTH.
-     *
-     * This branch used to be the green tick, so a freshly installed server
-     * rendered "✅ Protected" directly above its own "Last scan: never" —
-     * "never looked" painted identically to "looked and found nothing", and
-     * the tick is what an operator reads, not the grey line under it. It is
-     * also the first thing every new customer sees.
-     *
-     * The comment on the threats === null branch above states the principle;
-     * this is the same case, one step earlier. */
+     * Reached only when no job has EVER finished -- not merely when the
+     * newest one is still running. */
     scanIcon.textContent = '🔍';
     scanStatus.textContent = 'Not yet scanned';
     scanStatus.style.color = 'var(--txt2)';
     scanBadge.className = 'badge badge-gray';
     scanBadge.textContent = 'No scan yet';
-    scanStatus.title = 'Nothing has been scanned on this server yet, so there is '
-                     + 'nothing to report either way. Run a scan.';
-  } else if (lastJob.status === 'incomplete') {
-    // Same rule as the pill (topStatusFor): a capped scan is not "Protected".
+    if (cardBadge === 'Scanning') { scanBadge.textContent = 'Scanning'; }
+    scanStatus.title = cardTitle;
+  } else if (cardState === 'partial') {
+    // Hit a limit, did not finish, or too old: the scan did not cover
+    // everything recently. Amber, never green; the words say which.
     scanIcon.textContent = '⚠️';
-    scanStatus.textContent = 'Last scan incomplete';
+    scanStatus.textContent = cardText;
     scanStatus.style.color = 'var(--amber)';
     scanBadge.className = 'badge badge-amber';
-    scanBadge.textContent = 'Incomplete';
-    scanStatus.title = 'The last scan hit a per-account limit and did not examine '
-                     + 'every file. See the Scan Log for which accounts.';
+    scanBadge.textContent = cardBadge;
+    scanStatus.title = cardTitle;
   } else {
     scanIcon.textContent = '✅';
     scanStatus.textContent = 'Protected';
     scanStatus.style.color = 'var(--green)';
     scanBadge.className = 'badge badge-green';
     scanBadge.textContent = 'Protected';
-    // Green is earned by a scan that ran and found nothing, and by nothing else.
-    scanStatus.title = 'No open threats, as of the last scan.';
+    // Green is earned by a complete server scan within 8 days that left
+    // nothing open; the title names that scan and any later one that did not
+    // finish.
+    scanStatus.title = cardTitle;
   }
 
   // One source for both badges: the card and the pill cannot disagree if they
@@ -888,7 +912,9 @@ async function refreshDashboard() {
 
   const ls = sc?.last_scan_stats || null;
   if (!lastJob?.finished_at) {
-    scanMeta.textContent = 'Last scan: never';
+    // The newest job is still running. "never" only if nothing ever finished.
+    scanMeta.textContent = sc?.last_finished_scan?.finished_at
+      ? 'Scan in progress' : 'Last scan: never';
   } else {
     const found = Number.isFinite(ls?.threats_found) ? ls.threats_found
                 : (Number.isFinite(lastJob.threats_found) ? lastJob.threats_found : null);
