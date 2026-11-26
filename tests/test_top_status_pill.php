@@ -188,13 +188,13 @@ t_ok(strpos($setter, "'Protected'") === false,
 
 $now = time();
 $day = 86400;
-$seed = function (array $rows) {
+$seed = function (array $rows) use (&$now) {   // one clock: seeding and judging read the same $now
     Database::query('DELETE FROM scan_jobs');
     foreach ($rows as $r) {
         Database::insert('scan_jobs', $r + ['scan_type' => 'quick', 'scan_path' => '/home',
                                             'requested_by' => '@schedule', 'files_scanned' => 10]);
     }
-    $s = (new Scanner())->getStats();
+    $s = (new Scanner())->getStats($now);
     // A backend without the decision fails each assertion below, not one crash.
     $s['protection'] = ($s['protection'] ?? null)
         ?: ['state' => '(missing)', 'text' => '', 'title' => '', 'badge' => ''];
@@ -276,7 +276,7 @@ foreach ([[$done($day)], [], [$done($day), $upd]] as $i => $rows) {
     $s = $seed($rows);
     Database::insert('threats', ['scan_job_id' => $s['last_scan']['id'] ?? null, 'file_path' => '/home/a/x.php',
                                  'status' => 'active']);
-    $s = (new Scanner())->getStats();
+    $s = (new Scanner())->getStats($now);
     t_eq('threat', $s['protection']['state'] ?? null, "CASE 7.$i: an open threat is red whatever the scans did");
 }
 Database::query('DELETE FROM threats');
@@ -305,6 +305,11 @@ t_ok(Scanner::isServerWideJob(['requested_by' => '@schedule', 'scan_path' => '/h
      'a scheduled scan of /home is');
 t_ok(Scanner::isServerWideJob(['requested_by' => '', 'scan_path' => '/'], $homes),
      'a CLI full scan of / is');
+t_ok(Scanner::isServerWideJob(['requested_by' => '@cli', 'scan_path' => '/home'], $homes),
+     'a `serverscrub scan` from the CLI (tagged @cli) over /home is server-wide; '
+   . 'excluding it showed a false amber after an admin scanned everything');
+t_ok(!Scanner::isServerWideJob(['requested_by' => '@cli', 'scan_path' => '/home/alice'], $homes),
+     'but a CLI scan of one account is not');
 t_ok(!Scanner::isServerWideJob(['requested_by' => 'alice', 'scan_path' => '/home'], $homes),
      'a customer request is never server-wide, whatever path it names');
 $more = ['/home/alice', '/home/bob', '/home/carol'];

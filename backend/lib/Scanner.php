@@ -4045,7 +4045,7 @@ This file was removed and not kept. Restore it from your backups
         ];
     }
 
-    public function getStats(): array {
+    public function getStats(?int $now = null): array {
         $total    = Database::fetchOne("SELECT COUNT(*) as c FROM threats")['c'];
         $active   = Database::fetchOne("SELECT COUNT(*) as c FROM threats WHERE status='active'")['c'];
         $quarant  = Database::fetchOne("SELECT COUNT(*) as c FROM threats WHERE status='quarantined'")['c'];
@@ -4104,7 +4104,7 @@ This file was removed and not kept. Restore it from your backups
             // that found nothing" are different answers and the card has to be
             // able to tell them apart.
             'last_scan_stats' => $lastStats,
-        ] + self::protectionInputs((int) $active, $lastScan ?: null, time());
+        ] + self::protectionInputs((int) $active, $lastScan ?: null, $now ?? time());
     }
 
     /** How many `done` jobs getStats() will look back through for one that
@@ -4169,7 +4169,8 @@ This file was removed and not kept. Restore it from your backups
      * a quick scan of /home is stored as the list of homes it expanded to --
      * so this takes the strictest reading the row allows:
      *
-     *   - requested by a customer (anything but '', '@schedule', '@operator'):
+     *   - requested by a customer (anything but '', '@schedule', '@operator',
+     *     '@cli'):
      *     never, whatever its path;
      *   - otherwise only if its paths cover every account home on the server
      *     NOW (or, with no accounts, include a configured scan root or '/').
@@ -4184,7 +4185,7 @@ This file was removed and not kept. Restore it from your backups
     public static function isServerWideJob(array $job, ?array &$homes = null): bool
     {
         $by = trim((string) ($job['requested_by'] ?? ''));
-        if (!in_array($by, ['', '@schedule', '@operator'], true)) { return false; }
+        if (!in_array($by, ['', '@schedule', '@operator', '@cli'], true)) { return false; }
 
         $paths = [];
         foreach (explode(',', (string) ($job['scan_path'] ?? '')) as $p) {

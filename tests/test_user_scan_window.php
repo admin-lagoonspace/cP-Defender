@@ -43,7 +43,7 @@ Database::setSetting('user_scan_starts_' . $U, json_encode([$now - 3600, $now - 
 t_ok(UserScanRequest::atLimit($U),
      'THE LIMIT: two inside the window and the third is refused');
 
-$wait = UserScanRequest::retryIn($U);
+$wait = UserScanRequest::retryIn($U, $now);   // one clock: a second tick gave 39599
 t_ok($wait > 0, 'which reports a wait');
 t_eq(12 * 3600 - 3600, $wait,
      'measured from the OLDEST start, because that is the one whose expiry '

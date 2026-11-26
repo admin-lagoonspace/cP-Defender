@@ -26,7 +26,8 @@ heading or touch VERSION mid-week._
   a failed or interrupted scan did the same. And while any scan ran, the
   newest row had no finish time, so a server scanned every night read "Not
   yet scanned". Now green needs a `done` scan that covered the whole server
-  (scheduled, or an operator/CLI scan over every account home or `/home`),
+  (scheduled, or an operator or `serverscrub scan` CLI scan over every
+  account home or `/home`),
   at most 8 days old. A customer's one-account scan never counts toward it.
   A scan that was cancelled, failed or interrupted shows amber "Last scan did
   not finish" unless a complete scan within 8 days exists, in which case the

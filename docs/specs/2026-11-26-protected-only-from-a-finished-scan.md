@@ -67,7 +67,7 @@ None blocking. These assumptions are labelled so Shakaal can check them:
 ## Wasooli: what was done (2026-11-26)
 - **Correction applied (from the orchestrator):** only server-wide `done` scans
   count toward green. `Scanner::isServerWideJob()`: `requested_by` must be
-  `''`, `@schedule` or `@operator`, and the paths must include `/` or cover
+  `''`, `@schedule`, `@operator` or `@cli` (the last added after Shakaal's review), and the paths must include `/` or cover
   every account home that exists NOW. The row records no "all accounts" flag
   (a quick scan of /home is stored as the expanded list of homes), so this is
   the strictest derivable reading: an account added after the last sweep
