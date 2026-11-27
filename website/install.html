@@ -3,129 +3,161 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Installation — ServerScrub</title>
-<meta name="description" content="Install ServerScrub on a cPanel server with one command, update it in place, and remove it cleanly.">
-<link rel="icon" href="/assets/img/favicon.png" type="image/png">
+<title>Install — ServerScrub</title>
+<meta name="description" content="Install ServerScrub on a cPanel server with one command, as root.">
+<link rel="canonical" href="https://www.serverscrub.com/install.html">
+<link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/img/favicon.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/assets/img/icon-180.png">
 <link rel="stylesheet" href="/assets/css/site.css">
+<meta property="og:title" content="Install — ServerScrub">
+<meta property="og:description" content="Install ServerScrub on a cPanel server with one command, as root.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://www.serverscrub.com/install.html">
 </head>
 <body>
 
-<header>
-  <div class="wrap nav">
-    <a class="brand" href="/">
-      <img src="/assets/img/mark-64.png" alt="" width="64" height="64">
-      <span class="wm">Server<b>Scrub</b></span>
-    </a>
-    <nav>
+<a class="skip" href="#main">Skip to content</a>
+<header class="masthead">
+  <div class="wrap bar">
+    <a class="brand" href="/"><img src="/assets/img/logo.svg" alt="ServerScrub home" width="222" height="28"></a>
+    <nav aria-label="Main">
       <a href="/features.html">Features</a>
       <a href="/pricing.html">Pricing</a>
-      <a href="/install.html" class="hide-sm">Install</a>
-      <a class="btn btn-primary" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
+      <a href="/install.html" aria-current="page">Install</a>
+      <a class="btn btn-signal" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
     </nav>
   </div>
 </header>
 
-<div class="hero" style="padding:58px 0 40px">
-  <div class="wrap" style="max-width:760px">
-    <span class="eyebrow">Installation</span>
-    <h1 style="font-size:2.45rem">One command, as root.</h1>
+<main id="main">
+
+<div class="page-head">
+  <div class="wrap">
+    <h1>Installation</h1>
     <p class="lede">
-      The installer detects cPanel, installs its dependencies, registers itself in WHM
-      and in every cPanel account, writes its cron entries and starts the first scan.
+      One command, as root. The installer detects cPanel, installs its dependencies,
+      registers itself in WHM and in every cPanel account, writes its cron entries and
+      starts the first scan.
     </p>
   </div>
 </div>
 
-<section style="padding-top:24px">
-  <div class="wrap" style="max-width:760px">
-
-    <div class="sec-head"><h2>Before you start</h2></div>
-    <ul style="color:#3b4754;font-size:.97rem">
-      <li>cPanel or WHM on a RHEL-family system — AlmaLinux, Rocky, CloudLinux or CentOS</li>
-      <li>Root shell access</li>
-      <li>A licence key from your order</li>
+<section class="section">
+  <div class="wrap sheet">
+    <div class="sheet-head">
+      <h2>Before you start</h2>
+    </div>
+    <ul class="rows">
+      <li class="row">cPanel or WHM on a RHEL-family system: AlmaLinux, Rocky, CloudLinux or CentOS</li>
+      <li class="row">Root shell access</li>
+      <li class="row">A licence key from your order</li>
     </ul>
+  </div>
+</section>
 
-    <div class="sec-head" style="margin-top:42px"><h2>Install</h2></div>
-<pre><code><span class="c"># as root</span>
-bash &lt;(curl -fsSL https://serverscrub.com/serverscrub/code/get.sh)</code></pre>
-    <p style="color:#3b4754;font-size:.96rem">
-      When it finishes, open <strong>WHM &rarr; Plugins &rarr; ServerScrub</strong> and
-      enter your licence key. Every cPanel account on the server also gains a
-      <strong>ServerScrub Security</strong> entry in its own Security section, with no
-      further work.
-    </p>
+<section class="section band">
+  <div class="wrap">
+    <h2>Install</h2>
+    <ol class="steps">
+      <li>
+        <h3>Run the installer as root</h3>
+<pre class="cmd"><code><span class="c"># with curl (RHEL, AlmaLinux, Rocky, CloudLinux)</span>
+bash &lt;(curl -fsSL https://serverscrub.com/releases/get.sh)</code></pre>
+<pre class="cmd"><code><span class="c"># or with wget, if curl is not installed</span>
+bash &lt;(wget -qO- https://serverscrub.com/releases/get.sh)</code></pre>
+        <p class="fine">Both behave the same once running. The <code>bash &lt;(…)</code> form
+          keeps your terminal attached, so the installer can ask its questions.</p>
+      </li>
+      <li>
+        <h3>Enter your licence key in WHM</h3>
+        <p>When it finishes, open WHM, then Plugins, then ServerScrub, and enter your
+           licence key.</p>
+      </li>
+      <li>
+        <h3>Your customers get their own page</h3>
+        <p>Every cPanel account on the server gains a ServerScrub Security entry in its
+           own Security section, with no further work.</p>
+      </li>
+    </ol>
+  </div>
+</section>
 
-    <div class="sec-head" style="margin-top:42px"><h2>Update</h2></div>
-<pre><code>bash /usr/local/serverscrub/update.sh --yes</code></pre>
-    <p style="color:#3b4754;font-size:.96rem">
-      Updates overlay the code and preserve everything else: the database, your
-      settings, the quarantine, the logs and any custom signatures. ServerScrub also
-      checks for updates on its own and can apply them for you if you let it.
-    </p>
-
-    <div class="sec-head" style="margin-top:42px"><h2>Check it is running</h2></div>
-<pre><code><span class="c"># what version is installed</span>
+<section class="section">
+  <div class="wrap sheet">
+    <div class="sheet-head">
+      <h2>Afterwards</h2>
+      <p>Updating, checking and removing.</p>
+    </div>
+    <div class="rows">
+      <div class="row">
+        <h3>Update</h3>
+<pre class="cmd"><code>bash /usr/local/serverscrub/update.sh --yes</code></pre>
+        <p>Updates overlay the code and preserve everything else: the database, your
+           settings, the quarantine, the logs and any custom signatures. ServerScrub also
+           checks for updates on its own and can apply them for you if you let it.</p>
+      </div>
+      <div class="row">
+        <h3>Check it is running</h3>
+<pre class="cmd"><code><span class="c"># what version is installed</span>
 grep SG_VERSION /usr/local/serverscrub/backend/config/config.php
 
 <span class="c"># what the scheduler is doing</span>
 php /usr/local/serverscrub/backend/cron/scheduler.php --status</code></pre>
-
-    <div class="sec-head" style="margin-top:42px"><h2>Remove</h2></div>
-<pre><code>bash /usr/local/serverscrub/uninstall.sh</code></pre>
-    <p style="color:#3b4754;font-size:.96rem">
-      This removes the application, its cron entries and its WHM and cPanel
-      registrations. The quarantine is deliberately left behind — deleting the evidence
-      of a compromise on the way out is not a decision an uninstaller should make for
-      you. Remove <code>/home/malscan_quarantine</code> yourself once you are satisfied
-      you no longer need it.
-    </p>
-
-    <div class="sec-head" style="margin-top:42px"><h2>If the install cannot reach us</h2></div>
-    <p style="color:#3b4754;font-size:.96rem">
-      Some servers block outbound access to GitHub, and some block everything except a
-      short allow list. The installer tries our own download host first and falls back
-      to a GitHub mirror, so one being unreachable is not fatal. If both are blocked,
-      allow <code>serverscrub.com</code> on port 443 and run it again.
-    </p>
-
-  </div>
-</section>
-
-<section class="alt">
-  <div class="wrap" style="text-align:center">
-    <div class="sec-head center">
-      <h2>Not licensed yet?</h2>
-      <p>$10 per month, per server, with every account on it covered.</p>
+      </div>
+      <div class="row">
+        <h3>Remove</h3>
+<pre class="cmd"><code>bash /usr/local/serverscrub/uninstall.sh</code></pre>
+        <p>This removes the application, its cron entries and its WHM and cPanel
+           registrations. The quarantine is deliberately left behind: deleting the evidence
+           of a compromise on the way out is not a decision an uninstaller should make for
+           you. Remove <code>/home/malscan_quarantine</code> yourself once you are satisfied
+           you no longer need it.</p>
+      </div>
+      <div class="row">
+        <h3>If the install cannot reach us</h3>
+        <p>Some servers block outbound access to GitHub, and some block everything except a
+           short allow list. The installer tries our own download host first and falls back
+           to a GitHub mirror, so one being unreachable is not fatal. If both are blocked,
+           allow <code>serverscrub.com</code> on port 443 and run it again.</p>
+      </div>
     </div>
-    <a class="btn btn-primary btn-lg" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
   </div>
 </section>
 
-<footer>
+</main>
+
+<section class="closer">
+  <div class="wrap closer-in">
+    <div>
+      <h2>$10 a month, per server</h2>
+      <p>Every account on the server is covered, however many there are.</p>
+    </div>
+    <a class="btn btn-signal btn-lg" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
+  </div>
+</section>
+
+<footer class="foot">
   <div class="wrap">
     <div class="foot-grid">
-      <div style="max-width:300px">
-        <a class="brand" href="/" style="margin-bottom:12px">
-          <img src="/assets/img/logo.png" alt="ServerScrub" width="480" height="304">
-        </a>
-        <p style="margin:0;color:#9db4cd">Server security for cPanel and WHM. One agent, every account.</p>
+      <div class="foot-brand">
+        <img src="/assets/img/logo.svg" alt="ServerScrub" width="254" height="32">
+        <p>Server security for cPanel and WHM. One agent, every account.</p>
       </div>
-      <div>
-        <h4>Product</h4>
+      <nav aria-label="Product">
+        <p class="foot-h">Product</p>
         <a href="/features.html">Features</a>
         <a href="/pricing.html">Pricing</a>
         <a href="/install.html">Installation</a>
         <a href="/status.html">Release status</a>
-      </div>
-      <div>
-        <h4>Get started</h4>
+      </nav>
+      <nav aria-label="Account">
+        <p class="foot-h">Get started</p>
         <a href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
         <a href="https://clientarea.lagoonspace.net/">Client area</a>
-      </div>
+      </nav>
     </div>
-    <div class="foot-bot">&copy; 2026 ServerScrub. All rights reserved.</div>
+    <p class="foot-bot">&copy; 2026 ServerScrub. All rights reserved.</p>
   </div>
 </footer>
 

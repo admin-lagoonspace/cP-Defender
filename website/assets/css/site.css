@@ -1,212 +1,397 @@
-/* ServerScrub — marketing site
-   One stylesheet, no framework, no build step. The site is four static pages
-   uploaded to a cPanel docroot; adding a toolchain to that would be a cost
-   with nothing on the other side of it. */
+/* ServerScrub marketing site.
+ *
+ * Direction: the front of a rack server. Brushed-aluminium page, graphite
+ * faceplates with vent perforations and indicator lights, and headings set in
+ * DIN-style condensed type, the face used on equipment labels. One faceplate
+ * per page carries the weight; everything else stays quiet and engineered.
+ *
+ * Fonts are system stacks on purpose: no third-party host sees a visitor to a
+ * security vendor's site, and nothing is fetched that the deploy cannot check.
+ * Hex colours live only in :root. Pages use the tokens, never literals.
+ */
 
-/* The palette is the LOGO's, sampled from frontend/images/logo.png rather
- * than chosen. Counting pixels by hue family gave:
- *
- *   green  10,948 px  #00b038 / #00b040   the word "Scrub" and the swoosh
- *   navy   21,096 px  #000820 / #000828   the shield body
- *   blue               #009cf0 / #0090f0  the shield highlight
- *   grey    2,361 px  #708098             the metallic word "Server"
- *
- * An earlier version of this file used #1668b3, which appears nowhere in the
- * artwork. A brand colour is not a judgement call when the logo is sitting
- * right there to be measured. */
 :root {
-  --ink:#0b1420; --ink-2:#36434f; --dim:#6b7784; --line:#dde4ec;
-  --bg:#ffffff; --bg-2:#f5f8fb; --bg-3:#e9eff6;
+  /* colour */
+  --alu: #e8ebee;          /* page */
+  --alu-2: #dde1e6;        /* inset bands, code plates */
+  --plate: #f6f7f8;        /* raised light surfaces */
+  --ink: #1b2430;          /* text, and the graphite faceplate */
+  --ink-2: #4a5563;        /* secondary text, 6.3:1 on --alu */
+  --rule: #c3c9d1;
+  --signal: #2747d0;       /* links, primary action, 6.0:1 on --alu */
+  --signal-2: #1d37a6;     /* hover */
+  --on-ink: #e8ebee;
+  --on-ink-2: #a9b3bf;     /* 7.3:1 on --ink */
+  --led: #6e94ff;          /* signal on graphite, 5.4:1 */
+  --vent: #2c3644;
+  --screw: #3a4555;
+  --ok: #1d6b37;           /* status: >= 5.9:1 on --plate, >= 5.3:1 on their -bg */
+  --warn: #8a5300;
+  --bad: #b3261e;
+  --ok-bg: #e3f1e7;
+  --warn-bg: #f7ecd9;
+  --bad-bg: #f8e3e1;
 
-  --navy:#001a3d;          /* shield body — headers, footers, code blocks */
-  --navy-2:#002a5e;
-  --brand:#0090f0;         /* shield highlight — links, primary actions */
-  --brand-dk:#0074c8;
-  --brand-lt:#e6f4fe;
-  --green:#00b03c;         /* "Scrub" — success, confirmation, the CTA accent */
-  --green-dk:#009432;
+  /* type */
+  --f-display: Bahnschrift, "DIN Alternate", "DIN Condensed", "Barlow Semi Condensed",
+               "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --f-mono: ui-monospace, "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+  --t-sm: .875rem;
+  --t-base: 1.0625rem;
+  --t-md: 1.25rem;
+  --t-lg: 1.625rem;
+  --t-xl: clamp(2rem, 1.4rem + 2.6vw, 3rem);
+  --t-hero: clamp(2.4rem, 1.5rem + 4.2vw, 4.5rem);
 
-  --good:#00b03c; --warn:#b26a00; --bad:#d93a2b;
-  --radius:10px; --maxw:1120px;
-  --shadow:0 1px 2px rgba(0,26,61,.06), 0 8px 24px rgba(0,26,61,.08);
+  /* space, shape, depth */
+  --s1: .25rem; --s2: .5rem; --s3: .75rem; --s4: 1rem; --s5: 1.5rem;
+  --s6: 2rem; --s7: 3rem; --s8: 4.5rem; --s9: 6.5rem;
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-plate: 14px;
+  --edge: inset 0 1px 0 rgba(255, 255, 255, .06), inset 0 -1px 0 rgba(0, 0, 0, .35);
+  --lift: 0 1px 0 rgba(255, 255, 255, .8) inset, 0 1px 2px rgba(27, 36, 48, .08);
+  --measure: 68ch;
+  --wrap: 1160px;
 }
 
-* { box-sizing:border-box; }
-html { scroll-behavior:smooth; }
+/* ── base ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
 body {
-  margin:0; background:var(--bg); color:var(--ink);
-  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  -webkit-font-smoothing:antialiased;
+  margin: 0;
+  background: var(--alu);
+  color: var(--ink);
+  font: 400 var(--t-base)/1.6 var(--f-body);
+  overflow-wrap: break-word;
 }
-img, svg { max-width:100%; }
-a { color:var(--brand); text-decoration:none; }
-a:hover { text-decoration:underline; }
-.wrap { max-width:var(--maxw); margin:0 auto; padding:0 22px; }
+img, svg { max-width: 100%; height: auto; display: block; }
+a { color: var(--signal); text-underline-offset: .18em; }
+a:hover { color: var(--signal-2); }
+:focus-visible { outline: 3px solid var(--signal); outline-offset: 3px; border-radius: 2px; }
+p { margin: 0 0 var(--s4); max-width: var(--measure); }
 
-/* ── Header ───────────────────────────────────────────────────────────── */
-header {
-  position:sticky; top:0; z-index:40; background:rgba(255,255,255,.92);
-  backdrop-filter:saturate(180%) blur(8px); border-bottom:1px solid var(--line);
+h1, h2, h3 {
+  font-family: var(--f-display);
+  font-stretch: 87.5%;
+  font-weight: 600;
+  line-height: 1.08;
+  letter-spacing: -.01em;
+  margin: 0 0 var(--s4);
+  text-wrap: balance;
 }
-.nav { display:flex; align-items:center; gap:28px; height:64px; }
-/* The header uses the MARK plus a text wordmark, not the full lockup.
- *
- * logo.png is a 480x304 lockup whose wordmark fills the lower half. Scaled to
- * a 38px-tall header it renders the word "ServerScrub" at roughly six pixels
- * and reads as a smudge -- which is what the first version of this did. The
- * shield alone survives being small; the words are set in type instead, in the
- * logo's own colours. The full lockup is kept for the footer, where it has the
- * width to be legible. */
-.brand { display:inline-flex; align-items:center; gap:9px; }
-.brand:hover { text-decoration:none; }
-.brand img { height:34px; width:34px; display:block; }
-.brand .wm { font-size:1.16rem; font-weight:700; letter-spacing:-.02em;
-             color:var(--navy); line-height:1; white-space:nowrap; }
-.brand .wm b { color:var(--green); font-weight:700; }
+h1 { font-size: var(--t-xl); }
+h2 { font-size: var(--t-lg); }
+h3 { font-size: var(--t-md); line-height: 1.2; margin-bottom: var(--s2); }
 
-footer .brand { display:block; }
-footer .brand img { height:auto; width:168px; }
-.nav nav { display:flex; gap:22px; margin-left:auto; align-items:center; }
-.nav nav a { color:var(--ink-2); font-size:.94rem; font-weight:500; }
-.nav nav a:hover { color:var(--brand); text-decoration:none; }
+code, pre { font-family: var(--f-mono); font-size: .9em; }
+:not(pre) > code {
+  background: var(--alu-2);
+  padding: .1em .35em;
+  border-radius: var(--r-sm);
+}
 
-/* ── Buttons ──────────────────────────────────────────────────────────── */
+.wrap { width: 100%; max-width: var(--wrap); margin: 0 auto; padding: 0 var(--s4); }
+@media (min-width: 768px) { .wrap { padding: 0 var(--s6); } }
+
+.skip {
+  position: absolute; left: var(--s4); top: -100px; z-index: 10;
+  background: var(--ink); color: var(--on-ink);
+  padding: var(--s2) var(--s4); border-radius: var(--r-sm);
+}
+.skip:focus { top: var(--s2); color: var(--on-ink); }
+
+/* ── masthead ─────────────────────────────────────────────────────────────── */
+.masthead { border-bottom: 1px solid var(--rule); background: var(--alu); }
+.bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--s3) var(--s5); padding-top: var(--s4); padding-bottom: var(--s4);
+}
+.brand { display: inline-flex; flex: none; }
+.brand img { width: 222px; height: 28px; }
+@media (max-width: 559px) { .brand img { width: 206px; height: 26px; } }
+.bar nav { display: flex; align-items: center; gap: var(--s1) var(--s2); flex-wrap: wrap; }
+.bar nav a:not(.btn) {
+  color: var(--ink); text-decoration: none; font-weight: 500;
+  padding: var(--s2) var(--s3); border-radius: var(--r-sm);
+}
+.bar nav a:not(.btn):hover { background: var(--alu-2); color: var(--ink); }
+.bar nav a[aria-current="page"] { box-shadow: inset 0 -2px 0 var(--signal); border-radius: 0; }
+@media (max-width: 559px) {
+  .bar nav { width: 100%; justify-content: space-between; flex-wrap: nowrap; gap: 0; }
+  .bar nav a:not(.btn) { padding: var(--s2) var(--s1); font-size: var(--t-sm); }
+  .bar nav .btn { font-size: var(--t-sm); padding: .6em .8em; }
+}
+
+/* ── buttons ──────────────────────────────────────────────────────────────── */
 .btn {
-  display:inline-block; font-weight:600; font-size:.95rem; padding:11px 22px;
-  border-radius:8px; border:1px solid transparent; cursor:pointer; transition:.15s;
+  display: inline-flex; align-items: center; justify-content: center;
+  font: 600 var(--t-base)/1 var(--f-display); font-stretch: 87.5%;
+  letter-spacing: .01em; text-decoration: none;
+  padding: .8em 1.15em; border-radius: var(--r-md); border: 1px solid transparent;
 }
-.btn:hover { text-decoration:none; transform:translateY(-1px); }
-.btn-primary { background:var(--green); color:#fff; border-color:var(--green); }
-.btn-primary:hover { background:var(--green-dk); color:#fff; }
-.btn-ghost { background:#fff; color:var(--ink); border-color:var(--line); }
-.btn-ghost:hover { border-color:var(--brand); color:var(--brand); }
-.btn-lg { font-size:1.02rem; padding:14px 30px; }
+.btn-signal { background: var(--signal); color: var(--plate); }
+.btn-signal:hover { background: var(--signal-2); color: var(--plate); }
+.btn-line { border-color: currentColor; color: var(--ink); }
+.btn-line:hover { background: var(--alu-2); color: var(--ink); }
+.btn-lg { font-size: var(--t-md); padding: .85em 1.3em; }
+.bar .btn { padding: .65em 1em; }
 
-/* ── Hero ─────────────────────────────────────────────────────────────── */
-.hero { padding:76px 0 64px;
-        background:linear-gradient(170deg,var(--brand-lt) 0%, #f7fbff 48%, #fff 100%); }
-.hero-grid { display:grid; grid-template-columns:1.05fr .95fr; gap:52px; align-items:center; }
-.eyebrow {
-  display:inline-block; font-size:.76rem; font-weight:700; letter-spacing:.09em;
-  text-transform:uppercase; color:var(--navy); background:#fff;
-  border:1px solid #c7e2f7; padding:5px 12px; border-radius:999px; margin-bottom:18px;
+/* ── the faceplate: one per page, the memorable thing ─────────────────────── */
+.plate {
+  position: relative;
+  background:
+    radial-gradient(circle at 18px 18px, var(--screw) 0 5px, transparent 6px),
+    radial-gradient(circle at calc(100% - 18px) 18px, var(--screw) 0 5px, transparent 6px),
+    radial-gradient(circle at 18px calc(100% - 18px), var(--screw) 0 5px, transparent 6px),
+    radial-gradient(circle at calc(100% - 18px) calc(100% - 18px), var(--screw) 0 5px, transparent 6px),
+    var(--ink);
+  color: var(--on-ink);
+  border-radius: var(--r-plate);
+  box-shadow: var(--edge), 0 18px 40px -24px rgba(27, 36, 48, .55);
+  padding: var(--s7) var(--s5);
 }
-h1 { font-size:2.9rem; line-height:1.12; letter-spacing:-.025em; margin:0 0 18px; }
-.lede { font-size:1.14rem; color:var(--ink-2); margin:0 0 28px; max-width:34em; }
-.hero-cta { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
-.hero-note { font-size:.85rem; color:var(--dim); margin-top:14px; }
+@media (min-width: 768px) { .plate { padding: var(--s8) var(--s7); } }
+.plate a:not(.btn) { color: var(--led); }
+.plate p { color: var(--on-ink-2); }
+.plate .btn-line { color: var(--on-ink); }
+.plate .btn-line:hover { background: var(--vent); color: var(--on-ink); }
+.plate :focus-visible { outline-color: var(--led); }
 
-/* ── Sections ─────────────────────────────────────────────────────────── */
-section { padding:72px 0; }
-section.alt { background:var(--bg-2); border-block:1px solid var(--line); }
-.sec-head { max-width:46em; margin:0 0 44px; }
-.sec-head h2 { font-size:2rem; letter-spacing:-.02em; margin:0 0 12px; }
-.sec-head p { color:var(--ink-2); font-size:1.05rem; margin:0; }
-.center { text-align:center; margin-inline:auto; }
-
-/* ── Cards ────────────────────────────────────────────────────────────── */
-.grid { display:grid; gap:20px; }
-.g2 { grid-template-columns:repeat(2,1fr); }
-.g3 { grid-template-columns:repeat(3,1fr); }
-.card {
-  background:#fff; border:1px solid var(--line); border-radius:var(--radius);
-  padding:26px; box-shadow:var(--shadow);
+.hero { padding: var(--s5) 0 var(--s8); }
+.hero-plate { display: grid; gap: var(--s6); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 960px) {
+  .hero-plate { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); align-items: stretch; }
 }
-.card h3 { margin:14px 0 8px; font-size:1.06rem; letter-spacing:-.01em; }
-.card p { margin:0; color:var(--ink-2); font-size:.94rem; }
-.card .ico { width:38px; height:38px; color:var(--brand); }
+.hero h1 { font-size: var(--t-hero); font-weight: 700; line-height: 1; margin-bottom: var(--s5); max-width: 15ch; }
+.hero .lede { font-size: var(--t-md); line-height: 1.55; color: var(--on-ink-2); max-width: 46ch; }
+.cta-row { display: flex; flex-wrap: wrap; gap: var(--s3); margin: var(--s5) 0 var(--s3); }
+.fine { font-size: var(--t-sm); color: var(--ink-2); }
+.plate .fine { color: var(--on-ink-2); }
 
-/* ── Feature list (features page) ─────────────────────────────────────── */
-.feat { display:grid; grid-template-columns:44px 1fr; gap:18px; padding:24px 0;
-        border-bottom:1px solid var(--line); }
-.feat:last-child { border-bottom:0; }
-.feat .ico { width:38px; height:38px; color:var(--brand); margin-top:3px; }
-.feat h3 { margin:0 0 6px; font-size:1.08rem; }
-.feat p { margin:0 0 8px; color:var(--ink-2); font-size:.96rem; }
-.feat ul { margin:8px 0 0; padding-left:18px; color:var(--ink-2); font-size:.92rem; }
-.feat li { margin:3px 0; }
-
-/* ── Pricing ──────────────────────────────────────────────────────────── */
-.price-card {
-  max-width:460px; margin:0 auto; background:#fff; border:2px solid var(--green);
-  border-radius:14px; padding:38px 34px; text-align:center; box-shadow:var(--shadow);
+/* The vent: a perforated bay with the four channels racked into it. The
+ * channels fill the bay edge to edge, so the perforation shows only in the
+ * gaps between units, the way blanking plates sit between servers. */
+.vent {
+  border-radius: var(--r-md);
+  background:
+    radial-gradient(circle, var(--vent) 2.2px, transparent 2.6px) 0 0 / 11px 11px,
+    rgba(0, 0, 0, .18);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, .4);
+  padding: var(--s3);
+  display: grid; grid-auto-rows: 1fr; gap: var(--s3);
+  align-self: center;
 }
-.price { font-size:3.5rem; font-weight:700; letter-spacing:-.03em; line-height:1; }
-.price span { font-size:1rem; font-weight:500; color:var(--dim); letter-spacing:0; }
-.price-card ul { text-align:left; list-style:none; padding:0; margin:26px 0 30px; }
-.price-card li { padding:7px 0 7px 28px; position:relative; color:var(--ink-2); font-size:.95rem; }
-.price-card li::before {
-  content:""; position:absolute; left:2px; top:14px; width:13px; height:7px;
-  border-left:2.5px solid var(--green); border-bottom:2.5px solid var(--green);
-  transform:rotate(-45deg);
+.chan {
+  position: relative;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--s4);
+  background: linear-gradient(var(--screw), var(--ink) 2px);
+  border-radius: var(--r-sm);
+  box-shadow: var(--edge);
+  padding: var(--s3) 3.25rem var(--s3) var(--s4);
+  font: 600 var(--t-md)/1.15 var(--f-display); font-stretch: 87.5%;
+  color: var(--on-ink);
 }
-
-/* ── Code blocks ──────────────────────────────────────────────────────── */
-pre {
-  background:var(--navy); color:#dbe9f7; padding:18px 20px; border-radius:var(--radius);
-  overflow-x:auto; font:13.5px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  margin:0 0 18px;
+.chan small {
+  display: block; margin-top: .2em;
+  font: 400 var(--t-sm)/1.35 var(--f-body); color: var(--on-ink-2);
 }
-pre .c { color:#8b98a5; }
-code { font:.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-       background:var(--bg-3); padding:2px 6px; border-radius:4px; }
-pre code { background:none; padding:0; }
-
-/* ── Stats strip ──────────────────────────────────────────────────────── */
-.stats { display:grid; grid-template-columns:repeat(4,1fr); gap:20px; text-align:center; }
-.stat .n { font-size:2.1rem; font-weight:700; letter-spacing:-.02em; color:var(--navy); }
-.stat .l { font-size:.86rem; color:var(--dim); }
-
-/* ── Footer ───────────────────────────────────────────────────────────── */
-footer { background:var(--navy); border-top:0; padding:46px 0 34px;
-         font-size:.9rem; color:#9db4cd; }
-.foot-grid { display:flex; gap:40px; flex-wrap:wrap; justify-content:space-between;
-             margin-bottom:28px; }
-footer h4 { color:#fff; font-size:.86rem; text-transform:uppercase;
-            letter-spacing:.06em; margin:0 0 12px; }
-footer a { color:#c3d6e8; display:block; padding:3px 0; }
-footer a:hover { color:#fff; }
-.foot-bot { border-top:1px solid rgba(255,255,255,.14); padding-top:20px; color:#8aa4bf; }
-
-/* ── Responsive ───────────────────────────────────────────────────────── */
-@media (max-width:900px) {
-  .hero-grid, .g3, .g2, .stats { grid-template-columns:1fr; }
-  .stats { grid-template-columns:repeat(2,1fr); }
-  h1 { font-size:2.2rem; }
-  .nav nav a.hide-sm { display:none; }
-  section { padding:52px 0; }
+/* The unit's handle grille, at the right-hand end of each channel. */
+.chan::after {
+  content: ""; position: absolute; right: var(--s4); top: 50%;
+  width: 1.4rem; height: 1.3rem; transform: translateY(-50%);
+  background: repeating-linear-gradient(var(--vent) 0 2px, transparent 2px 5px);
+}
+.led {
+  flex: none; width: 12px; height: 12px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, .85) 0 1.5px, var(--led) 3.5px);
+  box-shadow: 0 0 0 3px rgba(110, 148, 255, .2), 0 0 14px 2px rgba(110, 148, 255, .75);
+}
+/* The single moment of motion: the lights come on in order, once. */
+@media (prefers-reduced-motion: no-preference) {
+  .vent .led { animation: power-on .5s ease-out both; }
+  .vent .chan:nth-child(2) .led { animation-delay: .25s; }
+  .vent .chan:nth-child(3) .led { animation-delay: .5s; }
+  .vent .chan:nth-child(4) .led { animation-delay: .75s; }
+  @keyframes power-on { from { opacity: .15; box-shadow: none; } }
 }
 
-/* The header stacks rather than overflowing.
- *
- * It was one flex row at every width, with the links pushed right by
- * margin-left:auto. Below about 600px there is no space left to push into, so
- * the brand ran straight into the first link and the Order button hung off
- * the right edge of the screen -- on the page whose entire job is to get that
- * button pressed. */
-@media (max-width:620px) {
-  /* Keep .wrap gutter: padding:12px 0 here would override the 0 22px that
-     .wrap sets, and the nav then runs edge to edge. */
-  .nav { flex-wrap:wrap; height:auto; padding:12px 22px; gap:10px; }
-  .brand { font-size:1rem; }
-  .nav nav {
-    margin-left:0; width:100%; gap:16px; flex-wrap:wrap;
-    align-items:center; justify-content:flex-start;
-  }
-  .nav nav a { font-size:.9rem; }
-  .nav nav a.btn { margin-left:auto; padding:9px 16px; font-size:.88rem; }
-  h1 { font-size:1.95rem; }
-  .lede { font-size:1.04rem; }
-  .hero { padding:44px 0 40px; }
-  .hero-cta { flex-direction:column; align-items:stretch; }
-  .hero-cta .btn { text-align:center; }
-  .feat { grid-template-columns:1fr; gap:10px; }
-  .price-card { padding:30px 22px; }
-  .price { font-size:2.9rem; }
-  .foot-grid { flex-direction:column; gap:26px; }
+/* The install line, engraved along the bottom of the plate. */
+.label-strip {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--vent);
+  padding-top: var(--s5);
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2) var(--s4);
+}
+.label-strip span { font: 500 var(--t-sm)/1.4 var(--f-display); font-stretch: 87.5%; color: var(--on-ink-2); }
+.label-strip code {
+  flex: 1 1 auto; min-width: 0; max-width: 100%;
+  background: none; padding: 0 0 var(--s1); color: var(--on-ink);
+  font-size: var(--t-sm);
+  /* One line, scrolled sideways on a phone. Breaking it anywhere put a line
+   * break in the middle of the URL, which reads as a typo in the one
+   * command a customer copies. */
+  white-space: pre; overflow-wrap: normal; overflow-x: auto;
 }
 
-/* Long shell commands must not force the whole page sideways. */
-@media (max-width:620px) {
-  pre { font-size:12px; padding:14px; }
+/* ── sections ─────────────────────────────────────────────────────────────── */
+.section { padding: var(--s8) 0; }
+.section + .section { border-top: 1px solid var(--rule); }
+.page-head { padding: var(--s8) 0 var(--s6); }
+.page-head .lede { font-size: var(--t-md); color: var(--ink-2); max-width: 58ch; }
+
+/* Spec sheet: heading column beside a column of rows. */
+.sheet { display: grid; gap: var(--s5) var(--s7); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 900px) { .sheet { grid-template-columns: minmax(0, 1fr) minmax(0, 2.2fr); } }
+.sheet-head { border-top: 6px solid var(--ink); padding-top: var(--s4); }
+.sheet-head h2, .section > .wrap > h2 { font-size: var(--t-xl); font-weight: 700; }
+.sheet-head p { color: var(--ink-2); }
+@media (min-width: 900px) { .sheet-head { position: sticky; top: var(--s5); align-self: start; } }
+.rows { display: grid; gap: 0 var(--s6); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 700px) { .rows.two { grid-template-columns: 1fr 1fr; } }
+.row { padding: var(--s5) 0; border-top: 1px solid var(--rule); }
+/* Each item carries a small rack unit: a status light and a vent. It marks
+ * the start of an item, it does not number or rank them. */
+.row::before, .unit {
+  content: ""; display: block; flex: none;
+  width: 38px; height: 12px; border-radius: 3px;
+  margin-bottom: var(--s3);
+  background:
+    radial-gradient(circle at 8px 50%, var(--led) 0 2.5px, transparent 3.2px),
+    radial-gradient(circle, var(--screw) 1.1px, transparent 1.5px) 16px 0 / 5px 6px repeat-x,
+    var(--ink);
 }
+li.row { display: flex; align-items: center; gap: var(--s4); }
+li.row::before { margin-bottom: 0; }
+.row h3 { font-size: var(--t-md); }
+.row p { color: var(--ink-2); margin-bottom: var(--s2); }
+.row p:last-child { margin-bottom: 0; }
+.row ul { margin: var(--s2) 0 0; padding-left: 1.1em; color: var(--ink-2); }
+.row li { margin: var(--s1) 0; }
+.row li::marker { color: var(--signal); }
+
+/* The band: one dark section per page, below the hero, so the page has a
+ * second weight. A strip of perforation along its top edge, like a vent. */
+.band {
+  position: relative; background: var(--ink); color: var(--on-ink);
+  padding-top: calc(var(--s8) + 14px);
+}
+.section.band + .section, .section + .section.band { border-top: 0; }
+.band::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 14px;
+  background:
+    radial-gradient(circle, var(--vent) 2.2px, transparent 2.6px) 0 1px / 11px 11px,
+    rgba(0, 0, 0, .25);
+}
+.band .sheet-head { border-top-color: var(--led); }
+.band p, .band .row p, .band .row ul, .band .sheet-head p, .band .fine { color: var(--on-ink-2); }
+.band .row { border-top-color: var(--vent); }
+.band .row li::marker { color: var(--led); }
+.band a:not(.btn) { color: var(--led); }
+.band :focus-visible { outline-color: var(--led); }
+.band :not(pre) > code { background: var(--vent); color: var(--on-ink); }
+.band .cmd { background: rgba(0, 0, 0, .28); border-color: var(--vent); border-left-color: var(--led); color: var(--on-ink); }
+.band .cmd .c { color: var(--on-ink-2); }
+.band .steps > li::before { background: var(--led); color: var(--ink); }
+.band .row::before, .band .unit { background:
+    radial-gradient(circle at 8px 50%, var(--led) 0 2.5px, transparent 3.2px),
+    radial-gradient(circle, var(--vent) 1.1px, transparent 1.5px) 16px 0 / 5px 6px repeat-x,
+    var(--screw); }
+
+/* Code plates: commands to copy. */
+.cmd {
+  background: var(--alu-2);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--ink);
+  border-radius: var(--r-sm);
+  padding: var(--s4) var(--s5);
+  margin: 0 0 var(--s4);
+  overflow-x: auto;
+  font-size: var(--t-sm);
+  line-height: 1.7;
+  color: var(--ink);
+}
+.cmd .c { color: var(--ink-2); }
+.cmd-wrap { max-width: 760px; }
+
+/* Ordered steps: install really is a sequence. */
+.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; }
+.steps > li {
+  counter-increment: step; position: relative;
+  padding: 0 0 var(--s6) 3.25rem; max-width: 820px;
+}
+.steps > li::before {
+  content: counter(step);
+  position: absolute; left: 0; top: -.1em;
+  width: 2.2rem; height: 2.2rem; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--ink); color: var(--on-ink);
+  font: 600 var(--t-base)/1 var(--f-display);
+}
+
+/* Price plate */
+.price-plate { display: grid; gap: var(--s6); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 860px) { .price-plate { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); align-items: center; } }
+.plate .price { color: var(--on-ink); }
+.price { font: 700 clamp(4rem, 3rem + 5vw, 7rem)/.9 var(--f-display); font-stretch: 87.5%; letter-spacing: -.02em; margin: 0; }
+.price-unit { font: 500 var(--t-md)/1.3 var(--f-display); font-stretch: 87.5%; color: var(--on-ink-2); margin: var(--s3) 0 var(--s5); }
+.included { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s3); }
+@media (min-width: 560px) { .included { grid-template-columns: 1fr 1fr; gap: var(--s3) var(--s5); } }
+.included li { display: flex; gap: var(--s3); align-items: baseline; color: var(--on-ink); line-height: 1.4; }
+.included .led { transform: translateY(-1px); width: 8px; height: 8px; }
+
+/* Closing call to action, the same on every page. */
+.closer { padding: var(--s8) 0; border-top: 1px solid var(--rule); }
+.closer-in { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s5); }
+.closer h2 { font-size: var(--t-xl); font-weight: 700; margin-bottom: var(--s2); }
+.closer p { color: var(--ink-2); margin: 0; }
+
+/* ── footer ───────────────────────────────────────────────────────────────── */
+.foot { background: var(--alu-2); border-top: 1px solid var(--rule); padding: var(--s7) 0 var(--s5); font-size: var(--t-sm); }
+.foot-grid { display: grid; gap: var(--s6); }
+@media (min-width: 760px) { .foot-grid { grid-template-columns: 2fr 1fr 1fr; } }
+.foot-brand img { width: 254px; height: 32px; margin-bottom: var(--s4); }
+.foot-brand p { color: var(--ink-2); max-width: 34ch; }
+.foot-h { font: 600 var(--t-base)/1.2 var(--f-display); font-stretch: 87.5%; margin: 0 0 var(--s3); color: var(--ink); }
+.foot nav a { display: block; color: var(--ink-2); text-decoration: none; padding: var(--s1) 0; }
+.foot nav a:hover { color: var(--signal); text-decoration: underline; }
+.foot-bot { margin-top: var(--s6); padding-top: var(--s4); border-top: 1px solid var(--rule); color: var(--ink-2); }
+
+/* ── release status (status.html) ─────────────────────────────────────────── */
+.st-banner {
+  border: 1px solid var(--rule); border-left-width: 6px; border-radius: var(--r-md);
+  background: var(--plate); color: var(--ink-2);
+  padding: var(--s4) var(--s5); margin: 0 0 var(--s6); line-height: 1.6;
+}
+.st-banner strong { color: var(--ink); }
+.st-banner.is-ok   { border-color: var(--ok);   background: var(--ok-bg); }
+.st-banner.is-warn { border-color: var(--warn); background: var(--warn-bg); }
+.st-banner.is-bad  { border-color: var(--bad);  background: var(--bad-bg); }
+.st-banner.is-ok strong   { color: var(--ok); }
+.st-banner.is-warn strong { color: var(--warn); }
+.st-banner.is-bad strong  { color: var(--bad); }
+
+.st-grid { display: grid; gap: var(--s4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); margin: 0 0 var(--s6); }
+.st-card { background: var(--plate); border: 1px solid var(--rule); border-radius: var(--r-md); padding: var(--s4) var(--s5); box-shadow: var(--lift); }
+.st-card h2 { font-size: var(--t-base); color: var(--ink-2); margin: 0 0 var(--s2); }
+.st-value { font: 700 var(--t-lg)/1.15 var(--f-display); font-stretch: 87.5%; color: var(--ink); word-break: break-word; }
+.st-note { font-size: var(--t-sm); color: var(--ink-2); margin: var(--s2) 0 0; line-height: 1.55; }
+.st-ok   { color: var(--ok); }
+.st-warn { color: var(--warn); }
+.st-bad  { color: var(--bad); }
+.st-dim  { color: var(--ink-2); }
+.st-panel { background: var(--plate); border: 1px solid var(--rule); border-radius: var(--r-md); padding: var(--s5); margin: 0 0 var(--s5); }
+.st-panel { border-top: 6px solid var(--ink); }
+.st-panel h2 { font-size: var(--t-lg); font-weight: 700; margin-bottom: var(--s2); }
+.st-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--s1) var(--s4); padding: var(--s3) 0; border-bottom: 1px solid var(--rule); }
+.st-row:last-child { border-bottom: 0; }
+.st-row .k { color: var(--ink-2); font-size: var(--t-sm); }
+.st-row .v { font-family: var(--f-mono); font-size: var(--t-sm); text-align: right; }
+.st-row .v:not([class*="st-"]) { color: var(--ink); }
+.st-foot { font-size: var(--t-sm); color: var(--ink-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+ul.rows { list-style: none; margin: 0; padding: 0; }

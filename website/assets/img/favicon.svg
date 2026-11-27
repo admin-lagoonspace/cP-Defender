@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+<!--
+  ServerScrub mark. Hand-built on a 32-unit grid: a squared S drawn as three
+  stacked bars, like units in a rack, whose top terminal is a status light.
+  Ink #1b2430, aluminium #e9ecee, signal #6e94ff (tokens in site.css).
+
+  The PNG and ICO icons are rendered from this file, never edited by hand:
+    python/python.exe scripts/render-site-icons.py
+  which screenshots it in headless Chrome at 32, 64, 180 (opaque) and 16+32
+  for favicon.ico, then writes them beside this file and at website/.
+-->
+<title>ServerScrub</title>
+<rect width="32" height="32" rx="7" fill="#1b2430"/>
+<path d="M18 8H11.5A3 3 0 0 0 8.5 11V13A3 3 0 0 0 11.5 16H20.5A3 3 0 0 1 23.5 19V21A3 3 0 0 1 20.5 24H8.5" fill="none" stroke="#e9ecee" stroke-width="4"/>
+<circle cx="23.2" cy="8" r="2.6" fill="#6e94ff"/>
+</svg>

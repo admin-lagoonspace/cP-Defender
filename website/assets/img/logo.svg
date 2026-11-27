@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 254 32" width="254" height="32">
+<!-- ServerScrub lockup: the mark plus a hand-drawn wordmark (paths, not a
+     font) on the same squared-corner construction as the mark. Drawn at a
+     5-unit stroke so it carries the same weight as the bold condensed
+     headings beside it; the letters are spaced 2.4 units wider than the
+     first monoline cut so the heavier counters stay open at 26px. -->
+<title>ServerScrub</title>
+<rect width="32" height="32" rx="7" fill="#1b2430"/>
+<path d="M18 8H11.5A3 3 0 0 0 8.5 11V13A3 3 0 0 0 11.5 16H20.5A3 3 0 0 1 23.5 19V21A3 3 0 0 1 20.5 24H8.5" fill="none" stroke="#e9ecee" stroke-width="4"/>
+<circle cx="23.2" cy="8" r="2.6" fill="#6e94ff"/>
+<path d="M59 5H49.5A3.5 3.5 0 0 0 46 8.5V12.5A3.5 3.5 0 0 0 49.5 16H55.5A3.5 3.5 0 0 1 59 19.5V23.5A3.5 3.5 0 0 1 55.5 27H45.5M68 19.5H79V15.5A3.5 3.5 0 0 0 75.5 12H71.5A3.5 3.5 0 0 0 68 15.5V23.5A3.5 3.5 0 0 0 71.5 27H79M88 27V15.5A3.5 3.5 0 0 1 91.5 12H96M104.2 12L108.6 27H111.6L116 12M125 19.5H136V15.5A3.5 3.5 0 0 0 132.5 12H128.5A3.5 3.5 0 0 0 125 15.5V23.5A3.5 3.5 0 0 0 128.5 27H136M145 27V15.5A3.5 3.5 0 0 1 148.5 12H153M175 5H165.5A3.5 3.5 0 0 0 162 8.5V12.5A3.5 3.5 0 0 0 165.5 16H171.5A3.5 3.5 0 0 1 175 19.5V23.5A3.5 3.5 0 0 1 171.5 27H161.5M194.5 12H187.5A3.5 3.5 0 0 0 184 15.5V23.5A3.5 3.5 0 0 0 187.5 27H194.5M203.5 27V15.5A3.5 3.5 0 0 1 207 12H211.5M220.5 12V23.5A3.5 3.5 0 0 0 224 27H230.5V12M239.5 5V27H246.5A3.5 3.5 0 0 0 250 23.5V15.5A3.5 3.5 0 0 0 246.5 12H239.5" fill="none" stroke="#1b2430" stroke-width="5" stroke-linejoin="round"/>
+</svg>

@@ -118,9 +118,11 @@ CORROBORATE = _between(UPD, '    # --- CORROBORATE:', '    [[ -z "$DOWNLOAD_URL"
 GATE        = _block(UPD, '    if [[ "$CURRENT_VERSION" == "$LATEST_VERSION" ]]; then', '    fi')
 UPG_DECIDE  = _between(UPG, 'CACHE_BUST="$(date', 'echo -e "  ${BOLD}v${CURRENT}')
 
-BASH = shutil.which('bash') or shutil.which('bash.exe')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _bash import find_bash  # not shutil.which: from PowerShell that is WSL's empty stub
+BASH, _BASH_WHY = find_bash()
 if BASH is None:
-    print('SKIP bash not available; cannot execute the updater blocks')
+    print('SKIP cannot execute the updater blocks: ' + _BASH_WHY)
     sys.exit(0)
 
 CDN  = 'https://cdn.example/releases'

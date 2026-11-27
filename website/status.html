@@ -3,96 +3,82 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerScrub — Release status</title>
+<title>Release status — ServerScrub</title>
 <meta name="description" content="Live publishing status for ServerScrub releases: what the update channels are serving right now, and whether they agree.">
 <meta name="robots" content="noindex">
-<link rel="icon" href="/assets/img/favicon.png" type="image/png">
+<link rel="canonical" href="https://www.serverscrub.com/status.html">
+<link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/img/favicon.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/assets/img/icon-180.png">
 <link rel="stylesheet" href="/assets/css/site.css">
-<style>
-/* Page-local. The marketing stylesheet has no status vocabulary, and adding
-   one to it would change pages this has nothing to do with. */
-.st-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:16px; margin:22px 0 }
-.st-card { background:#0f1b29; border:1px solid #1d2d40; border-radius:12px; padding:18px 20px }
-.st-label { font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:#7f99b4; margin-bottom:6px }
-.st-value { font-size:1.5rem; font-weight:700; color:#e8f0f8; line-height:1.2; word-break:break-word }
-.st-note { font-size:.78rem; color:#9db4cd; margin-top:8px; line-height:1.55 }
-.st-ok   { color:#4ade80 }
-.st-warn { color:#fbbf24 }
-.st-bad  { color:#f87171 }
-.st-dim  { color:#7f99b4 }
-.st-pill { display:inline-block; font-size:.7rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase;
-           padding:3px 9px; border-radius:999px; border:1px solid currentColor; margin-left:8px; vertical-align:middle }
-.st-row { display:flex; justify-content:space-between; align-items:baseline; gap:14px; padding:11px 0; border-bottom:1px solid #16263a }
-.st-row:last-child { border-bottom:0 }
-.st-row .k { color:#9db4cd; font-size:.85rem }
-.st-row .v { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.85rem; color:#e8f0f8; text-align:right }
-.st-banner { border-radius:12px; padding:16px 20px; margin:22px 0; border:1px solid; line-height:1.6; font-size:.92rem }
-.st-cmd { background:#0b1420; border:1px solid #1d2d40; border-radius:10px; padding:14px 16px; margin:14px 0 0;
-          font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.82rem; color:#cfe3f7; overflow-x:auto }
-.st-foot { font-size:.78rem; color:#7f99b4; margin-top:26px; line-height:1.7 }
-</style>
+<meta property="og:title" content="Release status — ServerScrub">
+<meta property="og:description" content="Live publishing status for ServerScrub releases: what the update channels are serving right now, and whether they agree.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://www.serverscrub.com/status.html">
 </head>
 <body>
 
-<header>
-  <div class="wrap nav">
-    <a class="brand" href="/">
-      <img src="/assets/img/mark-64.png" alt="" width="64" height="64">
-      <span class="wm">Server<b>Scrub</b></span>
-    </a>
-    <nav>
+<a class="skip" href="#main">Skip to content</a>
+<header class="masthead">
+  <div class="wrap bar">
+    <a class="brand" href="/"><img src="/assets/img/logo.svg" alt="ServerScrub home" width="222" height="28"></a>
+    <nav aria-label="Main">
       <a href="/features.html">Features</a>
       <a href="/pricing.html">Pricing</a>
-      <a href="/install.html" class="hide-sm">Install</a>
-      <a class="btn btn-primary" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
+      <a href="/install.html">Install</a>
+      <a class="btn btn-signal" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
     </nav>
   </div>
 </header>
 
-<div class="wrap" style="padding:46px 0 60px">
+<main id="main">
 
-  <span class="eyebrow">Release pipeline</span>
-  <h1 style="margin:6px 0 10px">Release status</h1>
-  <p class="lede" style="max-width:70ch">
-    What the update channels are serving <em>right now</em>, read live from your
-    browser. A release is only finished when every channel below agrees, and this
-    page exists because when they disagree, nothing else says so.
-  </p>
+<div class="page-head">
+  <div class="wrap">
+    <h1>Release status</h1>
+    <p class="lede">
+      What the update channels are serving <em>right now</em>, read live from your
+      browser. A release is only finished when every channel below agrees, and this
+      page exists because when they disagree, nothing else says so.
+    </p>
+  </div>
+</div>
+
+<div class="wrap">
 
   <!-- The verdict, written by JS once the readings are in. -->
-  <div id="verdict" class="st-banner" style="border-color:#1d2d40;color:#9db4cd">
+  <div id="verdict" class="st-banner" role="status">
     Reading the channels&hellip;
   </div>
 
   <div class="st-grid">
     <div class="st-card">
-      <div class="st-label">Published</div>
+      <h2>Published</h2>
       <div class="st-value" id="v-published">&hellip;</div>
-      <div class="st-note">The newest release in the source repository. This is the answer everything else is compared against.</div>
+      <p class="st-note">The newest release in the source repository. This is the answer everything else is compared against.</p>
     </div>
     <div class="st-card">
-      <div class="st-label">CDN is serving</div>
+      <h2>CDN is serving</h2>
       <div class="st-value" id="v-cdn">&hellip;</div>
-      <div class="st-note" id="n-cdn">The manifest at the canonical download URL.</div>
+      <p class="st-note" id="n-cdn">The manifest at the canonical download URL.</p>
     </div>
     <div class="st-card">
-      <div class="st-label">Download</div>
+      <h2>Download</h2>
       <div class="st-value" id="v-zip">&hellip;</div>
-      <div class="st-note" id="n-zip">Whether this version&rsquo;s archive can actually be fetched from the CDN.</div>
+      <p class="st-note" id="n-zip">Whether this version&rsquo;s archive can actually be fetched from the CDN.</p>
     </div>
     <div class="st-card">
-      <div class="st-label">Mirror</div>
+      <h2>Mirror</h2>
       <div class="st-value" id="v-mirror">&hellip;</div>
-      <div class="st-note">The GitHub fallback every installed server can reach when the CDN cannot serve a build.</div>
+      <p class="st-note">The GitHub fallback every installed server can reach when the CDN cannot serve a build.</p>
     </div>
   </div>
 
-  <div class="card" style="margin-top:8px">
-    <h3 style="margin:0 0 6px">Every reading</h3>
-    <p class="st-note" style="margin:0 0 10px">
-      The CDN manifest is read twice on purpose &mdash; once normally, once with a
-      cache-busting parameter. That pair is the whole diagnosis: if the two
+  <div class="st-panel">
+    <h2>Every reading</h2>
+    <p class="st-note">
+      The CDN manifest is read twice on purpose: once normally, once with a
+      cache-busting parameter. That pair is the whole diagnosis. If the two
       disagree, a proxy cache is holding an old copy over a correct origin. If
       they agree but trail the published version, the origin itself is behind
       and the sync has not run.
@@ -102,47 +88,57 @@
     </div>
   </div>
 
-  <div class="card" style="margin-top:18px">
-    <h3 style="margin:0 0 6px">Update a server</h3>
-    <p class="st-note" style="margin:0">
+  <div class="st-panel">
+    <h2>Update a server</h2>
+    <p class="st-note">
       The updater asks every channel and takes the newest, falling back to the
       mirror when the CDN cannot serve the archive. So this works whatever the
       rows above say, as long as one channel has the build.
     </p>
-    <pre class="st-cmd" id="cmd">bash /usr/local/serverscrub/update.sh --yes</pre>
+    <pre class="cmd" id="cmd">bash /usr/local/serverscrub/update.sh --yes</pre>
   </div>
 
   <p class="st-foot">
-    Read live from your browser each time this page loads &mdash; nothing here is
+    Read live from your browser each time this page loads. Nothing here is
     cached or precomputed, so it reflects what a server would see at this moment.
     <span id="checked"></span>
   </p>
 
 </div>
 
-<footer>
+</main>
+
+<section class="closer">
+  <div class="wrap closer-in">
+    <div>
+      <h2>$10 a month, per server</h2>
+      <p>Every account on the server is covered, however many there are.</p>
+    </div>
+    <a class="btn btn-signal btn-lg" href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
+  </div>
+</section>
+
+<footer class="foot">
   <div class="wrap">
     <div class="foot-grid">
-      <div style="max-width:300px">
-        <a class="brand" href="/" style="margin-bottom:12px">
-          <img src="/assets/img/logo.png" alt="ServerScrub" width="480" height="304">
-        </a>
-        <p style="margin:0;color:#9db4cd">Server security for cPanel and WHM. One agent, every account.</p>
+      <div class="foot-brand">
+        <img src="/assets/img/logo.svg" alt="ServerScrub" width="254" height="32">
+        <p>Server security for cPanel and WHM. One agent, every account.</p>
       </div>
-      <div>
-        <h4>Product</h4>
+      <nav aria-label="Product">
+        <p class="foot-h">Product</p>
         <a href="/features.html">Features</a>
         <a href="/pricing.html">Pricing</a>
         <a href="/install.html">Installation</a>
         <a href="/status.html">Release status</a>
-      </div>
-      <div>
-        <h4>Get started</h4>
+      </nav>
+      <nav aria-label="Account">
+        <p class="foot-h">Get started</p>
         <a href="https://clientarea.lagoonspace.net/cart.php?a=add&amp;pid=29">Order now</a>
         <a href="https://clientarea.lagoonspace.net/">Client area</a>
-      </div>
+      </nav>
     </div>
-    <div class="foot-bot">&copy; 2026 ServerScrub. All rights reserved.</div>
+    <p class="foot-bot">&copy; 2026 ServerScrub. All rights reserved.</p>
   </div>
 </footer>
 
@@ -166,7 +162,13 @@
 (function () {
   var REPO = 'admin-lagoonspace/cP-Defender';
   var RAW  = 'https://raw.githubusercontent.com/' + REPO + '/main';
-  var CDN  = '/releases';
+  // The APEX URL, absolute, on purpose. This page is served from www, and a
+  // relative '/releases' would then read www.serverscrub.com/releases -- a
+  // different URL, with a different proxy-cache key, from the one every
+  // installed server reads. It could look healthy while servers see stale
+  // data, which is the failure this page exists to catch. Cross-origin reads
+  // work because htaccess.site sends Access-Control-Allow-Origin on /releases/.
+  var CDN  = 'https://serverscrub.com/releases';
 
   function bust(u) { return u + (u.indexOf('?') === -1 ? '?' : '&') + 'cb=' + Date.now() + Math.random().toString(36).slice(2, 7); }
   function el(id) { return document.getElementById(id); }
@@ -210,10 +212,9 @@
   }
 
   function banner(cls, html) {
+    // Colour comes from the stylesheet's status tokens, not from literals here.
     var b = el('verdict');
-    var colour = { ok: '#4ade80', warn: '#fbbf24', bad: '#f87171', dim: '#9db4cd' }[cls] || '#9db4cd';
-    b.style.borderColor = colour;
-    b.style.color = colour;
+    b.className = 'st-banner' + ({ ok: ' is-ok', warn: ' is-warn', bad: ' is-bad' }[cls] || '');
     b.innerHTML = html;
   }
 
@@ -231,14 +232,27 @@
     var tree      = (treeR.ok && treeR.body) ? treeR.body.trim() : null;
 
     txt('v-published', published || 'unknown', published ? '' : 'st-bad');
-    txt('v-cdn', cdnBusted || (cdnBustedR.status ? 'unreadable' : 'unreachable'),
-        (published && cdnBusted === published) ? 'st-ok' : 'st-warn');
+    // A request that never completed (status 0: blocked, offline, refused
+    // cross-origin) is a missing reading, shown as "could not tell" in the
+    // neutral colour -- never red, never green. Red is for an answer that
+    // came back wrong.
+    function unread(r) { return r.status ? 'unreadable (HTTP ' + r.status + ')' : 'could not tell'; }
+    function unreadCls(r) { return r.status ? 'st-bad' : 'st-dim'; }
+
+    txt('v-cdn', cdnBusted || (cdnBustedR.status ? 'unreadable' : 'Could not tell'),
+        cdnBusted ? ((published && cdnBusted === published) ? 'st-ok' : 'st-warn')
+                  : (cdnBustedR.status ? 'st-warn' : 'st-dim'));
 
     var rows = '';
     rows += row('Repository manifest', published || 'unreadable', published ? 'st-ok' : 'st-bad');
-    rows += row('CDN manifest (cache-busted)', cdnBusted || 'unreadable', cdnBusted ? '' : 'st-bad');
-    rows += row('CDN manifest (plain, as a server reads it)', cdnPlain || 'unreadable', cdnPlain ? '' : 'st-bad');
-    rows += row('CDN extracted tree (latest/VERSION)', tree || 'not published', tree ? '' : 'st-dim');
+    rows += row('CDN manifest (cache-busted)', cdnBusted || unread(cdnBustedR), cdnBusted ? '' : unreadCls(cdnBustedR));
+    rows += row('CDN manifest (plain, as a server reads it)', cdnPlain || unread(cdnPlainR), cdnPlain ? '' : unreadCls(cdnPlainR));
+    // Only a real 404 supports "not published". A blocked or failed read
+    // (status 0) used to show "not published" here too, which the page cannot
+    // know; it says "could not tell" like the rows above.
+    rows += row('CDN extracted tree (latest/VERSION)',
+                tree || (treeR.status === 404 ? 'not published' : unread(treeR)),
+                tree ? '' : (treeR.status === 404 ? 'st-dim' : unreadCls(treeR)));
     if (cdnPlainR.lastMod) { rows += row('CDN manifest last modified', cdnPlainR.lastMod, 'st-dim'); }
 
     // The archive for the PUBLISHED version is the thing an update needs.
@@ -252,17 +266,19 @@
     Promise.all(checks).then(function (z) {
       var zip = z[0], mirror = z[1];
 
-      txt('v-zip', zip.ok ? 'Available' : (zip.status ? 'HTTP ' + zip.status : 'Unreachable'),
-          zip.ok ? 'st-ok' : 'st-bad');
+      txt('v-zip', zip.ok ? 'Available' : (zip.status ? 'HTTP ' + zip.status : 'Could not tell'),
+          zip.ok ? 'st-ok' : (zip.status ? 'st-bad' : 'st-dim'));
       el('n-zip').textContent = zip.ok
         ? 'serverscrub-' + published + '.zip can be fetched from the CDN.'
-        : 'The CDN has no archive for ' + (published || 'the published version') + ' yet.';
+        : zip.status
+          ? 'The CDN has no archive for ' + (published || 'the published version') + ' yet.'
+          : 'This browser could not reach the CDN archive, so whether it exists is unknown.';
 
-      txt('v-mirror', mirror.ok ? 'Available' : (mirror.status ? 'HTTP ' + mirror.status : 'Unreachable'),
-          mirror.ok ? 'st-ok' : 'st-warn');
+      txt('v-mirror', mirror.ok ? 'Available' : (mirror.status ? 'HTTP ' + mirror.status : 'Could not tell'),
+          mirror.ok ? 'st-ok' : (mirror.status ? 'st-warn' : 'st-dim'));
 
-      rows += row('CDN archive', zip.ok ? 'available' : ('HTTP ' + (zip.status || 'unreachable')), zip.ok ? 'st-ok' : 'st-bad');
-      rows += row('GitHub mirror archive', mirror.ok ? 'available' : ('HTTP ' + (mirror.status || 'unreachable')), mirror.ok ? 'st-ok' : 'st-warn');
+      rows += row('CDN archive', zip.ok ? 'available' : unread(zip), zip.ok ? 'st-ok' : unreadCls(zip));
+      rows += row('GitHub mirror archive', mirror.ok ? 'available' : unread(mirror), mirror.ok ? 'st-ok' : (mirror.status ? 'st-warn' : 'st-dim'));
       el('readings').innerHTML = rows;
 
       if (published) { el('cmd').textContent = 'bash /usr/local/serverscrub/update.sh --yes'; }
@@ -291,6 +307,19 @@
       var cdnCurrent = agree && cdnPlain === published && cdnBusted === published
                        && (!tree || tree === published) && zip.ok;
 
+      // Could not read the CDN at all (blocked cross-origin read, a cached
+      // response from before the CORS header existed, or the host is down).
+      // Without this branch an unreadable CDN fell through to "the manifest is
+      // current but the archive is missing" -- a confident statement made from
+      // no reading at all. Absence of a reading is "could not tell".
+      if (!cdnBusted && !cdnPlain) {
+        banner('dim', '<strong>Could not tell.</strong> This browser could not read the CDN '
+          + 'manifest (' + (cdnPlainR.status ? 'HTTP ' + cdnPlainR.status : 'request blocked or unreachable')
+          + '), so there is nothing to compare against <code>' + published + '</code>. '
+          + 'Check from a server with <code>curl ' + CDN + '/latest.json</code>.');
+        return;
+      }
+
       if (cdnBusted && cdnPlain && cdnBusted !== cdnPlain) {
         banner('warn', '<strong>A proxy cache is serving a stale manifest.</strong> '
           + 'The origin returns <code>' + cdnBusted + '</code> but an ordinary request &mdash; '
@@ -307,6 +336,10 @@
           + 'releases onto the CDN has not completed.'
           + (mirror.ok ? ' Updates still work: servers fall back to the GitHub mirror, which has '
                        + published + '.' : ''));
+      } else if (!zip.ok && !zip.status) {
+        banner('dim', '<strong>Could not tell whether the archive is on the CDN.</strong> '
+          + 'The manifest reads <code>' + cdnPlain + '</code>, but this browser could not reach '
+          + '<code>serverscrub-' + published + '.zip</code> to check it.');
       } else if (!zip.ok) {
         banner('warn', '<strong>The CDN manifest is current but the archive is missing.</strong> '
           + 'It advertises <code>' + published + '</code> and cannot serve it, so an update that trusts '

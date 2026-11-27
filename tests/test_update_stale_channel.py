@@ -88,9 +88,11 @@ LOOP     = _block(SRC, '    for BASE in "${CHANNELS[@]}"; do', '    done')
 OVERRIDE = _block(SRC, '    if [[ -n "$BEST_LIVE" ]] && _ver_gt "$BEST_LIVE" "$LATEST_VERSION"; then',
                   '    fi')
 
-BASH = shutil.which('bash') or shutil.which('bash.exe')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _bash import find_bash  # not shutil.which: from PowerShell that is WSL's empty stub
+BASH, _BASH_WHY = find_bash()
 if BASH is None:
-    print('SKIP bash not available; cannot execute the updater blocks')
+    print('SKIP cannot execute the updater blocks: ' + _BASH_WHY)
     sys.exit(0)
 
 

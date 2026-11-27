@@ -9,3 +9,7 @@
 *.conf text eol=lf
 *.service text eol=lf
 *.sig text eol=lf
+
+# The site's .htaccess block is merged by a shell script that matches marker
+# lines exactly; a CRLF checkout must not change what it reads.
+website/htaccess.site text eol=lf

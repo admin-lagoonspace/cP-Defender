@@ -102,9 +102,11 @@ VERIFY_FN = _block(SYNC, '_verify_public_manifest() {', '}')
 SYNC_PUB  = _between(SYNC, '# A FAILED READ-BACK IS A FAILED PUBLISH.',
                      '# ── Optional retention')
 
-BASH = shutil.which('bash') or shutil.which('bash.exe')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _bash import find_bash  # not shutil.which: from PowerShell that is WSL's empty stub
+BASH, _BASH_WHY = find_bash()
 if BASH is None:
-    print('SKIP bash not available; cannot execute the release blocks')
+    print('SKIP cannot execute the release blocks: ' + _BASH_WHY)
     sys.exit(0)
 
 CDN = 'https://cdn.example/releases'

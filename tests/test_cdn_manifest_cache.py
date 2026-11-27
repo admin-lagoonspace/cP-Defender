@@ -106,9 +106,11 @@ ok('max-age=31536000' in HTACCESS_FN and 'immutable' in HTACCESS_FN,
 #
 # This docroot is shared with the website. A wholesale overwrite here would
 # trade a stale manifest for a broken site.
-BASH = shutil.which('bash') or shutil.which('bash.exe')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _bash import find_bash  # not shutil.which: from PowerShell that is WSL's empty stub
+BASH, _BASH_WHY = find_bash()
 if BASH is None:
-    print('SKIP bash not available; cannot execute the htaccess writer')
+    print('SKIP cannot execute the htaccess writer: ' + _BASH_WHY)
 else:
     def write_htaccess(existing=None, runs=1):
         d = tempfile.mkdtemp(prefix='sg-cdn-')

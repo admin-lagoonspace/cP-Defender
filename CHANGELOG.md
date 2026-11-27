@@ -17,6 +17,69 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+### Fixed
+
+- **serverscrub.com told customers to run an installer that 404s.** The
+  install command on the home and install pages pointed at
+  `/serverscrub/code/get.sh`, a path the plugin's own global Alias shadows on
+  the CDN host. Every page now gives `https://serverscrub.com/releases/get.sh`
+  (plus the wget form on the install page), and the site validator refuses
+  the old path.
+- **`deploy-site.sh` left `status.html` owned by root.** The ownership step
+  named four pages by hand and missed the fifth. It now walks the deploy
+  manifest itself, so every published file belongs to the account user.
+- **The site's copy overclaimed.** "Fifteen modules" sat over sixteen cards,
+  the home page said "15+", "installed in about a minute" had nothing behind
+  it, and the WAF copy said "see what was blocked" about a WAF that can run in
+  DetectionOnly. The counts and the timing are gone, and the WAF copy now says
+  what it matched and whether it is blocking or only detecting.
+- **The release status page could give a verdict from no reading.** When the
+  browser could not read the CDN at all, the verdict fell through to "the
+  manifest is current but the archive is missing". It now says it could not
+  tell, in the neutral colour, and the status page reads the CDN at the apex
+  URL that servers use rather than a relative path that would resolve on www.
+  One row, the CDN's extracted `latest/VERSION`, still said "not published"
+  when it had not been read; it now says so only on a real 404.
+- **The site deploy checked `/releases/` on HTTPS only.** Its post-write
+  check read `https://serverscrub.com/releases/latest.json` and nothing else,
+  so a rule block that redirected `/releases/` on plain HTTP was verified and
+  left live, and the deploy exited 0. It now probes `/releases/latest.json`,
+  `/.well-known/` and `/serverscrub/` on both schemes, on the apex and on www
+  when the rules send traffic there, and rolls back if any of them is
+  redirected. Its `.htaccess` backups also no longer overwrite each other
+  when two changes land in the same second, and each new backup is always
+  named above the newest, so pruning can never delete the one just written.
+- **Preflight lost the mock-env suite's output on Windows.** It decoded the
+  suite's UTF-8 box drawing as cp1252, the reader thread died, and the pass
+  count and any failure details disappeared; once decoded, echoing the
+  suite's check mark aborted preflight. Suite output is now read and printed
+  as UTF-8.
+- **Four update and CDN tests "flaked" depending on the shell.** They took
+  the first `bash` on PATH, which from PowerShell is WSL's empty launcher, so
+  every preflight started from PowerShell failed them and every one started
+  from Git Bash passed. That looked like a crash in two runs of three. All the
+  Python tests that run shell scripts now share one locator
+  (`tests/_bash.py`) that skips the WSL stub and finds Git Bash.
+
+### Changed
+
+- **New website design and logo.** The marketing site is redesigned around
+  an original SVG mark and wordmark (website only; the plugin keeps its
+  logo), on one shared stylesheet with no inline styles, no third-party
+  resources and system fonts. Icons are rendered from `mark.svg` by
+  `scripts/render-site-icons.py`, and `favicon.ico`, `robots.txt` and
+  `sitemap.xml` now publish to the docroot.
+- **One canonical address: `https://www.serverscrub.com/`.** `deploy-site.sh`
+  merges a marked block into the docroot `.htaccess` (prepended, cPanel's
+  own rules left byte-for-byte, backup first, refuses malformed markers) that
+  sends HTTP to HTTPS and the apex to www and sets HSTS for a year without
+  `includeSubDomains`. `/releases/`, `/serverscrub/` and `/.well-known/` are
+  never redirected on either scheme or host, because the panel's update check
+  treats a 301 in front of `latest.json` as unreadable. The apex-to-www rule
+  is only enabled when `https://www` answers with a valid certificate, and
+  after writing the block the deploy checks `/releases/latest.json` live and
+  restores the backup if it is redirected, fails, or anything loops or 5xxs.
+
 ## [4.37.12] - 2026-11-27
 
 ### Fixed

@@ -1,0 +1,53 @@
+# BEGIN ServerScrub site
+# Managed by scripts/deploy-site.sh from website/htaccess.site. Everything
+# between these two markers is replaced on every deploy; edit the source file.
+#
+# One canonical address for the site: https://www.serverscrub.com/
+#
+# /releases/ is the update CDN for every installed server and is NEVER
+# redirected, on either scheme or host. The panel's update check reads the
+# status from the FIRST response line, so a 301 in front of latest.json is
+# reported as "unreadable" and every installed server silently stops seeing
+# updates. /serverscrub/ (the plugin's own Alias) and /.well-known/ (AutoSSL
+# domain validation) are exempt for the same reason: something other than a
+# browser depends on the exact URL.
+#
+# Only serverscrub.com and www.serverscrub.com are touched. Any other Host
+# (cPanel proxy subdomains, the bare IP) passes through as before.
+#
+# "Is HTTPS" means %{HTTPS}=on OR X-Forwarded-Proto: https, so this cannot loop
+# behind cPanel's ea-nginx proxy. Spoofing the header only lets a client skip
+# a redirect, which costs nothing.
+
+<IfModule mod_rewrite.c>
+RewriteEngine On
+
+# Plain HTTP, either host -> https://www (the target host is switched to the
+# apex by deploy-site.sh when www has no DNS or certificate).
+RewriteCond %{REQUEST_URI} !^/(releases|serverscrub)(/|$) [NC]
+RewriteCond %{REQUEST_URI} !^/\.well-known/ [NC]
+RewriteCond %{HTTP_HOST} ^(www\.)?serverscrub\.com\.?(:[0-9]+)?$ [NC]
+RewriteCond %{HTTPS} !=on
+RewriteCond %{HTTP:X-Forwarded-Proto} !=https [NC]
+RewriteRule ^ https://www.serverscrub.com%{REQUEST_URI} [R=301,L]
+
+# ss:www-begin -- removed by deploy-site.sh when www is not reachable
+# HTTPS on the apex -> https://www
+RewriteCond %{REQUEST_URI} !^/(releases|serverscrub)(/|$) [NC]
+RewriteCond %{REQUEST_URI} !^/\.well-known/ [NC]
+RewriteCond %{HTTP_HOST} ^serverscrub\.com\.?(:[0-9]+)?$ [NC]
+RewriteRule ^ https://www.serverscrub.com%{REQUEST_URI} [R=301,L]
+# ss:www-end
+</IfModule>
+
+<IfModule mod_headers.c>
+# HSTS on HTTPS responses for our two hosts only. No includeSubDomains: the
+# cpanel./webmail./mail. certificates are cPanel's, not ours to promise. No
+# preload: it is very hard to undo.
+Header always set Strict-Transport-Security "max-age=31536000" "expr=(%{HTTPS} == 'on' || %{HTTP:X-Forwarded-Proto} =~ /^https$/i) && %{HTTP_HOST} =~ /^(www\.)?serverscrub\.com\.?(:[0-9]+)?$/i"
+
+# status.html, served from www, reads the CDN at the apex URL the servers use.
+# The files are public and no credentials are involved.
+Header always set Access-Control-Allow-Origin "*" "expr=%{REQUEST_URI} =~ m#^/releases(/|$)#"
+</IfModule>
+# END ServerScrub site

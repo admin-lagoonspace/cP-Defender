@@ -37,6 +37,13 @@ import shutil
 import tempfile
 import sys
 
+# The suites print UTF-8 (box drawing, check marks). Echoing their summary
+# line to a cp1252 console or a redirected file raised UnicodeEncodeError and
+# aborted preflight, so preflight's own output is UTF-8 with replacement.
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REQUIRED_CONSTANTS = ["SG_ROOT", "SG_VERSION", "SG_DB", "QUARANTINE_DIR", "SG_LOGS"]
 
@@ -155,8 +162,12 @@ def run_suite(label, cmd, tail=14):
     release since 23 Sep went out over a suite that had not tested anything.
     A gate that can be absent without anyone noticing is not a gate.
     """
+    # UTF-8, not the locale: on Windows text=True decodes as cp1252, and the
+    # suites' box-drawing output (0x90 in "═") killed the reader thread,
+    # left r.stdout None and dropped the pass counts and failure details.
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO, timeout=1800)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", cwd=REPO, timeout=1800)
     except FileNotFoundError:
         fail("%s: cannot run %s" % (label, cmd[0]))
         return 1
@@ -495,7 +506,8 @@ def main():
         problems += 1
     if php:
         r = subprocess.run([php, os.path.join(REPO, "tests", "run.php")],
-                           capture_output=True, text=True, env=suite_env)
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=suite_env)
         if r.returncode != 0:
             fail("regression tests failed:")
             for line in (r.stdout or "").strip().splitlines():

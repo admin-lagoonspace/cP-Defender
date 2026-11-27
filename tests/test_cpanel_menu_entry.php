@@ -148,39 +148,43 @@ t_contains($plugin, '<img src="serverscrub.png"',
 t_ok(strpos($pcode, 'M32 3 56 12v20c0 14-10 25-24 29') === false,
      'and the hand-drawn shield path is gone');
 
-// ── The marketing site, same rule ───────────────────────────────────────────
-$css = (string) file_get_contents($repo . '/website/assets/css/site.css');
-$ccode = (string) preg_replace(['~/\*.*?\*/~s'], '', $css);
-t_contains($css, '--green:#00b03c', 'the site uses the logo green');
-t_contains($css, '--navy:#001a3d', 'and the logo navy');
-t_ok(strpos($ccode, '#1668b3') === false, 'and none of the invented blue');
-
-t_ok(is_file($repo . '/website/assets/img/logo.png'),
-     'the real logo ships with the site');
-t_ok(!is_file($repo . '/website/assets/img/logo.svg'),
-     'and the hand-drawn one is gone');
-
-// The header uses the MARK, not the full lockup.
+// ── The marketing site: superseded 2026-11-23 ───────────────────────────────
 //
-// logo.png is a 480x304 lockup whose wordmark fills the lower half; scaled to
-// a 38px header it rendered "ServerScrub" at about six pixels and read as a
-// smudge. The shield survives being small; the words are set in type.
-$idx = (string) file_get_contents($repo . '/website/index.html');
-t_contains($idx, 'src="/assets/img/mark-64.png"',
-     'THE LEGIBILITY FIX: the header uses the shield mark');
-t_contains($idx, '<span class="wm">Server<b>Scrub</b></span>',
-     'with the wordmark set in type, in the logo\'s own two colours');
-t_contains($idx, 'footer', 'and the full lockup is kept for the footer');
+// This block used to hold the site to the plugin's logo: logo.png in the
+// footer, mark-64.png cut from it, and the logo's green and navy in site.css,
+// with logo.svg asserted ABSENT because an earlier hand-drawn SVG had been
+// rejected for inventing colours.
+//
+// The owner then rejected that site and that logo outright ("the logo which
+// was uploaded is horrible"), and the spec
+// docs/specs/2026-11-23-website-redesign-logo-canonical-https.md replaces the
+// website's brand with an original SVG mark and wordmark (D2, D3). The rule
+// above still holds for the PLUGIN, which keeps frontend/images/logo.png and
+// its measured palette; only the website changed. The website's own rules
+// now live in tests/test_site_redesign.py. What is kept here is the part of
+// the old intent that still applies: the header mark must be the real file,
+// square and small, and everything the deploy publishes must exist.
+$site = $repo . '/website';
+t_ok(!is_file($site . '/assets/img/logo.png'),
+     'the rejected website lockup is no longer shipped (the plugin keeps its own copy)');
+t_ok(is_file($repo . '/frontend/images/logo.png'),
+     'and the plugin logo is untouched: the redesign is website-only');
+t_ok(is_file($site . '/assets/img/logo.svg') && is_file($site . '/assets/img/mark.svg'),
+     'the new lockup and mark are SVG sources');
 
-$mark = @getimagesize($repo . '/website/assets/img/mark-64.png');
-t_eq(64, $mark[0] ?? 0, 'the mark is square and small enough to stay sharp');
+$idx = (string) file_get_contents($site . '/index.html');
+t_contains($idx, 'src="/assets/img/logo.svg"',
+     'the header uses the new lockup, drawn as paths so the wordmark is legible '
+   . 'at header size, which the old raster lockup was not');
+
+$mark = @getimagesize($site . '/assets/img/mark-64.png');
+t_eq(64, $mark[0] ?? 0, 'mark-64.png keeps its name and size, rendered from mark.svg');
 
 // Everything the deploy script uploads has to exist.
 $dep = (string) file_get_contents($repo . '/scripts/deploy-site.sh');
-foreach (['logo.png', 'icon-180.png', 'favicon.png', 'mark-64.png', 'hero.svg'] as $a) {
-    t_contains($dep, $a, 'deploy-site.sh publishes ' . $a);
-    t_ok(is_file($repo . '/website/assets/img/' . $a),
-         'and ' . $a . ' exists to be published');
+foreach (['logo.svg', 'mark.svg', 'favicon.svg', 'icon-180.png', 'favicon.png', 'mark-64.png'] as $a) {
+    t_contains($dep, 'assets/img/' . $a, 'deploy-site.sh publishes ' . $a);
+    t_ok(is_file($site . '/assets/img/' . $a), 'and ' . $a . ' exists to be published');
 }
-t_ok(strpos($dep, 'logo.svg') === false,
-     'and no longer tries to publish a file that was deleted');
+t_ok(strpos($dep, 'assets/img/logo.png') === false && strpos($dep, 'assets/img/hero.svg') === false,
+     'and it no longer tries to publish files that were removed');
