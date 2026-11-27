@@ -279,15 +279,23 @@ t_eq('incomplete', $st['last_scan']['status'] ?? null,
 
 $js   = t_js($repo . '/frontend/js/app.js');
 $pill = t_fn_body($js, 'topStatusFor', 'js');
-$pPos = strpos($pill, "sc.last_scan.status === 'incomplete'");
-t_ok($pPos !== false && $pPos < strpos($pill, "'clean', 'No open threats'"),
+// CHANGED 2026-11-26: the pill no longer reads last_scan.status itself; the
+// decision moved to Scanner::protectionStatus() (see test_top_status_pill.php
+// CASE 5 for the same claim asserted on seeded rows). Asserted here by
+// behaviour: a capped newest scan beside a complete one an hour old.
+$ps = Scanner::protectionStatus(0, ['id' => 2, 'status' => 'incomplete', 'finished_at' => time()],
+    ['id' => 2, 'status' => 'incomplete', 'finished_at' => time()],
+    ['id' => 1, 'finished_at' => time() - 3600, 'age_secs' => 3600], time());
+t_eq('partial', $ps['state'],
     'THE PILL: an incomplete last scan is checked BEFORE the green state, so it can never read '
   . '"The last scan finished and nothing is open"');
-t_contains($pill, "'partial', 'Last scan incomplete'", 'and it has its own state and words');
+t_eq('Last scan incomplete', $ps['text'], 'and it has its own state and words');
 t_contains(file_get_contents($repo . '/frontend/css/app.css'), '.status-pill.sp-partial',
     'which is styled, amber, and does not pulse like the clean state');
 $card = t_fn_body($js, 'refreshDashboard', 'js');
-$cPos = strpos($card, "lastJob.status === 'incomplete'");
+// CHANGED 2026-11-26: the card renders topStatusFor()'s state instead of its
+// own `lastJob.status === 'incomplete'` test, so the amber branch is 'partial'.
+$cPos = strpos($card, "} else if (cardState === 'partial') {");
 t_ok($cPos !== false && $cPos < strpos($card, "scanStatus.textContent = 'Protected'"),
     'THE CARD: the incomplete branch comes before "Protected", same order as the pill');
 t_contains($card, "scanBadge.className = 'badge badge-amber'", 'and is amber, not green');

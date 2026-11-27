@@ -4045,7 +4045,7 @@ This file was removed and not kept. Restore it from your backups
         ];
     }
 
-    public function getStats(): array {
+    public function getStats(?int $now = null): array {
         $total    = Database::fetchOne("SELECT COUNT(*) as c FROM threats")['c'];
         $active   = Database::fetchOne("SELECT COUNT(*) as c FROM threats WHERE status='active'")['c'];
         $quarant  = Database::fetchOne("SELECT COUNT(*) as c FROM threats WHERE status='quarantined'")['c'];
@@ -4104,7 +4104,218 @@ This file was removed and not kept. Restore it from your backups
             // that found nothing" are different answers and the card has to be
             // able to tell them apart.
             'last_scan_stats' => $lastStats,
+        ] + self::protectionInputs((int) $active, $lastScan ?: null, $now ?? time());
+    }
+
+    /** How many `done` jobs getStats() will look back through for one that
+     *  covered the whole server. Customer scans outnumber scheduled ones on a
+     *  busy server, so the newest done job is often not server-wide. */
+    const PROTECTED_LOOKBACK = 25;
+
+    /** Green lasts this long after the last complete server-wide scan: a
+     *  weekly schedule plus a day of slack. */
+    const PROTECTED_MAX_AGE = 691200;
+
+    /**
+     * The three extra figures the dashboard's "Protected" decision needs, and
+     * the decision itself.
+     *
+     * Green used to mean "the newest job row has no open threats", whatever
+     * happened to that job: a scan cancelled by our own updater, failed or
+     * interrupted still painted "Protected / The last scan finished and
+     * nothing is open". And while any scan ran, the newest row had no
+     * finished_at, so a server scanned hundreds of times read "Not yet
+     * scanned".
+     *
+     * @return array{last_finished_scan:?array,last_done_scan:?array,protection:array}
+     */
+    private static function protectionInputs(int $active, ?array $lastScan, int $now): array
+    {
+        $finished = Database::fetchOne(
+            "SELECT * FROM scan_jobs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1"
+        ) ?: null;
+
+        $done  = null;
+        $homes = null;      // listed only if a job's path does not settle it
+        $rows  = Database::fetchAll(
+            "SELECT * FROM scan_jobs WHERE status='done' AND finished_at IS NOT NULL
+              ORDER BY id DESC LIMIT " . (int) self::PROTECTED_LOOKBACK
+        );
+        foreach ($rows as $r) {
+            if (self::isServerWideJob($r, $homes)) {
+                $done = [
+                    'id'          => (int) $r['id'],
+                    'finished_at' => (int) $r['finished_at'],
+                    'scan_type'   => (string) $r['scan_type'],
+                    'scan_path'   => (string) $r['scan_path'],
+                    'age_secs'    => $now - (int) $r['finished_at'],
+                ];
+                break;
+            }
+        }
+
+        return [
+            'last_finished_scan' => $finished,
+            'last_done_scan'     => $done,
+            'protection'         => self::protectionStatus($active, $lastScan, $finished, $done, $now),
         ];
+    }
+
+    /**
+     * Did this job set out to scan the whole server?
+     *
+     * A customer's one-account scan finishing must not turn the server's
+     * dashboard green. The job row does not record "all accounts" as such --
+     * a quick scan of /home is stored as the list of homes it expanded to --
+     * so this takes the strictest reading the row allows:
+     *
+     *   - requested by a customer (anything but '', '@schedule', '@operator',
+     *     '@cli'):
+     *     never, whatever its path;
+     *   - otherwise only if its paths cover every account home on the server
+     *     NOW (or, with no accounts, include a configured scan root or '/').
+     *     An account added since the scan therefore drops it out of green
+     *     until the next sweep includes that account.
+     *
+     * @param array      $job   a scan_jobs row
+     * @param array|null $homes account homes; null = list them when needed
+     *                          (by reference, so a caller looping over jobs
+     *                          lists accounts once)
+     */
+    public static function isServerWideJob(array $job, ?array &$homes = null): bool
+    {
+        $by = trim((string) ($job['requested_by'] ?? ''));
+        if (!in_array($by, ['', '@schedule', '@operator', '@cli'], true)) { return false; }
+
+        $paths = [];
+        foreach (explode(',', (string) ($job['scan_path'] ?? '')) as $p) {
+            $p = trim($p);
+            if ($p === '') { continue; }
+            $paths[] = rtrim($p, '/');           // '/' becomes '' = everything
+        }
+        if (!$paths) { return false; }
+        if (in_array('', $paths, true)) { return true; }
+
+        if ($homes === null) {
+            $homes = [];
+            foreach (self::listAccounts() as $a) {
+                if (!empty($a['home'])) { $homes[] = rtrim((string) $a['home'], '/'); }
+            }
+        }
+        if (!$homes) {
+            return (bool) array_intersect($paths, self::scanRoots());
+        }
+        foreach ($homes as $h) {
+            $covered = false;
+            foreach ($paths as $p) {
+                if ($h === $p || strpos($h, $p . '/') === 0) { $covered = true; break; }
+            }
+            if (!$covered) { return false; }
+        }
+        return true;
+    }
+
+    /**
+     * The dashboard's one protection decision: the card and the topbar pill
+     * both render this, so they cannot disagree.
+     *
+     * Pure: every input is passed in, so tests can drive each case.
+     *
+     * @param int        $active       open threats
+     * @param array|null $lastScan     newest job, any status (may be running)
+     * @param array|null $lastFinished newest job with finished_at, any status
+     * @param array|null $lastDone     newest server-wide `done` job, with age_secs
+     * @return array{state:string,text:string,title:string,card:string,badge:string}
+     */
+    public static function protectionStatus(int $active, ?array $lastScan,
+                                            ?array $lastFinished, ?array $lastDone,
+                                            int $now): array
+    {
+        $out = function (string $state, string $text, string $title,
+                         string $card, string $badge): array {
+            return ['state' => $state, 'text' => $text, 'title' => $title,
+                    'card' => $card, 'badge' => $badge];
+        };
+        $running = $lastScan && empty($lastScan['finished_at'])
+                && in_array((string) ($lastScan['status'] ?? ''),
+                            ['running', 'pending', 'cancelling'], true);
+
+        if ($active > 0) {
+            return $out('threat', $active . ' threat' . ($active > 1 ? 's' : '') . ' open',
+                        'Open threats across every scan. Scanner > Threats lists them.',
+                        $active . ' Active Threat' . ($active > 1 ? 's' : ''), 'Threats Found');
+        }
+        if (!$lastFinished) {
+            return $out('never', 'Not yet scanned',
+                        $running ? 'First scan in progress.'
+                                 : 'Nothing has been scanned on this server yet, so there is '
+                                 . 'nothing to report either way.',
+                        'Not yet scanned', $running ? 'Scanning' : 'No scan yet');
+        }
+
+        $fStatus = (string) ($lastFinished['status'] ?? '');
+        if ($fStatus === 'incomplete') {
+            return $out('partial', 'Last scan incomplete',
+                        'The last scan hit a per-account limit and did not examine every '
+                        . 'file. See the Scan Log for which accounts.',
+                        'Last scan incomplete', 'Incomplete');
+        }
+
+        // A future or unparsable finished_at does not count as recent.
+        $age    = $lastDone ? (int) ($lastDone['age_secs'] ?? -1) : -1;
+        $recent = $lastDone && $age >= 0 && $age <= self::PROTECTED_MAX_AGE
+               && (int) ($lastDone['finished_at'] ?? 0) > 0;
+        $notFinished = !in_array($fStatus, ['done', 'incomplete'], true);
+        $why = function (array $j): string {
+            $r = trim((string) ($j['stop_reason'] ?? ''));
+            return (string) ($j['status'] ?? 'unknown') . ($r !== '' ? ' (' . $r . ')' : '');
+        };
+
+        if ($recent) {
+            $sameJob = (int) ($lastFinished['id'] ?? 0) === (int) $lastDone['id'];
+            if ($sameJob && !$running) {
+                $title = 'The last scan finished and nothing is open.';
+            } else {
+                $title = 'No open threats as of the complete server scan '
+                       . self::ageText($age) . '.';
+                if ((int) ($lastFinished['id'] ?? 0) > (int) $lastDone['id']) {
+                    $title .= $notFinished
+                        ? ' A later scan was ' . $why($lastFinished) . '.'
+                        : ' A later scan of part of the server also finished.';
+                }
+                if ($running) { $title .= ' A scan is running now.'; }
+            }
+            return $out('clean', 'No open threats', $title, 'Protected', 'Protected');
+        }
+
+        $lastComplete = $lastDone
+            ? 'The last complete server scan was ' . self::ageText(max(0, $age)) . '.'
+            : 'No complete server scan on record.';
+
+        if ($notFinished) {
+            return $out('partial', 'Last scan did not finish',
+                        'The last scan ended ' . $why($lastFinished) . '. ' . $lastComplete,
+                        'Last scan did not finish', 'Not finished');
+        }
+        if ($lastDone && $age >= 0) {
+            $days = (int) floor($age / 86400);
+            return $out('partial', 'Last complete scan ' . $days . ' days ago',
+                        'Green needs a complete server scan within the last 8 days. '
+                        . $lastComplete,
+                        'Last complete scan ' . $days . ' days ago', 'Out of date');
+        }
+        // Finished `done` jobs exist, but none covered the whole server.
+        return $out('partial', 'No complete server scan',
+                    'Only scans of part of the server have finished. ' . $lastComplete,
+                    'No complete server scan', 'Partial');
+    }
+
+    private static function ageText(int $secs): string
+    {
+        if ($secs < 3600)  { return max(1, (int) floor($secs / 60)) . 'm ago'; }
+        if ($secs < 86400) { return (int) floor($secs / 3600) . 'h ago'; }
+        $d = (int) floor($secs / 86400);
+        return $d . ' day' . ($d === 1 ? '' : 's') . ' ago';
     }
 
     /**

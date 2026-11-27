@@ -190,11 +190,13 @@ Database::setSetting('user_scan_pickup_refused_at', '0');
 t_ok(UserScanRequest::pickupState()['refused'] === false,
      'with nothing recorded, nothing is claimed');
 
-Database::setSetting('user_scan_pickup_refused_since', (string) (time() - 3600));
-Database::setSetting('user_scan_pickup_refused_at', (string) time());
+// One clock read: a second ticking between write and assert gave 3601.
+$t = time();
+Database::setSetting('user_scan_pickup_refused_since', (string) ($t - 3600));
+Database::setSetting('user_scan_pickup_refused_at', (string) $t);
 $pk = UserScanRequest::pickupState();
 t_ok($pk['refused'] === true, 'a current refusal is reported as current');
-t_eq(3600, time() - $pk['since'], 'with the time it started, not just "now"');
+t_eq(3600, $t - $pk['since'], 'with the time it started, not just "now"');
 
 // Stale state must not read as a live refusal: if nothing has attempted a
 // pickup for an hour, the honest answer is about the pickup not running at
