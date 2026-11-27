@@ -17,6 +17,8 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+## [4.37.12] - 2026-11-27
+
 ### Fixed
 
 - **Every CSF reload on a migrated server printed an error for a file
@@ -55,6 +57,14 @@ heading or touch VERSION mid-week._
   green title says a later scan did not finish. A complete scan older than 8
   days shows amber "Last complete scan N days ago". The decision is made once,
   in `Scanner::protectionStatus()`, and the card and the pill both render it.
+
+### Known limitations in this release
+
+- **The "Protected" change was tested in automated tests only.** It was not
+  checked in the browser panel or in cPanel mode, against real scans, or at
+  the scale of a 132-account server. If the dashboard card or the topbar pill
+  shows something unexpected after upgrading, report it; a fix ships the
+  following Friday.
 
 ## [4.37.11] - 2026-11-24
 
