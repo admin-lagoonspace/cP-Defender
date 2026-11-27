@@ -17,6 +17,28 @@ _Work lands here through the week. Gabbar turns this into a dated heading on
 Friday and bumps the version once for the whole batch. Do not add a version
 heading or touch VERSION mid-week._
 
+### Fixed
+
+- **Every CSF reload on a migrated server printed an error for a file
+  ServerScrub had deleted.** Sentinel Gate added
+  `Include /etc/sentinel-gate/csf_allow.txt` to `csf.allow` and
+  `…/csf_ignore.txt` to `csf.ignore`. The legacy WAF cleanup removes
+  `/etc/sentinel-gate` but never looked in `/etc/csf`, so from then on every
+  `csf -r` said `*Error* File does not exist: [/etc/sentinel-gate/csf_allow.txt]`.
+  On prod the lines sat at `csf.allow:72` and `csf.ignore:30`. The firewall
+  still loaded; the cost was an operator learning to scroll past a CSF
+  `*Error*`, which is how a real one gets missed.
+
+  install.sh now removes exactly those lines: an `Include` of a path under
+  `/etc/sentinel-gate/`, and nothing else. Comments that mention
+  sentinel-gate, our own `/etc/serverscrub` includes, IPs and blank lines stay
+  byte-for-byte, and a file with nothing to remove is not rewritten. It runs
+  outside the legacy-directory block (which has already run once on every
+  affected server and will not run again) and outside every `--register-only`
+  guard, so the upgrade that ships it applies it. Each removed line is printed.
+  The existing CSF reload applies the change; no second reload was added.
+  uninstall.sh runs the same function before its reload.
+
 ## [4.37.11] - 2026-11-24
 
 ### Changed

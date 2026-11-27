@@ -1276,6 +1276,99 @@ mkdir -p "${SG_ETC}"
 # ServerScrub's own long-running root daemons from LFD process tracking so they are
 # never flagged or killed.
 section "CSF / LFD firewall integration"
+
+# ── Sentinel Gate's CSF includes, left behind ──
+# Before the rename, csf.allow and csf.ignore each carried
+#   Include /etc/sentinel-gate/csf_allow.txt   (and csf_ignore.txt)
+# The legacy WAF cleanup above deletes /etc/sentinel-gate but never looked in
+# /etc/csf, so on every migrated server every `csf -r` printed
+#   *Error* File does not exist: [/etc/sentinel-gate/csf_allow.txt]
+# for a file this installer deleted. An operator taught to ignore CSF errors
+# will ignore a real one.
+#
+# WHERE this runs is the fix as much as WHAT it does. Not inside the
+# LEGACY_WAF_DIR block: that has already run once on every affected server and
+# removed the directory, so it never runs again. Not inside any REGISTER_ONLY
+# guard: update.sh reaches this file only through --register-only. Not gated on
+# /usr/sbin/csf: a server with CSF removed but /etc/csf left behind still gets
+# clean files, and simply gets no reload. When CSF is present, the reload just
+# below applies the change; this step adds no reload of its own.
+#
+# Strict match only -- `Include`, whitespace, then a path under
+# /etc/sentinel-gate/. A comment that merely mentions sentinel-gate is the
+# operator's and stays. Every other byte of the file is kept; a file with no
+# match is not rewritten at all. The rewrite goes to a temp file beside the
+# original and is mv'd over it, so a failure leaves the original intact. A
+# symlinked file is rewritten at its target, so the link stays a link. A
+# hard-linked file is never rewritten: it is reported, line by line, for the
+# operator to fix, because no safe rewrite keeps every name pointing at it.
+#
+# The same function is in uninstall.sh, byte for byte, and
+# tests/test_legacy_csf_include_cleanup.php fails if the two drift. It is
+# duplicated rather than shared from a sourced file because update.sh copies a
+# fixed file list, and a new helper file would not reach the server until the
+# release after.
+_ss_strip_legacy_csf_includes() {
+  local _f="$1" _re _hits _rc=0 _real _tmp _trail=0 _l
+  _re=$'^[ \t]*Include[ \t]+/etc/sentinel-gate/'
+  [[ -f "${_f}" ]] || return 0
+
+  # -a: a stray NUL or non-UTF-8 byte must not turn the matched lines into
+  # grep's "Binary file ... matches", which is what would then be reported.
+  _hits=$(grep -a -E -- "${_re}" "${_f}" 2>/dev/null) || _rc=$?
+  [[ ${_rc} -eq 1 ]] && return 0
+  if [[ ${_rc} -ne 0 ]]; then
+    warn "  Could not read ${_f} to check for stale Sentinel Gate includes."
+    warn "  Remove any 'Include /etc/sentinel-gate/...' line from it by hand."
+    return 0
+  fi
+
+  # Rewrite the file a symlink points at, not the link: mv over the link
+  # would turn it into a plain copy and leave the stale line in the target.
+  _real=$(readlink -f -- "${_f}" 2>/dev/null) || _real=""
+  [[ -n "${_real}" && -f "${_real}" ]] || _real="${_f}"
+
+  # Hard-linked: left alone. mv would split this name from the others, which
+  # keep the stale line, and writing in place truncates before it writes, so
+  # a failed or interrupted write empties csf.allow. Neither is acceptable for
+  # a cosmetic fix; the operator gets the exact lines instead.
+  if [[ "$(stat -c %h -- "${_real}" 2>/dev/null || echo 1)" -gt 1 ]]; then
+    warn "  ${_f} is hard-linked, so it was not rewritten. Remove by hand:"
+    while IFS= read -r _l; do
+      warn "    ${_l%$'\r'}"
+    done <<< "${_hits}"
+    return 0
+  fi
+
+  # Keep a missing final newline missing: only the matched lines may change.
+  [[ -z "$(tail -c 1 "${_real}" 2>/dev/null)" ]] && _trail=1
+
+  # BINMODE=3 keeps a CRLF line's \r: Windows gawk strips it otherwise, and
+  # every other awk ignores the variable.
+  _tmp=$(mktemp "${_real}.ss-XXXXXX" 2>/dev/null) || _tmp=""
+  if [[ -n "${_tmp}" ]] \
+     && cp -p "${_real}" "${_tmp}" 2>/dev/null \
+     && awk -v BINMODE=3 -v re="${_re}" -v trail="${_trail}" '
+          $0 ~ re { next }
+          { if (n++) printf "\n"; printf "%s", $0 }
+          END { if (n && trail) printf "\n" }' "${_real}" > "${_tmp}" 2>/dev/null \
+     && mv -f "${_tmp}" "${_real}" 2>/dev/null; then
+    while IFS= read -r _l; do
+      ok "  Removed stale Sentinel Gate include from ${_f}: ${_l%$'\r'}"
+    done <<< "${_hits}"
+    return 0
+  fi
+
+  [[ -n "${_tmp}" ]] && rm -f "${_tmp}" 2>/dev/null
+  warn "  Could not rewrite ${_f} (immutable or read-only?). Remove by hand:"
+  while IFS= read -r _l; do
+    warn "    ${_l%$'\r'}"
+  done <<< "${_hits}"
+  return 0
+}
+_ss_strip_legacy_csf_includes /etc/csf/csf.allow
+_ss_strip_legacy_csf_includes /etc/csf/csf.ignore
+
 if [[ -f /usr/sbin/csf ]]; then
   touch "${SG_ETC}/csf_allow.txt" "${SG_ETC}/csf_ignore.txt"
   chmod 600 "${SG_ETC}/csf_allow.txt" "${SG_ETC}/csf_ignore.txt"
