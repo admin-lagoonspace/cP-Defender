@@ -74,10 +74,13 @@ with open(PUBLISH, encoding='utf-8') as fh:
 
 CHECK = _between(SRC, 'git rev-parse --is-inside-work-tree', 'TOKEN="${GH_TOKEN')
 
-BASH = shutil.which('bash') or shutil.which('bash.exe')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _bash import find_bash  # not shutil.which: from PowerShell that is WSL's empty stub
+BASH, _BASH_WHY = find_bash()
 GIT = shutil.which('git') or shutil.which('git.exe')
 if BASH is None or GIT is None:
-    print('SKIP bash and git are both required to build the fixtures')
+    print('SKIP bash and git are both required to build the fixtures: '
+          + (_BASH_WHY or 'git not found'))
     sys.exit(0)
 
 HARNESS = '''
